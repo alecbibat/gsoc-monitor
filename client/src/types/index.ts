@@ -77,4 +77,7 @@ export interface RadarManifest {
     past: RadarFrame[];
     nowcast: RadarFrame[];
   };
+  satellite: {
+    infrared: RadarFrame[];
+  };
 }

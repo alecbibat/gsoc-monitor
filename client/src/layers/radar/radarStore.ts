@@ -1,14 +1,19 @@
 import { create } from 'zustand';
 import type { RadarFrame } from '../../types';
 
+export type RadarMode = 'radar' | 'satellite' | 'combined';
+
 interface RadarState {
   host: string;
   frames: RadarFrame[];
+  satelliteFrames: RadarFrame[];
+  mode: RadarMode;
   windowMinutes: 30 | 60 | 120;
   currentIndex: number;
   playing: boolean;
   opacity: number;
-  setManifest: (host: string, frames: RadarFrame[]) => void;
+  setManifest: (host: string, frames: RadarFrame[], satelliteFrames: RadarFrame[]) => void;
+  setMode: (m: RadarMode) => void;
   setWindowMinutes: (m: 30 | 60 | 120) => void;
   setCurrentIndex: (i: number) => void;
   setPlaying: (p: boolean) => void;
@@ -18,11 +23,14 @@ interface RadarState {
 export const useRadarStore = create<RadarState>((set) => ({
   host: '',
   frames: [],
+  satelliteFrames: [],
+  mode: 'combined',
   windowMinutes: 30,
   currentIndex: 0,
   playing: true,
   opacity: 0.7,
-  setManifest: (host, frames) => set({ host, frames }),
+  setManifest: (host, frames, satelliteFrames) => set({ host, frames, satelliteFrames }),
+  setMode: (mode) => set({ mode, currentIndex: 0 }),
   setWindowMinutes: (m) => set({ windowMinutes: m }),
   setCurrentIndex: (i) => set({ currentIndex: i }),
   setPlaying: (playing) => set({ playing }),
@@ -30,7 +38,6 @@ export const useRadarStore = create<RadarState>((set) => ({
 }));
 
 export function framesInWindow(frames: RadarFrame[], windowMinutes: number): RadarFrame[] {
-  // RainViewer ships past frames at 10-minute steps.
   const count = Math.max(1, Math.round(windowMinutes / 10));
   return frames.slice(Math.max(0, frames.length - count));
 }
