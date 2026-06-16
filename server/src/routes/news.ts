@@ -67,6 +67,25 @@ interface GDELTArticle {
   sourcecountry?: string;
 }
 
+interface NewsItem {
+  id: string;
+  title: string;
+  url: string;
+  source: string;
+  image: string | null;
+  publishedAt: number;
+  severity: 'alert' | 'urgent' | 'critical';
+  category: string;
+  countryName: string | null;
+  lat: number | null;
+  lon: number | null;
+}
+
+interface NewsResult {
+  items: NewsItem[];
+  updated: number;
+}
+
 function parseSeen(s: string): number {
   const m = s.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/);
   if (!m) return Date.now();
@@ -92,30 +111,31 @@ function guessCategory(title: string): string {
   return 'conflict';
 }
 
-// Keep this tight — GDELT returns a plain-text error page (not JSON) when a
-// query is too long or complex, which would look like a 502 to the client.
+// GDELT requires OR'd terms to be wrapped in parentheses, and rejects overly
+// long/complex queries with a plain-text error. Keep this tight.
 const NEWS_QUERY =
-  'earthquake OR hurricane OR wildfire OR explosion OR airstrike OR war OR outbreak OR election OR eruption OR shooting';
+  '(earthquake OR hurricane OR wildfire OR explosion OR airstrike OR war OR outbreak OR election OR eruption OR shooting)';
 
-async function fetchGdelt(query: string): Promise<GDELTArticle[]> {
+async function fetchGdeltOnce(query: string): Promise<GDELTArticle[]> {
   const url = new URL(GDELT_BASE);
   url.searchParams.set('query', query);
   url.searchParams.set('mode', 'artlist');
   url.searchParams.set('maxrecords', '100');
   url.searchParams.set('format', 'json');
-  // 360min = 6 hours — confirmed valid GDELT timespan format.
-  url.searchParams.set('timespan', '360min');
+  url.searchParams.set('timespan', '360min'); // 6 hours
   url.searchParams.set('sort', 'DateDesc');
 
   const r = await fetch(url.toString(), {
-    signal: AbortSignal.timeout(12_000),
-    headers: { 'User-Agent': 'gsoc-monitor/1.0' },
+    signal: AbortSignal.timeout(8_000),
+    headers: { 'User-Agent': 'gsoc-monitor/1.0 (+https://github.com/alecbibat/gsoc-monitor)' },
   });
-  if (!r.ok) throw new Error(`GDELT HTTP ${r.status}`);
+  if (!r.ok) {
+    const err = new Error(`GDELT HTTP ${r.status}`) as Error & { status?: number };
+    err.status = r.status;
+    throw err;
+  }
 
-  // GDELT sometimes returns a plain-text error (HTTP 200) instead of JSON when
-  // a query is malformed or rate-limited. Read as text and parse defensively so
-  // we surface a useful message rather than crashing on res.json().
+  // GDELT returns plain text (HTTP 200) for malformed queries, so parse defensively.
   const text = await r.text();
   let data: { articles?: GDELTArticle[] };
   try {
@@ -126,37 +146,90 @@ async function fetchGdelt(query: string): Promise<GDELTArticle[]> {
   return data.articles ?? [];
 }
 
-router.get('/', async (_req, res) => {
-  try {
-    const items = await cache.getOrFetch('news:gdelt', 5 * 60_000, async () => {
-      const raw = await fetchGdelt(NEWS_QUERY);
-      const seen = new Set<string>();
-      const out = [];
-      for (const a of raw) {
-        if (!a.url || !a.title || seen.has(a.url)) continue;
-        seen.add(a.url);
-        const centroid = a.sourcecountry ? COUNTRY_CENTROIDS[a.sourcecountry] : undefined;
-        const image = a.socialimage && /^https?:\/\//.test(a.socialimage) ? a.socialimage : null;
-        out.push({
-          id: Buffer.from(a.url).toString('base64').slice(0, 16),
-          title: a.title,
-          url: a.url,
-          source: a.domain ?? '',
-          image,
-          publishedAt: parseSeen(a.seendate ?? ''),
-          severity: severity(a.title),
-          category: guessCategory(a.title),
-          countryName: a.sourcecountry ?? null,
-          lat: centroid?.[0] ?? null,
-          lon: centroid?.[1] ?? null,
-        });
-      }
-      return out.sort((a, b) => b.publishedAt - a.publishedAt);
+// GDELT aggressively rate-limits a shared IP (429). Retry a couple of times
+// with backoff so transient limits don't bubble up as an outage.
+async function fetchGdelt(query: string): Promise<GDELTArticle[]> {
+  // Keep total time well under Heroku's 30s router limit: 8s + 3s + 8s ≈ 19s.
+  const delays = [3000];
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      return await fetchGdeltOnce(query);
+    } catch (err) {
+      lastErr = err;
+      const status = (err as { status?: number }).status;
+      // Only worth retrying transient failures (rate limit / network blips).
+      const transient = status === 429 || status === undefined || (status >= 500 && status < 600);
+      if (!transient || attempt === delays.length) break;
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    }
+  }
+  throw lastErr;
+}
+
+function transform(raw: GDELTArticle[]): NewsItem[] {
+  const seen = new Set<string>();
+  const out: NewsItem[] = [];
+  for (const a of raw) {
+    if (!a.url || !a.title || seen.has(a.url)) continue;
+    seen.add(a.url);
+    const centroid = a.sourcecountry ? COUNTRY_CENTROIDS[a.sourcecountry] : undefined;
+    const image = a.socialimage && /^https?:\/\//.test(a.socialimage) ? a.socialimage : null;
+    out.push({
+      id: Buffer.from(a.url).toString('base64').slice(0, 16),
+      title: a.title,
+      url: a.url,
+      source: a.domain ?? '',
+      image,
+      publishedAt: parseSeen(a.seendate ?? ''),
+      severity: severity(a.title),
+      category: guessCategory(a.title),
+      countryName: a.sourcecountry ?? null,
+      lat: centroid?.[0] ?? null,
+      lon: centroid?.[1] ?? null,
     });
-    res.json({ items, updated: Date.now() });
+  }
+  return out.sort((a, b) => b.publishedAt - a.publishedAt);
+}
+
+const CACHE_KEY = 'news:gdelt';
+const SUCCESS_TTL = 10 * 60_000; // cache good results for 10 min (gentle on GDELT)
+const FAILURE_COOLDOWN = 2 * 60_000; // after a failure, don't re-hit GDELT this soon
+
+// Last successful payload — used to serve stale data instead of erroring when
+// GDELT is rate-limiting us.
+let lastGood: NewsResult | null = null;
+let cooldownUntil = 0;
+
+router.get('/', async (_req, res) => {
+  // Fresh cached success — serve immediately.
+  const cached = cache.get<NewsResult>(CACHE_KEY);
+  if (cached) {
+    res.json(cached);
+    return;
+  }
+
+  // Recently failed — serve stale rather than hammering a rate-limited GDELT.
+  if (Date.now() < cooldownUntil && lastGood) {
+    res.json({ ...lastGood, stale: true });
+    return;
+  }
+
+  try {
+    const raw = await fetchGdelt(NEWS_QUERY);
+    const result: NewsResult = { items: transform(raw), updated: Date.now() };
+    cache.set(CACHE_KEY, result, SUCCESS_TTL);
+    lastGood = result;
+    res.json(result);
   } catch (err) {
     console.error('[news] GDELT fetch failed:', err);
-    res.status(502).json({ error: String(err), items: [], updated: Date.now() });
+    cooldownUntil = Date.now() + FAILURE_COOLDOWN;
+    // Degrade gracefully: serve the last good payload if we have one.
+    if (lastGood) {
+      res.json({ ...lastGood, stale: true });
+    } else {
+      res.status(502).json({ error: String(err), items: [], updated: Date.now() });
+    }
   }
 });
 
