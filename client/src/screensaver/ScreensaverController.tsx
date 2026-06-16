@@ -3,12 +3,14 @@ import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useScreensaverStore, type Poi } from './screensaverStore';
 
-const ROTATE_RAD_PER_SEC = (10 * Math.PI) / (180 * 60); // 10°/min
+const ROTATE_RAD_PER_SEC = (30 * Math.PI) / (180 * 60); // 30°/min — full turn ~12 min
 const OVERVIEW_ALT = 13_500_000; // metres above earth
 const POI_INTERVAL_MIN_MS = 18_000;
 const POI_INTERVAL_MAX_MS = 30_000;
 const POI_DWELL_MIN_MS = 10_000;
 const POI_DWELL_MAX_MS = 16_000;
+// Don't revisit the same POI within this window.
+const POI_COOLDOWN_MS = 5 * 60_000;
 
 // Geopolitically and operationally interesting fallback locations.
 const LANDMARK_POIS: Poi[] = [
@@ -88,6 +90,11 @@ function rand(min: number, max: number) {
   return min + Math.random() * (max - min);
 }
 
+// Stable identity for a POI so we can track when we last visited it.
+function poiKey(poi: Poi): string {
+  return `${poi.title}|${poi.lat.toFixed(2)},${poi.lon.toFixed(2)}`;
+}
+
 export function ScreensaverController() {
   const viewer = useCesiumViewer();
   const active = useScreensaverStore((s) => s.active);
@@ -100,6 +107,8 @@ export function ScreensaverController() {
   const poisRef = useRef<Poi[]>([...LANDMARK_POIS]);
   const poiTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // poiKey -> timestamp of last visit, to enforce the cooldown window.
+  const recentVisitsRef = useRef<Map<string, number>>(new Map());
 
   function updatePhase(p: typeof phaseRef.current) {
     phaseRef.current = p;
@@ -160,7 +169,18 @@ export function ScreensaverController() {
       const pool = poisRef.current;
       if (pool.length === 0) { scheduleNextPoi(); return; }
 
-      const poi = pool[Math.floor(Math.random() * pool.length)];
+      const now = Date.now();
+      const recent = recentVisitsRef.current;
+      // Prefer POIs we haven't shown within the cooldown window; if every
+      // candidate is on cooldown (small pool), fall back to the full pool.
+      const eligible = pool.filter((p) => {
+        const last = recent.get(poiKey(p));
+        return last === undefined || now - last > POI_COOLDOWN_MS;
+      });
+      const candidates = eligible.length > 0 ? eligible : pool;
+
+      const poi = candidates[Math.floor(Math.random() * candidates.length)];
+      recent.set(poiKey(poi), now);
       updatePhase('flying-to');
       setCurrentPoi(poi);
 

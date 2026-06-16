@@ -5,6 +5,7 @@ import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { useLightningStatus } from '../layers/lightning/lightningStore';
 import { useFiresStatus } from '../layers/fires/firesStore';
 import { useShipsStatus } from '../layers/ships/shipsStore';
+import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { LayerToggle } from './LayerToggle';
 import { Section } from './Section';
 import { BasemapSwitcher } from './BasemapSwitcher';
@@ -34,6 +35,7 @@ export function Sidebar() {
   const lightningStatus = useLightningStatus();
   const firesStatus = useFiresStatus();
   const shipsStatus = useShipsStatus();
+  const screensaverActive = useScreensaverStore((s) => s.active);
 
   function shipsStatusText() {
     if (shipsStatus.noKey) return 'Set AISSTREAM_API_KEY to enable';
@@ -43,7 +45,11 @@ export function Sidebar() {
   }
 
   return (
-    <div className="pointer-events-auto absolute left-0 top-0 z-10 flex h-full w-72 flex-col border-r border-white/10 bg-ink-900/85 pt-20 shadow-panel backdrop-blur-sm">
+    <div
+      className={`pointer-events-auto absolute left-0 top-0 z-10 flex h-full w-72 flex-col border-r border-white/10 bg-ink-900/85 pt-20 shadow-panel backdrop-blur-sm transition-transform duration-700 ease-in-out ${
+        screensaverActive ? '-translate-x-full' : 'translate-x-0'
+      }`}
+    >
       <div className="hud-scroll flex-1 overflow-y-auto px-2 pb-4">
         <Section title="Base Map">
           <BasemapSwitcher />
