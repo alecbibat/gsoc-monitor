@@ -7,6 +7,13 @@ const MODES: Array<{ value: RadarMode; label: string }> = [
   { value: 'satellite', label: 'Satellite' },
   { value: 'combined', label: 'Combined' },
 ];
+// RainViewer color scheme ids — curated to a few clean palettes.
+const PALETTES: Array<{ value: number; label: string }> = [
+  { value: 4, label: 'Classic' },  // The Weather Channel (zoom.earth-like)
+  { value: 2, label: 'Blue' },     // Universal Blue
+  { value: 7, label: 'Vivid' },    // Rainbow @ SELEX-SI
+  { value: 8, label: 'Mono' },     // Dark Sky
+];
 
 export function RadarControls() {
   const mode = useRadarStore((s) => s.mode);
@@ -17,6 +24,11 @@ export function RadarControls() {
   const setPlaying = useRadarStore((s) => s.setPlaying);
   const opacity = useRadarStore((s) => s.opacity);
   const setOpacity = useRadarStore((s) => s.setOpacity);
+  const colorScheme = useRadarStore((s) => s.colorScheme);
+  const setColorScheme = useRadarStore((s) => s.setColorScheme);
+
+  // The palette only affects the precipitation overlay, not the IR satellite.
+  const showPalette = mode !== 'satellite';
 
   return (
     <div className="mt-2 space-y-2 rounded-md bg-black/20 p-2">
@@ -59,6 +71,25 @@ export function RadarControls() {
           {playing ? '⏸' : '▶'}
         </button>
       </div>
+
+      {/* Precipitation palette */}
+      {showPalette && (
+        <div className="flex items-center gap-1">
+          {PALETTES.map(({ value, label }) => (
+            <button
+              key={value}
+              onClick={() => setColorScheme(value)}
+              className={`flex-1 rounded px-1 py-1 text-[11px] font-medium transition ${
+                colorScheme === value
+                  ? 'bg-sky-500/30 text-sky-300'
+                  : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/70'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <label className="flex items-center gap-2 text-[11px] text-white/50">
         Opacity

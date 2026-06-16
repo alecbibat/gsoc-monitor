@@ -5,16 +5,25 @@ import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
 import { useRadarStore, framesInWindow } from './radarStore';
 
-const TILE_SIZE = 256;
-const RADAR_COLOR = 2;    // Universal Blue
-const RADAR_OPTIONS = '1_1';
+// 512px tiles render noticeably smoother than 256 at the same zoom.
+const TILE_SIZE = 512;
+// smooth=1 turns on RainViewer's server-side bilinear interpolation; snow=0
+// keeps everything in one clean reflectivity gradient instead of painting snow
+// in a separate blue/purple palette (which looks patchy).
+const RADAR_SMOOTH = 1;
+const RADAR_SNOW = 0;
+// Cap the radar overlay a few levels below the basemap. The underlying radar
+// data is coarse, so requesting native high-zoom tiles just yields blocky
+// pixels — letting Cesium smoothly upscale a level-9 tile looks far cleaner
+// (this is the trick zoom.earth uses).
+const RADAR_MAX_LEVEL = 9;
 const SAT_COLOR = 0;      // Classic IR (white = cold/high clouds)
 const SAT_OPTIONS = '0';
 
-function makeRadarProvider(host: string, frame: { path: string }) {
+function makeRadarProvider(host: string, frame: { path: string }, colorScheme: number) {
   return new Cesium.UrlTemplateImageryProvider({
-    url: `${host}${frame.path}/${TILE_SIZE}/{z}/{x}/{y}/${RADAR_COLOR}/${RADAR_OPTIONS}.png`,
-    maximumLevel: 12,
+    url: `${host}${frame.path}/${TILE_SIZE}/{z}/{x}/{y}/${colorScheme}/${RADAR_SMOOTH}_${RADAR_SNOW}.png`,
+    maximumLevel: RADAR_MAX_LEVEL,
   });
 }
 
@@ -36,6 +45,7 @@ export function RadarLayer() {
   const currentIndex = useRadarStore((s) => s.currentIndex);
   const opacity = useRadarStore((s) => s.opacity);
   const playing = useRadarStore((s) => s.playing);
+  const colorScheme = useRadarStore((s) => s.colorScheme);
   const setCurrentIndex = useRadarStore((s) => s.setCurrentIndex);
 
   // Animated radar frames
@@ -86,7 +96,7 @@ export function RadarLayer() {
     if (mode === 'radar' && frames.length > 0) {
       const windowed = framesInWindow(frames, windowMinutes);
       radarLayersRef.current = windowed.map((frame) => {
-        const layer = viewer.imageryLayers.addImageryProvider(makeRadarProvider(host, frame));
+        const layer = viewer.imageryLayers.addImageryProvider(makeRadarProvider(host, frame, colorScheme));
         layer.alpha = 0;
         return layer;
       });
@@ -114,7 +124,7 @@ export function RadarLayer() {
       if (frames.length > 0) {
         const windowed = framesInWindow(frames, windowMinutes);
         radarLayersRef.current = windowed.map((frame) => {
-          const layer = viewer.imageryLayers.addImageryProvider(makeRadarProvider(host, frame));
+          const layer = viewer.imageryLayers.addImageryProvider(makeRadarProvider(host, frame, colorScheme));
           layer.alpha = 0;
           return layer;
         });
@@ -124,7 +134,7 @@ export function RadarLayer() {
 
     viewer.scene.requestRender();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewer, active, host, frames, satelliteFrames, mode, windowMinutes]);
+  }, [viewer, active, host, frames, satelliteFrames, mode, windowMinutes, colorScheme]);
 
   // Sync alpha with currentIndex / opacity
   useEffect(() => {
