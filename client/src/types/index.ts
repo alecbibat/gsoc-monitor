@@ -96,3 +96,18 @@ export interface RadarManifest {
     infrared: RadarFrame[];
   };
 }
+
+export interface PizzaPlaceBusyness {
+  name: string;
+  area: string;
+  live: number | null; // current busyness 0-100, null when unavailable
+  forecast: number | null; // typical busyness for this hour 0-100
+  delta: number | null; // live minus forecast (positive = busier than usual)
+}
+
+export interface PizzaBusyness {
+  // 'besttime' = live data; otherwise the widget uses its modeled signal.
+  source: 'besttime' | 'no-key' | 'error';
+  places: PizzaPlaceBusyness[];
+  updated: number;
+}

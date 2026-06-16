@@ -7,6 +7,7 @@ import earthquakesRouter from './routes/earthquakes';
 import radarRouter from './routes/radar';
 import flightsRouter from './routes/flights';
 import geocodeRouter from './routes/geocode';
+import pizzaRouter from './routes/pizza';
 
 dotenv.config();
 
@@ -19,6 +20,7 @@ app.use('/api/earthquakes', earthquakesRouter);
 app.use('/api/radar', radarRouter);
 app.use('/api/flights', flightsRouter);
 app.use('/api/geocode', geocodeRouter);
+app.use('/api/pizza', pizzaRouter);
 
 // Serve the built client as static files, with an SPA fallback so client-side
 // routing (if any is added later) keeps working on refresh/deep links.
