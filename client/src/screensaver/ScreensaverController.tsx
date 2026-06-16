@@ -98,8 +98,10 @@ function poiKey(poi: Poi): string {
 export function ScreensaverController() {
   const viewer = useCesiumViewer();
   const active = useScreensaverStore((s) => s.active);
+  const mode = useScreensaverStore((s) => s.mode);
   const setPhase = useScreensaverStore((s) => s.setPhase);
   const setCurrentPoi = useScreensaverStore((s) => s.setCurrentPoi);
+  const dequeueNewsPoi = useScreensaverStore((s) => s.dequeueNewsPoi);
 
   // Stable refs so closure callbacks see current values without stale captures.
   const cancelledRef = useRef(false);
@@ -109,14 +111,18 @@ export function ScreensaverController() {
   const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // poiKey -> timestamp of last visit, to enforce the cooldown window.
   const recentVisitsRef = useRef<Map<string, number>>(new Map());
+  const dequeueRef = useRef(dequeueNewsPoi);
+  dequeueRef.current = dequeueNewsPoi;
 
   function updatePhase(p: typeof phaseRef.current) {
     phaseRef.current = p;
     setPhase(p);
   }
 
+  const isGlobal = active && mode === 'global';
+
   useEffect(() => {
-    if (!active || !viewer) return;
+    if (!isGlobal || !viewer) return;
     // Capture as non-nullable so inner closures don't need null checks.
     const v = viewer;
 
@@ -166,21 +172,30 @@ export function ScreensaverController() {
 
     function visitPoi() {
       if (cancelledRef.current) return;
+
+      // Drain any news POIs queued during this session first.
+      const newsPoi = dequeueRef.current();
+      if (newsPoi) {
+        flyToPoi(newsPoi);
+        return;
+      }
+
       const pool = poisRef.current;
       if (pool.length === 0) { scheduleNextPoi(); return; }
 
       const now = Date.now();
       const recent = recentVisitsRef.current;
-      // Prefer POIs we haven't shown within the cooldown window; if every
-      // candidate is on cooldown (small pool), fall back to the full pool.
       const eligible = pool.filter((p) => {
         const last = recent.get(poiKey(p));
         return last === undefined || now - last > POI_COOLDOWN_MS;
       });
       const candidates = eligible.length > 0 ? eligible : pool;
+      flyToPoi(candidates[Math.floor(Math.random() * candidates.length)]);
+    }
 
-      const poi = candidates[Math.floor(Math.random() * candidates.length)];
-      recent.set(poiKey(poi), now);
+    function flyToPoi(poi: Poi) {
+      if (cancelledRef.current) return;
+      recentVisitsRef.current.set(poiKey(poi), Date.now());
       updatePhase('flying-to');
       setCurrentPoi(poi);
 
@@ -228,7 +243,7 @@ export function ScreensaverController() {
       setCurrentPoi(null);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, viewer]);
+  }, [isGlobal, viewer]);
 
   return null;
 }

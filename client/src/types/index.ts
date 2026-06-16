@@ -9,7 +9,7 @@ export type LayerId =
   | 'ships';
 
 // Standalone dockable widgets that aren't tied to a clicked map entity.
-export type WidgetId = 'pentagon-pizza';
+export type WidgetId = 'pentagon-pizza' | 'news-feed';
 
 // Anything that can occupy a dockable panel.
 export type PanelKind = LayerId | WidgetId;
@@ -120,6 +120,24 @@ export interface ShipsResponse {
   updated: number;
   connected?: boolean;
   total?: number; // size of the allowlist
+}
+
+export interface NewsItem {
+  id: string;
+  title: string;
+  url: string;
+  source: string;
+  publishedAt: number;
+  severity: 'alert' | 'urgent' | 'critical';
+  category: 'conflict' | 'disaster' | 'weather' | 'politics' | 'economy' | 'health' | 'environment';
+  countryName: string | null;
+  lat: number | null;
+  lon: number | null;
+}
+
+export interface NewsResponse {
+  items: NewsItem[];
+  updated: number;
 }
 
 export interface PizzaPlaceBusyness {

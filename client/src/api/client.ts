@@ -22,4 +22,6 @@ export const api = {
     ),
   pizza: () => getJson<import('../types').PizzaBusyness>('/api/pizza'),
   ships: () => getJson<import('../types').ShipsResponse>('/api/ships'),
+  news: () => getJson<import('../types').NewsResponse>('/api/news'),
+  county: (fips: string) => getJson<GeoJSON.FeatureCollection>(`/api/county/${fips}`),
 };

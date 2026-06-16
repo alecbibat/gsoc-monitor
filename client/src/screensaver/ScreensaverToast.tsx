@@ -5,6 +5,8 @@ const ICON: Record<string, string> = {
   weather: '⚠️',
   landmark: '◎',
   hurricane: '🌀',
+  park: '🏔',
+  news: '📡',
 };
 
 const LABEL_COLOR: Record<string, string> = {
@@ -12,6 +14,8 @@ const LABEL_COLOR: Record<string, string> = {
   weather: 'text-accent-danger',
   landmark: 'text-accent',
   hurricane: 'text-pink-400',
+  park: 'text-emerald-400',
+  news: 'text-sky-400',
 };
 
 const LABEL: Record<string, string> = {
@@ -19,6 +23,8 @@ const LABEL: Record<string, string> = {
   weather: 'WEATHER ALERT',
   landmark: 'POINT OF INTEREST',
   hurricane: 'TROPICAL CYCLONE',
+  park: 'NATIONAL PARKS',
+  news: 'BREAKING NEWS',
 };
 
 export function ScreensaverToast() {
@@ -42,12 +48,12 @@ export function ScreensaverToast() {
           <div className="flex items-start gap-3">
             <span className="mt-0.5 text-xl leading-none">{ICON[poi.category] ?? '◎'}</span>
             <div className="min-w-0">
-              <div className={`text-[15px] font-bold leading-tight ${LABEL_COLOR[poi.category] ?? 'text-accent'}`}>
+              <div
+                className={`text-[15px] font-bold leading-tight ${LABEL_COLOR[poi.category] ?? 'text-accent'}`}
+              >
                 {poi.title}
               </div>
-              <div className="mt-1 text-[12px] leading-snug text-white/60">
-                {poi.description}
-              </div>
+              <div className="mt-1 text-[12px] leading-snug text-white/60">{poi.description}</div>
             </div>
           </div>
         </div>

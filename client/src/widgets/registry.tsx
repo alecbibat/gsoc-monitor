@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { WidgetId } from '../types';
 import { PentagonPizzaWidget } from './pentagonPizza/PentagonPizzaWidget';
+import { NewsWidget } from './news/NewsWidget';
 
 export interface WidgetDef {
   id: WidgetId;
@@ -21,6 +22,15 @@ export const WIDGETS: WidgetDef[] = [
     glyph: '🍕',
     accentClass: 'border-accent-warn/40',
     render: () => <PentagonPizzaWidget />,
+  },
+  {
+    id: 'news-feed',
+    title: 'Breaking News',
+    subtitle: 'GDELT · live feed',
+    label: 'News',
+    glyph: '📡',
+    accentClass: 'border-sky-500/40',
+    render: () => <NewsWidget />,
   },
 ];
 
