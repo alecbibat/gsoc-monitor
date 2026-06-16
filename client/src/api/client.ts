@@ -31,4 +31,6 @@ export const api = {
   },
   county: (fips: string) => getJson<GeoJSON.FeatureCollection>(`/api/county/${fips}`),
   park: (code: string) => getJson<GeoJSON.FeatureCollection>(`/api/park/${code}`),
+  directions: (lat: number, lon: number) =>
+    getJson<import('../types').DirectionsResponse>(`/api/directions?lat=${lat}&lon=${lon}`),
 };

@@ -142,6 +142,29 @@ export interface NewsResponse {
   updated: number;
 }
 
+export interface RouteStep {
+  instruction: string;
+  distanceM: number;
+}
+
+export interface DirectionsLeg {
+  name: string;
+  category: 'hospital' | 'hotel';
+  lat: number;
+  lon: number;
+  distanceM: number;
+  durationS: number;
+  geometry: Array<[number, number]>; // [lon, lat] pairs
+  steps: RouteStep[];
+  routed: boolean; // false = straight-line fallback (OSRM had no route)
+}
+
+export interface DirectionsResponse {
+  origin: { lat: number; lon: number };
+  hospital: DirectionsLeg | null;
+  hotel: DirectionsLeg | null;
+}
+
 export interface PizzaPlaceBusyness {
   name: string;
   area: string;
