@@ -1,4 +1,17 @@
-export type LayerId = 'radar' | 'earthquakes' | 'alerts' | 'flights' | 'hurricanes';
+export type LayerId =
+  | 'radar'
+  | 'earthquakes'
+  | 'alerts'
+  | 'flights'
+  | 'hurricanes'
+  | 'lightning'
+  | 'fires';
+
+// Standalone dockable widgets that aren't tied to a clicked map entity.
+export type WidgetId = 'pentagon-pizza';
+
+// Anything that can occupy a dockable panel.
+export type PanelKind = LayerId | WidgetId;
 
 export type BasemapId = 'dark' | 'light' | 'satellite' | 'topo';
 

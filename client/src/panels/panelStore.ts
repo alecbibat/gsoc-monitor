@@ -1,9 +1,9 @@
 import { create } from 'zustand';
-import type { LayerId } from '../types';
+import type { PanelKind } from '../types';
 
 export interface PanelData {
   id: string;
-  kind: LayerId;
+  kind: PanelKind;
   title: string;
   subtitle?: string;
   payload: Record<string, unknown>;

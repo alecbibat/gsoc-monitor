@@ -2,6 +2,8 @@ import { useLayersStore } from '../store/layersStore';
 import { useFlightsStatus } from '../layers/flights/flightsStore';
 import { useAlertsStatus } from '../layers/alerts/alertsStore';
 import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
+import { useLightningStatus } from '../layers/lightning/lightningStore';
+import { useFiresStatus } from '../layers/fires/firesStore';
 import { LayerToggle } from './LayerToggle';
 import { Section } from './Section';
 import { BasemapSwitcher } from './BasemapSwitcher';
@@ -25,6 +27,8 @@ export function Sidebar() {
   const flightsStatus = useFlightsStatus();
   const alertsStatus = useAlertsStatus();
   const hurricanesStatus = useHurricanesStatus();
+  const lightningStatus = useLightningStatus();
+  const firesStatus = useFiresStatus();
 
   return (
     <div className="pointer-events-auto absolute left-0 top-0 z-10 flex h-full w-72 flex-col border-r border-white/10 bg-ink-900/85 pt-20 shadow-panel backdrop-blur-sm">
@@ -50,6 +54,18 @@ export function Sidebar() {
               (hurricanesStatus.count > 0
                 ? `${hurricanesStatus.count} active system${hurricanesStatus.count === 1 ? '' : 's'}`
                 : 'No active tropical systems')
+            }
+          />
+          <LayerToggle
+            label="Lightning (Blitzortung)"
+            active={active.lightning}
+            onToggle={() => toggleLayer('lightning')}
+            statusText={
+              lightningStatus.error
+                ? lightningStatus.error
+                : lightningStatus.connected
+                  ? `${lightningStatus.ratePerMin} strikes/min · live`
+                  : 'Connecting to network…'
             }
           />
         </Section>
@@ -81,6 +97,17 @@ export function Sidebar() {
             active={active.alerts}
             onToggle={() => toggleLayer('alerts')}
             statusText={alertsStatus.error ?? `${alertsStatus.count} active alerts`}
+          />
+          <LayerToggle
+            label="Wildfires (NASA FIRMS)"
+            active={active.fires}
+            onToggle={() => toggleLayer('fires')}
+            statusText={
+              firesStatus.error ??
+              `${firesStatus.count.toLocaleString()} hotspots${
+                firesStatus.capped ? ' (top 2,500)' : ''
+              } · 24h`
+            }
           />
         </Section>
 
