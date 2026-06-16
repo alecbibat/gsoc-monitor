@@ -1,0 +1,30 @@
+{
+  "name": "GSOC Monitor",
+  "description": "Real-time 3D globe situational awareness dashboard",
+  "keywords": ["node", "express", "react", "cesium", "globe", "dashboard"],
+  "env": {
+    "OPENSKY_CLIENT_ID": {
+      "description": "Optional OpenSky Network API client ID for higher flight-tracking rate limits",
+      "required": false
+    },
+    "OPENSKY_CLIENT_SECRET": {
+      "description": "Optional OpenSky Network API client secret for higher flight-tracking rate limits",
+      "required": false
+    },
+    "NWS_USER_AGENT": {
+      "description": "Contact string (app name + email) sent to api.weather.gov per NWS API policy",
+      "required": false
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    }
+  ]
+}
