@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { flyToLonLat } from '../../cesium/flyTo';
 import { api } from '../../api/client';
+import { PulseLineMaterialProperty } from './pulseLineMaterial';
 import type { DirectionsResponse, DirectionsLeg } from '../../types';
 
 export interface LocationPayload {
@@ -229,21 +230,42 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
       const positions = leg.geometry.map(([lo, la]) => Cesium.Cartesian3.fromDegrees(lo, la));
       pts.push(...positions);
 
-      ds.entities.add({
-        polyline: {
-          positions,
-          width: leg.routed ? 5 : 3,
-          clampToGround: true,
-          material: leg.routed
-            ? new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.22, color })
-            : new Cesium.PolylineDashMaterialProperty({ color }),
-        },
-      });
+      if (leg.routed) {
+        // Real route: a glowing pulse sweeps from the pin toward the destination.
+        // Drawn unclamped (the app has no terrain, so this sits on the surface);
+        // the dense road geometry keeps it hugging the globe.
+        ds.entities.add({
+          polyline: {
+            positions,
+            width: 5,
+            material: new PulseLineMaterialProperty(
+              color,
+              8.0,
+              0.16
+            ) as unknown as Cesium.MaterialProperty,
+          },
+        });
+      } else {
+        // Fallback estimate: a draped dashed line (clamped, since it's one long
+        // straight chord that would otherwise cut through the globe).
+        ds.entities.add({
+          polyline: {
+            positions,
+            width: 3,
+            clampToGround: true,
+            material: new Cesium.PolylineDashMaterialProperty({ color }),
+          },
+        });
+      }
 
+      // Destination marker with a gentle "ping" pulse.
       ds.entities.add({
         position: Cesium.Cartesian3.fromDegrees(leg.lon, leg.lat),
         point: {
-          pixelSize: 8,
+          pixelSize: new Cesium.CallbackProperty(
+            () => 7 + 2.5 * (0.5 + 0.5 * Math.sin(Date.now() / 240)),
+            false
+          ) as unknown as Cesium.Property,
           color,
           outlineColor: Cesium.Color.WHITE,
           outlineWidth: 2,
@@ -274,7 +296,19 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
       });
     }
 
+    // The globe only renders on demand, so drive a render loop to animate the
+    // pulse while a route is on screen. Stops when the panel closes.
+    let raf = 0;
+    if (data.hospital || data.hotel) {
+      const tick = () => {
+        viewer.scene.requestRender();
+        raf = requestAnimationFrame(tick);
+      };
+      raf = requestAnimationFrame(tick);
+    }
+
     return () => {
+      if (raf) cancelAnimationFrame(raf);
       viewer.dataSources.remove(ds, true);
       viewer.scene.requestRender();
     };
