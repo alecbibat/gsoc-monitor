@@ -22,7 +22,13 @@ export const api = {
     ),
   pizza: () => getJson<import('../types').PizzaBusyness>('/api/pizza'),
   ships: () => getJson<import('../types').ShipsResponse>('/api/ships'),
-  news: () => getJson<import('../types').NewsResponse>('/api/news'),
+  news: (extras?: Array<{ url: string; label: string }>) => {
+    if (extras && extras.length > 0) {
+      const param = encodeURIComponent(JSON.stringify(extras));
+      return getJson<import('../types').NewsResponse>(`/api/news?extra=${param}`);
+    }
+    return getJson<import('../types').NewsResponse>('/api/news');
+  },
   county: (fips: string) => getJson<GeoJSON.FeatureCollection>(`/api/county/${fips}`),
   park: (code: string) => getJson<GeoJSON.FeatureCollection>(`/api/park/${code}`),
 };

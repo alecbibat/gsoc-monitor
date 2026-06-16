@@ -6,6 +6,9 @@ import { useLightningStatus } from '../layers/lightning/lightningStore';
 import { useFiresStatus } from '../layers/fires/firesStore';
 import { useShipsStatus } from '../layers/ships/shipsStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
+import { useCesiumViewer } from '../cesium/CesiumContext';
+import { flyToLonLat } from '../cesium/flyTo';
+import { LOCATION_GROUPS } from '../layers/locations/locations';
 import { LayerToggle } from './LayerToggle';
 import { Section } from './Section';
 import { BasemapSwitcher } from './BasemapSwitcher';
@@ -36,6 +39,8 @@ export function Sidebar() {
   const firesStatus = useFiresStatus();
   const shipsStatus = useShipsStatus();
   const screensaverActive = useScreensaverStore((s) => s.active);
+  const viewer = useCesiumViewer();
+  const locationsActive = (active as Record<string, boolean>).locations ?? true;
 
   function shipsStatusText() {
     if (shipsStatus.noKey) return 'Set AISSTREAM_API_KEY to enable';
@@ -168,6 +173,56 @@ export function Sidebar() {
               Show favorites only ({shipFavorites.length})
             </label>
           </LayerToggle>
+        </Section>
+
+        <Section title="Locations">
+          {/* Globe pin visibility toggle */}
+          <div className="px-1 pb-1">
+            <button
+              onClick={() => toggleLayer('locations')}
+              className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left transition hover:bg-white/5"
+            >
+              <span className="text-[13px] text-white/85">Show pins on map</span>
+              <span
+                className={`relative h-4 w-7 shrink-0 rounded-full transition ${
+                  locationsActive ? 'bg-accent/70' : 'bg-white/15'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${
+                    locationsActive ? 'translate-x-3.5' : 'translate-x-0.5'
+                  }`}
+                />
+              </span>
+            </button>
+          </div>
+
+          {/* Grouped location list */}
+          {LOCATION_GROUPS.map((group) => (
+            <div key={group.id} className="px-1">
+              <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-white/35">
+                <span>{group.icon}</span>
+                <span>{group.name}</span>
+              </div>
+              <div className="space-y-px">
+                {group.locations.map((loc) => (
+                  <button
+                    key={loc.name}
+                    onClick={() =>
+                      viewer && flyToLonLat(viewer, loc.lon, loc.lat, loc.altitudeM ?? 30_000)
+                    }
+                    className="flex w-full items-center gap-2 rounded px-3 py-1 text-left text-[12px] text-white/60 transition hover:bg-white/8 hover:text-white/90"
+                  >
+                    <span
+                      className="h-1.5 w-1.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: group.color }}
+                    />
+                    {loc.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
         </Section>
       </div>
     </div>

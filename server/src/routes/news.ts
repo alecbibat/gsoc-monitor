@@ -191,8 +191,9 @@ async function fetchFeed(url: string, source: string): Promise<NewsItem[]> {
   return items;
 }
 
-async function fetchAllFeeds(): Promise<NewsItem[]> {
-  const results = await Promise.allSettled(FEEDS.map((f) => fetchFeed(f.url, f.source)));
+async function fetchAllFeeds(extraFeeds: Array<{ url: string; source: string }> = []): Promise<NewsItem[]> {
+  const allFeeds = [...FEEDS, ...extraFeeds];
+  const results = await Promise.allSettled(allFeeds.map((f) => fetchFeed(f.url, f.source)));
   const all: NewsItem[] = [];
   const seen = new Set<string>();
   for (const res of results) {
@@ -217,7 +218,60 @@ const FAILURE_COOLDOWN = 60_000;
 let lastGood: NewsResult | null = null;
 let cooldownUntil = 0;
 
-router.get('/', async (_req, res) => {
+router.get('/', async (req, res) => {
+  // Parse user-supplied extra RSS feeds from ?extra=<url-encoded-json>.
+  let extraFeeds: Array<{ url: string; source: string }> = [];
+  if (req.query.extra) {
+    try {
+      const parsed = JSON.parse(req.query.extra as string) as Array<{ url: string; label: string }>;
+      extraFeeds = parsed.map((e) => ({ url: e.url, source: e.label || new URL(e.url).hostname }));
+    } catch {
+      // ignore malformed extra param
+    }
+  }
+
+  // If extra feeds supplied, fetch base from cache then merge extras fresh.
+  if (extraFeeds.length > 0) {
+    let baseItems: NewsItem[] = [];
+    const cached = cache.get<NewsResult>(CACHE_KEY);
+    if (cached) {
+      baseItems = cached.items;
+    } else if (lastGood) {
+      baseItems = lastGood.items;
+    } else {
+      try {
+        baseItems = await fetchAllFeeds();
+        const result: NewsResult = { items: baseItems, updated: Date.now() };
+        cache.set(CACHE_KEY, result, SUCCESS_TTL);
+        lastGood = result;
+      } catch {
+        // continue with empty base
+      }
+    }
+
+    const extraResults = await Promise.allSettled(
+      extraFeeds.map((f) => fetchFeed(f.url, f.source))
+    );
+    const baseUrls = new Set(baseItems.map((i) => i.url));
+    const extraItems: NewsItem[] = [];
+    for (const r of extraResults) {
+      if (r.status !== 'fulfilled') {
+        console.error('[news] extra feed failed:', r.reason);
+        continue;
+      }
+      for (const item of r.value) {
+        if (!baseUrls.has(item.url)) extraItems.push(item);
+      }
+    }
+
+    const merged = [...extraItems, ...baseItems]
+      .sort((a, b) => b.publishedAt - a.publishedAt)
+      .slice(0, 120);
+    res.json({ items: merged, updated: Date.now() });
+    return;
+  }
+
+  // Standard path: cache → cooldown stale → fresh fetch.
   const cached = cache.get<NewsResult>(CACHE_KEY);
   if (cached) {
     res.json(cached);

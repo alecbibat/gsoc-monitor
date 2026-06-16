@@ -10,6 +10,7 @@ import { HurricaneLayer } from './layers/hurricanes/HurricaneLayer';
 import { LightningLayer } from './layers/lightning/LightningLayer';
 import { FireLayer } from './layers/fires/FireLayer';
 import { ShipLayer } from './layers/ships/ShipLayer';
+import { LocationsLayer } from './layers/locations/LocationsLayer';
 import { TopBar } from './ui/TopBar';
 import { Sidebar } from './ui/Sidebar';
 import { StarField } from './ui/StarField';
@@ -36,6 +37,7 @@ export default function App() {
           <LightningLayer />
           <FlightLayer />
           <ShipLayer />
+          <LocationsLayer />
         </CesiumGlobe>
         <TopBar />
         <Sidebar />

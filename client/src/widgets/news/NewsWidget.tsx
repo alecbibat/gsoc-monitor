@@ -1,10 +1,12 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/client';
 import type { NewsItem } from '../../types';
 import { useNewsStore, type CategoryFilter, type SeverityFilter } from './newsStore';
 import { useScreensaverStore } from '../../screensaver/screensaverStore';
 
 const REFRESH_MS = 5 * 60_000;
+
+const BUILTIN_SOURCES = ['BBC News', 'The Guardian', 'Sky News', 'NPR', 'Al Jazeera'];
 
 const SEVERITY_LABEL: Record<SeverityFilter, string> = {
   alert: 'ALERT',
@@ -62,6 +64,9 @@ export function NewsWidget() {
   const setData = useNewsStore((s) => s.setData);
   const setLoading = useNewsStore((s) => s.setLoading);
   const setError = useNewsStore((s) => s.setError);
+  const customSources = useNewsStore((s) => s.customSources);
+  const addCustomSource = useNewsStore((s) => s.addCustomSource);
+  const removeCustomSource = useNewsStore((s) => s.removeCustomSource);
 
   const enqueueNewsPoi = useScreensaverStore((s) => s.enqueueNewsPoi);
   const screensaverActive = useScreensaverStore((s) => s.active);
@@ -69,16 +74,20 @@ export function NewsWidget() {
 
   const prevSeenRef = useRef<Set<string>>(new Set());
 
+  const [showSources, setShowSources] = useState(false);
+  const [newUrl, setNewUrl] = useState('');
+  const [newLabel, setNewLabel] = useState('');
+  const [addError, setAddError] = useState('');
+
   useEffect(() => {
     let cancelled = false;
 
     const fetchNews = async () => {
       setLoading(true);
       try {
-        const res = await api.news();
+        const res = await api.news(customSources.length > 0 ? customSources : undefined);
         if (cancelled) return;
 
-        // Detect brand-new items (not in our seen set before this fetch).
         const prevSeen = prevSeenRef.current;
         if (screensaverActive && screensaverMode === 'global') {
           for (const item of res.items) {
@@ -113,7 +122,22 @@ export function NewsWidget() {
       clearInterval(id);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screensaverActive, screensaverMode]);
+  }, [screensaverActive, screensaverMode, customSources]);
+
+  function handleAddSource() {
+    setAddError('');
+    const url = newUrl.trim();
+    if (!url) return;
+    try {
+      const parsed = new URL(url);
+      const label = newLabel.trim() || parsed.hostname;
+      addCustomSource({ url, label });
+      setNewUrl('');
+      setNewLabel('');
+    } catch {
+      setAddError('Invalid URL');
+    }
+  }
 
   const visible = items.filter(
     (i) => severityFilter.has(i.severity) && categoryFilter.has(i.category)
@@ -132,7 +156,7 @@ export function NewsWidget() {
         ) : (
           <span className="flex items-center gap-1.5 text-accent-ok">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-ok" />
-            GDELT · live
+            RSS · live
           </span>
         )}
         {updated && (
@@ -243,6 +267,74 @@ export function NewsWidget() {
             </div>
           </a>
         ))}
+      </div>
+
+      {/* Sources section */}
+      <div className="border-t border-white/8 pt-2">
+        <button
+          onClick={() => setShowSources(!showSources)}
+          className="flex w-full items-center justify-between text-[10px] font-semibold uppercase tracking-widest text-white/30 hover:text-white/50 transition"
+        >
+          <span>Sources ({BUILTIN_SOURCES.length + customSources.length})</span>
+          <span className="transition-transform" style={{ display: 'inline-block', transform: showSources ? 'rotate(0deg)' : 'rotate(-90deg)' }}>▾</span>
+        </button>
+
+        {showSources && (
+          <div className="mt-2 space-y-1">
+            {/* Built-in sources */}
+            {BUILTIN_SOURCES.map((s) => (
+              <div key={s} className="flex items-center justify-between px-1 py-0.5">
+                <span className="text-[11px] text-white/50">{s}</span>
+                <span className="text-[9px] text-white/20">built-in</span>
+              </div>
+            ))}
+
+            {/* Custom sources */}
+            {customSources.map((s) => (
+              <div key={s.url} className="flex items-center justify-between px-1 py-0.5 group">
+                <span className="truncate text-[11px] text-white/70" title={s.url}>
+                  {s.label}
+                </span>
+                <button
+                  onClick={() => removeCustomSource(s.url)}
+                  className="ml-2 shrink-0 text-[13px] leading-none text-white/25 transition hover:text-red-400"
+                  title="Remove source"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+
+            {/* Add source form */}
+            <div className="pt-2 space-y-1.5">
+              <input
+                type="url"
+                value={newUrl}
+                onChange={(e) => { setNewUrl(e.target.value); setAddError(''); }}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddSource()}
+                placeholder="RSS feed URL"
+                className="w-full rounded bg-white/5 px-2 py-1.5 text-[11px] text-white/80 placeholder:text-white/25 outline-none ring-0 focus:ring-1 focus:ring-accent/50 transition"
+              />
+              <input
+                type="text"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddSource()}
+                placeholder="Source name (optional)"
+                className="w-full rounded bg-white/5 px-2 py-1.5 text-[11px] text-white/80 placeholder:text-white/25 outline-none ring-0 focus:ring-1 focus:ring-accent/50 transition"
+              />
+              {addError && (
+                <div className="text-[10px] text-red-400">{addError}</div>
+              )}
+              <button
+                onClick={handleAddSource}
+                className="w-full rounded bg-accent/15 py-1.5 text-[11px] font-semibold text-accent/90 transition hover:bg-accent/25"
+              >
+                + Add Source
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -6,7 +6,8 @@ export type LayerId =
   | 'hurricanes'
   | 'lightning'
   | 'fires'
-  | 'ships';
+  | 'ships'
+  | 'locations';
 
 // Standalone dockable widgets that aren't tied to a clicked map entity.
 export type WidgetId = 'pentagon-pizza' | 'news-feed';
