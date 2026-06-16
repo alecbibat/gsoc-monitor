@@ -11,6 +11,7 @@ import pizzaRouter from './routes/pizza';
 import shipsRouter, { initShipsStream } from './routes/ships';
 import newsRouter from './routes/news';
 import countyRouter from './routes/county';
+import parkRouter from './routes/park';
 
 dotenv.config();
 
@@ -27,6 +28,7 @@ app.use('/api/pizza', pizzaRouter);
 app.use('/api/ships', shipsRouter);
 app.use('/api/news', newsRouter);
 app.use('/api/county', countyRouter);
+app.use('/api/park', parkRouter);
 
 // Start AIS WebSocket stream (after dotenv so env vars are available).
 initShipsStream();

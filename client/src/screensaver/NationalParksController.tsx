@@ -15,7 +15,8 @@ const POI_DWELL_MAX_MS = 18_000;
 
 interface ParkPoi {
   title: string;
-  fips: string;
+  unitCode?: string; // NPS park unit code → park boundary outline (e.g. GRCA)
+  fips?: string; // county FIPS → county outline, for non-park office locations
   lat: number;
   lon: number;
   altitudeM: number;
@@ -25,7 +26,7 @@ interface ParkPoi {
 const PARKS: ParkPoi[] = [
   {
     title: 'Grand Canyon National Park',
-    fips: '04005',
+    unitCode: 'GRCA',
     lat: 36.1069,
     lon: -112.1129,
     altitudeM: 500_000,
@@ -39,7 +40,7 @@ const PARKS: ParkPoi[] = [
   },
   {
     title: 'Glacier National Park',
-    fips: '30029',
+    unitCode: 'GLAC',
     lat: 48.6960,
     lon: -113.7180,
     altitudeM: 400_000,
@@ -53,7 +54,7 @@ const PARKS: ParkPoi[] = [
   },
   {
     title: 'Mount Rushmore National Memorial',
-    fips: '46103',
+    unitCode: 'MORU',
     lat: 43.8791,
     lon: -103.4591,
     altitudeM: 60_000,
@@ -67,7 +68,7 @@ const PARKS: ParkPoi[] = [
   },
   {
     title: 'Yellowstone National Park',
-    fips: '56029',
+    unitCode: 'YELL',
     lat: 44.4280,
     lon: -110.5885,
     altitudeM: 600_000,
@@ -95,7 +96,7 @@ const PARKS: ParkPoi[] = [
   },
   {
     title: 'Death Valley National Park',
-    fips: '06027',
+    unitCode: 'DEVA',
     lat: 36.5054,
     lon: -117.0794,
     altitudeM: 400_000,
@@ -151,8 +152,8 @@ export function NationalParksController() {
   const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Per-park last fact index to avoid repeating the same fact.
   const lastFactIndexRef = useRef<number[]>(PARKS.map(() => -1));
-  // Active county DataSource reference for cleanup.
-  const countySourceRef = useRef<Cesium.GeoJsonDataSource | null>(null);
+  // Active boundary DataSource reference for cleanup.
+  const boundarySourceRef = useRef<Cesium.GeoJsonDataSource | null>(null);
 
   function updatePhase(p: typeof phaseRef.current) {
     phaseRef.current = p;
@@ -168,28 +169,63 @@ export function NationalParksController() {
     return arr;
   }
 
-  async function loadCountyHighlight(v: Cesium.Viewer, fips: string) {
+  // Fetch and render the boundary outline for a park (NPS unit) or office
+  // (county). Cesium clamps WebGL line width to 1px, so we draw each polygon
+  // ring as a glowing polyline to get a clearly visible, thick outline.
+  async function loadBoundaryHighlight(v: Cesium.Viewer, park: ParkPoi) {
     try {
-      const geoJson = await api.county(fips);
-      if (cancelledRef.current) return;
+      const geoJson = park.unitCode
+        ? await api.park(park.unitCode)
+        : park.fips
+          ? await api.county(park.fips)
+          : null;
+      if (!geoJson || cancelledRef.current) return;
+
       const source = await Cesium.GeoJsonDataSource.load(geoJson, {
-        fill: Cesium.Color.fromCssColorString('#4ade80').withAlpha(0.18),
-        stroke: Cesium.Color.fromCssColorString('#4ade80').withAlpha(0.85),
-        strokeWidth: 3,
+        fill: Cesium.Color.fromCssColorString('#4ade80').withAlpha(0.1),
+        stroke: Cesium.Color.fromCssColorString('#4ade80').withAlpha(0.9),
+        strokeWidth: 2,
         clampToGround: true,
       });
-      if (cancelledRef.current) { return; }
-      countySourceRef.current = source;
+      if (cancelledRef.current) return;
+
+      const now = Cesium.JulianDate.now();
+      const glow = new Cesium.PolylineGlowMaterialProperty({
+        color: Cesium.Color.fromCssColorString('#7cffb0'),
+        glowPower: 0.3,
+      });
+      // Snapshot existing polygon entities, then add polyline borders for each.
+      for (const entity of source.entities.values.slice()) {
+        const poly = entity.polygon;
+        if (!poly) continue;
+        const hierarchy = poly.hierarchy?.getValue(now) as Cesium.PolygonHierarchy | undefined;
+        if (!hierarchy) continue;
+        const rings = [hierarchy.positions, ...(hierarchy.holes ?? []).map((h) => h.positions)];
+        for (const positions of rings) {
+          if (!positions || positions.length < 2) continue;
+          source.entities.add({
+            polyline: {
+              positions: [...positions, positions[0]],
+              width: 4,
+              material: glow,
+              clampToGround: true,
+            },
+          });
+        }
+        poly.outline = new Cesium.ConstantProperty(false);
+      }
+
+      boundarySourceRef.current = source;
       await v.dataSources.add(source);
     } catch {
-      // County highlight is non-critical — silently skip.
+      // Boundary highlight is non-critical — silently skip on any failure.
     }
   }
 
-  function removeCountyHighlight(v: Cesium.Viewer) {
-    if (countySourceRef.current) {
-      v.dataSources.remove(countySourceRef.current, true);
-      countySourceRef.current = null;
+  function removeBoundaryHighlight(v: Cesium.Viewer) {
+    if (boundarySourceRef.current) {
+      v.dataSources.remove(boundarySourceRef.current, true);
+      boundarySourceRef.current = null;
     }
   }
 
@@ -247,8 +283,8 @@ export function NationalParksController() {
         complete: () => {
           if (cancelledRef.current) return;
           updatePhase('at-poi');
-          // Load county polygon highlight.
-          loadCountyHighlight(v, park.fips);
+          // Outline the park (or office county) boundary.
+          loadBoundaryHighlight(v, park);
           dwellTimerRef.current = setTimeout(leaveParkAndReturn, rand(POI_DWELL_MIN_MS, POI_DWELL_MAX_MS));
         },
       });
@@ -259,8 +295,8 @@ export function NationalParksController() {
       updatePhase('flying-back');
       setCurrentPoi(null);
 
-      // Remove county highlight while flying back.
-      removeCountyHighlight(v);
+      // Remove boundary highlight while flying back.
+      removeBoundaryHighlight(v);
 
       v.camera.flyTo({
         destination: Cesium.Cartesian3.fromDegrees(OVERVIEW_LON, OVERVIEW_LAT, OVERVIEW_ALT),
@@ -280,7 +316,7 @@ export function NationalParksController() {
       cancelledRef.current = true;
       if (poiTimerRef.current) clearTimeout(poiTimerRef.current);
       if (dwellTimerRef.current) clearTimeout(dwellTimerRef.current);
-      removeCountyHighlight(v);
+      removeBoundaryHighlight(v);
 
       v.scene.requestRenderMode = prevRequestRender;
       v.scene.maximumRenderTimeChange = prevMaxRenderTime;

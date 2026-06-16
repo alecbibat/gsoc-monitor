@@ -127,6 +127,7 @@ export interface NewsItem {
   title: string;
   url: string;
   source: string;
+  image: string | null;
   publishedAt: number;
   severity: 'alert' | 'urgent' | 'critical';
   category: 'conflict' | 'disaster' | 'weather' | 'politics' | 'economy' | 'health' | 'environment';

@@ -86,11 +86,13 @@ export function NewsWidget() {
               if (item.severity === 'urgent' || item.severity === 'critical') {
                 enqueueNewsPoi({
                   title: item.title,
-                  description: `${item.source} · ${item.countryName ?? ''}`,
+                  description: `${item.source}${item.countryName ? ` · ${item.countryName}` : ''}`,
                   lat: item.lat,
                   lon: item.lon,
                   altitudeM: 2_500_000,
                   category: 'news',
+                  imageUrl: item.image,
+                  url: item.url,
                 });
               }
             }
@@ -204,6 +206,17 @@ export function NewsWidget() {
               <span
                 className={`mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full ${SEVERITY_DOT[item.severity]}`}
               />
+              {item.image && (
+                <img
+                  src={item.image}
+                  alt=""
+                  loading="lazy"
+                  className="h-12 w-12 shrink-0 rounded object-cover"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).style.display = 'none';
+                  }}
+                />
+              )}
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5 text-[10px] text-white/35">
                   <span>{CAT_ICON[item.category]}</span>

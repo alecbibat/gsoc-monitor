@@ -50,12 +50,18 @@ const COUNTRY_CENTROIDS: Record<string, [number, number]> = {
   'South Africa': [-30.6, 22.9], ZA: [-30.6, 22.9],
   Nigeria: [9.1, 8.7], NG: [9.1, 8.7],
   Ethiopia: [9.1, 40.5], ET: [9.1, 40.5],
+  Spain: [40.0, -4.0], ES: [40.0, -4.0],
+  Italy: [42.8, 12.8], IT: [42.8, 12.8],
+  Yemen: [15.5, 48.0], YE: [15.5, 48.0],
+  Lebanon: [33.9, 35.5], LB: [33.9, 35.5],
+  Afghanistan: [33.9, 67.7], AF: [33.9, 67.7],
 };
 
 interface GDELTArticle {
   url?: string;
   title?: string;
   seendate?: string;
+  socialimage?: string;
   domain?: string;
   language?: string;
   sourcecountry?: string;
@@ -86,28 +92,41 @@ function guessCategory(title: string): string {
   return 'conflict';
 }
 
+// GDELT rejects queries that are too long/complex (it returns a plain-text
+// error page, not JSON). Keep this focused and parenthesized — a tight set of
+// high-signal terms spanning our categories.
+const NEWS_QUERY =
+  '(earthquake OR hurricane OR wildfire OR flooding OR explosion OR airstrike OR war OR outbreak OR election OR economy OR evacuation OR eruption OR shooting OR protest)';
+
 async function fetchGdelt(query: string): Promise<GDELTArticle[]> {
   const url = new URL(GDELT_BASE);
-  url.searchParams.set('query', query);
+  // In the GDELT DOC 2.0 API, language is a query operator (`sourcelang:`),
+  // not a URL parameter, and the space here means AND.
+  url.searchParams.set('query', `${query} sourcelang:english`);
   url.searchParams.set('mode', 'artlist');
   url.searchParams.set('maxrecords', '100');
   url.searchParams.set('format', 'json');
-  url.searchParams.set('SOURCELANG', 'english');
-  url.searchParams.set('timespan', '360min');
+  url.searchParams.set('timespan', '24h');
   url.searchParams.set('sort', 'DateDesc');
-  const r = await fetch(url.toString(), { signal: AbortSignal.timeout(12_000) });
-  if (!r.ok) throw new Error(`GDELT ${r.status}`);
-  const data = await r.json() as { articles?: GDELTArticle[] };
+
+  const r = await fetch(url.toString(), {
+    signal: AbortSignal.timeout(12_000),
+    headers: { 'User-Agent': 'gsoc-monitor/1.0' },
+  });
+  if (!r.ok) throw new Error(`GDELT HTTP ${r.status}`);
+
+  // GDELT sometimes returns a plain-text error (HTTP 200) instead of JSON when
+  // a query is malformed or rate-limited. Read as text and parse defensively so
+  // we surface a useful message rather than crashing on res.json().
+  const text = await r.text();
+  let data: { articles?: GDELTArticle[] };
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`GDELT non-JSON response: ${text.slice(0, 140).replace(/\s+/g, ' ')}`);
+  }
   return data.articles ?? [];
 }
-
-const NEWS_QUERY = [
-  'disaster OR emergency OR attack OR explosion OR earthquake OR flood OR hurricane OR cyclone',
-  'OR military OR troops OR war OR missile OR bombing',
-  'OR outbreak OR virus OR epidemic OR pandemic',
-  'OR economy OR market OR inflation OR election OR government',
-  'OR tornado OR wildfire OR eruption OR tsunami',
-].join(' ');
 
 router.get('/', async (_req, res) => {
   try {
@@ -119,11 +138,13 @@ router.get('/', async (_req, res) => {
         if (!a.url || !a.title || seen.has(a.url)) continue;
         seen.add(a.url);
         const centroid = a.sourcecountry ? COUNTRY_CENTROIDS[a.sourcecountry] : undefined;
+        const image = a.socialimage && /^https?:\/\//.test(a.socialimage) ? a.socialimage : null;
         out.push({
           id: Buffer.from(a.url).toString('base64').slice(0, 16),
           title: a.title,
           url: a.url,
           source: a.domain ?? '',
+          image,
           publishedAt: parseSeen(a.seendate ?? ''),
           severity: severity(a.title),
           category: guessCategory(a.title),

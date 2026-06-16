@@ -24,4 +24,5 @@ export const api = {
   ships: () => getJson<import('../types').ShipsResponse>('/api/ships'),
   news: () => getJson<import('../types').NewsResponse>('/api/news'),
   county: (fips: string) => getJson<GeoJSON.FeatureCollection>(`/api/county/${fips}`),
+  park: (code: string) => getJson<GeoJSON.FeatureCollection>(`/api/park/${code}`),
 };

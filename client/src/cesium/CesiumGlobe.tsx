@@ -79,7 +79,15 @@ export function CesiumGlobe({ children, onReady }: Props) {
 
   useEffect(() => {
     if (!viewer) return;
-    const newLayer = viewer.imageryLayers.addImageryProvider(BASEMAPS[basemap].build());
+    const def = BASEMAPS[basemap];
+    const newLayer = viewer.imageryLayers.addImageryProvider(def.build());
+    // Apply optional colour adjustments (e.g. the dark-satellite look).
+    if (def.adjust) {
+      if (def.adjust.brightness != null) newLayer.brightness = def.adjust.brightness;
+      if (def.adjust.contrast != null) newLayer.contrast = def.adjust.contrast;
+      if (def.adjust.saturation != null) newLayer.saturation = def.adjust.saturation;
+      if (def.adjust.gamma != null) newLayer.gamma = def.adjust.gamma;
+    }
     viewer.imageryLayers.lowerToBottom(newLayer);
     if (baseLayerRef.current) {
       viewer.imageryLayers.remove(baseLayerRef.current, true);

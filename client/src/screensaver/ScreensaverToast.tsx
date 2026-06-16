@@ -41,19 +41,31 @@ export function ScreensaverToast() {
       }`}
     >
       {poi && (
-        <div className="min-w-[320px] max-w-[520px] rounded-xl border border-white/10 bg-ink-900/90 px-6 py-4 shadow-2xl backdrop-blur-md">
-          <div className="mb-1 text-[10px] font-semibold tracking-[0.2em] text-white/30">
-            {LABEL[poi.category] ?? 'MONITORING'}
-          </div>
-          <div className="flex items-start gap-3">
-            <span className="mt-0.5 text-xl leading-none">{ICON[poi.category] ?? '◎'}</span>
-            <div className="min-w-0">
-              <div
-                className={`text-[15px] font-bold leading-tight ${LABEL_COLOR[poi.category] ?? 'text-accent'}`}
-              >
-                {poi.title}
+        <div className="w-[420px] max-w-[92vw] overflow-hidden rounded-xl border border-white/10 bg-ink-900/90 shadow-2xl backdrop-blur-md">
+          {poi.imageUrl && (
+            <img
+              src={poi.imageUrl}
+              alt=""
+              className="h-40 w-full object-cover"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.display = 'none';
+              }}
+            />
+          )}
+          <div className="px-6 py-4">
+            <div className="mb-1 text-[10px] font-semibold tracking-[0.2em] text-white/30">
+              {LABEL[poi.category] ?? 'MONITORING'}
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 text-xl leading-none">{ICON[poi.category] ?? '◎'}</span>
+              <div className="min-w-0">
+                <div
+                  className={`text-[15px] font-bold leading-tight ${LABEL_COLOR[poi.category] ?? 'text-accent'}`}
+                >
+                  {poi.title}
+                </div>
+                <div className="mt-1 text-[12px] leading-snug text-white/60">{poi.description}</div>
               </div>
-              <div className="mt-1 text-[12px] leading-snug text-white/60">{poi.description}</div>
             </div>
           </div>
         </div>

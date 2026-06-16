@@ -7,6 +7,8 @@ export interface Poi {
   lon: number;
   altitudeM: number;
   category: 'earthquake' | 'weather' | 'landmark' | 'hurricane' | 'park' | 'news';
+  imageUrl?: string | null;
+  url?: string;
 }
 
 export type ScreensaverMode = 'global' | 'national-parks';

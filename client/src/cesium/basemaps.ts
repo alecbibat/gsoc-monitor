@@ -5,6 +5,13 @@ interface BasemapDef {
   label: string;
   attribution: string;
   build: () => Cesium.ImageryProvider;
+  // Optional ImageryLayer colour adjustments applied after the layer is added.
+  adjust?: {
+    brightness?: number;
+    contrast?: number;
+    saturation?: number;
+    gamma?: number;
+  };
 }
 
 export const BASEMAPS: Record<BasemapId, BasemapDef> = {
@@ -31,7 +38,7 @@ export const BASEMAPS: Record<BasemapId, BasemapDef> = {
       }),
   },
   satellite: {
-    label: 'Satellite',
+    label: 'Dark Sat',
     attribution: 'Esri World Imagery',
     build: () =>
       new Cesium.UrlTemplateImageryProvider({
@@ -39,6 +46,8 @@ export const BASEMAPS: Record<BasemapId, BasemapDef> = {
         maximumLevel: 19,
         credit: new Cesium.Credit('Esri, Maxar, Earthstar Geographics'),
       }),
+    // Darken Esri imagery into a muted "night satellite" look so overlays pop.
+    adjust: { brightness: 0.48, contrast: 1.15, saturation: 0.62, gamma: 1.45 },
   },
   topo: {
     label: 'Topographic',
