@@ -100,6 +100,7 @@ export interface RadarManifest {
 
 export interface ShipState {
   mmsi: string;
+  imo: number | null;
   name: string | null;
   callsign: string | null;
   shipType: number | null;
@@ -118,6 +119,7 @@ export interface ShipsResponse {
   ships: ShipState[];
   updated: number;
   connected?: boolean;
+  total?: number; // size of the allowlist
 }
 
 export interface PizzaPlaceBusyness {

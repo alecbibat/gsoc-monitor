@@ -17,6 +17,7 @@ const NAV_STATUS: Record<number, string> = {
 interface Props {
   payload: {
     mmsi: string;
+    imo: number | null;
     name: string | null;
     callsign: string | null;
     shipType: number | null;
@@ -46,9 +47,6 @@ export function ShipDetails({ payload }: Props) {
           <div className="text-xl font-bold tracking-wide">
             {payload.name?.trim() || `MMSI ${payload.mmsi}`}
           </div>
-          {payload.name && (
-            <div className="font-mono text-[11px] text-white/40">{payload.mmsi}</div>
-          )}
         </div>
         <button
           onClick={() => toggleFavorite(payload.mmsi)}
@@ -63,6 +61,12 @@ export function ShipDetails({ payload }: Props) {
       </div>
 
       <dl className="grid grid-cols-2 gap-y-1.5 text-[13px]">
+        <dt className="text-white/40">IMO</dt>
+        <dd className="font-mono">{payload.imo ?? '—'}</dd>
+
+        <dt className="text-white/40">MMSI</dt>
+        <dd className="font-mono">{payload.mmsi}</dd>
+
         <dt className="text-white/40">Type</dt>
         <dd>{shipTypeLabel(payload.shipType)}</dd>
 

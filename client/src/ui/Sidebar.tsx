@@ -38,9 +38,8 @@ export function Sidebar() {
   function shipsStatusText() {
     if (shipsStatus.noKey) return 'Set AISSTREAM_API_KEY to enable';
     if (shipsStatus.error) return shipsStatus.error;
-    if (shipsStatus.tooWideView) return 'Zoom in to load vessels';
     const conn = shipsStatus.connected ? ' · live' : '';
-    return `${shipsStatus.count} vessel${shipsStatus.count === 1 ? '' : 's'} in view${conn}`;
+    return `${shipsStatus.count}/${shipsStatus.total} vessels tracked${conn}`;
   }
 
   return (

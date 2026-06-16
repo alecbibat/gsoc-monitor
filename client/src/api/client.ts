@@ -21,6 +21,5 @@ export const api = {
       `/api/geocode?q=${encodeURIComponent(q)}`
     ),
   pizza: () => getJson<import('../types').PizzaBusyness>('/api/pizza'),
-  ships: (lat: number, lon: number, dist: number) =>
-    getJson<import('../types').ShipsResponse>(`/api/ships?lat=${lat}&lon=${lon}&dist=${dist}`),
+  ships: () => getJson<import('../types').ShipsResponse>('/api/ships'),
 };

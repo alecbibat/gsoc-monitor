@@ -6,24 +6,19 @@ import { api } from '../../api/client';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { useShipsStatus } from './shipsStore';
 
-// AIS global coverage; ships are globally distributed so a large max radius is fine.
-const MAX_RADIUS_NM = 500;
-
-// AIS ship type → category color
 function shipColor(type: number | null): string {
   if (type === null) return '#8fc7d9';
-  if (type >= 70 && type <= 79) return '#3ddcff'; // Cargo  — blue
-  if (type >= 80 && type <= 89) return '#ff9d2e'; // Tanker — orange
-  if (type >= 60 && type <= 69) return '#4dff91'; // Passenger — green
-  if (type === 30) return '#ffd84d';              // Fishing — yellow
-  if (type === 36 || type === 37) return '#ffd84d'; // Sailing — yellow
-  if (type >= 50 && type <= 59) return '#c084fc'; // Special (pilot, rescue…) — purple
-  if (type >= 40 && type <= 49) return '#ff5ad8'; // High-speed — pink
-  return '#8fc7d9'; // Other — grey-blue
+  if (type >= 70 && type <= 79) return '#3ddcff'; // Cargo
+  if (type >= 80 && type <= 89) return '#ff9d2e'; // Tanker
+  if (type >= 60 && type <= 69) return '#4dff91'; // Passenger
+  if (type === 30) return '#ffd84d';              // Fishing
+  if (type === 36 || type === 37) return '#ffd84d'; // Sailing
+  if (type >= 50 && type <= 59) return '#c084fc'; // Special
+  if (type >= 40 && type <= 49) return '#ff5ad8'; // High Speed
+  return '#8fc7d9';
 }
 
 function shipIconDataUri(color: string, favorite: boolean): string {
-  // Top-down ship silhouette: pointed bow at top, wider stern at bottom.
   const hull = 'M32 4 L46 20 L46 58 L18 58 L18 20 Z';
   const bridge = '<rect x="24" y="28" width="16" height="12" fill="rgba(5,34,43,0.55)" rx="2"/>';
   const outline = favorite ? '#ffb84d' : '#05222b';
@@ -31,15 +26,6 @@ function shipIconDataUri(color: string, favorite: boolean): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-function debounce<T extends (...args: never[]) => void>(fn: T, ms: number) {
-  let handle: ReturnType<typeof setTimeout> | null = null;
-  return (...args: Parameters<T>) => {
-    if (handle) clearTimeout(handle);
-    handle = setTimeout(() => fn(...args), ms);
-  };
-}
-
-// Icon cache so we don't rebuild the same SVG string thousands of times per tick.
 const iconCache = new Map<string, string>();
 function cachedIcon(color: string, favorite: boolean): string {
   const key = `${color}-${favorite}`;
@@ -78,32 +64,8 @@ export function ShipLayer() {
     let cancelled = false;
 
     const load = async () => {
-      const rect = viewer.camera.computeViewRectangle();
-      if (!rect) return;
-
-      const north = Cesium.Math.toDegrees(rect.north);
-      const south = Cesium.Math.toDegrees(rect.south);
-      const west = Cesium.Math.toDegrees(rect.west);
-      const east = Cesium.Math.toDegrees(rect.east);
-
-      const centerLat = (north + south) / 2;
-      const lonSpan = east >= west ? east - west : east + 360 - west;
-      let centerLon = west + lonSpan / 2;
-      if (centerLon > 180) centerLon -= 360;
-
-      const latHalfNm = ((north - south) / 2) * 60;
-      const lonHalfNm = (lonSpan / 2) * 60 * Math.cos(Cesium.Math.toRadians(centerLat));
-      const radiusNm = Math.ceil(Math.sqrt(latHalfNm ** 2 + lonHalfNm ** 2));
-
-      if (!Number.isFinite(radiusNm) || radiusNm > MAX_RADIUS_NM) {
-        ds.entities.removeAll();
-        useShipsStatus.getState().setStatus({ tooWideView: true, count: 0, error: null });
-        viewer.scene.requestRender();
-        return;
-      }
-
       try {
-        const data = await api.ships(centerLat, centerLon, Math.max(1, radiusNm));
+        const data = await api.ships();
         if (cancelled) return;
 
         if (data.source === 'no-key') {
@@ -120,7 +82,6 @@ export function ShipLayer() {
         for (const ship of visible) {
           const isFavorite = favorites.includes(ship.mmsi);
           const color = shipColor(ship.shipType);
-          // Prefer TrueHeading; fall back to COG so the icon always has some orientation.
           const bearing = ship.heading ?? ship.course ?? 0;
 
           const entity = ds.entities.add({
@@ -146,8 +107,8 @@ export function ShipLayer() {
         }
 
         useShipsStatus.getState().setStatus({
-          tooWideView: false,
           count: visible.length,
+          total: data.total ?? 7,
           error: null,
           noKey: false,
           connected: data.connected ?? true,
@@ -161,14 +122,11 @@ export function ShipLayer() {
     };
 
     load();
-    const debouncedLoad = debounce(load, 800);
-    viewer.camera.moveEnd.addEventListener(debouncedLoad);
     const interval = setInterval(load, 30_000);
 
     return () => {
       cancelled = true;
       clearInterval(interval);
-      viewer.camera.moveEnd.removeEventListener(debouncedLoad);
     };
   }, [viewer, active, favoritesOnly, favorites]);
 
