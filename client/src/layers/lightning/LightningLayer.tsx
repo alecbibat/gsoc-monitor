@@ -16,7 +16,7 @@ const RELAYS = [
 
 const STRIKE_LIFETIME_MS = 30_000; // how long a flash lingers before fading out
 const MAX_STRIKES = 900; // hard cap so a busy storm can't flood the scene
-const TICK_MS = 500; // fade/cleanup cadence
+const TICK_MS = 250; // fade/cleanup cadence (smooth enough for the strike flash)
 
 // LZW-style decompressor matching Blitzortung's wire format. Frames are JSON
 // objects compressed with this scheme; decode then JSON.parse to get a strike.
@@ -51,8 +51,22 @@ interface Strike {
   t: number; // local receive time (ms)
 }
 
-const FRESH = Cesium.Color.fromCssColorString('#ffffff');
-const HOT = Cesium.Color.fromCssColorString('#9fd8ff');
+const FLASH_MS = 850; // how long the bright "pop" lasts before settling
+const FRESH = Cesium.Color.fromCssColorString('#ffffff'); // new-strike flash
+const HOT = Cesium.Color.fromCssColorString('#76e6ff'); // settled electric blue
+
+// White "X" with a soft glow, drawn once and tinted per-strike via billboard
+// colour — Blitzortung-style crosshair rather than a plain dot.
+const BOLT_ICON = (() => {
+  const x = 'M10 10 L26 26 M26 10 L10 26';
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36">` +
+    `<g fill="none" stroke="#ffffff" stroke-linecap="round">` +
+    `<path d="${x}" stroke-width="8" opacity="0.25"/>` +
+    `<path d="${x}" stroke-width="3.5"/>` +
+    `</g></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+})();
 
 export function LightningLayer() {
   const viewer = useCesiumViewer();
@@ -130,12 +144,14 @@ export function LightningLayer() {
         ds.entities.add({
           id: `bolt-${id}`,
           position: Cesium.Cartesian3.fromDegrees(strike.lon, strike.lat),
-          point: {
-            pixelSize: 13,
+          billboard: {
+            image: BOLT_ICON,
+            width: 22,
+            height: 22,
             color: FRESH,
-            outlineColor: HOT.withAlpha(0.5),
-            outlineWidth: 2,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            scale: 2.4, // born big & bright; the ticker settles it
+            // Default depth test (disableDepthTestDistance = 0) so strikes on the
+            // far side of the planet are correctly hidden behind the globe.
           },
         });
 
@@ -177,17 +193,27 @@ export function LightningLayer() {
       for (const [id, s] of strikes) {
         const age = now - s.t;
         const entity = ds.entities.getById(`bolt-${id}`);
-        if (!entity?.point) continue;
+        if (!entity?.billboard) continue;
         if (age >= STRIKE_LIFETIME_MS) {
           strikes.delete(id);
           ds.entities.removeById(`bolt-${id}`);
           changed = true;
           continue;
         }
-        const k = 1 - age / STRIKE_LIFETIME_MS; // 1 = fresh, 0 = gone
-        entity.point.pixelSize = new Cesium.ConstantProperty(3 + 10 * k);
-        const base = age < 1200 ? FRESH : HOT;
-        entity.point.color = new Cesium.ConstantProperty(base.withAlpha(Math.max(0.05, k)));
+        let scale: number;
+        let color: Cesium.Color;
+        if (age < FLASH_MS) {
+          // Initial pop: shrink 2.4 -> 1.0 while bright white.
+          scale = 2.4 - 1.4 * (age / FLASH_MS);
+          color = FRESH;
+        } else {
+          // Settled crosshair that fades to transparent over its remaining life.
+          scale = 1;
+          const k = 1 - (age - FLASH_MS) / (STRIKE_LIFETIME_MS - FLASH_MS);
+          color = HOT.withAlpha(Math.max(0.05, k));
+        }
+        entity.billboard.scale = new Cesium.ConstantProperty(scale);
+        entity.billboard.color = new Cesium.ConstantProperty(color);
         changed = true;
       }
 

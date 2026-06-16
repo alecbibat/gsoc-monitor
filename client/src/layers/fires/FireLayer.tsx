@@ -184,7 +184,7 @@ export function FireLayer() {
             color: color.withAlpha(0.9),
             outlineColor: Cesium.Color.BLACK.withAlpha(0.45),
             outlineWidth: 1,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            // Default depth test so hotspots behind the globe stay hidden.
           },
         });
         attachPanelData(entity, {
