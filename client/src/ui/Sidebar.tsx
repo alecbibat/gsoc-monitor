@@ -4,6 +4,7 @@ import { useAlertsStatus } from '../layers/alerts/alertsStore';
 import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { useLightningStatus } from '../layers/lightning/lightningStore';
 import { useFiresStatus } from '../layers/fires/firesStore';
+import { useShipsStatus } from '../layers/ships/shipsStore';
 import { LayerToggle } from './LayerToggle';
 import { Section } from './Section';
 import { BasemapSwitcher } from './BasemapSwitcher';
@@ -24,11 +25,23 @@ export function Sidebar() {
   const flightFavoritesOnly = useLayersStore((s) => s.flightFavoritesOnly);
   const setFlightFavoritesOnly = useLayersStore((s) => s.setFlightFavoritesOnly);
   const flightFavorites = useLayersStore((s) => s.flightFavorites);
+  const shipFavoritesOnly = useLayersStore((s) => s.shipFavoritesOnly);
+  const setShipFavoritesOnly = useLayersStore((s) => s.setShipFavoritesOnly);
+  const shipFavorites = useLayersStore((s) => s.shipFavorites);
   const flightsStatus = useFlightsStatus();
   const alertsStatus = useAlertsStatus();
   const hurricanesStatus = useHurricanesStatus();
   const lightningStatus = useLightningStatus();
   const firesStatus = useFiresStatus();
+  const shipsStatus = useShipsStatus();
+
+  function shipsStatusText() {
+    if (shipsStatus.noKey) return 'Set AISSTREAM_API_KEY to enable';
+    if (shipsStatus.error) return shipsStatus.error;
+    if (shipsStatus.tooWideView) return 'Zoom in to load vessels';
+    const conn = shipsStatus.connected ? ' · live' : '';
+    return `${shipsStatus.count} vessel${shipsStatus.count === 1 ? '' : 's'} in view${conn}`;
+  }
 
   return (
     <div className="pointer-events-auto absolute left-0 top-0 z-10 flex h-full w-72 flex-col border-r border-white/10 bg-ink-900/85 pt-20 shadow-panel backdrop-blur-sm">
@@ -132,6 +145,22 @@ export function Sidebar() {
                 className="accent-accent"
               />
               Show favorites only ({flightFavorites.length})
+            </label>
+          </LayerToggle>
+          <LayerToggle
+            label="Ships (AIS)"
+            active={active.ships}
+            onToggle={() => toggleLayer('ships')}
+            statusText={shipsStatusText()}
+          >
+            <label className="flex items-center gap-2 pt-1 text-[11px] text-white/60">
+              <input
+                type="checkbox"
+                checked={shipFavoritesOnly}
+                onChange={(e) => setShipFavoritesOnly(e.target.checked)}
+                className="accent-accent"
+              />
+              Show favorites only ({shipFavorites.length})
             </label>
           </LayerToggle>
         </Section>

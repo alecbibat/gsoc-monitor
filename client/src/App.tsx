@@ -9,6 +9,7 @@ import { FlightLayer } from './layers/flights/FlightLayer';
 import { HurricaneLayer } from './layers/hurricanes/HurricaneLayer';
 import { LightningLayer } from './layers/lightning/LightningLayer';
 import { FireLayer } from './layers/fires/FireLayer';
+import { ShipLayer } from './layers/ships/ShipLayer';
 import { TopBar } from './ui/TopBar';
 import { Sidebar } from './ui/Sidebar';
 import { PanelManager } from './panels/PanelManager';
@@ -29,6 +30,7 @@ export default function App() {
           <FireLayer />
           <LightningLayer />
           <FlightLayer />
+          <ShipLayer />
         </CesiumGlobe>
         <TopBar />
         <Sidebar />

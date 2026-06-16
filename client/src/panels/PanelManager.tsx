@@ -5,6 +5,7 @@ import { AlertDetails } from '../layers/alerts/AlertDetails';
 import { FlightDetails } from '../layers/flights/FlightDetails';
 import { HurricaneDetails } from '../layers/hurricanes/HurricaneDetails';
 import { FireDetails } from '../layers/fires/FireDetails';
+import { ShipDetails } from '../layers/ships/ShipDetails';
 import { WIDGET_BY_ID } from '../widgets/registry';
 
 const ACCENT_BY_KIND: Record<string, string> = {
@@ -14,6 +15,7 @@ const ACCENT_BY_KIND: Record<string, string> = {
   radar: 'border-accent/40',
   hurricanes: 'border-accent-warn/40',
   fires: 'border-accent-warn/40',
+  ships: 'border-accent/40',
 };
 
 export function PanelManager() {
@@ -36,6 +38,7 @@ export function PanelManager() {
               <HurricaneDetails payload={panel.payload as never} />
             )}
             {panel.kind === 'fires' && <FireDetails payload={panel.payload as never} />}
+            {panel.kind === 'ships' && <ShipDetails payload={panel.payload as never} />}
           </Panel>
         );
       })}

@@ -5,7 +5,8 @@ export type LayerId =
   | 'flights'
   | 'hurricanes'
   | 'lightning'
-  | 'fires';
+  | 'fires'
+  | 'ships';
 
 // Standalone dockable widgets that aren't tied to a clicked map entity.
 export type WidgetId = 'pentagon-pizza';
@@ -95,6 +96,28 @@ export interface RadarManifest {
   satellite: {
     infrared: RadarFrame[];
   };
+}
+
+export interface ShipState {
+  mmsi: string;
+  name: string | null;
+  callsign: string | null;
+  shipType: number | null;
+  latitude: number;
+  longitude: number;
+  speedKt: number | null;
+  heading: number | null;
+  course: number | null;
+  navStatus: number | null;
+  destination: string | null;
+  lastSeenSec: number;
+}
+
+export interface ShipsResponse {
+  source: 'aisstream' | 'no-key' | 'error';
+  ships: ShipState[];
+  updated: number;
+  connected?: boolean;
 }
 
 export interface PizzaPlaceBusyness {

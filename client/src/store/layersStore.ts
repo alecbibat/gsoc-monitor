@@ -11,6 +11,10 @@ interface LayersState {
   setFlightFavoritesOnly: (v: boolean) => void;
   flightFavorites: string[];
   toggleFlightFavorite: (icao24: string) => void;
+  shipFavoritesOnly: boolean;
+  setShipFavoritesOnly: (v: boolean) => void;
+  shipFavorites: string[];
+  toggleShipFavorite: (mmsi: string) => void;
   earthquakeMagnitude: 'significant' | '4.5' | '2.5' | '1.0' | 'all';
   earthquakePeriod: 'hour' | 'day' | 'week';
   setEarthquakeFilter: (
@@ -32,6 +36,7 @@ export const useLayersStore = create<LayersState>()(
         hurricanes: true,
         lightning: false,
         fires: false,
+        ships: false,
       },
       basemap: 'dark',
       toggleLayer: (id) =>
@@ -48,6 +53,17 @@ export const useLayersStore = create<LayersState>()(
             : [...current, icao24],
         });
       },
+      shipFavoritesOnly: false,
+      setShipFavoritesOnly: (v) => set({ shipFavoritesOnly: v }),
+      shipFavorites: [],
+      toggleShipFavorite: (mmsi) => {
+        const current = get().shipFavorites;
+        set({
+          shipFavorites: current.includes(mmsi)
+            ? current.filter((id) => id !== mmsi)
+            : [...current, mmsi],
+        });
+      },
       earthquakeMagnitude: '2.5',
       earthquakePeriod: 'day',
       setEarthquakeFilter: (partial) =>
@@ -62,6 +78,7 @@ export const useLayersStore = create<LayersState>()(
         active: state.active,
         basemap: state.basemap,
         flightFavorites: state.flightFavorites,
+        shipFavorites: state.shipFavorites,
       }),
     }
   )
