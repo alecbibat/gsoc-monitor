@@ -3,10 +3,11 @@ import { cache } from '../cache';
 
 const router = Router();
 
-// Official NPS Land Resources Division boundary service. Layer 2 holds the
-// authoritative park unit boundary polygons, keyed by UNIT_CODE (e.g. GRCA).
+// NPS Land Resources Division Boundary — Esri-hosted FeatureServer (layer 2 = nps_boundary).
+// Confirmed URL: https://services1.arcgis.com/fBc8EJBxQRMcHlei/arcgis/rest/services/
+//   NPS_Land_Resources_Division_Boundary_and_Tract_Data_Service/FeatureServer/2
 const NPS_BOUNDARIES =
-  'https://mapservices.nps.gov/arcgis/rest/services/LandResourcesDivisionTractAndBoundaryService/MapServer/2/query';
+  'https://services1.arcgis.com/fBc8EJBxQRMcHlei/arcgis/rest/services/NPS_Land_Resources_Division_Boundary_and_Tract_Data_Service/FeatureServer/2/query';
 
 router.get('/:code', async (req, res) => {
   const code = req.params.code.toUpperCase();
@@ -29,6 +30,7 @@ router.get('/:code', async (req, res) => {
     });
     res.json(data);
   } catch (err) {
+    console.error(`[park] NPS boundary fetch failed for ${code}:`, err);
     res.status(502).json({ error: String(err) });
   }
 });

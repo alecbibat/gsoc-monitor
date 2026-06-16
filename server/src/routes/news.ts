@@ -92,21 +92,19 @@ function guessCategory(title: string): string {
   return 'conflict';
 }
 
-// GDELT rejects queries that are too long/complex (it returns a plain-text
-// error page, not JSON). Keep this focused and parenthesized — a tight set of
-// high-signal terms spanning our categories.
+// Keep this tight — GDELT returns a plain-text error page (not JSON) when a
+// query is too long or complex, which would look like a 502 to the client.
 const NEWS_QUERY =
-  '(earthquake OR hurricane OR wildfire OR flooding OR explosion OR airstrike OR war OR outbreak OR election OR economy OR evacuation OR eruption OR shooting OR protest)';
+  'earthquake OR hurricane OR wildfire OR explosion OR airstrike OR war OR outbreak OR election OR eruption OR shooting';
 
 async function fetchGdelt(query: string): Promise<GDELTArticle[]> {
   const url = new URL(GDELT_BASE);
-  // In the GDELT DOC 2.0 API, language is a query operator (`sourcelang:`),
-  // not a URL parameter, and the space here means AND.
-  url.searchParams.set('query', `${query} sourcelang:english`);
+  url.searchParams.set('query', query);
   url.searchParams.set('mode', 'artlist');
   url.searchParams.set('maxrecords', '100');
   url.searchParams.set('format', 'json');
-  url.searchParams.set('timespan', '24h');
+  // 360min = 6 hours — confirmed valid GDELT timespan format.
+  url.searchParams.set('timespan', '360min');
   url.searchParams.set('sort', 'DateDesc');
 
   const r = await fetch(url.toString(), {
@@ -157,6 +155,7 @@ router.get('/', async (_req, res) => {
     });
     res.json({ items, updated: Date.now() });
   } catch (err) {
+    console.error('[news] GDELT fetch failed:', err);
     res.status(502).json({ error: String(err), items: [], updated: Date.now() });
   }
 });
