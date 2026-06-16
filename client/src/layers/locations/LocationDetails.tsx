@@ -17,8 +17,8 @@ export interface LocationPayload {
 }
 
 const LEG_META = {
-  hospital: { label: 'Nearest Hospital', icon: '🏥', color: '#ef4444' },
-  hotel: { label: 'Nearest Hotel', icon: '🏨', color: '#38bdf8' },
+  hospital: { label: 'Hospital', icon: '🏥', color: '#ef4444' },
+  hotel: { label: 'Hotel', icon: '🏨', color: '#38bdf8' },
 } as const;
 
 function fmtDist(m: number): string {
@@ -54,23 +54,17 @@ function LegCard({
   leg,
   kind,
   origin,
+  optionLabel,
 }: {
-  leg: DirectionsLeg | null;
+  leg: DirectionsLeg;
   kind: 'hospital' | 'hotel';
   origin: { lat: number; lon: number };
+  optionLabel?: string | null;
 }) {
   const [showSteps, setShowSteps] = useState(false);
   const [shared, setShared] = useState(false);
   const [copied, setCopied] = useState(false);
   const meta = LEG_META[kind];
-
-  if (!leg) {
-    return (
-      <div className="rounded-lg border border-white/8 bg-white/4 p-2.5 text-[12px] text-white/40">
-        {meta.icon} No {kind} found within range
-      </div>
-    );
-  }
 
   const url = gmapsUrl(origin.lat, origin.lon, leg);
   const dur = fmtDur(leg.durationS);
@@ -116,6 +110,7 @@ function LegCard({
         <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: meta.color }}>
             {meta.icon} {meta.label}
+            {optionLabel ? ` · Option ${optionLabel}` : ''}
           </div>
           <div className="truncate text-[13px] font-medium text-white/90">{leg.name}</div>
         </div>
@@ -165,12 +160,81 @@ function LegCard({
   );
 }
 
+function optionLetter(i: number): string {
+  return String.fromCharCode(65 + i); // 0 → A, 1 → B, …
+}
+
+function LegSection({
+  legs,
+  kind,
+  origin,
+  selectedIdx,
+  onSelect,
+}: {
+  legs: DirectionsLeg[];
+  kind: 'hospital' | 'hotel';
+  origin: { lat: number; lon: number };
+  selectedIdx: number;
+  onSelect: (i: number) => void;
+}) {
+  const meta = LEG_META[kind];
+
+  if (!legs || legs.length === 0) {
+    return (
+      <div className="rounded-lg border border-white/8 bg-white/4 p-2.5 text-[12px] text-white/40">
+        {meta.icon} No {kind} found within range
+      </div>
+    );
+  }
+
+  const idx = Math.min(selectedIdx, legs.length - 1);
+  const leg = legs[idx];
+
+  return (
+    <div className="space-y-1.5">
+      {legs.length > 1 && (
+        <div className="flex gap-1">
+          {legs.map((l, i) => {
+            const active = i === idx;
+            return (
+              <button
+                key={i}
+                onClick={() => onSelect(i)}
+                className="flex-1 rounded-md border px-1.5 py-1 text-center text-[11px] transition"
+                style={
+                  active
+                    ? { borderColor: `${meta.color}aa`, background: `${meta.color}22`, color: '#fff' }
+                    : { borderColor: 'rgba(255,255,255,0.10)', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.55)' }
+                }
+              >
+                <span className="font-semibold">{optionLetter(i)}</span>
+                <span className="ml-1 opacity-75">{fmtDist(l.distanceM)}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <LegCard
+        leg={leg}
+        kind={kind}
+        origin={origin}
+        optionLabel={legs.length > 1 ? optionLetter(idx) : null}
+      />
+    </div>
+  );
+}
+
 export function LocationDetails({ payload }: { payload: LocationPayload }) {
   const viewer = useCesiumViewer();
   const [data, setData] = useState<DirectionsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [hospitalIdx, setHospitalIdx] = useState(0);
+  const [hotelIdx, setHotelIdx] = useState(0);
+
+  const selHospital = data && data.hospitals.length ? data.hospitals[Math.min(hospitalIdx, data.hospitals.length - 1)] : null;
+  const selHotel = data && data.hotels.length ? data.hotels[Math.min(hotelIdx, data.hotels.length - 1)] : null;
 
   // Fly to the pin when the panel opens.
   useEffect(() => {
@@ -189,6 +253,8 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
       .then((d) => {
         if (!cancelled) {
           setData(d);
+          setHospitalIdx(0);
+          setHotelIdx(0);
           setLoading(false);
         }
       })
@@ -223,7 +289,7 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
       },
     });
 
-    for (const leg of [data.hospital, data.hotel]) {
+    for (const leg of [selHospital, selHotel]) {
       if (!leg) continue;
       const meta = LEG_META[leg.category];
       const color = Cesium.Color.fromCssColorString(meta.color);
@@ -299,7 +365,7 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
     // The globe only renders on demand, so drive a render loop to animate the
     // pulse while a route is on screen. Stops when the panel closes.
     let raf = 0;
-    if (data.hospital || data.hotel) {
+    if (selHospital || selHotel) {
       const tick = () => {
         viewer.scene.requestRender();
         raf = requestAnimationFrame(tick);
@@ -312,7 +378,7 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
       viewer.dataSources.remove(ds, true);
       viewer.scene.requestRender();
     };
-  }, [viewer, data, payload.lat, payload.lon, payload.color]);
+  }, [viewer, selHospital, selHotel, payload.lat, payload.lon, payload.color]);
 
   return (
     <div className="space-y-3 p-1">
@@ -372,9 +438,21 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
         )}
 
         {data && !loading && (
-          <div className="space-y-2">
-            <LegCard leg={data.hospital} kind="hospital" origin={data.origin} />
-            <LegCard leg={data.hotel} kind="hotel" origin={data.origin} />
+          <div className="space-y-3">
+            <LegSection
+              legs={data.hospitals}
+              kind="hospital"
+              origin={data.origin}
+              selectedIdx={hospitalIdx}
+              onSelect={setHospitalIdx}
+            />
+            <LegSection
+              legs={data.hotels}
+              kind="hotel"
+              origin={data.origin}
+              selectedIdx={hotelIdx}
+              onSelect={setHotelIdx}
+            />
           </div>
         )}
       </div>

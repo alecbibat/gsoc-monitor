@@ -39,9 +39,12 @@ interface Leg {
 
 interface DirectionsResult {
   origin: { lat: number; lon: number };
-  hospital: Leg | null;
-  hotel: Leg | null;
+  hospitals: Leg[];
+  hotels: Leg[];
 }
+
+// How many alternatives (A/B/C…) to return per category.
+const OPTIONS_PER_KIND = 3;
 
 function haversine(aLat: number, aLon: number, bLat: number, bLon: number): number {
   const R = 6_371_000;
@@ -69,10 +72,29 @@ function overpassFilter(kind: LegKind): string {
     : 'nwr["tourism"="hotel"]';
 }
 
-async function nearestPoi(lat: number, lon: number, kind: LegKind): Promise<Poi | null> {
+// Treat two POIs as the same real-world place when they're a named match
+// nearby (multiple mapped buildings/entrances) or simply overlap on the map
+// (OSM often stores a feature as both a node and a polygon).
+function isSamePlace(a: Poi, b: Poi, kind: LegKind): boolean {
+  const generic = kind === 'hospital' ? 'Hospital' : 'Hotel';
+  const named = a.name === b.name && a.name !== generic;
+  const gap = haversine(a.lat, a.lon, b.lat, b.lon);
+  if (named && gap < 1500) return true;
+  return gap < (kind === 'hospital' ? 250 : 60);
+}
+
+// Return up to `limit` distinct closest POIs (nearest first). Expands the
+// search radius until it has enough options or runs out of radii.
+async function nearestPois(
+  lat: number,
+  lon: number,
+  kind: LegKind,
+  limit: number
+): Promise<Poi[]> {
+  let bestSoFar: Poi[] = [];
   for (const radius of RADII[kind]) {
     const q =
-      `[out:json][timeout:25];(${overpassFilter(kind)}(around:${radius},${lat},${lon}););out center 120;`;
+      `[out:json][timeout:25];(${overpassFilter(kind)}(around:${radius},${lat},${lon}););out center 200;`;
     let data: { elements?: Array<{ lat?: number; lon?: number; center?: { lat: number; lon: number }; tags?: Record<string, string> }> };
     try {
       const r = await fetch(OVERPASS, {
@@ -91,7 +113,7 @@ async function nearestPoi(lat: number, lon: number, kind: LegKind): Promise<Poi 
       continue; // try a wider radius
     }
 
-    let best: Poi | null = null;
+    const pois: Poi[] = [];
     for (const el of data.elements ?? []) {
       const elLat = el.lat ?? el.center?.lat;
       const elLon = el.lon ?? el.center?.lon;
@@ -99,18 +121,27 @@ async function nearestPoi(lat: number, lon: number, kind: LegKind): Promise<Poi 
       const d = haversine(lat, lon, elLat, elLon);
       // Skip the pin itself (a hotel pin will match its own building).
       if (kind === 'hotel' && d < 80) continue;
-      if (!best || d < best.distanceM) {
-        best = {
-          name: el.tags?.name ?? (kind === 'hospital' ? 'Hospital' : 'Hotel'),
-          lat: elLat,
-          lon: elLon,
-          distanceM: d,
-        };
-      }
+      pois.push({
+        name: el.tags?.name ?? (kind === 'hospital' ? 'Hospital' : 'Hotel'),
+        lat: elLat,
+        lon: elLon,
+        distanceM: d,
+      });
     }
-    if (best) return best;
+
+    pois.sort((a, b) => a.distanceM - b.distanceM);
+
+    // Collapse duplicate map entries for the same place.
+    const distinct: Poi[] = [];
+    for (const p of pois) {
+      if (distinct.some((q) => isSamePlace(p, q, kind))) continue;
+      distinct.push(p);
+    }
+
+    if (distinct.length > bestSoFar.length) bestSoFar = distinct;
+    if (distinct.length >= limit) return distinct.slice(0, limit);
   }
-  return null;
+  return bestSoFar.slice(0, limit);
 }
 
 function formatStep(step: {
@@ -185,10 +216,7 @@ async function driveRoute(
   };
 }
 
-async function buildLeg(lat: number, lon: number, kind: LegKind): Promise<Leg | null> {
-  const poi = await nearestPoi(lat, lon, kind);
-  if (!poi) return null;
-
+async function routeLeg(lat: number, lon: number, poi: Poi, kind: LegKind): Promise<Leg> {
   try {
     const r = await driveRoute(lat, lon, poi.lat, poi.lon);
     if (r) {
@@ -226,6 +254,22 @@ async function buildLeg(lat: number, lon: number, kind: LegKind): Promise<Leg | 
   };
 }
 
+async function buildLegs(lat: number, lon: number, kind: LegKind, limit: number): Promise<Leg[]> {
+  const pois = await nearestPois(lat, lon, kind, limit);
+  if (pois.length === 0) return [];
+
+  const legs = await Promise.all(pois.map((poi) => routeLeg(lat, lon, poi, kind)));
+
+  // Order so option A is the closest by road: routed legs first (by drive
+  // time), then any straight-line fallbacks (by distance).
+  legs.sort((a, b) => {
+    if (a.routed !== b.routed) return a.routed ? -1 : 1;
+    if (a.routed && b.routed) return a.durationS - b.durationS;
+    return a.distanceM - b.distanceM;
+  });
+  return legs;
+}
+
 router.get('/', async (req, res) => {
   const lat = Number(req.query.lat);
   const lon = Number(req.query.lon);
@@ -234,8 +278,9 @@ router.get('/', async (req, res) => {
     return;
   }
 
-  // Pins are static, so cache aggressively (per ~11 m grid cell).
-  const key = `directions:${lat.toFixed(4)}:${lon.toFixed(4)}`;
+  // Pins are static, so cache aggressively (per ~11 m grid cell). Key is
+  // versioned (v2) since the response shape now returns multiple options.
+  const key = `directions:v2:${lat.toFixed(4)}:${lon.toFixed(4)}`;
   const cached = cache.get<DirectionsResult>(key);
   if (cached) {
     res.json(cached);
@@ -243,20 +288,20 @@ router.get('/', async (req, res) => {
   }
 
   try {
-    const [hospital, hotel] = await Promise.all([
-      buildLeg(lat, lon, 'hospital').catch((e) => {
-        console.error('[directions] hospital leg failed:', e);
-        return null;
+    const [hospitals, hotels] = await Promise.all([
+      buildLegs(lat, lon, 'hospital', OPTIONS_PER_KIND).catch((e) => {
+        console.error('[directions] hospital legs failed:', e);
+        return [] as Leg[];
       }),
-      buildLeg(lat, lon, 'hotel').catch((e) => {
-        console.error('[directions] hotel leg failed:', e);
-        return null;
+      buildLegs(lat, lon, 'hotel', OPTIONS_PER_KIND).catch((e) => {
+        console.error('[directions] hotel legs failed:', e);
+        return [] as Leg[];
       }),
     ]);
 
-    const result: DirectionsResult = { origin: { lat, lon }, hospital, hotel };
+    const result: DirectionsResult = { origin: { lat, lon }, hospitals, hotels };
     // Only cache a useful answer; otherwise let the next click retry.
-    if (hospital || hotel) cache.set(key, result, 24 * 60 * 60_000);
+    if (hospitals.length || hotels.length) cache.set(key, result, 24 * 60 * 60_000);
     res.json(result);
   } catch (err) {
     console.error('[directions] failed:', err);

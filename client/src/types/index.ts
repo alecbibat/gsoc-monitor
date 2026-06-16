@@ -168,8 +168,8 @@ export interface DirectionsLeg {
 
 export interface DirectionsResponse {
   origin: { lat: number; lon: number };
-  hospital: DirectionsLeg | null;
-  hotel: DirectionsLeg | null;
+  hospitals: DirectionsLeg[];
+  hotels: DirectionsLeg[];
 }
 
 export interface PizzaPlaceBusyness {
