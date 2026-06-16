@@ -4,7 +4,6 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
 import { useRadarStore, framesInWindow } from './radarStore';
-import { SmoothImageryProvider } from './smoothImageryProvider';
 
 // 512px tiles render noticeably smoother than 256 at the same zoom.
 const TILE_SIZE = 512;
@@ -21,16 +20,10 @@ const RADAR_MAX_LEVEL = 9;
 const SAT_COLOR = 0;      // Classic IR (white = cold/high clouds)
 const SAT_OPTIONS = '0';
 
-function makeRadarProvider(
-  host: string,
-  frame: { path: string },
-  colorScheme: number,
-  blurPx: number
-) {
-  return new SmoothImageryProvider({
+function makeRadarProvider(host: string, frame: { path: string }, colorScheme: number) {
+  return new Cesium.UrlTemplateImageryProvider({
     url: `${host}${frame.path}/${TILE_SIZE}/{z}/{x}/{y}/${colorScheme}/${RADAR_SMOOTH}_${RADAR_SNOW}.png`,
     maximumLevel: RADAR_MAX_LEVEL,
-    blurPx,
   });
 }
 
@@ -39,24 +32,6 @@ function makeSatProvider(host: string, frame: { path: string }) {
     url: `${host}${frame.path}/${TILE_SIZE}/{z}/{x}/{y}/${SAT_COLOR}/${SAT_OPTIONS}.png`,
     maximumLevel: 6,
   });
-}
-
-// Cross-fade frame opacities: blend `from`→`to` by t∈[0,1]; hide all others.
-// This is what makes playback read as a smooth morph instead of a hard cut.
-function blendFrameAlphas(
-  layers: Cesium.ImageryLayer[],
-  from: number,
-  to: number,
-  t: number,
-  baseAlpha: number
-) {
-  for (let i = 0; i < layers.length; i++) {
-    let a = 0;
-    if (i === from && i === to) a = baseAlpha;
-    else if (i === from) a = baseAlpha * (1 - t);
-    else if (i === to) a = baseAlpha * t;
-    layers[i].alpha = a;
-  }
 }
 
 export function RadarLayer() {
@@ -71,7 +46,6 @@ export function RadarLayer() {
   const opacity = useRadarStore((s) => s.opacity);
   const playing = useRadarStore((s) => s.playing);
   const colorScheme = useRadarStore((s) => s.colorScheme);
-  const blurPx = useRadarStore((s) => s.blurPx);
   const setCurrentIndex = useRadarStore((s) => s.setCurrentIndex);
 
   // Animated radar frames
@@ -122,7 +96,7 @@ export function RadarLayer() {
     if (mode === 'radar' && frames.length > 0) {
       const windowed = framesInWindow(frames, windowMinutes);
       radarLayersRef.current = windowed.map((frame) => {
-        const layer = viewer.imageryLayers.addImageryProvider(makeRadarProvider(host, frame, colorScheme, blurPx));
+        const layer = viewer.imageryLayers.addImageryProvider(makeRadarProvider(host, frame, colorScheme));
         layer.alpha = 0;
         return layer;
       });
@@ -150,7 +124,7 @@ export function RadarLayer() {
       if (frames.length > 0) {
         const windowed = framesInWindow(frames, windowMinutes);
         radarLayersRef.current = windowed.map((frame) => {
-          const layer = viewer.imageryLayers.addImageryProvider(makeRadarProvider(host, frame, colorScheme, blurPx));
+          const layer = viewer.imageryLayers.addImageryProvider(makeRadarProvider(host, frame, colorScheme));
           layer.alpha = 0;
           return layer;
         });
@@ -160,74 +134,44 @@ export function RadarLayer() {
 
     viewer.scene.requestRender();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewer, active, host, frames, satelliteFrames, mode, windowMinutes, colorScheme, blurPx]);
+  }, [viewer, active, host, frames, satelliteFrames, mode, windowMinutes, colorScheme]);
 
-  // While PAUSED, hard-set the single scrubbed frame. (During playback the
-  // cross-fade player below owns the layer alphas, so this stays out of its way.)
+  // Sync alpha with currentIndex / opacity
   useEffect(() => {
-    if (!viewer || playing) return;
-    // 'combined' animates the radar layers; its satellite base keeps its own alpha.
-    const layers = mode === 'satellite' ? satLayersRef.current : radarLayersRef.current;
-    layers.forEach((l, i) => {
-      l.alpha = i === currentIndex ? opacity : 0;
-    });
-    viewer.scene.requestRender();
-  }, [viewer, currentIndex, opacity, mode, playing]);
+    if (!viewer) return;
 
-  // Smooth cross-fade player. Instead of snapping between frames, it holds each
-  // frame briefly then blends into the next over a short fade, driving renders
-  // itself (the scene is in on-demand render mode). Pauses a beat on the newest
-  // frame before looping back to the oldest.
+    if (mode === 'radar') {
+      radarLayersRef.current.forEach((l, i) => {
+        l.alpha = i === currentIndex ? opacity : 0;
+      });
+    } else if (mode === 'satellite') {
+      satLayersRef.current.forEach((l, i) => {
+        l.alpha = i === currentIndex ? opacity : 0;
+      });
+    } else {
+      // combined — satellite base stays at its fixed opacity; animate radar on top
+      radarLayersRef.current.forEach((l, i) => {
+        l.alpha = i === currentIndex ? opacity : 0;
+      });
+    }
+
+    viewer.scene.requestRender();
+  }, [viewer, currentIndex, opacity, mode]);
+
+  // Animation ticker
   useEffect(() => {
     if (!viewer || !active || !playing) return;
 
-    const DWELL_MS = 700; // hold a frame crisp and fully visible
-    const FADE_MS = 240; // quick blend into the next frame (less double-image)
-    const END_PAUSE_MS = 1000; // extra hold on the newest frame before looping
+    const interval = setInterval(() => {
+      const state = useRadarStore.getState();
+      const source = state.mode === 'satellite' ? state.satelliteFrames : state.frames;
+      const windowed = framesInWindow(source, state.windowMinutes);
+      if (windowed.length === 0) return;
+      state.setCurrentIndex((state.currentIndex + 1) % windowed.length);
+    }, 600);
 
-    let raf = 0;
-    let from = Math.max(0, useRadarStore.getState().currentIndex);
-    let segStart = performance.now();
-
-    const tick = (now: number) => {
-      // Read layers fresh each tick so a manifest refresh (which rebuilds the
-      // layer stack) is picked up without a stale reference.
-      const layers = mode === 'satellite' ? satLayersRef.current : radarLayersRef.current;
-      const n = layers.length;
-      if (n === 0) {
-        raf = requestAnimationFrame(tick);
-        return;
-      }
-      if (from >= n) from = n - 1;
-
-      if (n === 1) {
-        layers[0].alpha = opacity;
-      } else {
-        const to = (from + 1) % n;
-        const isLast = from === n - 1;
-        const dwell = DWELL_MS + (isLast ? END_PAUSE_MS : 0);
-        const elapsed = now - segStart;
-
-        if (elapsed < dwell) {
-          blendFrameAlphas(layers, from, from, 0, opacity);
-        } else if (elapsed < dwell + FADE_MS) {
-          blendFrameAlphas(layers, from, to, (elapsed - dwell) / FADE_MS, opacity);
-        } else {
-          from = to;
-          segStart = now;
-          blendFrameAlphas(layers, from, from, 0, opacity);
-          useRadarStore.getState().setCurrentIndex(from);
-        }
-      }
-
-      viewer.scene.requestRender();
-      raf = requestAnimationFrame(tick);
-    };
-
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-    // Restart cleanly whenever the layer stack is rebuilt.
-  }, [viewer, active, playing, mode, opacity, frames, satelliteFrames, windowMinutes, colorScheme, host, blurPx]);
+    return () => clearInterval(interval);
+  }, [viewer, active, playing]);
 
   return null;
 }

@@ -26,10 +26,8 @@ export function RadarControls() {
   const setOpacity = useRadarStore((s) => s.setOpacity);
   const colorScheme = useRadarStore((s) => s.colorScheme);
   const setColorScheme = useRadarStore((s) => s.setColorScheme);
-  const blurPx = useRadarStore((s) => s.blurPx);
-  const setBlurPx = useRadarStore((s) => s.setBlurPx);
 
-  // The palette + smoothing only affect the precipitation overlay, not the IR satellite.
+  // The palette only affects the precipitation overlay, not the IR satellite.
   const showPalette = mode !== 'satellite';
 
   return (
@@ -105,22 +103,6 @@ export function RadarControls() {
           className="flex-1 accent-accent"
         />
       </label>
-
-      {showPalette && (
-        <label className="flex items-center gap-2 text-[11px] text-white/50">
-          Smooth
-          <input
-            type="range"
-            min={0}
-            max={5}
-            step={0.5}
-            value={blurPx}
-            onChange={(e) => setBlurPx(Number(e.target.value))}
-            className="flex-1 accent-accent"
-          />
-          <span className="w-7 text-right tabular-nums text-white/40">{blurPx.toFixed(1)}</span>
-        </label>
-      )}
     </div>
   );
 }
