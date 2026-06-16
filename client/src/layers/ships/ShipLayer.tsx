@@ -84,6 +84,11 @@ export function ShipLayer() {
           const color = shipColor(ship.shipType);
           const bearing = ship.heading ?? ship.course ?? 0;
 
+          // Fade ships sitting at a stale last-known position so it's clear
+          // they aren't reporting live (e.g. out of coastal AIS range).
+          const ageMin = ship.lastSeenSec / 60;
+          const alpha = ageMin < 20 ? 1 : ageMin < 120 ? 0.6 : 0.4;
+
           const entity = ds.entities.add({
             id: `ship-${ship.mmsi}`,
             position: Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude, 0),
@@ -93,6 +98,7 @@ export function ShipLayer() {
               height: isFavorite ? 28 : 22,
               rotation: Cesium.Math.toRadians(-bearing),
               alignedAxis: Cesium.Cartesian3.UNIT_Z,
+              color: Cesium.Color.WHITE.withAlpha(alpha),
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
             },
           });

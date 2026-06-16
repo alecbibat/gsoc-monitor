@@ -35,6 +35,25 @@ interface StaticInfo {
 const vessels = new Map<string, VesselData>();
 const staticCache = new Map<string, StaticInfo>();
 
+// The allowlisted passenger vessels we actually display. This map keeps each
+// ship's LAST KNOWN position indefinitely (never evicted, never capped) so a
+// vessel that sails out of coastal AIS range stays on the map at its last
+// reported spot until a fresh report updates it.
+const tracked = new Map<string, VesselData>();
+// MMSIs confirmed to belong to an allowlisted IMO (learned from static data).
+// AIS position reports identify a vessel only by MMSI, so once we've correlated
+// an MMSI to an allowlisted IMO we keep updating it even if static data stops.
+const allowedMmsis = new Set<string>();
+
+function isAllowed(mmsi: string, imo: number | null): boolean {
+  if (allowedMmsis.has(mmsi)) return true;
+  if (imo !== null && ALLOWED_IMOS.has(imo)) {
+    allowedMmsis.add(mmsi);
+    return true;
+  }
+  return false;
+}
+
 // Prevent unbounded memory growth from the global AIS stream.
 const VESSEL_CAP = 50_000;
 
@@ -70,12 +89,15 @@ function handleMessage(raw: string) {
     const lon = typeof pr.Longitude === 'number' ? pr.Longitude : null;
     if (lat === null || lon === null || lat < -90 || lat > 90 || lon < -180 || lon > 180) return;
 
-    if (vessels.size >= VESSEL_CAP && !vessels.has(mmsi)) return;
+    // Always accept reports for confirmed allowlisted ships; only apply the
+    // memory cap to the anonymous firehose.
+    const known = allowedMmsis.has(mmsi);
+    if (!known && vessels.size >= VESSEL_CAP && !vessels.has(mmsi)) return;
 
-    const existing = vessels.get(mmsi);
+    const existing = vessels.get(mmsi) ?? tracked.get(mmsi);
     const sd = staticCache.get(mmsi);
 
-    vessels.set(mmsi, {
+    const record: VesselData = {
       mmsi,
       imo: sd?.imo ?? existing?.imo ?? null,
       name: sd?.name || (meta.ShipName as string | undefined)?.trim() || existing?.name || null,
@@ -98,7 +120,11 @@ function handleMessage(raw: string) {
           : existing?.navStatus ?? null,
       destination: sd?.destination ?? existing?.destination ?? null,
       updatedAt: now,
-    });
+    };
+
+    vessels.set(mmsi, record);
+    // Promote into the permanent tracked map once we know it's allowlisted.
+    if (isAllowed(mmsi, record.imo)) tracked.set(mmsi, record);
   } else if (type === 'ShipStaticData') {
     const sd = msg.Message?.ShipStaticData ?? {};
     const imo = typeof sd.ImoNumber === 'number' && sd.ImoNumber > 0 ? sd.ImoNumber : null;
@@ -111,17 +137,21 @@ function handleMessage(raw: string) {
     };
     staticCache.set(mmsi, info);
 
-    // Enrich existing position entry immediately if we have one.
-    const existing = vessels.get(mmsi);
+    // Enrich an existing position entry immediately if we have one.
+    const existing = vessels.get(mmsi) ?? tracked.get(mmsi);
     if (existing) {
-      vessels.set(mmsi, {
+      const enriched: VesselData = {
         ...existing,
         imo: info.imo ?? existing.imo,
         name: info.name || existing.name,
         callsign: info.callsign || existing.callsign,
         shipType: info.shipType ?? existing.shipType,
         destination: info.destination || existing.destination,
-      });
+      };
+      vessels.set(mmsi, enriched);
+      // Now that static data may have revealed an allowlisted IMO, promote it
+      // (with its last known position) into the permanent tracked map.
+      if (isAllowed(mmsi, enriched.imo)) tracked.set(mmsi, enriched);
     }
   }
 }
@@ -176,15 +206,20 @@ router.get('/', (_req, res) => {
   }
 
   const now = Date.now();
-  const cutoff = now - 15 * 60_000;
-  const result = [];
 
-  for (const v of vessels.values()) {
-    if (v.updatedAt < cutoff) continue;
-    if (v.imo !== null && ALLOWED_IMOS.has(v.imo)) {
-      result.push({ ...v, lastSeenSec: (now - v.updatedAt) / 1000 });
-    }
+  // Return every tracked ship at its last known position regardless of age —
+  // no staleness cutoff, so they stay visible until a fresh report moves them.
+  // Dedupe by IMO (keeping the most recent) in case an MMSI was reassigned.
+  const best = new Map<string, VesselData>();
+  for (const v of tracked.values()) {
+    const key = v.imo !== null ? `imo:${v.imo}` : `mmsi:${v.mmsi}`;
+    const prev = best.get(key);
+    if (!prev || v.updatedAt > prev.updatedAt) best.set(key, v);
   }
+  const result = [...best.values()].map((v) => ({
+    ...v,
+    lastSeenSec: (now - v.updatedAt) / 1000,
+  }));
 
   res.json({
     source: 'aisstream',

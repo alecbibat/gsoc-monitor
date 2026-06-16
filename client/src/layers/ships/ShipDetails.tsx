@@ -40,6 +40,14 @@ export function ShipDetails({ payload }: Props) {
   const num = (n: number | null, suffix: string, decimals = 0) =>
     n != null ? `${n.toFixed(decimals)} ${suffix}` : '—';
 
+  const fmtAge = (sec: number) => {
+    if (sec < 90) return `${Math.round(sec)}s ago`;
+    if (sec < 5400) return `${Math.round(sec / 60)}m ago`;
+    if (sec < 172800) return `${Math.round(sec / 3600)}h ago`;
+    return `${Math.round(sec / 86400)}d ago`;
+  };
+  const isStale = payload.lastSeenSec > 20 * 60;
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -98,8 +106,15 @@ export function ShipDetails({ payload }: Props) {
         </dd>
 
         <dt className="text-white/40">Last AIS</dt>
-        <dd>{Math.round(payload.lastSeenSec)}s ago</dd>
+        <dd className={isStale ? 'text-amber-300/90' : undefined}>{fmtAge(payload.lastSeenSec)}</dd>
       </dl>
+
+      {isStale && (
+        <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-200/80">
+          Showing last known position — this vessel is likely outside coastal AIS
+          range and will update when it reports again.
+        </div>
+      )}
     </div>
   );
 }
