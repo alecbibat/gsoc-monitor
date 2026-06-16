@@ -4,7 +4,6 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { config } from './config';
 import earthquakesRouter from './routes/earthquakes';
-import alertsRouter from './routes/alerts';
 import radarRouter from './routes/radar';
 import flightsRouter from './routes/flights';
 import geocodeRouter from './routes/geocode';
@@ -17,7 +16,6 @@ app.use(cors());
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.use('/api/earthquakes', earthquakesRouter);
-app.use('/api/alerts', alertsRouter);
 app.use('/api/radar', radarRouter);
 app.use('/api/flights', flightsRouter);
 app.use('/api/geocode', geocodeRouter);

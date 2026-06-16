@@ -11,8 +11,6 @@ export const api = {
     getJson<GeoJSON.FeatureCollection>(
       `/api/earthquakes?magnitude=${magnitude}&period=${period}`
     ),
-  alerts: (area?: string) =>
-    getJson<GeoJSON.FeatureCollection>(`/api/alerts${area ? `?area=${area}` : ''}`),
   radarManifest: () => getJson<import('../types').RadarManifest>('/api/radar'),
   flights: (lat: number, lon: number, dist: number) =>
     getJson<{ flights: import('../types').FlightState[] }>(
