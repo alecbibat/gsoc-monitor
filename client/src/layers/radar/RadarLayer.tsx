@@ -4,6 +4,7 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
 import { useRadarStore, framesInWindow } from './radarStore';
+import { SmoothImageryProvider } from './smoothImageryProvider';
 
 // 512px tiles render noticeably smoother than 256 at the same zoom.
 const TILE_SIZE = 512;
@@ -20,10 +21,16 @@ const RADAR_MAX_LEVEL = 9;
 const SAT_COLOR = 0;      // Classic IR (white = cold/high clouds)
 const SAT_OPTIONS = '0';
 
-function makeRadarProvider(host: string, frame: { path: string }, colorScheme: number) {
-  return new Cesium.UrlTemplateImageryProvider({
+function makeRadarProvider(
+  host: string,
+  frame: { path: string },
+  colorScheme: number,
+  blurPx: number
+) {
+  return new SmoothImageryProvider({
     url: `${host}${frame.path}/${TILE_SIZE}/{z}/{x}/{y}/${colorScheme}/${RADAR_SMOOTH}_${RADAR_SNOW}.png`,
     maximumLevel: RADAR_MAX_LEVEL,
+    blurPx,
   });
 }
 
@@ -64,6 +71,7 @@ export function RadarLayer() {
   const opacity = useRadarStore((s) => s.opacity);
   const playing = useRadarStore((s) => s.playing);
   const colorScheme = useRadarStore((s) => s.colorScheme);
+  const blurPx = useRadarStore((s) => s.blurPx);
   const setCurrentIndex = useRadarStore((s) => s.setCurrentIndex);
 
   // Animated radar frames
@@ -114,7 +122,7 @@ export function RadarLayer() {
     if (mode === 'radar' && frames.length > 0) {
       const windowed = framesInWindow(frames, windowMinutes);
       radarLayersRef.current = windowed.map((frame) => {
-        const layer = viewer.imageryLayers.addImageryProvider(makeRadarProvider(host, frame, colorScheme));
+        const layer = viewer.imageryLayers.addImageryProvider(makeRadarProvider(host, frame, colorScheme, blurPx));
         layer.alpha = 0;
         return layer;
       });
@@ -142,7 +150,7 @@ export function RadarLayer() {
       if (frames.length > 0) {
         const windowed = framesInWindow(frames, windowMinutes);
         radarLayersRef.current = windowed.map((frame) => {
-          const layer = viewer.imageryLayers.addImageryProvider(makeRadarProvider(host, frame, colorScheme));
+          const layer = viewer.imageryLayers.addImageryProvider(makeRadarProvider(host, frame, colorScheme, blurPx));
           layer.alpha = 0;
           return layer;
         });
@@ -152,7 +160,7 @@ export function RadarLayer() {
 
     viewer.scene.requestRender();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewer, active, host, frames, satelliteFrames, mode, windowMinutes, colorScheme]);
+  }, [viewer, active, host, frames, satelliteFrames, mode, windowMinutes, colorScheme, blurPx]);
 
   // While PAUSED, hard-set the single scrubbed frame. (During playback the
   // cross-fade player below owns the layer alphas, so this stays out of its way.)
@@ -173,9 +181,9 @@ export function RadarLayer() {
   useEffect(() => {
     if (!viewer || !active || !playing) return;
 
-    const DWELL_MS = 500; // hold a frame fully visible
-    const FADE_MS = 420; // cross-fade into the next frame
-    const END_PAUSE_MS = 900; // extra hold on the newest frame before looping
+    const DWELL_MS = 700; // hold a frame crisp and fully visible
+    const FADE_MS = 240; // quick blend into the next frame (less double-image)
+    const END_PAUSE_MS = 1000; // extra hold on the newest frame before looping
 
     let raf = 0;
     let from = Math.max(0, useRadarStore.getState().currentIndex);
@@ -219,7 +227,7 @@ export function RadarLayer() {
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
     // Restart cleanly whenever the layer stack is rebuilt.
-  }, [viewer, active, playing, mode, opacity, frames, satelliteFrames, windowMinutes, colorScheme, host]);
+  }, [viewer, active, playing, mode, opacity, frames, satelliteFrames, windowMinutes, colorScheme, host, blurPx]);
 
   return null;
 }

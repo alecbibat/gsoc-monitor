@@ -13,6 +13,7 @@ interface RadarState {
   playing: boolean;
   opacity: number;
   colorScheme: number;
+  blurPx: number;
   setManifest: (host: string, frames: RadarFrame[], satelliteFrames: RadarFrame[]) => void;
   setMode: (m: RadarMode) => void;
   setWindowMinutes: (m: 30 | 60 | 120) => void;
@@ -20,6 +21,7 @@ interface RadarState {
   setPlaying: (p: boolean) => void;
   setOpacity: (o: number) => void;
   setColorScheme: (c: number) => void;
+  setBlurPx: (b: number) => void;
 }
 
 export const useRadarStore = create<RadarState>((set) => ({
@@ -35,6 +37,8 @@ export const useRadarStore = create<RadarState>((set) => ({
   // RainViewer color scheme 4 = "The Weather Channel": the clean green → yellow
   // → orange → red → magenta gradient zoom.earth uses.
   colorScheme: 4,
+  // Client-side blur (tile-native px) that melts banded cells into soft blobs.
+  blurPx: 2.5,
   setManifest: (host, frames, satelliteFrames) => set({ host, frames, satelliteFrames }),
   setMode: (mode) => set({ mode, currentIndex: 0 }),
   setWindowMinutes: (m) => set({ windowMinutes: m }),
@@ -42,6 +46,7 @@ export const useRadarStore = create<RadarState>((set) => ({
   setPlaying: (playing) => set({ playing }),
   setOpacity: (opacity) => set({ opacity }),
   setColorScheme: (colorScheme) => set({ colorScheme }),
+  setBlurPx: (blurPx) => set({ blurPx }),
 }));
 
 export function framesInWindow(frames: RadarFrame[], windowMinutes: number): RadarFrame[] {
