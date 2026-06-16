@@ -12,16 +12,20 @@ import { FireLayer } from './layers/fires/FireLayer';
 import { ShipLayer } from './layers/ships/ShipLayer';
 import { TopBar } from './ui/TopBar';
 import { Sidebar } from './ui/Sidebar';
+import { StarField } from './ui/StarField';
 import { PanelManager } from './panels/PanelManager';
+import { ScreensaverController } from './screensaver/ScreensaverController';
+import { ScreensaverToast } from './screensaver/ScreensaverToast';
 
 export default function App() {
-  // The viewer is created inside CesiumGlobe but is needed by UI that lives
-  // outside the globe (search, etc.), so the provider lives here at the root.
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
 
   return (
     <CesiumContext.Provider value={viewer}>
-      <div className="relative h-full w-full overflow-hidden bg-ink-950">
+      {/* bg-black is the fallback; StarField canvas renders on top of it,
+          and the transparent Cesium canvas sits above that. */}
+      <div className="relative h-full w-full overflow-hidden bg-black">
+        <StarField />
         <CesiumGlobe onReady={setViewer}>
           <RadarLayer />
           <EarthquakeLayer />
@@ -35,6 +39,8 @@ export default function App() {
         <TopBar />
         <Sidebar />
         <PanelManager />
+        <ScreensaverController />
+        <ScreensaverToast />
       </div>
     </CesiumContext.Provider>
   );

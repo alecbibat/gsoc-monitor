@@ -32,12 +32,11 @@ export function CesiumGlobe({ children, onReady }: Props) {
       infoBox: false,
       selectionIndicator: false,
       shadows: false,
-      contextOptions: { webgl: { alpha: false } },
+      // alpha:true lets the WebGL canvas be transparent so our CSS star
+      // field shows through wherever there's no globe or UI.
+      contextOptions: { webgl: { alpha: true } },
     });
 
-    // Performance: only render a new frame when something actually changes,
-    // with a 1s ceiling so clock-driven effects (sun position, etc.) still
-    // animate smoothly on low-powered machines instead of redrawing at 60fps.
     v.scene.requestRenderMode = true;
     v.scene.maximumRenderTimeChange = 1;
 
@@ -46,6 +45,11 @@ export function CesiumGlobe({ children, onReady }: Props) {
     v.scene.globe.depthTestAgainstTerrain = false;
     v.scene.fog.enabled = true;
     v.scene.skyAtmosphere!.hueShift = -0.05;
+
+    // Transparent background so the StarField canvas shows through.
+    v.scene.backgroundColor = new Cesium.Color(0, 0, 0, 0);
+    // Replace blurry default star-cube-map with nothing; stars come from StarField.
+    if (v.scene.skyBox) v.scene.skyBox.show = false;
 
     v.camera.setView({
       destination: Cesium.Cartesian3.fromDegrees(-95, 38, 14_000_000),
@@ -73,9 +77,6 @@ export function CesiumGlobe({ children, onReady }: Props) {
     };
   }, [onReady]);
 
-  // Swap only the base imagery layer when the user picks a different basemap,
-  // leaving any other imagery layers (e.g. animated radar) that other layers
-  // have stacked on top of it untouched.
   useEffect(() => {
     if (!viewer) return;
     const newLayer = viewer.imageryLayers.addImageryProvider(BASEMAPS[basemap].build());
