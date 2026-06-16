@@ -32,6 +32,8 @@ export function Sidebar() {
   const shipFavoritesOnly = useLayersStore((s) => s.shipFavoritesOnly);
   const setShipFavoritesOnly = useLayersStore((s) => s.setShipFavoritesOnly);
   const shipFavorites = useLayersStore((s) => s.shipFavorites);
+  const shipPaths = useLayersStore((s) => s.shipPaths);
+  const setShipPaths = useLayersStore((s) => s.setShipPaths);
   const flightsStatus = useFlightsStatus();
   const alertsStatus = useAlertsStatus();
   const hurricanesStatus = useHurricanesStatus();
@@ -171,6 +173,15 @@ export function Sidebar() {
                 className="accent-accent"
               />
               Show favorites only ({shipFavorites.length})
+            </label>
+            <label className="flex items-center gap-2 pt-1 text-[11px] text-white/60">
+              <input
+                type="checkbox"
+                checked={shipPaths}
+                onChange={(e) => setShipPaths(e.target.checked)}
+                className="accent-accent"
+              />
+              Show past &amp; future paths
             </label>
           </LayerToggle>
         </Section>

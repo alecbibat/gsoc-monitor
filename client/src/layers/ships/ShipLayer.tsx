@@ -33,11 +33,37 @@ function cachedIcon(color: string, favorite: boolean): string {
   return iconCache.get(key)!;
 }
 
+// How far ahead to project the dead-reckoning "future path".
+const FUTURE_HOURS = 6;
+
+// Great-circle point a given distance along a fixed initial bearing from a
+// start point. Projecting at increasing distances traces the great circle, so
+// this yields a smooth predicted-track arc.
+function projectGreatCircle(
+  lat: number,
+  lon: number,
+  bearingDeg: number,
+  distM: number
+): [number, number] {
+  const R = 6_371_000;
+  const d = distM / R;
+  const th = (bearingDeg * Math.PI) / 180;
+  const p1 = (lat * Math.PI) / 180;
+  const l1 = (lon * Math.PI) / 180;
+  const sinP2 = Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(th);
+  const p2 = Math.asin(Math.max(-1, Math.min(1, sinP2)));
+  const l2 = l1 + Math.atan2(Math.sin(th) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * sinP2);
+  let lonDeg = (l2 * 180) / Math.PI;
+  lonDeg = ((lonDeg + 540) % 360) - 180; // normalize to [-180, 180]
+  return [lonDeg, (p2 * 180) / Math.PI];
+}
+
 export function ShipLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.ships);
   const favoritesOnly = useLayersStore((s) => s.shipFavoritesOnly);
   const favorites = useLayersStore((s) => s.shipFavorites);
+  const showPaths = useLayersStore((s) => s.shipPaths);
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
 
   useEffect(() => {
@@ -110,6 +136,58 @@ export function ShipLayer() {
             subtitle: [shipTypeLabel(ship.shipType), ship.callsign].filter(Boolean).join(' · '),
             payload: { ...ship },
           });
+
+          if (!showPaths) continue;
+          const cesColor = Cesium.Color.fromCssColorString(color);
+
+          // Past path — the breadcrumb trail of where the ship has been,
+          // draped on the surface so ocean-crossing gaps follow the globe.
+          const track = ship.track ?? [];
+          if (track.length > 1) {
+            const positions = track.map((p) => Cesium.Cartesian3.fromDegrees(p.lon, p.lat));
+            positions.push(Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude));
+            ds.entities.add({
+              polyline: {
+                positions,
+                width: 2,
+                clampToGround: true,
+                material: cesColor.withAlpha(0.5),
+              },
+            });
+          }
+
+          // Future path — dead-reckoning projection along current course/speed.
+          const travelBearing = ship.course ?? ship.heading;
+          if (ship.speedKt != null && ship.speedKt > 0.5 && travelBearing != null) {
+            const distM = ship.speedKt * 1852 * FUTURE_HOURS;
+            const pts: Cesium.Cartesian3[] = [];
+            for (let i = 0; i <= 16; i++) {
+              const [lo, la] = projectGreatCircle(ship.latitude, ship.longitude, travelBearing, (distM * i) / 16);
+              pts.push(Cesium.Cartesian3.fromDegrees(lo, la));
+            }
+            ds.entities.add({
+              polyline: {
+                positions: pts,
+                width: 2,
+                clampToGround: true,
+                material: new Cesium.PolylineDashMaterialProperty({
+                  color: cesColor.withAlpha(0.85),
+                  dashLength: 14,
+                }),
+              },
+            });
+            // Predicted position marker at the end of the projection.
+            ds.entities.add({
+              position: pts[pts.length - 1],
+              point: {
+                pixelSize: 5,
+                color: cesColor.withAlpha(0.7),
+                outlineColor: Cesium.Color.WHITE.withAlpha(0.6),
+                outlineWidth: 1,
+                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              },
+            });
+          }
         }
 
         useShipsStatus.getState().setStatus({
@@ -134,7 +212,7 @@ export function ShipLayer() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [viewer, active, favoritesOnly, favorites]);
+  }, [viewer, active, favoritesOnly, favorites, showPaths]);
 
   return null;
 }

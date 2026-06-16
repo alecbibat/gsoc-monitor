@@ -54,6 +54,41 @@ function isAllowed(mmsi: string, imo: number | null): boolean {
   return false;
 }
 
+// Per-ship breadcrumb history (where each vessel has been), used to draw the
+// "past path". Like the tracked map, this lives in memory for the process.
+interface TrackPoint {
+  lat: number;
+  lon: number;
+  t: number;
+}
+const history = new Map<string, TrackPoint[]>();
+const MAX_TRACK_POINTS = 400;
+const MAX_TRACK_AGE_MS = 72 * 60 * 60_000; // 72h
+const MIN_TRACK_MOVE_M = 75; // ignore jitter while moored/anchored
+
+function haversineM(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const R = 6_371_000;
+  const dLat = ((bLat - aLat) * Math.PI) / 180;
+  const dLon = ((bLon - aLon) * Math.PI) / 180;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((aLat * Math.PI) / 180) * Math.cos((bLat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+function recordHistory(mmsi: string, lat: number, lon: number, t: number): void {
+  let h = history.get(mmsi);
+  if (!h) {
+    h = [];
+    history.set(mmsi, h);
+  }
+  const last = h[h.length - 1];
+  if (last && haversineM(last.lat, last.lon, lat, lon) < MIN_TRACK_MOVE_M) return;
+  h.push({ lat, lon, t });
+  const cutoff = t - MAX_TRACK_AGE_MS;
+  while (h.length > MAX_TRACK_POINTS || (h.length > 0 && h[0].t < cutoff)) h.shift();
+}
+
 // Prevent unbounded memory growth from the global AIS stream.
 const VESSEL_CAP = 50_000;
 
@@ -124,7 +159,10 @@ function handleMessage(raw: string) {
 
     vessels.set(mmsi, record);
     // Promote into the permanent tracked map once we know it's allowlisted.
-    if (isAllowed(mmsi, record.imo)) tracked.set(mmsi, record);
+    if (isAllowed(mmsi, record.imo)) {
+      tracked.set(mmsi, record);
+      recordHistory(mmsi, lat, lon, now);
+    }
   } else if (type === 'ShipStaticData') {
     const sd = msg.Message?.ShipStaticData ?? {};
     const imo = typeof sd.ImoNumber === 'number' && sd.ImoNumber > 0 ? sd.ImoNumber : null;
@@ -151,7 +189,10 @@ function handleMessage(raw: string) {
       vessels.set(mmsi, enriched);
       // Now that static data may have revealed an allowlisted IMO, promote it
       // (with its last known position) into the permanent tracked map.
-      if (isAllowed(mmsi, enriched.imo)) tracked.set(mmsi, enriched);
+      if (isAllowed(mmsi, enriched.imo)) {
+        tracked.set(mmsi, enriched);
+        recordHistory(mmsi, enriched.latitude, enriched.longitude, enriched.updatedAt);
+      }
     }
   }
 }
@@ -219,6 +260,7 @@ router.get('/', (_req, res) => {
   const result = [...best.values()].map((v) => ({
     ...v,
     lastSeenSec: (now - v.updatedAt) / 1000,
+    track: history.get(v.mmsi) ?? [],
   }));
 
   res.json({

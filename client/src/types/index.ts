@@ -99,6 +99,12 @@ export interface RadarManifest {
   };
 }
 
+export interface ShipTrackPoint {
+  lat: number;
+  lon: number;
+  t: number;
+}
+
 export interface ShipState {
   mmsi: string;
   imo: number | null;
@@ -113,6 +119,7 @@ export interface ShipState {
   navStatus: number | null;
   destination: string | null;
   lastSeenSec: number;
+  track?: ShipTrackPoint[];
 }
 
 export interface ShipsResponse {
