@@ -1,4 +1,4 @@
-export type LayerId = 'radar' | 'earthquakes' | 'alerts' | 'flights';
+export type LayerId = 'radar' | 'earthquakes' | 'alerts' | 'flights' | 'hurricanes';
 
 export type BasemapId = 'dark' | 'light' | 'satellite' | 'topo';
 

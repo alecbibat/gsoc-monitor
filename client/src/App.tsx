@@ -6,6 +6,7 @@ import { EarthquakeLayer } from './layers/earthquakes/EarthquakeLayer';
 import { AlertsLayer } from './layers/alerts/AlertsLayer';
 import { RadarLayer } from './layers/radar/RadarLayer';
 import { FlightLayer } from './layers/flights/FlightLayer';
+import { HurricaneLayer } from './layers/hurricanes/HurricaneLayer';
 import { TopBar } from './ui/TopBar';
 import { Sidebar } from './ui/Sidebar';
 import { PanelManager } from './panels/PanelManager';
@@ -22,6 +23,7 @@ export default function App() {
           <RadarLayer />
           <EarthquakeLayer />
           <AlertsLayer />
+          <HurricaneLayer />
           <FlightLayer />
         </CesiumGlobe>
         <TopBar />

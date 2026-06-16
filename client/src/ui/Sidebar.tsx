@@ -1,6 +1,7 @@
 import { useLayersStore } from '../store/layersStore';
 import { useFlightsStatus } from '../layers/flights/flightsStore';
 import { useAlertsStatus } from '../layers/alerts/alertsStore';
+import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { LayerToggle } from './LayerToggle';
 import { Section } from './Section';
 import { BasemapSwitcher } from './BasemapSwitcher';
@@ -23,6 +24,7 @@ export function Sidebar() {
   const flightFavorites = useLayersStore((s) => s.flightFavorites);
   const flightsStatus = useFlightsStatus();
   const alertsStatus = useAlertsStatus();
+  const hurricanesStatus = useHurricanesStatus();
 
   return (
     <div className="pointer-events-auto absolute left-0 top-0 z-10 flex h-full w-72 flex-col border-r border-white/10 bg-ink-900/85 pt-20 shadow-panel backdrop-blur-sm">
@@ -39,6 +41,17 @@ export function Sidebar() {
           >
             <RadarControls />
           </LayerToggle>
+          <LayerToggle
+            label="Hurricanes (NHC)"
+            active={active.hurricanes}
+            onToggle={() => toggleLayer('hurricanes')}
+            statusText={
+              hurricanesStatus.error ??
+              (hurricanesStatus.count > 0
+                ? `${hurricanesStatus.count} active system${hurricanesStatus.count === 1 ? '' : 's'}`
+                : 'No active tropical systems')
+            }
+          />
         </Section>
 
         <Section title="Hazards">

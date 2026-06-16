@@ -29,6 +29,7 @@ export const useLayersStore = create<LayersState>()(
         earthquakes: true,
         alerts: true,
         flights: false,
+        hurricanes: true,
       },
       basemap: 'dark',
       toggleLayer: (id) =>

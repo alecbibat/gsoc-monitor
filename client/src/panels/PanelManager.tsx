@@ -3,12 +3,14 @@ import { Panel } from './Panel';
 import { EarthquakeDetails } from '../layers/earthquakes/EarthquakeDetails';
 import { AlertDetails } from '../layers/alerts/AlertDetails';
 import { FlightDetails } from '../layers/flights/FlightDetails';
+import { HurricaneDetails } from '../layers/hurricanes/HurricaneDetails';
 
 const ACCENT_BY_KIND: Record<string, string> = {
   earthquakes: 'border-accent-warn/40',
   alerts: 'border-accent-danger/40',
   flights: 'border-accent/40',
   radar: 'border-accent/40',
+  hurricanes: 'border-accent-warn/40',
 };
 
 export function PanelManager() {
@@ -23,6 +25,9 @@ export function PanelManager() {
           )}
           {panel.kind === 'alerts' && <AlertDetails payload={panel.payload as never} />}
           {panel.kind === 'flights' && <FlightDetails payload={panel.payload as never} />}
+          {panel.kind === 'hurricanes' && (
+            <HurricaneDetails payload={panel.payload as never} />
+          )}
         </Panel>
       ))}
     </>
