@@ -1,6 +1,32 @@
 import { create } from 'zustand';
 import type { PanelKind } from '../types';
 
+export type DockZone = 'tr' | 'br' | 'tl' | 'bl';
+
+export const ZONES: DockZone[] = ['tr', 'br', 'tl', 'bl'];
+
+export const ZONE_LABELS: Record<DockZone, string> = {
+  tr: 'Dock top-right',
+  br: 'Dock bottom-right',
+  tl: 'Dock top-left',
+  bl: 'Dock bottom-left',
+};
+
+const SIDEBAR_W = 288;
+const TOPBAR_H = 80;
+const EDGE_MARGIN = 20;
+
+export function dockPos(zone: DockZone, w: number, h: number): { x: number; y: number } {
+  const W = typeof window !== 'undefined' ? window.innerWidth : 1200;
+  const H = typeof window !== 'undefined' ? window.innerHeight : 800;
+  switch (zone) {
+    case 'tr': return { x: W - w - EDGE_MARGIN, y: TOPBAR_H + EDGE_MARGIN };
+    case 'br': return { x: W - w - EDGE_MARGIN, y: H - h - EDGE_MARGIN };
+    case 'tl': return { x: SIDEBAR_W + EDGE_MARGIN, y: TOPBAR_H + EDGE_MARGIN };
+    case 'bl': return { x: SIDEBAR_W + EDGE_MARGIN, y: H - h - EDGE_MARGIN };
+  }
+}
+
 export interface PanelData {
   id: string;
   kind: PanelKind;
@@ -12,16 +38,19 @@ export interface PanelData {
   width: number;
   height: number;
   z: number;
+  dockedTo: DockZone | null;
 }
 
 interface PanelsState {
   panels: PanelData[];
   topZ: number;
-  open: (panel: Omit<PanelData, 'x' | 'y' | 'width' | 'height' | 'z'>) => void;
+  open: (panel: Omit<PanelData, 'x' | 'y' | 'width' | 'height' | 'z' | 'dockedTo'>) => void;
   close: (id: string) => void;
   closeAll: () => void;
   bringToFront: (id: string) => void;
   updateRect: (id: string, rect: Partial<Pick<PanelData, 'x' | 'y' | 'width' | 'height'>>) => void;
+  dock: (id: string, zone: DockZone) => void;
+  undock: (id: string, x?: number, y?: number) => void;
 }
 
 const DEFAULT_WIDTH = 360;
@@ -53,7 +82,7 @@ export const usePanelStore = create<PanelsState>((set, get) => ({
     set({
       panels: [
         ...get().panels,
-        { ...panel, x, y, width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT, z: nextZ },
+        { ...panel, x, y, width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT, z: nextZ, dockedTo: null },
       ],
       topZ: nextZ,
     });
@@ -71,4 +100,21 @@ export const usePanelStore = create<PanelsState>((set, get) => ({
     set({
       panels: get().panels.map((p) => (p.id === id ? { ...p, ...rect } : p)),
     }),
+  dock: (id, zone) => {
+    set({
+      panels: get().panels.map((p) => {
+        if (p.id !== id) return p;
+        return { ...p, ...dockPos(zone, p.width, p.height), dockedTo: zone };
+      }),
+    });
+  },
+  undock: (id, x?, y?) => {
+    set({
+      panels: get().panels.map((p) =>
+        p.id === id
+          ? { ...p, dockedTo: null, ...(x !== undefined && y !== undefined ? { x, y } : {}) }
+          : p
+      ),
+    });
+  },
 }));

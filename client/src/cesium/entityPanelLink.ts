@@ -8,7 +8,7 @@ import type { PanelData } from '../panels/panelStore';
  * entity it creates, and a single global click handler (in CesiumGlobe) reads
  * it back off whatever entity got picked.
  */
-type PanelOpenData = Omit<PanelData, 'x' | 'y' | 'width' | 'height' | 'z'>;
+type PanelOpenData = Omit<PanelData, 'x' | 'y' | 'width' | 'height' | 'z' | 'dockedTo'>;
 
 interface EntityWithPanelLink extends Cesium.Entity {
   gsocPanel?: PanelOpenData;
