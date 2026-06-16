@@ -55,15 +55,17 @@ export interface NwsAlertFeature {
 export interface FlightState {
   icao24: string;
   callsign: string | null;
-  originCountry: string;
-  longitude: number | null;
+  registration: string | null;
+  type: string | null;
   latitude: number | null;
-  baroAltitude: number | null;
-  velocity: number | null;
-  trueTrack: number | null;
-  verticalRate: number | null;
+  longitude: number | null;
+  altitudeFt: number | null;
   onGround: boolean;
-  lastContact: number;
+  groundSpeedKt: number | null;
+  track: number | null;
+  verticalRateFpm: number | null;
+  squawk: string | null;
+  lastSeenSec: number;
 }
 
 export interface RadarFrame {

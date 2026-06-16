@@ -14,9 +14,9 @@ export const api = {
   alerts: (area?: string) =>
     getJson<GeoJSON.FeatureCollection>(`/api/alerts${area ? `?area=${area}` : ''}`),
   radarManifest: () => getJson<import('../types').RadarManifest>('/api/radar'),
-  flights: (bbox: { lamin: number; lomin: number; lamax: number; lomax: number }) =>
-    getJson<{ states: unknown[][] | null }>(
-      `/api/flights?lamin=${bbox.lamin}&lomin=${bbox.lomin}&lamax=${bbox.lamax}&lomax=${bbox.lomax}`
+  flights: (lat: number, lon: number, dist: number) =>
+    getJson<{ flights: import('../types').FlightState[] }>(
+      `/api/flights?lat=${lat}&lon=${lon}&dist=${dist}`
     ),
   geocode: (q: string) =>
     getJson<Array<{ lat: string; lon: string; display_name: string; boundingbox: string[] }>>(

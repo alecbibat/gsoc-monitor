@@ -70,13 +70,15 @@ export function Sidebar() {
 
         <Section title="Tracking">
           <LayerToggle
-            label="Flights (OpenSky)"
+            label="Flights (ADS-B)"
             active={active.flights}
             onToggle={() => toggleLayer('flights')}
             statusText={
-              flightsStatus.tooWideView
-                ? 'Zoom in to load live flights'
-                : `${flightsStatus.count} aircraft in view`
+              flightsStatus.error
+                ? flightsStatus.error
+                : flightsStatus.tooWideView
+                  ? 'Zoom in to load live flights'
+                  : `${flightsStatus.count} aircraft in view`
             }
           >
             <label className="flex items-center gap-2 pt-1 text-[11px] text-white/60">

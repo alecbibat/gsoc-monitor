@@ -1,6 +1,5 @@
 import * as Cesium from 'cesium';
 import { useEffect, useRef, useState } from 'react';
-import { CesiumContext } from './CesiumContext';
 import { BASEMAPS } from './basemaps';
 import { getPanelData } from './entityPanelLink';
 import { useLayersStore } from '../store/layersStore';
@@ -8,9 +7,10 @@ import { usePanelStore } from '../panels/panelStore';
 
 interface Props {
   children?: React.ReactNode;
+  onReady?: (viewer: Cesium.Viewer | null) => void;
 }
 
-export function CesiumGlobe({ children }: Props) {
+export function CesiumGlobe({ children, onReady }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
   const baseLayerRef = useRef<Cesium.ImageryLayer | null>(null);
@@ -64,12 +64,14 @@ export function CesiumGlobe({ children }: Props) {
     );
 
     setViewer(v);
+    onReady?.(v);
 
     return () => {
+      onReady?.(null);
       v.destroy();
       setViewer(null);
     };
-  }, []);
+  }, [onReady]);
 
   // Swap only the base imagery layer when the user picks a different basemap,
   // leaving any other imagery layers (e.g. animated radar) that other layers
@@ -87,7 +89,7 @@ export function CesiumGlobe({ children }: Props) {
 
   return (
     <div ref={containerRef} className="absolute inset-0">
-      <CesiumContext.Provider value={viewer}>{children}</CesiumContext.Provider>
+      {children}
     </div>
   );
 }

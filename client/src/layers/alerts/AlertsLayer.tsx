@@ -36,6 +36,7 @@ export function AlertsLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.alerts);
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
+  const lastSigRef = useRef<string>('');
 
   useEffect(() => {
     if (!viewer) return;
@@ -54,6 +55,7 @@ export function AlertsLayer() {
 
     if (!active) {
       ds.entities.removeAll();
+      lastSigRef.current = '';
       viewer.scene.requestRender();
       return;
     }
@@ -64,8 +66,19 @@ export function AlertsLayer() {
       try {
         const data = await api.alerts();
         if (cancelled) return;
+        const features = data.features as unknown as NwsAlertFeature[];
+
+        // The server resolves zone geometry progressively in the background, so
+        // skip the (potentially thousands of entities) rebuild when nothing has
+        // changed since the last refresh — keeps it smooth on weak hardware.
+        const sig = features
+          .map((f) => `${f.properties.id}:${f.geometry ? 1 : 0}`)
+          .join('|');
+        if (sig === lastSigRef.current) return;
+        lastSigRef.current = sig;
+
         ds.entities.removeAll();
-        for (const feature of data.features as unknown as NwsAlertFeature[]) {
+        for (const feature of features) {
           const rings = extractRings(feature.geometry);
           if (rings.length === 0) continue;
           const color = severityColor(feature.properties.severity);
@@ -107,7 +120,7 @@ export function AlertsLayer() {
       } catch (err) {
         console.error('Failed to load NWS alerts', err);
       }
-    }
+    };
 
     load();
     const interval = setInterval(load, 60_000);

@@ -7,8 +7,8 @@ Global Situational & Operational Conditions Monitor — a real-time 3D globe das
 - **3D globe** — CesiumJS with starfield, real sun lighting (day/night terminator), dark/light/satellite/topo basemaps.
 - **Precipitation radar** — RainViewer animated tiles with adjustable 30/60/120-min playback window and opacity control.
 - **Earthquakes** — USGS live feed, magnitude-scaled colored points, click for details panel.
-- **NWS Weather Alerts** — severity-coded polygon overlays (Extreme/Severe/Moderate/Minor) with full alert text in click panels.
-- **Live flights** — OpenSky ADS-B, plane icons rotated to heading, favorites list, auto-refresh when camera moves.
+- **NWS Weather Alerts** — every active alert, including zone/county-based ones (winter, heat, flood, red-flag) resolved to polygons server-side; severity-coded overlays with full alert text in click panels.
+- **Live flights** — adsb.fi ADS-B (free, no key), plane icons rotated to heading, favorites list, auto-refresh when camera moves.
 - **Search** — geocode (Nominatim), raw lat/lon input, auto-fly to results.
 - **Dockable panels** — any entity click opens a draggable/resizable detail window; multiple can be open at once.
 
@@ -34,8 +34,8 @@ npm run dev:client
 
 | Service | Required? | Notes |
 |---|---|---|
-| OpenSky Network | Optional but recommended | Free account at opensky-network.org gives higher rate limits. Set `OPENSKY_CLIENT_ID` + `OPENSKY_CLIENT_SECRET`. Without them, anonymous calls work but are limited. |
-| NWS (api.weather.gov) | No key needed | Set `NWS_USER_AGENT` to identify your app per NWS policy: `"my-app (me@email.com)"` |
+| adsb.fi (flights) | No key needed | Free open ADS-B data, ~1 req/sec (the server caches to stay under it). |
+| NWS (api.weather.gov) | No key needed | Set `NWS_USER_AGENT` to identify your app per NWS policy: `"my-app (me@email.com)"`. Used for both alerts and zone-geometry lookups. |
 | USGS Earthquakes | No key needed | Fully public. |
 | RainViewer | No key needed | Fully public tile CDN. |
 | Nominatim (geocoding) | No key needed | Uses OSM data; `NWS_USER_AGENT` string is also used here as User-Agent per their policy. |
@@ -49,10 +49,7 @@ heroku create your-app-name
 # 2. Set required env vars
 heroku config:set NWS_USER_AGENT="gsoc-monitor (you@email.com)"
 
-# 3. Optional: higher OpenSky rate limits
-heroku config:set OPENSKY_CLIENT_ID=your_id OPENSKY_CLIENT_SECRET=your_secret
-
-# 4. Push and deploy
+# 3. Push and deploy
 git push heroku main   # or: heroku git:push ...
 
 # 5. Open it

@@ -5,9 +5,10 @@ import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { useFlightsStatus } from './flightsStore';
-import type { FlightState } from '../../types';
 
-const MAX_VIEW_AREA_DEG2 = 4000;
+// adsb.fi caps the search radius at 250 NM; if the viewport is wider than that
+// we ask the user to zoom in rather than show a misleading partial slice.
+const MAX_RADIUS_NM = 250;
 
 function planeIconDataUri(color: string): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M32 2 L36 22 L58 40 L58 46 L36 38 L36 50 L46 58 L46 62 L32 58 L18 62 L18 58 L28 50 L28 38 L6 46 L6 40 L28 22 Z" fill="${color}" stroke="#05222b" stroke-width="2"/></svg>`;
@@ -16,22 +17,6 @@ function planeIconDataUri(color: string): string {
 
 const NORMAL_ICON = planeIconDataUri('#3ddcff');
 const FAVORITE_ICON = planeIconDataUri('#ffb84d');
-
-function parseState(arr: unknown[]): FlightState {
-  return {
-    icao24: String(arr[0]),
-    callsign: (arr[1] as string | null) ?? null,
-    originCountry: String(arr[2] ?? ''),
-    longitude: arr[5] as number | null,
-    latitude: arr[6] as number | null,
-    baroAltitude: arr[7] as number | null,
-    onGround: Boolean(arr[8]),
-    velocity: arr[9] as number | null,
-    trueTrack: arr[10] as number | null,
-    verticalRate: arr[11] as number | null,
-    lastContact: Number(arr[4] ?? 0),
-  };
-}
 
 function debounce<T extends (...args: never[]) => void>(fn: T, ms: number) {
   let handle: ReturnType<typeof setTimeout> | null = null;
@@ -72,32 +57,40 @@ export function FlightLayer() {
     let cancelled = false;
 
     const load = async () => {
-      const rect = viewer!.camera.computeViewRectangle();
+      const rect = viewer.camera.computeViewRectangle();
       if (!rect) return;
 
-      const bbox = {
-        lamin: Cesium.Math.toDegrees(rect.south),
-        lomin: Cesium.Math.toDegrees(rect.west),
-        lamax: Cesium.Math.toDegrees(rect.north),
-        lomax: Cesium.Math.toDegrees(rect.east),
-      };
-      const area = (bbox.lamax - bbox.lamin) * (bbox.lomax - bbox.lomin);
+      const north = Cesium.Math.toDegrees(rect.north);
+      const south = Cesium.Math.toDegrees(rect.south);
+      const west = Cesium.Math.toDegrees(rect.west);
+      const east = Cesium.Math.toDegrees(rect.east);
 
-      if (area > MAX_VIEW_AREA_DEG2) {
+      const centerLat = (north + south) / 2;
+      // Longitude span, accounting for a viewport that crosses the antimeridian.
+      const lonSpan = east >= west ? east - west : east + 360 - west;
+      let centerLon = west + lonSpan / 2;
+      if (centerLon > 180) centerLon -= 360;
+
+      // ~60 NM per degree of latitude; longitude degrees shrink by cos(lat).
+      const latHalfNm = ((north - south) / 2) * 60;
+      const lonHalfNm = (lonSpan / 2) * 60 * Math.cos(Cesium.Math.toRadians(centerLat));
+      const radiusNm = Math.ceil(Math.sqrt(latHalfNm * latHalfNm + lonHalfNm * lonHalfNm));
+
+      if (!Number.isFinite(radiusNm) || radiusNm > MAX_RADIUS_NM) {
         ds.entities.removeAll();
-        useFlightsStatus.getState().setStatus({ tooWideView: true, count: 0 });
-        viewer!.scene.requestRender();
+        useFlightsStatus.getState().setStatus({ tooWideView: true, count: 0, error: null });
+        viewer.scene.requestRender();
         return;
       }
 
       try {
-        const data = await api.flights(bbox);
+        const data = await api.flights(centerLat, centerLon, Math.max(1, radiusNm));
         if (cancelled) return;
         ds.entities.removeAll();
-        const states = (data.states ?? []).map(parseState);
+
         const visible = favoritesOnly
-          ? states.filter((s) => favorites.includes(s.icao24))
-          : states;
+          ? data.flights.filter((f) => favorites.includes(f.icao24))
+          : data.flights;
 
         for (const flight of visible) {
           if (flight.longitude == null || flight.latitude == null) continue;
@@ -109,10 +102,9 @@ export function FlightLayer() {
               image: isFavorite ? FAVORITE_ICON : NORMAL_ICON,
               width: isFavorite ? 30 : 24,
               height: isFavorite ? 30 : 24,
-              // OpenSky true_track is degrees clockwise from north; Cesium's
-              // rotation (with alignedAxis = UNIT_Z) is counter-clockwise,
-              // hence the negation.
-              rotation: Cesium.Math.toRadians(-(flight.trueTrack ?? 0)),
+              // ADS-B track is degrees clockwise from north; Cesium billboard
+              // rotation (with alignedAxis = UNIT_Z) is counter-clockwise.
+              rotation: Cesium.Math.toRadians(-(flight.track ?? 0)),
               alignedAxis: Cesium.Cartesian3.UNIT_Z,
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
             },
@@ -120,17 +112,23 @@ export function FlightLayer() {
           attachPanelData(entity, {
             id: `flight-${flight.icao24}`,
             kind: 'flights',
-            title: flight.callsign?.trim() || flight.icao24.toUpperCase(),
-            subtitle: flight.originCountry,
+            title: flight.callsign?.trim() || flight.registration || flight.icao24.toUpperCase(),
+            subtitle: [flight.type, flight.registration].filter(Boolean).join(' · '),
             payload: { ...flight },
           });
         }
-        useFlightsStatus.getState().setStatus({ tooWideView: false, count: visible.length });
-        viewer!.scene.requestRender();
+        useFlightsStatus.getState().setStatus({
+          tooWideView: false,
+          count: visible.length,
+          error: null,
+        });
+        viewer.scene.requestRender();
       } catch (err) {
+        if (cancelled) return;
         console.error('Failed to load flights', err);
+        useFlightsStatus.getState().setStatus({ error: 'Live flight feed unavailable' });
       }
-    }
+    };
 
     load();
     const debouncedLoad = debounce(load, 800);
