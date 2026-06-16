@@ -7,7 +7,9 @@ import { useAlertsStatus } from './alertsStore';
 
 // Fetched directly from the browser: NWS sends CORS headers, so this avoids the
 // server-side User-Agent restrictions that block api.weather.gov from a proxy.
-const ALERTS_API = 'https://api.weather.gov/alerts/active?limit=500';
+// No query params — exactly like the proven weather-leaflet reference (the
+// /alerts/active endpoint can 400 on some param combinations).
+const ALERTS_API = 'https://api.weather.gov/alerts/active';
 
 // Static US county polygons keyed by 5-digit FIPS (the dataset the proven
 // weather-leaflet app uses). Most non-storm NWS alerts ship geometry: null and
@@ -94,12 +96,16 @@ function loadCounties(): Promise<Map<string, GeoJSON.Geometry>> {
   return countyPromise;
 }
 
-function alertRings(alert: RawAlert, counties: Map<string, GeoJSON.Geometry>): number[][][] {
+function alertRings(
+  alert: RawAlert,
+  counties: Map<string, GeoJSON.Geometry> | null
+): number[][][] {
   // Prefer the alert's own precise polygon (storm-based warnings have one)...
   const own = extractRings(alert.geometry);
   if (own.length) return own;
 
   // ...otherwise fall back to the counties named by its SAME (county FIPS) codes.
+  if (!counties) return [];
   const rings: number[][][] = [];
   for (const code of alert.properties.geocode?.SAME ?? []) {
     const fips = code.length === 6 ? code.slice(1) : code; // SAME -> 5-digit FIPS
@@ -140,17 +146,32 @@ export function AlertsLayer() {
     let cancelled = false;
 
     const load = async () => {
-      try {
-        const [counties, res] = await Promise.all([
-          loadCounties(),
-          fetch(ALERTS_API).then((r) => {
-            if (!r.ok) throw new Error(`NWS ${r.status}`);
-            return r.json() as Promise<{ features?: RawAlert[] }>;
-          }),
-        ]);
-        if (cancelled) return;
+      // Counties are a best-effort enhancement (they fill in non-storm alerts
+      // that lack their own polygon). Never let a county-file hiccup take down
+      // the whole layer — fall back to drawing only alerts that ship geometry.
+      const countiesPromise = loadCounties().catch((err) => {
+        console.warn('NWS alerts: county geometry unavailable', err);
+        return null;
+      });
 
-        const alerts = res.features ?? [];
+      let alerts: RawAlert[];
+      try {
+        const r = await fetch(ALERTS_API);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const json = (await r.json()) as { features?: RawAlert[] };
+        alerts = json.features ?? [];
+      } catch (err) {
+        if (cancelled) return;
+        console.error('NWS alerts fetch failed', err);
+        const reason = err instanceof Error ? err.message : 'unreachable';
+        useAlertsStatus.getState().setStatus({ error: `NWS feed error: ${reason}` });
+        return;
+      }
+
+      const counties = await countiesPromise;
+      if (cancelled) return;
+
+      try {
         const sig = alerts.map((a) => a.properties.id ?? a.id ?? '').join('|');
         if (sig === lastSigRef.current) {
           useAlertsStatus.getState().setStatus({ error: null });
