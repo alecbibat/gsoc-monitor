@@ -1,3 +1,5 @@
+import { ShipModel3D } from './ShipModel3D';
+
 interface ShipProfile {
   class: 'STAR CLASS' | 'WIND CLASS';
   built: number;
@@ -30,102 +32,20 @@ const PROFILES: Record<string, ShipProfile> = {
 const STAR_COLOR = '#38bdf8';
 const WIND_COLOR = '#fbbf24';
 
-// Side-profile wireframe of a multi-deck motor cruise ship (Star class).
-function StarWireframe({ color }: { color: string }) {
-  return (
-    <svg viewBox="0 0 168 68" width="168" height="68" aria-hidden>
-      {/* Hull underbody */}
-      <path d="M14,46 Q8,54 20,60 L150,60 Q162,58 160,46" stroke={color} fill="none" strokeWidth="1.4" />
-      {/* Stern overhang */}
-      <path d="M14,46 L6,52 L20,60" stroke={color} fill="none" strokeWidth="1.4" />
-      {/* Bow flare */}
-      <path d="M160,46 L166,50 L150,60" stroke={color} fill="none" strokeWidth="1.4" />
-      {/* Waterline */}
-      <line x1="6" y1="46" x2="166" y2="46" stroke={color} strokeWidth="1" opacity="0.5" />
-      {/* Deck 1 (main) */}
-      <rect x="24" y="36" width="124" height="10" stroke={color} fill="none" strokeWidth="1.3" />
-      {/* Deck 2 */}
-      <rect x="38" y="27" width="96" height="9" stroke={color} fill="none" strokeWidth="1.2" />
-      {/* Deck 3 */}
-      <rect x="52" y="19" width="68" height="8" stroke={color} fill="none" strokeWidth="1.1" />
-      {/* Bridge / wheelhouse */}
-      <rect x="62" y="12" width="30" height="7" stroke={color} fill="none" strokeWidth="1" />
-      {/* Funnel */}
-      <path d="M112,27 L109,15 L115,15 L112,27" stroke={color} fill="none" strokeWidth="1.2" />
-      <ellipse cx="112" cy="14" rx="4" ry="1.8" stroke={color} fill="none" strokeWidth="1" />
-      {/* Porthole dots on deck 1 */}
-      {[40, 55, 70, 85, 100, 115, 130].map((x) => (
-        <circle key={x} cx={x} cy="41" r="1.4" stroke={color} fill="none" strokeWidth="0.9" opacity="0.5" />
-      ))}
-      {/* Radar mast */}
-      <line x1="72" y1="12" x2="72" y2="6" stroke={color} strokeWidth="0.9" />
-      <line x1="68" y1="7" x2="76" y2="7" stroke={color} strokeWidth="0.9" />
-    </svg>
-  );
-}
-
-// Side-profile wireframe of a sailing cruise ship with tall masts (Wind class).
-function WindWireframe({ color, masts = 4 }: { color: string; masts?: number }) {
-  const mastXs = masts === 5
-    ? [48, 66, 84, 102, 120]
-    : [52, 72, 92, 112];
-
-  return (
-    <svg viewBox="0 0 168 72" width="168" height="72" aria-hidden>
-      {/* Hull — sleeker, sailing-ship profile */}
-      <path d="M16,50 Q10,58 24,64 L148,64 Q160,62 158,50" stroke={color} fill="none" strokeWidth="1.4" />
-      {/* Clipper bow */}
-      <path d="M158,50 L166,43 L148,64" stroke={color} fill="none" strokeWidth="1.4" />
-      {/* Stern */}
-      <path d="M16,50 L8,56 L24,64" stroke={color} fill="none" strokeWidth="1.4" />
-      {/* Waterline */}
-      <line x1="8" y1="50" x2="166" y2="50" stroke={color} strokeWidth="1" opacity="0.5" />
-      {/* Single low deck */}
-      <rect x="28" y="41" width="116" height="9" stroke={color} fill="none" strokeWidth="1.3" />
-      {/* Low bridge structure */}
-      <rect x="68" y="34" width="38" height="7" stroke={color} fill="none" strokeWidth="1.1" />
-      {/* Masts */}
-      {mastXs.map((x, i) => (
-        <g key={i}>
-          <line x1={x} y1="41" x2={x} y2="2" stroke={color} strokeWidth="1.3" />
-          {/* Boom */}
-          <line x1={x - 14} y1={8 + i * 2} x2={x + 14} y2={8 + i * 2} stroke={color} strokeWidth="0.9" />
-          {/* Stay lines — suggest sails */}
-          <line x1={x} y1="41" x2={x - 13} y2={9 + i * 2} stroke={color} strokeWidth="0.7" opacity="0.45" />
-          <line x1={x} y1="41" x2={x + 13} y2={9 + i * 2} stroke={color} strokeWidth="0.7" opacity="0.45" />
-        </g>
-      ))}
-    </svg>
-  );
-}
-
 export function ShipClassCard({ mmsi }: { mmsi: string }) {
   const profile = PROFILES[mmsi];
   if (!profile) return null;
 
   const isStar = profile.class === 'STAR CLASS';
   const color = isStar ? STAR_COLOR : WIND_COLOR;
-  const animId = `ship-rot-${mmsi}`;
 
   const fmt = (n: number) => n.toLocaleString();
 
   return (
     <div className="rounded-lg border bg-white/3 px-3 py-2.5" style={{ borderColor: `${color}30` }}>
-      <style>{`
-        @keyframes ${animId} {
-          0%   { transform: perspective(260px) rotateY(0deg); }
-          100% { transform: perspective(260px) rotateY(360deg); }
-        }
-        .${animId} { animation: ${animId} 9s linear infinite; }
-      `}</style>
-
-      {/* Rotating wireframe */}
+      {/* Rotating 3D wireframe */}
       <div className="flex justify-center pb-1">
-        <div className={animId} style={{ transformOrigin: 'center' }}>
-          {isStar
-            ? <StarWireframe color={color} />
-            : <WindWireframe color={color} masts={profile.masts} />}
-        </div>
+        <ShipModel3D variant={isStar ? 'star' : 'wind'} color={color} masts={profile.masts} />
       </div>
 
       {/* Class badge */}
