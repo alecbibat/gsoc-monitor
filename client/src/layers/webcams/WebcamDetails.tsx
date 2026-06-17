@@ -1,5 +1,5 @@
-import { useState } from 'react';
 import type { Webcam } from '../../types';
+import { RefreshingImage } from './RefreshingImage';
 
 interface Props {
   payload: Webcam;
@@ -14,20 +14,8 @@ function hostOf(url: string | null): string | null {
   }
 }
 
-function fmtAge(ms: number | null): string {
-  if (ms == null) return 'unknown';
-  const sec = Math.max(0, (Date.now() - ms) / 1000);
-  if (sec < 90) return 'just now';
-  if (sec < 5400) return `${Math.round(sec / 60)}m ago`;
-  if (sec < 172800) return `${Math.round(sec / 3600)}h ago`;
-  return `${Math.round(sec / 86400)}d ago`;
-}
-
 export function WebcamDetails({ payload }: Props) {
-  const [imgFailed, setImgFailed] = useState(false);
-  const active = payload.status.toLowerCase() === 'active';
-  const owner = hostOf(payload.providerUrl);
-  const stale = payload.lastUpdated != null && Date.now() - payload.lastUpdated > 6 * 3600_000;
+  const active = payload.status.toLowerCase() !== 'disabled';
 
   return (
     <div className="space-y-3">
@@ -49,62 +37,30 @@ export function WebcamDetails({ payload }: Props) {
         </div>
       </div>
 
-      {/* Live view — Windy's embed player always shows the latest frame/loop.
-          Falls back to the most recent still, then a placeholder. */}
+      {/* Live view — the DOT camera's latest frame, refreshed on an interval. */}
       <div className="overflow-hidden rounded-lg border border-white/10 bg-black/40">
         <div className="relative w-full" style={{ aspectRatio: '16 / 9' }}>
-          {payload.playerEmbedUrl ? (
-            <iframe
-              src={payload.playerEmbedUrl}
-              title={payload.title}
-              className="absolute inset-0 h-full w-full"
-              frameBorder="0"
-              allow="autoplay; fullscreen"
-            />
-          ) : payload.previewUrl && !imgFailed ? (
-            <img
-              src={payload.previewUrl}
-              alt={payload.title}
-              className="absolute inset-0 h-full w-full object-cover"
-              onError={() => setImgFailed(true)}
-            />
-          ) : (
-            <div className="absolute inset-0 flex items-center justify-center text-[12px] text-white/40">
-              Live view unavailable
-            </div>
-          )}
+          <RefreshingImage
+            url={payload.imageUrl}
+            alt={payload.title}
+            className="absolute inset-0 h-full w-full object-cover"
+          />
         </div>
       </div>
 
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[13px]">
-        <dt className="text-white/40">Last image</dt>
-        <dd className={stale ? 'text-amber-300/90' : undefined}>{fmtAge(payload.lastUpdated)}</dd>
-
         <dt className="text-white/40">Source</dt>
-        <dd>Windy Webcams</dd>
+        <dd>{payload.source}</dd>
 
-        <dt className="text-white/40">Owner</dt>
-        <dd className="truncate">
-          {payload.providerUrl && owner ? (
-            <a
-              href={payload.providerUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-accent/85 transition hover:text-accent"
-            >
-              {owner}
-            </a>
-          ) : (
-            owner || '—'
-          )}
-        </dd>
-
-        {payload.categories.length > 0 && (
+        {payload.roadway && (
           <>
-            <dt className="text-white/40">Type</dt>
-            <dd className="truncate">{payload.categories.join(', ')}</dd>
+            <dt className="text-white/40">Roadway</dt>
+            <dd className="truncate">{payload.roadway}</dd>
           </>
         )}
+
+        <dt className="text-white/40">Owner</dt>
+        <dd className="truncate">{payload.source} (state DOT)</dd>
 
         <dt className="text-white/40">Position</dt>
         <dd className="font-mono text-[12px]">
@@ -113,19 +69,19 @@ export function WebcamDetails({ payload }: Props) {
       </dl>
 
       <div className="flex items-center justify-between pt-0.5">
-        {payload.detailUrl ? (
+        {payload.sourceUrl ? (
           <a
-            href={payload.detailUrl}
+            href={payload.sourceUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[12px] font-medium text-white/70 transition hover:bg-white/10 hover:text-white"
           >
-            Open on Windy ↗
+            Open {hostOf(payload.sourceUrl)} ↗
           </a>
         ) : (
           <span />
         )}
-        <span className="text-[10px] text-white/30">Webcams via Windy.com</span>
+        <span className="text-[10px] text-white/30">Image refreshes every ~30s</span>
       </div>
     </div>
   );

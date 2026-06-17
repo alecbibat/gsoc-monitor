@@ -4,6 +4,7 @@ import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useScreensaverStore } from './screensaverStore';
 import { api } from '../api/client';
 import { useWebcamsData } from '../layers/webcams/webcamsStore';
+import { RefreshingImage } from '../layers/webcams/RefreshingImage';
 import type { Webcam } from '../types';
 
 // During the national-parks screensaver, surface the webcams that fall inside
@@ -53,7 +54,7 @@ export function WebcamScreensaverCallouts() {
     (async () => {
       try {
         const data = await api.webcams();
-        if (!cancelled && data.source !== 'no-key') useWebcamsData.getState().setWebcams(data.webcams);
+        if (!cancelled) useWebcamsData.getState().setWebcams(data.webcams);
       } catch {
         /* ignore — the screensaver simply shows no callouts */
       }
@@ -177,25 +178,11 @@ export function WebcamScreensaverCallouts() {
             className="w-[240px] overflow-hidden rounded-lg border border-sky-400/30 bg-ink-900/90 shadow-panel backdrop-blur-md"
           >
             <div className="relative w-full bg-black/40" style={{ aspectRatio: '16 / 9' }}>
-              {cam.playerEmbedUrl ? (
-                <iframe
-                  src={cam.playerEmbedUrl}
-                  title={cam.title}
-                  className="absolute inset-0 h-full w-full"
-                  frameBorder="0"
-                  allow="autoplay; fullscreen"
-                />
-              ) : cam.previewUrl ? (
-                <img
-                  src={cam.previewUrl}
-                  alt={cam.title}
-                  className="absolute inset-0 h-full w-full object-cover"
-                />
-              ) : (
-                <div className="absolute inset-0 flex items-center justify-center text-[11px] text-white/40">
-                  Live view unavailable
-                </div>
-              )}
+              <RefreshingImage
+                url={cam.imageUrl}
+                alt={cam.title}
+                className="absolute inset-0 h-full w-full object-cover"
+              />
             </div>
             <div className="flex items-center gap-1.5 px-2.5 py-1.5">
               <span aria-hidden className="text-[12px]">📷</span>

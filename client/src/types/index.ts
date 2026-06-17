@@ -228,20 +228,27 @@ export interface Webcam {
   title: string;
   lat: number;
   lon: number;
-  status: string;
-  lastUpdated: number | null; // epoch ms, or null if unknown
-  previewUrl: string | null; // tokened still (short-lived) — fallback only
-  playerEmbedUrl: string | null; // stable iframe live view
-  detailUrl: string | null; // webcam page on Windy
-  providerUrl: string | null; // owner's site, when known
-  categories: string[];
+  imageUrl: string | null; // proxied, auto-refreshing JPEG (the live view)
+  source: string; // DOT name, e.g. "Arizona DOT"
+  sourceUrl: string | null; // link to the state 511 site
+  roadway: string | null;
+  status: string; // 'active' | 'disabled' | 'unknown'
+  lastUpdated: number | null;
   nearestPin: string;
   distanceMi: number;
 }
 
+export interface WebcamProviderStatus {
+  code: string;
+  name: string;
+  configured: boolean;
+  count: number;
+  error: string | null;
+}
+
 export interface WebcamsResponse {
-  source: 'windy' | 'no-key' | 'error';
   webcams: Webcam[];
   updated: number;
+  providers: WebcamProviderStatus[];
   stale?: boolean;
 }

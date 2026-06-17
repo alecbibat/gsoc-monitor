@@ -85,9 +85,9 @@ export function Sidebar() {
   }
 
   function webcamsStatusText() {
-    if (webcamsStatus.noKey) return 'Set WINDY_API_KEY to enable';
     if (webcamsStatus.error) return webcamsStatus.error;
-    return `${webcamsStatus.count} cams within 10 mi of pins`;
+    if (webcamsStatus.count === 0) return 'No DOT cams yet — add state 511 keys';
+    return `${webcamsStatus.count} DOT cams · ${webcamsStatus.statesActive} states`;
   }
 
   function satellitesStatusText() {

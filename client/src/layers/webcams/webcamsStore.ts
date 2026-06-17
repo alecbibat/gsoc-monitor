@@ -3,15 +3,17 @@ import type { Webcam } from '../../types';
 
 interface WebcamsStatusState {
   count: number;
-  noKey: boolean;
+  statesActive: number; // DOT providers that returned at least one camera
   error: string | null;
-  setStatus: (partial: Partial<Pick<WebcamsStatusState, 'count' | 'noKey' | 'error'>>) => void;
+  setStatus: (
+    partial: Partial<Pick<WebcamsStatusState, 'count' | 'statesActive' | 'error'>>
+  ) => void;
 }
 
-// Status surfaced in the sidebar toggle (count / no-key hint / error).
+// Status surfaced in the sidebar toggle (count / active states / error).
 export const useWebcamsStatus = create<WebcamsStatusState>((set) => ({
   count: 0,
-  noKey: false,
+  statesActive: 0,
   error: null,
   setStatus: (partial) => set((s) => ({ ...s, ...partial })),
 }));

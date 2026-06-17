@@ -173,14 +173,14 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
   {
     id: 'webcams',
     info: {
-      name: 'Public Webcams',
+      name: 'DOT Traffic Cameras',
       icon: '📷',
-      source: 'Windy Webcams',
+      source: 'State Departments of Transportation',
       method:
-        'Public and traffic webcams within 10 miles of each property pin, found by radius search against the Windy Webcams API. The live view is Windy’s embedded player; each entry links back to the camera’s owner where known.',
+        'Public traffic cameras within 10 miles of each property pin, pulled from state DOT 511 feeds (Caltrans is open; Arizona, Georgia, Florida and Wisconsin use free per-state developer keys). The live view is each camera’s own JPEG, refreshed on an interval and proxied over HTTPS.',
       trust:
-        'Windy aggregates publicly broadcast camera feeds (DOT traffic cams, scenic cams) from their operators; imagery is attributed to Windy.com.',
-      url: 'https://www.windy.com/webcams',
+        'Camera feeds are published directly by state transportation agencies for public traveler information — official government sources.',
+      url: 'https://cwwp2.dot.ca.gov',
     },
   },
 ];

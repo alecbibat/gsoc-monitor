@@ -9,8 +9,8 @@ export const config = {
   // DEMO_KEY works out of the box (rate-limited); set NPS_API_KEY in Config Vars
   // for production headroom. Used for park news releases + alerts/closures.
   npsApiKey: process.env.NPS_API_KEY || 'DEMO_KEY',
-  // Windy Webcams API key — free at https://api.windy.com/keys (Webcams API).
-  // Powers the public/traffic webcam layer near property pins. Without it the
-  // layer shows a no-key placeholder. Attribution to Windy.com is required.
-  windyApiKey: process.env.WINDY_API_KEY || '',
+  // State DOT traffic-camera keys (free per-state developer keys) power the
+  // webcam layer. California (Caltrans) needs none. Read directly from env in
+  // routes/webcams.ts: AZ511_API_KEY, GA511_API_KEY, FL511_API_KEY,
+  // WI511_API_KEY. Add more states there as their endpoints are confirmed.
 };

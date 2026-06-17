@@ -1,18 +1,16 @@
 import { Router } from 'express';
 import { cache } from '../cache';
-import { config } from '../config';
 
 const router = Router();
 
-// Windy Webcams API v3 — global aggregator of public webcams (scenic + traffic),
-// searchable by lat/lon radius. Image URLs it returns are short-lived tokens, so
-// the panel relies on the stable `player` embed for the live view rather than
-// caching a tokened still. https://api.windy.com/webcams/docs
-const WINDY_API = 'https://api.windy.com/webcams/api/v3';
+// State DOT traffic cameras near the property pins. Sources are pluggable: most
+// states run the "ibi511" platform (/api/v2/get/cameras) or the older
+// /api/GetCameras platform — both need a free per-state key — while California's
+// Caltrans CWWP2 feed is open. Camera images are short-lived JPEGs proxied
+// through /api/webcams/image so they display over HTTPS without hotlink issues.
 
 // Property pins to search around — kept in sync with the client's
-// LOCATION_GROUPS (client/src/layers/locations/locations.ts). Webcams are
-// surfaced when they fall within RADIUS_MI of any one of these points.
+// LOCATION_GROUPS (client/src/layers/locations/locations.ts).
 const PINS: Array<{ name: string; lat: number; lon: number }> = [
   { name: 'Cedar Creek Lodge', lat: 48.37014, lon: -114.18468 },
   { name: 'Village Inn (Glacier)', lat: 48.52903, lon: -113.99417 },
@@ -42,83 +40,40 @@ const PINS: Array<{ name: string; lat: number; lon: number }> = [
 ];
 
 const RADIUS_MI = 10;
-const RADIUS_KM = RADIUS_MI * 1.60934;
-// Merge pins closer than this into one search anchor to cut request volume; the
-// query radius is widened by the merge distance so every original pin stays
-// fully covered.
-const MERGE_KM = 8;
-const PER_ANCHOR_LIMIT = 50;
 
 export interface Webcam {
   id: string;
   title: string;
   lat: number;
   lon: number;
-  status: string;
+  imageUrl: string | null; // proxied, auto-refreshing JPEG (the live view)
+  source: string; // DOT name, e.g. "Arizona DOT"
+  sourceUrl: string | null; // link to the state 511 site
+  roadway: string | null;
+  status: string; // 'active' | 'disabled' | 'unknown'
   lastUpdated: number | null;
-  previewUrl: string | null;
-  playerEmbedUrl: string | null;
-  detailUrl: string | null;
-  providerUrl: string | null;
-  categories: string[];
   nearestPin: string;
   distanceMi: number;
 }
 
-interface WindyWebcam {
-  webcamId?: number | string;
-  id?: number | string;
-  title?: string;
+interface RawCam {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  imageUrl: string | null; // upstream JPEG
+  roadway?: string | null;
   status?: string;
-  lastUpdatedOn?: string;
-  lastUpdated?: string;
-  categories?: Array<{ id?: string; name?: string }>;
-  location?: {
-    latitude?: number;
-    longitude?: number;
-    lat?: number;
-    lng?: number;
-    lon?: number;
-  };
-  images?: {
-    current?: { preview?: string; thumbnail?: string; icon?: string };
-    preview?: string;
-  };
-  player?: { day?: string; live?: string; month?: string; year?: string; lifetime?: string };
-  urls?: { detail?: string; provider?: string; edit?: string };
 }
 
 function haversineMi(aLat: number, aLon: number, bLat: number, bLon: number): number {
-  const R = 3958.7613; // mean Earth radius, miles
+  const R = 3958.7613;
   const dLat = ((bLat - aLat) * Math.PI) / 180;
   const dLon = ((bLon - aLon) * Math.PI) / 180;
   const s =
     Math.sin(dLat / 2) ** 2 +
     Math.cos((aLat * Math.PI) / 180) * Math.cos((bLat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(s));
-}
-
-// Greedily merge nearby pins into search anchors. Each anchor's radius is grown
-// to still reach RADIUS_MI past the farthest pin folded into it.
-interface Anchor {
-  lat: number;
-  lon: number;
-  radiusKm: number;
-}
-function buildAnchors(): Anchor[] {
-  const anchors: Anchor[] = [];
-  for (const p of PINS) {
-    const near = anchors.find(
-      (a) => haversineMi(a.lat, a.lon, p.lat, p.lon) * 1.60934 <= MERGE_KM
-    );
-    if (near) {
-      const extraKm = haversineMi(near.lat, near.lon, p.lat, p.lon) * 1.60934;
-      near.radiusKm = Math.max(near.radiusKm, RADIUS_KM + extraKm);
-    } else {
-      anchors.push({ lat: p.lat, lon: p.lon, radiusKm: RADIUS_KM });
-    }
-  }
-  return anchors;
 }
 
 function nearestPin(lat: number, lon: number): { name: string; distanceMi: number } {
@@ -131,106 +86,306 @@ function nearestPin(lat: number, lon: number): { name: string; distanceMi: numbe
 }
 
 function num(v: unknown): number | null {
-  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
 }
 
-function normalize(w: WindyWebcam): Webcam | null {
-  const id = w.webcamId ?? w.id;
-  const lat = num(w.location?.latitude ?? w.location?.lat);
-  const lon = num(w.location?.longitude ?? w.location?.lng ?? w.location?.lon);
-  if (id == null || lat == null || lon == null) return null;
-
-  const whenStr = w.lastUpdatedOn ?? w.lastUpdated;
-  const when = whenStr ? Date.parse(whenStr) : NaN;
-  const np = nearestPin(lat, lon);
-
-  return {
-    id: String(id),
-    title: (w.title ?? 'Webcam').trim() || 'Webcam',
-    lat,
-    lon,
-    status: w.status ?? 'unknown',
-    lastUpdated: Number.isNaN(when) ? null : when,
-    previewUrl: w.images?.current?.preview ?? w.images?.preview ?? null,
-    playerEmbedUrl: w.player?.day ?? w.player?.live ?? w.player?.lifetime ?? null,
-    detailUrl: w.urls?.detail ?? null,
-    providerUrl: w.urls?.provider ?? null,
-    categories: (w.categories ?? []).map((c) => c.name ?? '').filter(Boolean),
-    nearestPin: np.name,
-    distanceMi: Math.round(np.distanceMi * 10) / 10,
-  };
+function pick<T = unknown>(o: Record<string, unknown>, ...keys: string[]): T | undefined {
+  for (const k of keys) if (o[k] != null) return o[k] as T;
+  return undefined;
 }
 
-async function fetchAnchor(a: Anchor): Promise<WindyWebcam[]> {
-  const radius = Math.min(250, Math.ceil(a.radiusKm));
-  const url =
-    `${WINDY_API}/webcams?nearby=${a.lat.toFixed(4)},${a.lon.toFixed(4)},${radius}` +
-    `&include=categories,images,location,player,urls&limit=${PER_ANCHOR_LIMIT}`;
+// --- Providers -------------------------------------------------------------
+// 'ibi511'   → GET https://{host}/api/v2/get/cameras?key=&format=json
+// 'legacy511'→ GET https://{host}/api/GetCameras?key=&format=json
+// 'caltrans' → open per-district CWWP2 JSON (no key)
+type ProviderKind = 'ibi511' | 'legacy511' | 'caltrans';
+
+interface ProviderConfig {
+  code: string;
+  name: string;
+  kind: ProviderKind;
+  host?: string; // for ibi511 / legacy511
+  envKey?: string; // env var holding the API key
+  site: string; // public 511 site
+  districts?: string[]; // for caltrans (e.g. ['d8','d9'])
+}
+
+const PROVIDERS: ProviderConfig[] = [
+  // California — open Caltrans feed (no key). Death Valley straddles D8/D9.
+  { code: 'CA', name: 'Caltrans', kind: 'caltrans', districts: ['d8', 'd9'], site: 'https://cwwp2.dot.ca.gov' },
+  // ibi511 platform — confirmed hosts. Need a free per-state developer key.
+  { code: 'AZ', name: 'Arizona DOT', kind: 'ibi511', host: 'www.az511.com', envKey: 'AZ511_API_KEY', site: 'https://az511.com' },
+  { code: 'GA', name: 'Georgia DOT', kind: 'ibi511', host: 'ga.ibi511.com', envKey: 'GA511_API_KEY', site: 'https://511ga.org' },
+  { code: 'FL', name: 'Florida DOT', kind: 'ibi511', host: 'fl.ibi511.com', envKey: 'FL511_API_KEY', site: 'https://fl511.com' },
+  // Legacy /api/GetCameras platform.
+  { code: 'WI', name: 'Wisconsin DOT', kind: 'legacy511', host: '511wi.gov', envKey: 'WI511_API_KEY', site: 'https://511wi.gov' },
+];
+
+// Hostnames whose images the proxy is allowed to fetch (SSRF guard). Extend as
+// providers are added.
+const IMG_HOST_ALLOW = [
+  '.dot.ca.gov',
+  '.ibi511.com',
+  'az511.com',
+  '.az511.com',
+  'az511.gov',
+  '.az511.gov',
+  '511wi.gov',
+  '.511wi.gov',
+  'fl511.com',
+  '.fl511.com',
+  '511ga.org',
+  '.511ga.org',
+];
+
+function imageHostAllowed(host: string): boolean {
+  const h = host.toLowerCase();
+  return IMG_HOST_ALLOW.some((a) => (a.startsWith('.') ? h.endsWith(a) : h === a));
+}
+
+function proxied(url: string | null): string | null {
+  if (!url) return null;
+  return `/api/webcams/image?u=${encodeURIComponent(url)}`;
+}
+
+async function fetchJson(url: string): Promise<unknown> {
   const r = await fetch(url, {
-    signal: AbortSignal.timeout(10_000),
-    headers: {
-      'x-windy-api-key': config.windyApiKey,
-      'User-Agent': 'gsoc-monitor/1.0 (property webcam layer)',
-    },
+    signal: AbortSignal.timeout(12_000),
+    headers: { 'User-Agent': 'gsoc-monitor/1.0 (property webcam layer)', Accept: 'application/json' },
   });
-  if (!r.ok) throw new Error(`Windy ${r.status}`);
-  const data = (await r.json()) as { webcams?: WindyWebcam[]; result?: { webcams?: WindyWebcam[] } };
-  return data.webcams ?? data.result?.webcams ?? [];
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
 }
 
-const CACHE_KEY = 'webcams:v1';
-const SUCCESS_TTL = 6 * 60 * 60_000; // 6h — the set of nearby cams barely changes
-let lastGood: { source: 'windy'; webcams: Webcam[]; updated: number } | null = null;
+function asArray(data: unknown): Record<string, unknown>[] {
+  if (Array.isArray(data)) return data as Record<string, unknown>[];
+  if (data && typeof data === 'object') {
+    const o = data as Record<string, unknown>;
+    const arr = o.cameras ?? o.Cameras ?? o.data ?? o.results;
+    if (Array.isArray(arr)) return arr as Record<string, unknown>[];
+  }
+  return [];
+}
 
-router.get('/', async (_req, res) => {
-  if (!config.windyApiKey) {
-    res.json({ source: 'no-key', webcams: [], updated: Date.now() });
-    return;
+// ibi511: each camera carries Latitude/Longitude/Location/Roadway and a Views[]
+// array whose first entry holds the image Url + Status.
+function parseIbi511(data: unknown): RawCam[] {
+  const out: RawCam[] = [];
+  for (const c of asArray(data)) {
+    const lat = num(pick(c, 'Latitude', 'latitude'));
+    const lon = num(pick(c, 'Longitude', 'longitude'));
+    if (lat == null || lon == null) continue;
+    const views = (pick<Record<string, unknown>[]>(c, 'Views', 'views') ?? []) as Record<string, unknown>[];
+    const v0 = Array.isArray(views) ? views[0] : undefined;
+    const imageUrl =
+      (v0 && (pick<string>(v0, 'Url', 'url', 'ImageUrl', 'imageUrl') ?? null)) ??
+      (pick<string>(c, 'ImageUrl', 'imageUrl', 'Url', 'url') ?? null);
+    const status = v0 ? pick<string>(v0, 'Status', 'status') : pick<string>(c, 'Status', 'status');
+    out.push({
+      id: String(pick(c, 'Id', 'id', 'SourceId') ?? `${lat},${lon}`),
+      name: String(pick(c, 'Location', 'location', 'Name', 'name', 'Roadway') ?? 'Traffic camera'),
+      lat,
+      lon,
+      imageUrl: imageUrl ?? null,
+      roadway: (pick<string>(c, 'Roadway', 'roadway') ?? null) || null,
+      status: (status ?? 'unknown').toString().toLowerCase().includes('disab') ? 'disabled' : 'active',
+    });
+  }
+  return out;
+}
+
+// legacy /api/GetCameras: flat camera objects with Latitude/Longitude/Url.
+function parseLegacy511(data: unknown): RawCam[] {
+  const out: RawCam[] = [];
+  for (const c of asArray(data)) {
+    const lat = num(pick(c, 'Latitude', 'latitude'));
+    const lon = num(pick(c, 'Longitude', 'longitude'));
+    if (lat == null || lon == null) continue;
+    const disabled = String(pick(c, 'Disabled', 'disabled') ?? '').toLowerCase() === 'true';
+    out.push({
+      id: String(pick(c, 'ID', 'Id', 'id') ?? `${lat},${lon}`),
+      name: String(pick(c, 'Name', 'name', 'Location', 'RoadwayName') ?? 'Traffic camera'),
+      lat,
+      lon,
+      imageUrl: (pick<string>(c, 'Url', 'url', 'ImageUrl', 'imageUrl') ?? null) || null,
+      roadway: (pick<string>(c, 'RoadwayName', 'Roadway', 'roadway') ?? null) || null,
+      status: disabled ? 'disabled' : 'active',
+    });
+  }
+  return out;
+}
+
+// Caltrans CWWP2: { data: [ { cctv: { location:{latitude,longitude,locationName},
+// imageData:{ static:{ currentImageURL } } } } ] }
+function parseCaltrans(data: unknown): RawCam[] {
+  const out: RawCam[] = [];
+  const rows = (data && typeof data === 'object' ? (data as Record<string, unknown>).data : null) ?? [];
+  if (!Array.isArray(rows)) return out;
+  for (const row of rows as Record<string, unknown>[]) {
+    const cctv = (row.cctv ?? row.CCTV) as Record<string, unknown> | undefined;
+    if (!cctv) continue;
+    const loc = cctv.location as Record<string, unknown> | undefined;
+    const img = cctv.imageData as Record<string, unknown> | undefined;
+    const stat = img?.static as Record<string, unknown> | undefined;
+    const lat = num(loc?.latitude);
+    const lon = num(loc?.longitude);
+    if (lat == null || lon == null) continue;
+    const url = (stat?.currentImageURL as string) ?? null;
+    out.push({
+      id: String(cctv.index ?? `${lat},${lon}`),
+      name: String(loc?.locationName || loc?.nearbyPlace || 'Caltrans camera'),
+      lat,
+      lon,
+      imageUrl: url && url.trim() ? url.trim() : null,
+      roadway: (loc?.route as string) ?? null,
+      status: 'active',
+    });
+  }
+  return out;
+}
+
+async function runProvider(p: ProviderConfig): Promise<{ configured: boolean; cams: RawCam[] }> {
+  if (p.kind === 'caltrans') {
+    const lists = await Promise.allSettled(
+      (p.districts ?? []).map(async (d) => {
+        const dd = d.replace('d', '').padStart(2, '0');
+        return parseCaltrans(await fetchJson(`https://cwwp2.dot.ca.gov/data/${d}/cctv/cctvStatusD${dd}.json`));
+      })
+    );
+    const cams = lists.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
+    return { configured: true, cams };
   }
 
-  const cached = cache.get<{ source: 'windy'; webcams: Webcam[]; updated: number }>(CACHE_KEY);
+  const key = p.envKey ? process.env[p.envKey] : undefined;
+  if (!key) return { configured: false, cams: [] };
+  const path = p.kind === 'ibi511' ? 'api/v2/get/cameras' : 'api/GetCameras';
+  const data = await fetchJson(`https://${p.host}/${path}?key=${encodeURIComponent(key)}&format=json`);
+  const cams = p.kind === 'ibi511' ? parseIbi511(data) : parseLegacy511(data);
+  return { configured: true, cams };
+}
+
+const CACHE_KEY = 'webcams:dot:v1';
+const SUCCESS_TTL = 6 * 60 * 60_000; // 6h — the set of nearby cams barely changes
+type Result = {
+  webcams: Webcam[];
+  updated: number;
+  providers: Array<{ code: string; name: string; configured: boolean; count: number; error: string | null }>;
+};
+let lastGood: Result | null = null;
+
+router.get('/', async (_req, res) => {
+  const cached = cache.get<Result>(CACHE_KEY);
   if (cached) {
     res.json(cached);
     return;
   }
 
-  try {
-    const anchors = buildAnchors();
-    const settled = await Promise.allSettled(anchors.map(fetchAnchor));
+  const settled = await Promise.allSettled(PROVIDERS.map((p) => runProvider(p)));
 
-    const byId = new Map<string, Webcam>();
-    for (const s of settled) {
-      if (s.status !== 'fulfilled') {
-        console.error('[webcams] anchor failed:', s.reason);
-        continue;
-      }
-      for (const raw of s.value) {
-        const cam = normalize(raw);
-        if (!cam) continue;
-        // Honor the "within 10 miles of a pin" rule exactly (the anchor radius
-        // can reach a touch further once pins are merged).
-        if (cam.distanceMi > RADIUS_MI + 0.1) continue;
-        const prev = byId.get(cam.id);
-        // Keep the instance attributed to the closest pin.
-        if (!prev || cam.distanceMi < prev.distanceMi) byId.set(cam.id, cam);
-      }
+  const byId = new Map<string, Webcam>();
+  const providers: Result['providers'] = [];
+
+  settled.forEach((s, i) => {
+    const p = PROVIDERS[i];
+    if (s.status !== 'fulfilled') {
+      providers.push({ code: p.code, name: p.name, configured: true, count: 0, error: String(s.reason) });
+      return;
     }
-
-    const webcams = [...byId.values()].sort((a, b) => a.distanceMi - b.distanceMi);
-    const result = { source: 'windy' as const, webcams, updated: Date.now() };
-
-    // Only cache/remember non-empty successes so a transient empty result
-    // doesn't pin the layer blank for 6h.
-    if (webcams.length > 0) {
-      cache.set(CACHE_KEY, result, SUCCESS_TTL);
-      lastGood = result;
+    let near = 0;
+    for (const raw of s.value.cams) {
+      const np = nearestPin(raw.lat, raw.lon);
+      if (np.distanceMi > RADIUS_MI) continue;
+      near++;
+      const id = `${p.code}:${raw.id}`;
+      const cam: Webcam = {
+        id,
+        title: raw.name,
+        lat: raw.lat,
+        lon: raw.lon,
+        imageUrl: proxied(raw.imageUrl),
+        source: p.name,
+        sourceUrl: p.site,
+        roadway: raw.roadway ?? null,
+        status: raw.status ?? 'unknown',
+        lastUpdated: null,
+        nearestPin: np.name,
+        distanceMi: Math.round(np.distanceMi * 10) / 10,
+      };
+      const prev = byId.get(id);
+      if (!prev || cam.distanceMi < prev.distanceMi) byId.set(id, cam);
     }
-    res.json(result);
-  } catch (err) {
-    console.error('[webcams] fetch failed:', err);
-    if (lastGood) res.json({ ...lastGood, stale: true });
-    else res.status(502).json({ source: 'error', webcams: [], updated: Date.now(), error: String(err) });
+    providers.push({ code: p.code, name: p.name, configured: s.value.configured, count: near, error: null });
+  });
+
+  const webcams = [...byId.values()].sort((a, b) => a.distanceMi - b.distanceMi);
+  const result: Result = { webcams, updated: Date.now(), providers };
+
+  // Cache only when at least one provider returned cams, so a transient
+  // all-fail doesn't pin the layer blank for 6h.
+  if (webcams.length > 0) {
+    cache.set(CACHE_KEY, result, SUCCESS_TTL);
+    lastGood = result;
+  } else if (lastGood) {
+    res.json({ ...lastGood, stale: true });
+    return;
   }
+  res.json(result);
+});
+
+// Image proxy — fetches the upstream JPEG and serves it over our origin so the
+// browser gets HTTPS, no hotlink-referrer issues, and no CORS. Restricted to
+// known DOT hosts to avoid being an open proxy.
+router.get('/image', async (req, res) => {
+  const u = typeof req.query.u === 'string' ? req.query.u : '';
+  let parsed: URL;
+  try {
+    parsed = new URL(u);
+  } catch {
+    res.status(400).end();
+    return;
+  }
+  if (!/^https?:$/.test(parsed.protocol) || !imageHostAllowed(parsed.hostname)) {
+    res.status(403).end();
+    return;
+  }
+  try {
+    const upstream = await fetch(parsed.toString(), {
+      signal: AbortSignal.timeout(10_000),
+      headers: { 'User-Agent': 'gsoc-monitor/1.0', Accept: 'image/*' },
+    });
+    if (!upstream.ok || !upstream.body) {
+      res.status(502).end();
+      return;
+    }
+    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=20');
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    res.end(buf);
+  } catch {
+    res.status(504).end();
+  }
+});
+
+router.get('/debug', async (_req, res) => {
+  const cached = cache.get<Result>(CACHE_KEY);
+  res.json({
+    providers: PROVIDERS.map((p) => ({
+      code: p.code,
+      name: p.name,
+      kind: p.kind,
+      configured: p.kind === 'caltrans' ? true : Boolean(p.envKey && process.env[p.envKey]),
+      envKey: p.envKey ?? null,
+    })),
+    lastResult: cached
+      ? { count: cached.webcams.length, providers: cached.providers, updated: cached.updated }
+      : null,
+    pendingStates: ['CO (COtrip)', 'WY (no public API)', 'MT', 'SD', 'VT'],
+  });
 });
 
 export default router;

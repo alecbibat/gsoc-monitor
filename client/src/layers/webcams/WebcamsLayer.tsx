@@ -25,7 +25,7 @@ const ICON_ACTIVE = cameraIcon(true);
 const ICON_OFFLINE = cameraIcon(false);
 
 function isActive(status: string): boolean {
-  return status.toLowerCase() === 'active';
+  return status.toLowerCase() !== 'disabled';
 }
 
 export function WebcamsLayer() {
@@ -61,13 +61,6 @@ export function WebcamsLayer() {
         const data = await api.webcams();
         if (cancelled) return;
 
-        if (data.source === 'no-key') {
-          useWebcamsStatus.getState().setStatus({ noKey: true, count: 0, error: null });
-          ds.entities.removeAll();
-          viewer.scene.requestRender();
-          return;
-        }
-
         useWebcamsData.getState().setWebcams(data.webcams);
 
         ds.entities.removeAll();
@@ -97,7 +90,7 @@ export function WebcamsLayer() {
 
         useWebcamsStatus.getState().setStatus({
           count: data.webcams.length,
-          noKey: false,
+          statesActive: data.providers.filter((p) => p.count > 0).length,
           error: null,
         });
         viewer.scene.requestRender();
