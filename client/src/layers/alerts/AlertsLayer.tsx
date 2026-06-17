@@ -5,173 +5,14 @@ import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { useAlertsStatus } from './alertsStore';
 import { useScreensaverStore } from '../../screensaver/screensaverStore';
-
-// Fetched directly from the browser: NWS sends CORS headers, so this avoids the
-// server-side User-Agent restrictions that block api.weather.gov from a proxy.
-// No query params — exactly like the proven weather-leaflet reference (the
-// /alerts/active endpoint can 400 on some param combinations).
-const ALERTS_API = 'https://api.weather.gov/alerts/active';
-
-// Static US county polygons keyed by 5-digit FIPS (the dataset the proven
-// weather-leaflet app uses). Most non-storm NWS alerts ship geometry: null and
-// only reference county SAME codes, which we resolve against these polygons.
-const COUNTY_GEOJSON =
-  'https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json';
-
-interface RawAlert {
-  id?: string;
-  geometry: GeoJSON.Geometry | null;
-  properties: {
-    id?: string;
-    event?: string;
-    headline?: string | null;
-    description?: string;
-    instruction?: string | null;
-    severity?: string;
-    certainty?: string;
-    urgency?: string;
-    senderName?: string;
-    effective?: string;
-    expires?: string;
-    areaDesc?: string;
-    geocode?: { SAME?: string[]; UGC?: string[] };
-  };
-}
-
-const SEVERITY_RANK: Record<string, number> = {
-  Extreme: 4,
-  Severe: 3,
-  Moderate: 2,
-  Minor: 1,
-  Unknown: 0,
-};
-
-const c = (hex: string) => Cesium.Color.fromCssColorString(hex);
-
-// Severity is still used for draw-order (most severe drawn last/on top) and as the
-// fallback colour when an event doesn't match a known hazard family.
-function severityColor(severity: string): Cesium.Color {
-  switch (severity) {
-    case 'Extreme':
-      return c('#ff3b3b');
-    case 'Severe':
-      return c('#ff8a3d');
-    case 'Moderate':
-      return c('#ffe14d');
-    case 'Minor':
-      return c('#52a9ff');
-    default:
-      return c('#9aa5b1');
-  }
-}
-
-// Colour by hazard TYPE (the NWS `event` string), not just severity, so the map
-// reads semantically: floods are blue, thunderstorms yellow, fire orange, winter
-// icy, and the genuinely life-threatening events (tornado, tsunami, flash flood,
-// storm surge, hurricane, extreme wind) get bold, saturated, mutually-distinct
-// colours so they jump off the map on any basemap. Checks run most-specific
-// first; `severity` shades a few families (Warning vs Watch/Advisory).
-function alertColor(event: string, severity: string): Cesium.Color {
-  const e = event.toLowerCase();
-  const isWarning = e.includes('warning') || e.includes('emergency');
-  const isWatch = e.includes('watch');
-
-  // --- Life-threatening: bold, vivid, each a distinct hue ---
-  if (e.includes('tornado')) return c('#ff1f4f'); // crimson
-  if (e.includes('tsunami')) return c('#b026ff'); // electric purple
-  if (e.includes('extreme wind')) return c('#ff3d00'); // orange-red
-  if (e.includes('flash flood')) return c('#00c8ff'); // bright cyan
-  if (e.includes('storm surge')) return c('#6a5cff'); // violet-blue
-  if (e.includes('hurricane') && !e.includes('wind')) return c('#ff2d95'); // hot magenta
-  if (e.includes('typhoon') || e.includes('tropical storm')) return c('#ff2d95');
-
-  // --- Flooding family: shades of blue (Warning darkest) ---
-  if (e.includes('flood') || e.includes('seiche')) {
-    return c(isWarning ? '#1769ff' : isWatch ? '#4d94ff' : '#86b6ff');
-  }
-
-  // --- Thunderstorms: yellow ---
-  if (e.includes('thunderstorm')) return c(isWarning ? '#ffd60a' : '#ffe98a');
-
-  // --- Fire / red-flag: orange ---
-  if (e.includes('fire') || e.includes('red flag') || e.includes('smoke')) return c('#ff8a1e');
-
-  // --- Excessive heat: amber-red ---
-  if (e.includes('heat') || (e.includes('hot') && isWarning)) return c('#ff6024');
-
-  // --- Winter / cold: icy lavender (desaturated to stay distinct from flood blue) ---
-  if (/winter|snow|\bice\b|icy|blizzard|freez|frost|sleet|wind chill|cold|avalanche/.test(e)) {
-    return c(e.includes('blizzard') || e.includes('ice storm') ? '#8fa8e0' : '#b9c4e8');
-  }
-
-  // --- Wind (non-tornado): khaki ---
-  if (e.includes('wind') || e.includes('gale')) return c('#caa54a');
-
-  // --- Marine / coastal hazards: teal ---
-  if (e.includes('marine') || e.includes('small craft') || e.includes('rip current') || e.includes('surf'))
-    return c('#23c2b8');
-
-  // --- Air quality / dust / ash / fog: muted brown-grey ---
-  if (/air quality|dust|ashfall|\bfog\b/.test(e)) return c('#9a8a7a');
-
-  // --- Anything else: fall back to severity ---
-  return severityColor(severity);
-}
-
-function extractRings(geometry: GeoJSON.Geometry | null | undefined): number[][][] {
-  if (!geometry) return [];
-  if (geometry.type === 'Polygon') {
-    return [geometry.coordinates[0] as number[][]];
-  }
-  if (geometry.type === 'MultiPolygon') {
-    return geometry.coordinates.map((poly) => poly[0] as number[][]);
-  }
-  return [];
-}
-
-// Load the county polygons once and index them by FIPS id. Memoised across the
-// app's lifetime; a failed load is allowed to retry on the next refresh.
-let countyPromise: Promise<Map<string, GeoJSON.Geometry>> | null = null;
-function loadCounties(): Promise<Map<string, GeoJSON.Geometry>> {
-  if (!countyPromise) {
-    countyPromise = fetch(COUNTY_GEOJSON)
-      .then((r) => {
-        if (!r.ok) throw new Error(`county geojson ${r.status}`);
-        return r.json() as Promise<GeoJSON.FeatureCollection>;
-      })
-      .then((data) => {
-        const map = new Map<string, GeoJSON.Geometry>();
-        for (const f of data.features) {
-          if (f.id != null && f.geometry) map.set(String(f.id), f.geometry);
-        }
-        return map;
-      })
-      .catch((err) => {
-        countyPromise = null;
-        throw err;
-      });
-  }
-  return countyPromise;
-}
-
-function alertRings(
-  alert: RawAlert,
-  counties: Map<string, GeoJSON.Geometry> | null
-): number[][][] {
-  // Prefer the alert's own precise polygon (storm-based warnings have one)...
-  const own = extractRings(alert.geometry);
-  if (own.length) return own;
-
-  // ...otherwise fall back to the counties named by its SAME (county FIPS) codes.
-  if (!counties) return [];
-  const rings: number[][][] = [];
-  for (const code of alert.properties.geocode?.SAME ?? []) {
-    const fips = code.length === 6 ? code.slice(1) : code; // SAME -> 5-digit FIPS
-    const geom = counties.get(fips);
-    if (geom) for (const ring of extractRings(geom)) rings.push(ring);
-  }
-  return rings;
-}
+import {
+  fetchActiveAlerts,
+  loadCounties,
+  alertRings,
+  alertColorHex,
+  severityRank,
+  type RawAlert,
+} from './alertsData';
 
 export function AlertsLayer() {
   const viewer = useCesiumViewer();
@@ -227,10 +68,7 @@ export function AlertsLayer() {
 
       let alerts: RawAlert[];
       try {
-        const r = await fetch(ALERTS_API);
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const json = (await r.json()) as { features?: RawAlert[] };
-        alerts = json.features ?? [];
+        alerts = await fetchActiveAlerts();
       } catch (err) {
         if (cancelled) return;
         console.error('NWS alerts fetch failed', err);
@@ -252,9 +90,7 @@ export function AlertsLayer() {
 
         // Draw higher-severity polygons last so they sit on top.
         const sorted = [...alerts].sort(
-          (a, b) =>
-            (SEVERITY_RANK[a.properties.severity ?? 'Unknown'] ?? 0) -
-            (SEVERITY_RANK[b.properties.severity ?? 'Unknown'] ?? 0)
+          (a, b) => severityRank(a.properties.severity) - severityRank(b.properties.severity)
         );
 
         ds.entities.removeAll();
@@ -263,7 +99,9 @@ export function AlertsLayer() {
           const rings = alertRings(alert, counties);
           if (rings.length === 0) continue;
           const p = alert.properties;
-          const color = alertColor(p.event ?? '', p.severity ?? 'Unknown');
+          const color = Cesium.Color.fromCssColorString(
+            alertColorHex(p.event ?? '', p.severity ?? 'Unknown')
+          );
           const id = p.id ?? alert.id ?? `${drawn}`;
 
           rings.forEach((ring, idx) => {

@@ -4,79 +4,15 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { useFiresStatus } from './firesStore';
-import { LOCATION_GROUPS } from '../locations/locations';
-
-// NASA FIRMS VIIRS active-fire detections, served (no API key) through Esri's
-// CORS-enabled Living Atlas feature service and queried by viewport so the
-// global feed stays manageable. Same browser-side approach as the other GIS
-// layers (hurricanes / alerts).
-const SERVICE =
-  'https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/Satellite_VIIRS_Thermal_Hotspots_and_Fire_Activity/FeatureServer';
-
-const MAX_FIRES = 2500; // strongest-by-FRP hotspots we draw at once
-const FALLBACK_LAYER_ID = 0; // "past 24 hrs" sublayer if name discovery fails
-
-// "Near pins" filter. When active we ignore the viewport and instead query a
-// fixed box around each location group, then keep only hotspots within the
-// selected radius (50 / 100 / 200 mi) of an actual pin.
-const MILES_TO_M = 1_609.344;
-
-const ALL_PINS: Array<[number, number]> = LOCATION_GROUPS.flatMap((g) =>
-  g.locations.map((l) => [l.lon, l.lat] as [number, number])
-);
-
-function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6_371_000;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
-}
-
-function nearAnyPin(lat: number, lon: number, radiusM: number): boolean {
-  return ALL_PINS.some(([plon, plat]) => haversineM(lat, lon, plat, plon) <= radiusM);
-}
-
-// Query envelopes are padded for the maximum supported radius (200 mi) so the
-// same set of boxes works for all three distance options. The haversine check
-// above does the precise per-hotspot filtering.
-const PIN_ENVELOPES: string[] = LOCATION_GROUPS.map((g) => {
-  const lats = g.locations.map((l) => l.lat);
-  const lons = g.locations.map((l) => l.lon);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLon = Math.min(...lons);
-  const maxLon = Math.max(...lons);
-  const latPad = 200 / 69; // ~2.9° per 200 mi
-  const maxAbsLat = Math.max(Math.abs(minLat), Math.abs(maxLat));
-  const lonPad = Math.min(6, 200 / (69 * Math.cos((maxAbsLat * Math.PI) / 180)));
-  return `${minLon - lonPad},${minLat - latPad},${maxLon + lonPad},${maxLat + latPad}`;
-});
-
-interface ServiceLayer {
-  id: number;
-  name: string;
-}
-
-function pick<T = unknown>(
-  props: Record<string, unknown> | undefined,
-  keys: string[]
-): T | undefined {
-  if (!props) return undefined;
-  for (const k of keys) {
-    const v = props[k];
-    if (v != null && v !== '') return v as T;
-  }
-  return undefined;
-}
-
-function asNumber(v: unknown): number | undefined {
-  if (v == null || v === '') return undefined;
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : undefined;
-}
+import { MILES_TO_M } from '../../lib/geo';
+import {
+  fetchHotspotsNearPins,
+  fetchEnvelope,
+  getFireLayerId,
+  parseHotspot,
+  MAX_FIRES,
+  type FireHotspot,
+} from './firesData';
 
 // Layered flame SVG billboard — 3 color zones (outer body, mid flame, hot
 // core) keyed on FRP tier so we generate exactly 4 distinct data URIs.
@@ -120,17 +56,6 @@ function fireIconSize(frp: number | undefined): number {
   return FIRE_COLORS[frpTier(frp)].size;
 }
 
-function confidenceLabel(raw: unknown): string {
-  if (raw == null || raw === '') return 'Unknown';
-  const s = String(raw).toLowerCase();
-  if (s === 'h' || s === 'high') return 'High';
-  if (s === 'n' || s === 'nominal') return 'Nominal';
-  if (s === 'l' || s === 'low') return 'Low';
-  const n = Number(raw);
-  if (Number.isFinite(n)) return `${n}%`;
-  return String(raw);
-}
-
 function debounce<T extends (...args: never[]) => void>(fn: T, ms: number) {
   let handle: ReturnType<typeof setTimeout> | null = null;
   return (...args: Parameters<T>) => {
@@ -144,7 +69,6 @@ export function FireLayer() {
   const active = useLayersStore((s) => s.active.fires);
   const nearMiles = useLayersStore((s) => s.firesNearMiles);
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
-  const layerIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!viewer) return;
@@ -168,121 +92,52 @@ export function FireLayer() {
     }
 
     let cancelled = false;
-    let lastErr: unknown = null;
-
-    // Discover the "past 24 hrs" sublayer once, by name, with an index fallback.
-    const resolveLayerId = async (): Promise<number> => {
-      if (layerIdRef.current != null) return layerIdRef.current;
-      try {
-        const r = await fetch(`${SERVICE}?f=json`);
-        if (r.ok) {
-          const meta = (await r.json()) as { layers?: ServiceLayer[] };
-          const found = meta.layers?.find((l) => {
-            const n = l.name.toLowerCase();
-            return n.includes('24') || n.includes('last');
-          });
-          layerIdRef.current = found?.id ?? meta.layers?.[0]?.id ?? FALLBACK_LAYER_ID;
-        } else {
-          layerIdRef.current = FALLBACK_LAYER_ID;
-        }
-      } catch {
-        layerIdRef.current = FALLBACK_LAYER_ID;
-      }
-      return layerIdRef.current;
-    };
-
-    // Fetch + parse one ArcGIS envelope; returns null only on a hard failure.
-    const fetchEnvelope = async (
-      layerId: number,
-      envelope: string
-    ): Promise<GeoJSON.Feature[] | null> => {
-      const base =
-        `${SERVICE}/${layerId}/query?where=1%3D1` +
-        `&geometry=${encodeURIComponent(envelope)}&geometryType=esriGeometryEnvelope` +
-        `&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&outSR=4326` +
-        `&resultRecordCount=${MAX_FIRES}&f=geojson`;
-      // Prefer the strongest fires first (matters only when we hit the cap), but
-      // don't let a schema surprise on that field break the layer — fall back to
-      // an unordered query.
-      const candidates = [`${base}&orderByFields=frp%20DESC`, base];
-      for (const url of candidates) {
-        try {
-          const r = await fetch(url);
-          if (!r.ok) {
-            lastErr = new Error(`HTTP ${r.status}`);
-            continue;
-          }
-          const j = (await r.json()) as { features?: GeoJSON.Feature[] };
-          return j.features ?? [];
-        } catch (err) {
-          lastErr = err;
-        }
-      }
-      return null;
-    };
 
     const load = async () => {
-      const layerId = await resolveLayerId();
-      if (cancelled) return;
-
-      let features: GeoJSON.Feature[] | null;
+      let hotspots: FireHotspot[] | null;
+      let error: string | null = null;
 
       if (nearMiles > 0) {
         // Query a fixed box around each pin group (independent of the camera),
         // then keep only hotspots within the selected radius of a pin.
-        const radiusM = nearMiles * MILES_TO_M;
-        const results = await Promise.all(
-          PIN_ENVELOPES.map((env) => fetchEnvelope(layerId, env))
-        );
+        const res = await fetchHotspotsNearPins(nearMiles * MILES_TO_M);
         if (cancelled) return;
-        if (results.every((r) => r === null)) {
-          features = null; // every region failed — surface the error
-        } else {
-          const seen = new Set<string>();
-          features = [];
-          for (const r of results) {
-            if (!r) continue;
-            for (const f of r) {
-              if (f.geometry?.type !== 'Point') continue;
-              const [lon, lat] = f.geometry.coordinates as [number, number];
-              if (!nearAnyPin(lat, lon, radiusM)) continue;
-              // Adjacent group boxes can overlap, so dedupe by position.
-              const key = `${lon.toFixed(4)},${lat.toFixed(4)}`;
-              if (seen.has(key)) continue;
-              seen.add(key);
-              features.push(f);
-            }
-          }
-        }
+        hotspots = res.hotspots;
+        error = res.error;
       } else {
+        const layerId = await getFireLayerId();
+        if (cancelled) return;
         const rect = viewer.camera.computeViewRectangle();
         const xmin = rect ? Cesium.Math.toDegrees(rect.west) : -180;
         const xmax = rect ? Cesium.Math.toDegrees(rect.east) : 180;
         const ymin = rect ? Cesium.Math.toDegrees(rect.south) : -90;
         const ymax = rect ? Cesium.Math.toDegrees(rect.north) : 90;
-        features = await fetchEnvelope(layerId, `${xmin},${ymin},${xmax},${ymax}`);
+        const res = await fetchEnvelope(layerId, `${xmin},${ymin},${xmax},${ymax}`);
+        if (cancelled) return;
+        hotspots = res.features
+          ? res.features.map(parseHotspot).filter((h): h is FireHotspot => h !== null)
+          : null;
+        error = res.error;
       }
 
       if (cancelled) return;
-      if (features == null) {
-        console.error('FIRMS fire feed fetch failed', lastErr);
-        const reason = lastErr instanceof Error ? lastErr.message : 'unreachable';
-        useFiresStatus.getState().setStatus({ error: `FIRMS feed error: ${reason}` });
+      if (hotspots == null) {
+        console.error('FIRMS fire feed fetch failed', error);
+        useFiresStatus
+          .getState()
+          .setStatus({ error: `FIRMS feed error: ${error ?? 'unreachable'}` });
         return;
       }
 
       ds.entities.removeAll();
       let drawn = 0;
-      for (const f of features) {
-        if (f.geometry?.type !== 'Point') continue;
-        const [lon, lat] = f.geometry.coordinates as [number, number];
-        const p = (f.properties ?? undefined) as Record<string, unknown> | undefined;
-        const frp = asNumber(pick(p, ['frp', 'FRP']));
+      for (const h of hotspots) {
+        const frp = h.frp ?? undefined;
         const id = `fire-${drawn}`;
         const sz = fireIconSize(frp);
         const entity = ds.entities.add({
           id,
-          position: Cesium.Cartesian3.fromDegrees(lon, lat),
+          position: Cesium.Cartesian3.fromDegrees(h.lon, h.lat),
           billboard: {
             image: fireIcon(frp),
             width: sz,
@@ -295,17 +150,17 @@ export function FireLayer() {
           id,
           kind: 'fires',
           title: 'Active Fire Detection',
-          subtitle: `${lat.toFixed(2)}, ${lon.toFixed(2)}`,
+          subtitle: `${h.lat.toFixed(2)}, ${h.lon.toFixed(2)}`,
           payload: {
-            latitude: lat,
-            longitude: lon,
-            frp: frp ?? null,
-            brightness: asNumber(pick(p, ['bright_ti4', 'BRIGHT_TI4', 'brightness'])) ?? null,
-            confidence: confidenceLabel(pick(p, ['confidence', 'CONFIDENCE'])),
-            satellite: (pick<string>(p, ['satellite', 'SATELLITE']) ?? '—') as string,
-            daynight: (pick<string>(p, ['daynight', 'DAYNIGHT']) ?? '') as string,
-            acqDate: (pick<string>(p, ['acq_date', 'ACQ_DATE']) ?? '') as string,
-            acqTime: (pick<string>(p, ['acq_time', 'ACQ_TIME']) ?? '') as string,
+            latitude: h.lat,
+            longitude: h.lon,
+            frp: h.frp,
+            brightness: h.brightness,
+            confidence: h.confidence,
+            satellite: h.satellite,
+            daynight: h.daynight,
+            acqDate: h.acqDate,
+            acqTime: h.acqTime,
           },
         });
         drawn++;

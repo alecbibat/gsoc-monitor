@@ -4,6 +4,7 @@ import { PentagonPizzaWidget } from './pentagonPizza/PentagonPizzaWidget';
 import { NewsWidget } from './news/NewsWidget';
 import { FearGreedWidget } from './fearGreed/FearGreedWidget';
 import { DefconWidget } from './defcon/DefconWidget';
+import { ProximityWidget } from './proximity/ProximityWidget';
 
 export interface WidgetDef {
   id: WidgetId;
@@ -16,6 +17,15 @@ export interface WidgetDef {
 }
 
 export const WIDGETS: WidgetDef[] = [
+  {
+    id: 'proximity',
+    title: 'Property Watch',
+    subtitle: 'Hazards near your locations',
+    label: 'Watch',
+    glyph: '🛡',
+    accentClass: 'border-accent-ok/40',
+    render: () => <ProximityWidget />,
+  },
   {
     id: 'pentagon-pizza',
     title: 'Pentagon Pizza',
