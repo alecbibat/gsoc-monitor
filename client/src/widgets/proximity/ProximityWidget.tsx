@@ -3,6 +3,7 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { flyToLonLat } from '../../cesium/flyTo';
 import { MILES_TO_M } from '../../lib/geo';
 import { scanProximity, type PropertyHazards, type ScanResult } from './proximityScan';
+import { LightningTicker } from './LightningTicker';
 
 const RADII = [50, 100, 200] as const;
 const REFRESH_MS = 5 * 60_000;
@@ -128,6 +129,9 @@ export function ProximityWidget() {
           ))}
         </div>
       </div>
+
+      {/* Live global lightning activity */}
+      <LightningTicker />
 
       {/* Summary banner */}
       {result && (
