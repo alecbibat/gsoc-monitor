@@ -1,7 +1,18 @@
 import { useEffect } from 'react';
 import { usePickChooserStore } from './pickChooserStore';
 import { usePanelStore } from './panelStore';
+import { alertColorHex } from '../layers/alerts/alertsData';
 import type { PanelKind } from '../types';
+
+// Colour swatch for a pick row, where one exists. NWS alerts are colour-coded
+// by event/severity on the map, so mirror that here to disambiguate stacked
+// alerts of different types.
+function itemColor(kind: PanelKind, payload: Record<string, unknown>): string | null {
+  if (kind === 'alerts') {
+    return alertColorHex((payload.event as string) ?? '', (payload.severity as string) ?? 'Unknown');
+  }
+  return null;
+}
 
 const KIND_LABEL: Partial<Record<PanelKind, string>> = {
   alerts: 'ALERT',
@@ -75,6 +86,16 @@ export function PickChooser() {
               }}
               className="flex w-full items-start gap-2.5 border-b border-white/5 px-3 py-2.5 text-left transition last:border-b-0 hover:bg-white/8"
             >
+              {(() => {
+                const color = itemColor(item.kind, item.payload);
+                return color ? (
+                  <span
+                    className="mt-1 h-3 w-3 shrink-0 rounded-sm ring-1 ring-white/20"
+                    style={{ background: color }}
+                    aria-hidden
+                  />
+                ) : null;
+              })()}
               <span className="mt-0.5 shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-[9px] font-bold tracking-wider text-accent">
                 {KIND_LABEL[item.kind] ?? item.kind.toUpperCase()}
               </span>

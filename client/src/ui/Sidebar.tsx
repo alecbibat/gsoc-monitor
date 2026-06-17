@@ -268,7 +268,7 @@ export function Sidebar() {
                 Near pins
               </div>
               <div className="flex gap-1">
-                {([0, 50, 100, 200] as const).map((mi) => (
+                {([0, 5, 50, 100, 200] as const).map((mi) => (
                   <button
                     key={mi}
                     onClick={() => setFiresNearMiles(mi)}

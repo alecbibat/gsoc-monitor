@@ -19,8 +19,8 @@ interface LayersState {
   setShipPaths: (v: boolean) => void;
   lightningDetectorLines: boolean;
   setLightningDetectorLines: (v: boolean) => void;
-  firesNearMiles: 0 | 50 | 100 | 200;
-  setFiresNearMiles: (v: 0 | 50 | 100 | 200) => void;
+  firesNearMiles: 0 | 5 | 50 | 100 | 200;
+  setFiresNearMiles: (v: 0 | 5 | 50 | 100 | 200) => void;
   satelliteGroup: SatelliteGroup;
   setSatelliteGroup: (v: SatelliteGroup) => void;
   earthquakeMagnitude: 'significant' | '4.5' | '2.5' | '1.0' | 'all';
