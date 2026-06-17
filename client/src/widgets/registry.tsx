@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import type { WidgetId } from '../types';
 import { PentagonPizzaWidget } from './pentagonPizza/PentagonPizzaWidget';
 import { NewsWidget } from './news/NewsWidget';
+import { FearGreedWidget } from './fearGreed/FearGreedWidget';
+import { DefconWidget } from './defcon/DefconWidget';
 
 export interface WidgetDef {
   id: WidgetId;
@@ -31,6 +33,24 @@ export const WIDGETS: WidgetDef[] = [
     glyph: '📡',
     accentClass: 'border-sky-500/40',
     render: () => <NewsWidget />,
+  },
+  {
+    id: 'fear-greed',
+    title: 'BTC Fear & Greed',
+    subtitle: 'Crypto market sentiment',
+    label: 'F&G',
+    glyph: '₿',
+    accentClass: 'border-yellow-400/40',
+    render: () => <FearGreedWidget />,
+  },
+  {
+    id: 'defcon',
+    title: 'DEFCON Status',
+    subtitle: 'Novelty threat gauge',
+    label: 'DEFCON',
+    glyph: '⚠',
+    accentClass: 'border-red-500/40',
+    render: () => <DefconWidget />,
   },
 ];
 

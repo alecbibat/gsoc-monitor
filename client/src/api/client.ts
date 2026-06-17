@@ -16,6 +16,10 @@ export const api = {
     getJson<{ flights: import('../types').FlightState[] }>(
       `/api/flights?lat=${lat}&lon=${lon}&dist=${dist}`
     ),
+  flightsByTail: () =>
+    getJson<{ flights: import('../types').FlightState[]; trackedTails: string[] }>(
+      '/api/flights/registrations'
+    ),
   geocode: (q: string) =>
     getJson<Array<{ lat: string; lon: string; display_name: string; boundingbox: string[] }>>(
       `/api/geocode?q=${encodeURIComponent(q)}`

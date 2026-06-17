@@ -6,12 +6,12 @@ export interface Poi {
   lat: number;
   lon: number;
   altitudeM: number;
-  category: 'earthquake' | 'weather' | 'landmark' | 'hurricane' | 'park' | 'news' | 'iss';
+  category: 'earthquake' | 'weather' | 'landmark' | 'hurricane' | 'park' | 'news' | 'iss' | 'pin';
   imageUrl?: string | null;
   url?: string;
 }
 
-export type ScreensaverMode = 'global' | 'national-parks' | 'iss';
+export type ScreensaverMode = 'global' | 'national-parks' | 'iss' | 'pins';
 
 type Phase = 'rotating' | 'flying-to' | 'at-poi' | 'flying-back';
 

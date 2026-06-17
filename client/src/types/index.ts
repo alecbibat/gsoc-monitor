@@ -8,12 +8,13 @@ export type LayerId =
   | 'fires'
   | 'ships'
   | 'satellites'
-  | 'locations';
+  | 'locations'
+  | 'earth3d';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
 // Standalone dockable widgets that aren't tied to a clicked map entity.
-export type WidgetId = 'pentagon-pizza' | 'news-feed';
+export type WidgetId = 'pentagon-pizza' | 'news-feed' | 'fear-greed' | 'defcon';
 
 // Anything that can occupy a dockable panel.
 export type PanelKind = LayerId | WidgetId;

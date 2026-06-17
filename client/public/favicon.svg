@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Background -->
+  <rect width="32" height="32" rx="6" fill="#0a0e14"/>
+  <!-- Globe body -->
+  <circle cx="16" cy="16" r="11" fill="#0d1823"/>
+  <!-- Globe grid (subtle) -->
+  <circle cx="16" cy="16" r="11" fill="none" stroke="#1e3d55" stroke-width="0.9"/>
+  <ellipse cx="16" cy="16" rx="11" ry="4" fill="none" stroke="#1e3d55" stroke-width="0.7"/>
+  <line x1="16" y1="5" x2="16" y2="27" stroke="#1e3d55" stroke-width="0.7"/>
+  <!-- Satellite orbit (hero element) -->
+  <ellipse cx="16" cy="16" rx="14.5" ry="5.5" fill="none" stroke="#3ddcff" stroke-width="2" opacity="0.78" transform="rotate(-38 16 16)"/>
+  <!-- Satellite dot (bright accent-ok green) -->
+  <circle cx="26" cy="8" r="2.8" fill="#52e3a4"/>
+  <!-- Center target dot -->
+  <circle cx="16" cy="16" r="2" fill="#3ddcff" opacity="0.95"/>
+</svg>

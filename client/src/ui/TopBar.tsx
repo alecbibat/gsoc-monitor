@@ -5,6 +5,7 @@ import { useScreensaverStore } from '../screensaver/screensaverStore';
 import type { ScreensaverMode } from '../screensaver/screensaverStore';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { resetCamera } from '../cesium/flyTo';
+import { useTrackedHistory } from './useTrackedHistory';
 
 function ScreensaverButton({
   mode,
@@ -39,9 +40,6 @@ function ScreensaverButton({
   );
 }
 
-// Live local clock shown next to the title. Ticks once a second; shows the
-// browser's local time plus its timezone abbreviation (e.g. EDT), with the full
-// date on hover.
 function LiveClock() {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -81,7 +79,6 @@ function LiveClock() {
   );
 }
 
-// Returns the camera to the default global overview.
 function ResetCameraButton() {
   const viewer = useCesiumViewer();
   return (
@@ -91,7 +88,15 @@ function ResetCameraButton() {
       className="pointer-events-auto flex items-center gap-1.5 rounded-lg border border-white/10 bg-ink-900/80 px-2.5 py-1.5 text-[11px] font-semibold tracking-widest text-white/40 shadow-panel backdrop-blur-sm transition-all hover:text-white/70 disabled:opacity-40"
       title="Reset camera to the home view"
     >
-      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <svg
+        viewBox="0 0 24 24"
+        className="h-3.5 w-3.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
         <circle cx="12" cy="12" r="9" />
         <path d="M12 3v3M12 18v3M3 12h3M18 12h3" />
         <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
@@ -101,10 +106,58 @@ function ResetCameraButton() {
   );
 }
 
+// Tiny SVG sparkline for the items-tracked counter.
+function Sparkline({ history }: { history: number[] }) {
+  if (history.length < 2) return null;
+  const W = 48;
+  const H = 18;
+  const max = Math.max(...history, 1);
+  const pts = history
+    .map((v, i) => {
+      const x = (i / (history.length - 1)) * W;
+      const y = H - (v / max) * H * 0.9 + H * 0.05;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+  return (
+    <svg width={W} height={H} className="shrink-0 opacity-50">
+      <polyline
+        points={pts}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+// Live "N items tracked" pill with rolling sparkline.
+function TrackedCounter() {
+  const { total, history } = useTrackedHistory();
+  return (
+    <div
+      className="pointer-events-auto flex items-center gap-2 rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 text-white/60 shadow-panel backdrop-blur-sm"
+      title="Total items currently tracked across all active layers"
+    >
+      <Sparkline history={history} />
+      <div className="flex flex-col items-end leading-none">
+        <span className="font-mono text-[15px] font-bold tabular-nums text-white/85">
+          {total.toLocaleString()}
+        </span>
+        <span className="text-[9px] font-semibold uppercase tracking-wider text-white/30">
+          tracked
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function TopBar() {
   return (
     <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-4 p-4">
-      {/* Left: identity + view controls */}
+      {/* Left: identity + camera controls + screensaver modes */}
       <div className="flex items-center gap-3">
         <div className="pointer-events-auto flex items-center gap-2 rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 shadow-panel backdrop-blur-sm">
           <span className="h-2 w-2 animate-pulse rounded-full bg-accent-ok shadow-glow" />
@@ -113,6 +166,7 @@ export function TopBar() {
           </span>
         </div>
         <LiveClock />
+        <TrackedCounter />
         <ResetCameraButton />
         <ScreensaverButton
           mode="global"
@@ -125,12 +179,17 @@ export function TopBar() {
           title="Tour national parks and office locations with county highlighting"
         />
         <ScreensaverButton
+          mode="pins"
+          label="PINS"
+          title="Orbit each tracked property location with a cinematic close-up"
+        />
+        <ScreensaverButton
           mode="iss"
           label="ISS"
           title="Follow the International Space Station in real time"
         />
       </div>
-      {/* Right: tools + search */}
+      {/* Right: widgets + search */}
       <div className="flex items-center gap-3">
         <WidgetLauncher />
         <div className="pointer-events-auto">

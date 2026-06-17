@@ -4,9 +4,12 @@ import { config } from '../config';
 
 const router = Router();
 
-// adsb.fi open data API — free, no authentication, ~1 req/sec. Returns live
-// ADS-B aircraft within a radius (max 250 NM) of a point. Response is the
-// readsb / ADSBexchange-v2 shape: { ac: [ ... ], now, total }.
+// The only aircraft this app tracks. Uses adsb.fi's per-registration endpoint
+// so they appear anywhere in the world regardless of camera viewport.
+const TRACKED_TAILS = ['N10AZ', 'N14NA', 'N154LA'] as const;
+
+// adsb.fi open data API — free, no authentication. Per-registration endpoint
+// returns an array of matching aircraft (usually 0 or 1 per registration).
 interface AdsbAircraft {
   hex?: string;
   flight?: string;
@@ -22,13 +25,6 @@ interface AdsbAircraft {
   geom_rate?: number;
   squawk?: string;
   seen?: number; // seconds since last message
-}
-
-function isValidLat(n: number) {
-  return Number.isFinite(n) && n >= -90 && n <= 90;
-}
-function isValidLon(n: number) {
-  return Number.isFinite(n) && n >= -180 && n <= 180;
 }
 
 function normalize(ac: AdsbAircraft[]) {
@@ -65,37 +61,30 @@ function normalize(ac: AdsbAircraft[]) {
   return out;
 }
 
-router.get('/', async (req, res) => {
-  const lat = Number(req.query.lat);
-  const lon = Number(req.query.lon);
-  let dist = Number(req.query.dist);
-
-  if (!isValidLat(lat) || !isValidLon(lon)) {
-    res.status(400).json({ error: 'lat and lon are required valid coordinates' });
-    return;
-  }
-  if (!Number.isFinite(dist)) dist = 50;
-  dist = Math.min(250, Math.max(1, Math.round(dist)));
-
-  // Bucket the center to ~0.5° so nearby viewports share a cache entry and we
-  // stay well under adsb.fi's 1 req/sec limit.
-  const round = (n: number) => Math.round(n * 2) / 2;
-  const cacheKey = `flights:${round(lat)}:${round(lon)}:${dist}`;
-
+// Fetch all TRACKED_TAILS by registration — one request per tail, merged.
+// Cache for 30 s so quick re-opens don't hammer adsb.fi.
+router.get('/registrations', async (_req, res) => {
   try {
-    const data = await cache.getOrFetch(cacheKey, 8_000, async () => {
-      const url = `https://opendata.adsb.fi/api/v2/lat/${lat}/lon/${lon}/dist/${dist}`;
-      const upstream = await fetch(url, {
-        headers: { 'User-Agent': config.nwsUserAgent, Accept: 'application/json' },
-      });
-      if (!upstream.ok) throw new Error(`adsb.fi error: ${upstream.status}`);
-      const json = (await upstream.json()) as { ac?: AdsbAircraft[] };
-      return { flights: normalize(json.ac ?? []) };
+    const data = await cache.getOrFetch('flights:tracked-registrations', 30_000, async () => {
+      const results = await Promise.allSettled(
+        TRACKED_TAILS.map(async (reg) => {
+          const url = `https://opendata.adsb.fi/api/v2/registration/${reg}`;
+          const r = await fetch(url, {
+            headers: { 'User-Agent': config.nwsUserAgent, Accept: 'application/json' },
+          });
+          if (!r.ok) return [];
+          const json = (await r.json()) as { ac?: AdsbAircraft[] };
+          return normalize(json.ac ?? []);
+        })
+      );
+      const flights = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
+      return { flights, trackedTails: [...TRACKED_TAILS] };
     });
     res.json(data);
   } catch (err) {
-    res.status(502).json({ error: 'Failed to fetch flight data', detail: String(err) });
+    res.status(502).json({ error: 'Failed to fetch tracked flights', detail: String(err) });
   }
 });
 
 export default router;
+

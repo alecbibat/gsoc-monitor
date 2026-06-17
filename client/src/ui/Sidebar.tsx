@@ -7,6 +7,7 @@ import { useFiresStatus } from '../layers/fires/firesStore';
 import { useShipsStatus } from '../layers/ships/shipsStore';
 import { useSatellitesStatus } from '../layers/satellites/satellitesStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
+import { useEarthStatus } from '../layers/earth3d/earthStore';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { flyToLonLat } from '../cesium/flyTo';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
@@ -36,9 +37,6 @@ export function Sidebar() {
   const toggleLayer = useLayersStore((s) => s.toggleLayer);
   const earthquakeMagnitude = useLayersStore((s) => s.earthquakeMagnitude);
   const setEarthquakeFilter = useLayersStore((s) => s.setEarthquakeFilter);
-  const flightFavoritesOnly = useLayersStore((s) => s.flightFavoritesOnly);
-  const setFlightFavoritesOnly = useLayersStore((s) => s.setFlightFavoritesOnly);
-  const flightFavorites = useLayersStore((s) => s.flightFavorites);
   const shipFavoritesOnly = useLayersStore((s) => s.shipFavoritesOnly);
   const setShipFavoritesOnly = useLayersStore((s) => s.setShipFavoritesOnly);
   const shipFavorites = useLayersStore((s) => s.shipFavorites);
@@ -55,6 +53,7 @@ export function Sidebar() {
   const firesStatus = useFiresStatus();
   const shipsStatus = useShipsStatus();
   const satellitesStatus = useSatellitesStatus();
+  const earthStatus = useEarthStatus();
   const screensaverActive = useScreensaverStore((s) => s.active);
   const viewer = useCesiumViewer();
   const locationsActive = (active as Record<string, boolean>).locations ?? true;
@@ -85,6 +84,15 @@ export function Sidebar() {
       <div className="hud-scroll flex-1 overflow-y-auto px-2 pb-4">
         <Section title="Base Map">
           <BasemapSwitcher />
+          <LayerToggle
+            label="Google Earth 3D Tiles"
+            active={(active as Record<string, boolean>).earth3d ?? false}
+            onToggle={() => toggleLayer('earth3d')}
+            statusText={
+              earthStatus.error ??
+              (earthStatus.loading ? 'Loading 3D tiles…' : 'Photorealistic buildings & terrain')
+            }
+          />
         </Section>
 
         <Section title="Weather">
@@ -192,21 +200,9 @@ export function Sidebar() {
             statusText={
               flightsStatus.error
                 ? flightsStatus.error
-                : flightsStatus.tooWideView
-                  ? 'Zoom in to load live flights'
-                  : `${flightsStatus.count} aircraft in view`
+                : `${flightsStatus.count} of 3 tails tracked`
             }
-          >
-            <label className="flex items-center gap-2 pt-1 text-[11px] text-white/60">
-              <input
-                type="checkbox"
-                checked={flightFavoritesOnly}
-                onChange={(e) => setFlightFavoritesOnly(e.target.checked)}
-                className="accent-accent"
-              />
-              Show favorites only ({flightFavorites.length})
-            </label>
-          </LayerToggle>
+          />
           <LayerToggle
             label="Ships (AIS)"
             active={active.ships}

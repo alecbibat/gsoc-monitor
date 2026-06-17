@@ -8,6 +8,7 @@ const ICON: Record<string, string> = {
   park: '🏔',
   news: '📡',
   iss: '🛰',
+  pin: '📍',
 };
 
 const LABEL_COLOR: Record<string, string> = {
@@ -18,6 +19,7 @@ const LABEL_COLOR: Record<string, string> = {
   park: 'text-emerald-400',
   news: 'text-sky-400',
   iss: 'text-amber-300',
+  pin: 'text-purple-300',
 };
 
 const LABEL: Record<string, string> = {
@@ -28,6 +30,7 @@ const LABEL: Record<string, string> = {
   park: 'NATIONAL PARKS',
   news: 'BREAKING NEWS',
   iss: 'ORBITAL TRACKING',
+  pin: 'PROPERTY',
 };
 
 export function ScreensaverToast() {

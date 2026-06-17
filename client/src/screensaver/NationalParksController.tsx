@@ -190,10 +190,19 @@ export function NationalParksController() {
       if (cancelledRef.current) return;
 
       const now = Cesium.JulianDate.now();
-      const glow = new Cesium.PolylineGlowMaterialProperty({
-        color: Cesium.Color.fromCssColorString('#7cffb0'),
-        glowPower: 0.3,
-      });
+      // Pulsing width + alpha for an animated glowing border.
+      const startMs = Date.now();
+      const pulseWidth = new Cesium.CallbackProperty(() => {
+        const t = (Date.now() - startMs) / 1000;
+        return 3 + 2.5 * (0.5 + 0.5 * Math.sin(t * Math.PI * 1.4));
+      }, false);
+      const pulseMaterial = new Cesium.ColorMaterialProperty(
+        new Cesium.CallbackProperty(() => {
+          const t = (Date.now() - startMs) / 1000;
+          const a = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * Math.PI * 1.4));
+          return Cesium.Color.fromCssColorString('#7cffb0').withAlpha(a);
+        }, false)
+      );
       // Snapshot existing polygon entities, then add polyline borders for each.
       for (const entity of source.entities.values.slice()) {
         const poly = entity.polygon;
@@ -206,8 +215,8 @@ export function NationalParksController() {
           source.entities.add({
             polyline: {
               positions: [...positions, positions[0]],
-              width: 4,
-              material: glow,
+              width: pulseWidth,
+              material: pulseMaterial,
               clampToGround: true,
             },
           });

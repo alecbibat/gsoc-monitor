@@ -20,6 +20,8 @@ import { PanelManager } from './panels/PanelManager';
 import { ScreensaverController } from './screensaver/ScreensaverController';
 import { NationalParksController } from './screensaver/NationalParksController';
 import { IssController } from './screensaver/IssController';
+import { PinsController } from './screensaver/PinsController';
+import { GoogleEarthLayer } from './layers/earth3d/GoogleEarthLayer';
 import { ScreensaverToast } from './screensaver/ScreensaverToast';
 
 export default function App() {
@@ -42,6 +44,7 @@ export default function App() {
           <ShipLayer />
           <SatelliteLayer />
           <LocationsLayer />
+          <GoogleEarthLayer />
         </CesiumGlobe>
         <TopBar />
         <Sidebar />
@@ -50,6 +53,7 @@ export default function App() {
         <ScreensaverController />
         <NationalParksController />
         <IssController />
+        <PinsController />
         <ScreensaverToast />
       </div>
     </CesiumContext.Provider>
