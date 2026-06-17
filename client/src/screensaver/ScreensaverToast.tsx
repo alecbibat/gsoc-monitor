@@ -7,6 +7,7 @@ const ICON: Record<string, string> = {
   hurricane: '🌀',
   park: '🏔',
   news: '📡',
+  iss: '🛰',
 };
 
 const LABEL_COLOR: Record<string, string> = {
@@ -16,6 +17,7 @@ const LABEL_COLOR: Record<string, string> = {
   hurricane: 'text-pink-400',
   park: 'text-emerald-400',
   news: 'text-sky-400',
+  iss: 'text-amber-300',
 };
 
 const LABEL: Record<string, string> = {
@@ -25,6 +27,7 @@ const LABEL: Record<string, string> = {
   hurricane: 'TROPICAL CYCLONE',
   park: 'NATIONAL PARKS',
   news: 'BREAKING NEWS',
+  iss: 'ORBITAL TRACKING',
 };
 
 export function ScreensaverToast() {

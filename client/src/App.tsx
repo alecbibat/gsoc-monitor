@@ -19,6 +19,7 @@ import { StarField } from './ui/StarField';
 import { PanelManager } from './panels/PanelManager';
 import { ScreensaverController } from './screensaver/ScreensaverController';
 import { NationalParksController } from './screensaver/NationalParksController';
+import { IssController } from './screensaver/IssController';
 import { ScreensaverToast } from './screensaver/ScreensaverToast';
 
 export default function App() {
@@ -48,6 +49,7 @@ export default function App() {
         <PanelManager />
         <ScreensaverController />
         <NationalParksController />
+        <IssController />
         <ScreensaverToast />
       </div>
     </CesiumContext.Provider>

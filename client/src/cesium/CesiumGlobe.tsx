@@ -4,6 +4,7 @@ import { BASEMAPS } from './basemaps';
 import { getPanelData } from './entityPanelLink';
 import { useLayersStore } from '../store/layersStore';
 import { usePanelStore } from '../panels/panelStore';
+import { HOME_VIEW } from './flyTo';
 
 interface Props {
   children?: React.ReactNode;
@@ -52,7 +53,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
     if (v.scene.skyBox) v.scene.skyBox.show = false;
 
     v.camera.setView({
-      destination: Cesium.Cartesian3.fromDegrees(-95, 38, 14_000_000),
+      destination: Cesium.Cartesian3.fromDegrees(HOME_VIEW.lon, HOME_VIEW.lat, HOME_VIEW.height),
     });
 
     v.screenSpaceEventHandler.setInputAction(
