@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useScreensaverStore, type Poi } from './screensaverStore';
 import { FLEET_ROSTER, fleetColor } from '../layers/ships/fleet';
-import { ShipModel3D } from '../layers/ships/ShipModel3D';
+import { ShipModel3D, mastCountForShip } from '../layers/ships/ShipModel3D';
 
 // Bottom-centre card shown while orbiting a Windstar ship in the pins
 // screensaver. Displays a live-rotating 3D wireframe, class badge, and
@@ -64,6 +64,7 @@ export function ShipFocusCard() {
             <ShipModel3D
               variant={resolvedCls === 'STAR' ? 'star' : 'wind'}
               color={color}
+              masts={mastCountForShip(fleet?.name ?? shown.title)}
               width={310}
               height={116}
             />

@@ -38,6 +38,16 @@ export function LocationsLayer() {
             width: 24,
             height: 32,
             scaleByDistance: new Cesium.NearFarScalar(1_500_000, 1.0, 8_000_000, 0.4),
+            // While the pins screensaver is orbiting THIS pin, hide the flat
+            // marker — it's replaced by the animated loot beam.
+            show: new Cesium.CallbackProperty(() => {
+              const { active, mode, currentPoi } = useScreensaverStore.getState();
+              return !(
+                active && mode === 'pins' && currentPoi?.category === 'pin' &&
+                Math.abs(currentPoi.lat - loc.lat) < 1e-6 &&
+                Math.abs(currentPoi.lon - loc.lon) < 1e-6
+              );
+            }, false),
           },
           label: {
             text: loc.name,

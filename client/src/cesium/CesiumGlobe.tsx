@@ -7,6 +7,7 @@ import { usePanelStore } from '../panels/panelStore';
 import { usePickChooserStore, type PanelOpenData } from '../panels/pickChooserStore';
 import { useMeasureStore } from '../measure/measureStore';
 import { useHoverStore } from '../screensaver/hoverStore';
+import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { usePerfStore, QUALITY_SETTINGS } from '../perf/perfStore';
 import { HOME_VIEW } from './flyTo';
 
@@ -26,20 +27,27 @@ function applyAdjust(
   if (adjust.gamma != null) layer.gamma = adjust.gamma;
 }
 
-// Place-label overlays are hidden once the camera drops below this height so
-// town names stop overlapping nearby geographic features at close zoom; they
-// return above the upper bound for the regional/global view where the labels
-// add context. The gap between the two is hysteresis to avoid flicker at the
-// boundary.
-const LABELS_HIDE_BELOW_M = 55_000;
-const LABELS_SHOW_ABOVE_M = 80_000;
+// Place-label overlays fade out as the camera descends so town names stop
+// scaling up and overlapping terrain at close range, and fade back in for the
+// regional/global view where they add context. A smooth alpha ramp (rather than
+// a hard show/hide) removes the pop at the boundary.
+//
+// During the pins screensaver the fade happens far higher up, so the cinematic
+// close-ups carry no resizing labels at all while the zoomed-out overview keeps
+// them — labels fade out early in the descent, while they're still tiny.
+const LABELS_FADE = { near: 55_000,  far: 80_000 };       // normal browsing
+const PINS_FADE   = { near: 500_000, far: 1_500_000 };    // pins screensaver
 
-// Decide overlay visibility from camera height, holding the previous state
-// inside the hysteresis band.
-function labelsVisibleAt(height: number, current: boolean): boolean {
-  if (height < LABELS_HIDE_BELOW_M) return false;
-  if (height > LABELS_SHOW_ABOVE_M) return true;
-  return current;
+// Overlay alpha (0–1) for a camera height within a fade band.
+function labelAlphaAt(height: number, band: { near: number; far: number }): number {
+  if (height >= band.far) return 1;
+  if (height <= band.near) return 0;
+  return (height - band.near) / (band.far - band.near);
+}
+
+function currentLabelBand(): { near: number; far: number } {
+  const ss = useScreensaverStore.getState();
+  return ss.active && ss.mode === 'pins' ? PINS_FADE : LABELS_FADE;
 }
 
 export function CesiumGlobe({ children, onReady }: Props) {
@@ -157,7 +165,8 @@ export function CesiumGlobe({ children, onReady }: Props) {
       // Match the new overlay to the current zoom so swapping basemaps while
       // zoomed in doesn't briefly flash labels back on.
       const h = viewer.camera.positionCartographic?.height ?? Number.POSITIVE_INFINITY;
-      overlayLayer.show = labelsVisibleAt(h, true);
+      overlayLayer.alpha = labelAlphaAt(h, currentLabelBand());
+      overlayLayer.show = overlayLayer.alpha > 0.001;
       layers.lowerToBottom(overlayLayer);
     }
     layers.lowerToBottom(baseLayer);
@@ -172,35 +181,27 @@ export function CesiumGlobe({ children, onReady }: Props) {
     viewer.scene.requestRender();
   }, [viewer, basemap]);
 
-  // Hide the place-label overlay when zoomed in close, show it when zoomed out.
-  // camera.changed fires during continuous zoom/pan; moveEnd catches the end of
-  // programmatic flights (pin fly-tos, screensaver tours, reset).
+  // Smoothly fade the place-label overlay with camera height. Driven from
+  // preRender so the alpha ramps every frame during programmatic flights (pin
+  // fly-tos, screensaver tours) and interactive zoom — no pop, no stepping.
   useEffect(() => {
     if (!viewer) return;
-    const camera = viewer.camera;
+    const scene = viewer.scene;
 
     const sync = () => {
       const overlay = overlayLayerRef.current;
       if (!overlay) return;
-      const h = camera.positionCartographic?.height ?? Number.POSITIVE_INFINITY;
-      const next = labelsVisibleAt(h, overlay.show);
-      if (next !== overlay.show) {
-        overlay.show = next;
-        viewer.scene.requestRender();
+      const h = viewer.camera.positionCartographic?.height ?? Number.POSITIVE_INFINITY;
+      const a = labelAlphaAt(h, currentLabelBand());
+      if (Math.abs(a - overlay.alpha) > 0.001) {
+        overlay.alpha = a;
+        overlay.show = a > 0.001;
       }
     };
 
-    const prevPct = camera.percentageChanged;
-    camera.percentageChanged = 0.15; // more responsive than the 0.5 default
-    const offChanged = camera.changed.addEventListener(sync);
-    const offMoveEnd = camera.moveEnd.addEventListener(sync);
+    const off = scene.preRender.addEventListener(sync);
     sync();
-
-    return () => {
-      offChanged();
-      offMoveEnd();
-      camera.percentageChanged = prevPct;
-    };
+    return () => off();
   }, [viewer]);
 
   // Render quality: graduated trade of resolution, anti-aliasing, terrain detail

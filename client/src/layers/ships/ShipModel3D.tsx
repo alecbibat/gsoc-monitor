@@ -152,6 +152,48 @@ function buildWind(ship: THREE.Group, mat: THREE.LineBasicMaterial, mastCount: n
   ship.add(segments(pts, mat));
 }
 
+// Build the ship once with Three.js, then extract every wireframe segment as a
+// flat list of local-space coordinates (x,y,z, x,y,z, …) — each consecutive
+// pair of vertices is one line segment. Model axes: +X = bow, +Y = up (masts),
+// +Z = starboard, keel at y = 0. Reused by the Cesium globe layer that places
+// the same model on the water during the pins screensaver. Cached per variant.
+const _segCache = new Map<string, number[]>();
+export function shipWireframeSegments(variant: 'star' | 'wind', masts = 4): number[] {
+  const key = `${variant}-${masts}`;
+  const cached = _segCache.get(key);
+  if (cached) return cached;
+
+  const mat = new THREE.LineBasicMaterial();
+  const ship = new THREE.Group();
+  if (variant === 'star') buildStar(ship, mat);
+  else buildWind(ship, mat, masts);
+  ship.updateMatrixWorld(true);
+
+  const out: number[] = [];
+  const v = new THREE.Vector3();
+  ship.traverse((o) => {
+    const ls = o as THREE.LineSegments;
+    if (!ls.isLineSegments || !ls.geometry) return;
+    const pos = ls.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+    if (!pos) return;
+    for (let i = 0; i < pos.count; i++) {
+      v.set(pos.getX(i), pos.getY(i), pos.getZ(i));
+      ls.localToWorld(v); // bake in each child's position offset
+      out.push(v.x, v.y, v.z);
+    }
+    ls.geometry.dispose();
+  });
+  mat.dispose();
+
+  _segCache.set(key, out);
+  return out;
+}
+
+// Wind Surf is the fleet's only 5-masted vessel; the rest carry 4.
+export function mastCountForShip(name?: string): number {
+  return name && /surf/i.test(name) ? 5 : 4;
+}
+
 interface Props {
   variant: 'star' | 'wind';
   color: string;

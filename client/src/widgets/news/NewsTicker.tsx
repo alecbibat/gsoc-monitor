@@ -96,8 +96,11 @@ export function NewsTicker() {
 
   return (
     <div
-      className={`fixed bottom-0 left-0 right-0 z-10 md:left-72 ${
-        inPins ? 'md:right-[280px]' : ''
+      className={`fixed bottom-0 left-0 right-0 z-10 ${
+        // Inset for the docked sidebar only when it's actually present (desktop,
+        // outside the screensaver). During the pins screensaver the sidebar is
+        // hidden, so span the full width — very left to very right.
+        screensaverActive ? '' : 'md:left-72'
       }`}
     >
       <div className="flex h-9 items-center border-t border-white/10 bg-ink-900/85 backdrop-blur-sm">

@@ -101,7 +101,7 @@ export function PinsContextBox() {
 
   return (
     <div
-      className={`pointer-events-none absolute bottom-6 right-6 z-30 transition-all duration-500 ${
+      className={`pointer-events-none absolute bottom-12 right-6 z-30 transition-all duration-500 ${
         visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'
       }`}
     >

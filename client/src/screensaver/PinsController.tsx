@@ -103,7 +103,8 @@ function buildShipEntries(): ShipEntry[] {
 }
 
 // Orbit parameters for ships (over open ocean — no terrain sampling needed).
-const SHIP_RANGE_M  = 2_000;
+// Closer than a normal pin orbit so the 3D ship wireframe model reads clearly.
+const SHIP_RANGE_M  = 850;
 const SHIP_PITCH_RAD = Cesium.Math.toRadians(-28);
 
 function rand(min: number, max: number) {
@@ -268,6 +269,7 @@ export function PinsController() {
         lon: pin.lon,
         altitudeM: pin.altitudeM,
         category: 'pin',
+        meta: { color: pin.color },
       };
 
       setPhase('flying-to');
