@@ -10,6 +10,7 @@ import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { useEarthStatus } from '../layers/earth3d/earthStore';
 import { useOsmStatus } from '../layers/osmBuildings/osmStore';
 import { useTrafficStatus } from '../layers/traffic/trafficStore';
+import { useTimeZonesStatus } from '../layers/timezones/timezonesStore';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { flyToLonLat } from '../cesium/flyTo';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
@@ -60,6 +61,7 @@ export function Sidebar() {
   const earthStatus = useEarthStatus();
   const osmStatus = useOsmStatus();
   const trafficStatus = useTrafficStatus();
+  const timeZonesStatus = useTimeZonesStatus();
   const screensaverActive = useScreensaverStore((s) => s.active);
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
   const setSidebarOpen = useUiStore((s) => s.setSidebarOpen);
@@ -125,6 +127,19 @@ export function Sidebar() {
           </div>
           <Section title="Base Map">
           <BasemapSwitcher />
+          <LayerToggle
+            label="Time Zones"
+            active={active.timezones}
+            onToggle={() => toggleLayer('timezones')}
+            statusText={
+              timeZonesStatus.error ??
+              (timeZonesStatus.loading
+                ? 'Loading zone boundaries…'
+                : timeZonesStatus.ready
+                  ? `${timeZonesStatus.count} zones · click zone for local time`
+                  : 'Color-coded UTC offset bands · free')
+            }
+          />
           <LayerToggle
             label="3D Buildings & Terrain"
             active={(active as Record<string, boolean>).osmBuildings ?? false}

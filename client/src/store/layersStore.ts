@@ -48,6 +48,7 @@ export const useLayersStore = create<LayersState>()(
         osmBuildings: false,
         earth3d: false,
         traffic: false,
+        timezones: false,
       },
       basemap: 'dark',
       toggleLayer: (id) =>

@@ -11,7 +11,8 @@ export type LayerId =
   | 'locations'
   | 'osmBuildings'
   | 'earth3d'
-  | 'traffic';
+  | 'traffic'
+  | 'timezones';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 

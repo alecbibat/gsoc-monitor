@@ -24,6 +24,7 @@ import { PinsController } from './screensaver/PinsController';
 import { GoogleEarthLayer } from './layers/earth3d/GoogleEarthLayer';
 import { OsmBuildingsLayer } from './layers/osmBuildings/OsmBuildingsLayer';
 import { TrafficLayer } from './layers/traffic/TrafficLayer';
+import { TimeZonesLayer } from './layers/timezones/TimeZonesLayer';
 import { ScreensaverToast } from './screensaver/ScreensaverToast';
 
 export default function App() {
@@ -46,6 +47,7 @@ export default function App() {
           <ShipLayer />
           <SatelliteLayer />
           <LocationsLayer />
+          <TimeZonesLayer />
           <OsmBuildingsLayer />
           <GoogleEarthLayer />
           <TrafficLayer />
