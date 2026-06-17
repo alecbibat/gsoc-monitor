@@ -4,8 +4,28 @@ import { config } from '../config';
 
 const router = Router();
 
-// Only show these specific passenger vessels.
-const ALLOWED_IMOS = new Set([8807997, 9008598, 8707343, 9904819, 8603509, 8420878, 8700785]);
+// The tracked passenger fleet (Windstar Cruises). AIS identifies vessels only by
+// MMSI, so we subscribe to these MMSIs directly rather than fishing them out of
+// the global firehose by waiting for each ship's periodic static-data (IMO)
+// broadcast — the latter almost never catches a specific ship at the free tier's
+// volume. IMO + name are seeded so a position report can be labelled before any
+// static-data message arrives. MMSIs verified against VesselFinder/MarineTraffic.
+interface FleetShip {
+  mmsi: string;
+  imo: number;
+  name: string;
+}
+const FLEET: FleetShip[] = [
+  { mmsi: '311083000', imo: 8807997, name: 'Star Breeze' },
+  { mmsi: '311085000', imo: 9008598, name: 'Star Legend' },
+  { mmsi: '311084000', imo: 8707343, name: 'Star Pride' },
+  { mmsi: '311001759', imo: 9904819, name: 'Star Seeker' },
+  { mmsi: '309056000', imo: 8603509, name: 'Wind Spirit' },
+  { mmsi: '309163000', imo: 8420878, name: 'Wind Star' },
+  { mmsi: '309242000', imo: 8700785, name: 'Wind Surf' },
+];
+const ALLOWED_IMOS = new Set(FLEET.map((s) => s.imo));
+const FLEET_MMSIS = FLEET.map((s) => s.mmsi);
 
 interface VesselData {
   mmsi: string;
@@ -40,10 +60,21 @@ const staticCache = new Map<string, StaticInfo>();
 // vessel that sails out of coastal AIS range stays on the map at its last
 // reported spot until a fresh report updates it.
 const tracked = new Map<string, VesselData>();
-// MMSIs confirmed to belong to an allowlisted IMO (learned from static data).
-// AIS position reports identify a vessel only by MMSI, so once we've correlated
-// an MMSI to an allowlisted IMO we keep updating it even if static data stops.
+// MMSIs confirmed to belong to an allowlisted IMO. Pre-seeded from the known
+// fleet so position reports are accepted and labelled immediately (no need to
+// wait for a static-data message), and topped up by isAllowed() if static data
+// ever reveals an allowlisted IMO under a new MMSI.
 const allowedMmsis = new Set<string>();
+for (const s of FLEET) {
+  allowedMmsis.add(s.mmsi);
+  staticCache.set(s.mmsi, {
+    imo: s.imo,
+    name: s.name,
+    callsign: null,
+    shipType: 60, // passenger ship; real static data refines this
+    destination: null,
+  });
+}
 
 function isAllowed(mmsi: string, imo: number | null): boolean {
   if (allowedMmsis.has(mmsi)) return true;
@@ -225,7 +256,11 @@ function connectAIS() {
       ws?.send(
         JSON.stringify({
           APIKey: config.aisstreamApiKey,
+          // Whole-world box is mandatory; FiltersShipMMSI then narrows the feed
+          // to just the tracked fleet, so we get those ships wherever they are
+          // the instant any receiver sees them instead of the global firehose.
           BoundingBoxes: [[[-90, -180], [90, 180]]],
+          FiltersShipMMSI: FLEET_MMSIS,
           FilterMessageTypes: ['PositionReport', 'ShipStaticData'],
         })
       );
