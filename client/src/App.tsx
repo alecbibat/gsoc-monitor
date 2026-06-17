@@ -39,9 +39,19 @@ import { MeasureOverlay } from './measure/MeasureOverlay';
 import { ScreensaverToast } from './screensaver/ScreensaverToast';
 import { NewsTicker } from './widgets/news/NewsTicker';
 import { CrisisOverlay } from './crisis/CrisisOverlay';
+import { CrisisMapLayer } from './crisis/CrisisMapLayer';
+import { CrisisDrawController } from './crisis/CrisisDrawController';
+import { CrisisShareView } from './crisis/CrisisShareView';
+
+// Detect share link — renders a completely separate read-only view
+const shareToken = new URLSearchParams(window.location.search).get('share');
 
 export default function App() {
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
+
+  if (shareToken) {
+    return <CrisisShareView token={shareToken} />;
+  }
 
   return (
     <CesiumContext.Provider value={viewer}>
@@ -66,6 +76,7 @@ export default function App() {
           <GoogleEarthLayer />
           <TrafficLayer />
           <MeasureController />
+          <CrisisMapLayer />
         </CesiumGlobe>
         <TopBar />
         <Sidebar />
@@ -87,6 +98,7 @@ export default function App() {
         <PickChooser />
         <NewsTicker />
         <CrisisOverlay />
+        <CrisisDrawController />
       </div>
     </CesiumContext.Provider>
   );

@@ -17,12 +17,14 @@ import driveRouter from './routes/route';
 import parkNewsRouter from './routes/parkNews';
 import satellitesRouter from './routes/satellites';
 import webcamsRouter from './routes/webcams';
+import crisisRouter from './routes/crisis';
 
 dotenv.config();
 
 const app = express();
 
 app.use(cors());
+app.use(express.json({ limit: '2mb' }));
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.use('/api/earthquakes', earthquakesRouter);
@@ -39,6 +41,7 @@ app.use('/api/drive', driveRouter);
 app.use('/api/park-news', parkNewsRouter);
 app.use('/api/satellites', satellitesRouter);
 app.use('/api/webcams', webcamsRouter);
+app.use('/api/crisis', crisisRouter);
 
 // Start AIS WebSocket stream (after dotenv so env vars are available).
 initShipsStream();
