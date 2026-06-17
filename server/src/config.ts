@@ -11,6 +11,12 @@ export const config = {
   // (https://api.vesselfinder.com); MyShipTracking is the other supported option.
   vesselfinderApiKey: process.env.VESSELFINDER_API_KEY || '',
   myshiptrackingApiKey: process.env.MYSHIPTRACKING_API_KEY || '',
+  // Free fallback: scrape CruiseMapper's public ship pages by IMO when no paid
+  // key is set. CruiseMapper carries satellite-AIS positions (it sees the fleet
+  // at sea, unlike free aisstream) but sits behind Cloudflare, so a plain server
+  // fetch may be blocked — watch /api/ships/debug to see if it gets through.
+  // Set SHIPS_SCRAPE_CRUISEMAPPER=0 to disable.
+  cruisemapperScrape: process.env.SHIPS_SCRAPE_CRUISEMAPPER !== '0',
   // NPS Data API key — free at https://www.nps.gov/subjects/developer/get-started.htm.
   // DEMO_KEY works out of the box (rate-limited); set NPS_API_KEY in Config Vars
   // for production headroom. Used for park news releases + alerts/closures.

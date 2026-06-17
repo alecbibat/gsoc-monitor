@@ -382,6 +382,148 @@ async function fetchVesselFinder(key: string): Promise<PaidPosition[]> {
   });
 }
 
+// --- CruiseMapper free scrape ----------------------------------------------
+// CruiseMapper's public ship page (reachable by IMO at /?imo=NNN) renders the
+// vessel's last AIS fix into the HTML, and crucially it carries satellite-AIS
+// coverage — it sees the fleet at sea where free aisstream cannot. The catch is
+// Cloudflare bot protection: a plain fetch may be served a 403 challenge instead
+// of the page. We send a full, consistent set of browser headers to pass the
+// lighter checks; if we're still blocked, lastScrapeNote records the status so
+// /api/ships/debug shows exactly what happened on the live server.
+let lastScrapeNote: string | null = null;
+
+const BROWSER_HEADERS: Record<string, string> = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"Windows"',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Upgrade-Insecure-Requests': '1',
+};
+
+async function fetchText(url: string, headers?: Record<string, string>): Promise<string> {
+  const r = await fetch(url, {
+    signal: AbortSignal.timeout(15_000),
+    redirect: 'follow',
+    headers: { ...BROWSER_HEADERS, ...(headers ?? {}) },
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.text();
+}
+
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
+// Pull a last-known position out of one CruiseMapper ship page. The page format
+// isn't contractual, so we try several strategies and accept the first that
+// yields a coordinate pair in range. Returns null (not throw) on a page with no
+// parseable position so one ship's miss doesn't abort the batch.
+function parseCruiseMapper(html: string, ship: FleetShip): PaidPosition | null {
+  let lat: number | null = null;
+  let lon: number | null = null;
+
+  // 1) Decimal coords assigned to lat/lng-like keys in inline JS or JSON
+  //    (e.g. the Leaflet/Google marker init: "lat":-15.877,"lng":-149.56).
+  const keyed = (names: string[]): number | null => {
+    for (const n of names) {
+      const m = html.match(
+        new RegExp(`["']?${n}["']?\\s*[:=]\\s*["']?(-?\\d{1,3}\\.\\d{3,})`, 'i')
+      );
+      if (m) return Number(m[1]);
+    }
+    return null;
+  };
+  lat = keyed(['nlat', 'latitude', 'shipLat', 'lat']);
+  lon = keyed(['nlng', 'nlon', 'longitude', 'shipLng', 'shipLon', 'lng', 'lon']);
+
+  // 2) data-* attributes on the map container.
+  if (lat === null) {
+    const m = html.match(/data-lat(?:itude)?=["'](-?\d{1,2}\.\d+)["']/i);
+    if (m) lat = Number(m[1]);
+  }
+  if (lon === null) {
+    const m = html.match(/data-l(?:ng|on|ongitude)=["'](-?\d{1,3}\.\d+)["']/i);
+    if (m) lon = Number(m[1]);
+  }
+
+  // 3) Visible hemisphere format "15.877 S / 149.560 W".
+  if (lat === null || lon === null) {
+    const m = html.match(
+      /(\d{1,2}(?:\.\d+)?)\s*°?\s*([NS])\s*[/,]?\s*(\d{1,3}(?:\.\d+)?)\s*°?\s*([EW])/i
+    );
+    if (m) {
+      lat = Number(m[1]) * (m[2].toUpperCase() === 'S' ? -1 : 1);
+      lon = Number(m[3]) * (m[4].toUpperCase() === 'W' ? -1 : 1);
+    }
+  }
+
+  if (
+    lat === null ||
+    lon === null ||
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lon) ||
+    Math.abs(lat) > 90 ||
+    Math.abs(lon) > 180 ||
+    (lat === 0 && lon === 0)
+  ) {
+    return null;
+  }
+
+  const num = (re: RegExp): number | null => {
+    const m = html.match(re);
+    return m ? Number(m[1]) : null;
+  };
+  const speedKt = num(/([\d.]+)\s*(?:kn|knots|kts)\b/i);
+  const courseDeg = num(/course[^0-9-]{0,24}(\d{1,3}(?:\.\d+)?)\s*°/i);
+  const destM = html.match(/(?:en route to|next port|destination)[:\s]+([A-Za-z][A-Za-z .,'()-]{1,38})/i);
+
+  return {
+    imo: ship.imo,
+    mmsi: ship.mmsi,
+    lat,
+    lon,
+    speedKt,
+    courseDeg,
+    headingDeg: null,
+    navStatus: null,
+    destination: destM ? destM[1].trim() : null,
+    name: ship.name,
+    t: Date.now(),
+  };
+}
+
+async function fetchCruiseMapper(): Promise<PaidPosition[]> {
+  const out: PaidPosition[] = [];
+  let blocked = 0;
+  let parsed = 0;
+  let lastErr = '';
+  for (const ship of FLEET) {
+    try {
+      const html = await fetchText(`https://www.cruisemapper.com/?imo=${ship.imo}`, {
+        Referer: 'https://www.cruisemapper.com/',
+      });
+      const pos = parseCruiseMapper(html, ship);
+      if (pos) {
+        out.push(pos);
+        parsed++;
+      }
+    } catch (err) {
+      lastErr = String(err);
+      if (lastErr.includes('403') || lastErr.includes('503')) blocked++;
+    }
+    await sleep(1_200 + Math.random() * 800); // gentle, less bot-like pacing
+  }
+  lastScrapeNote =
+    blocked > 0
+      ? `${blocked}/${FLEET.length} requests blocked (Cloudflare ${lastErr || '403/503'}); ${parsed} parsed`
+      : `${parsed}/${FLEET.length} ships parsed${lastErr ? ` (last error: ${lastErr})` : ''}`;
+  return out;
+}
+
 // MyShipTracking bulk endpoint — comma-separated IMOs in one request; response
 // is a { data: [...] } envelope. Field names parsed defensively.
 async function fetchMyShipTracking(key: string): Promise<PaidPosition[]> {
@@ -451,6 +593,9 @@ async function pollPaidPositions() {
     } else if (config.myshiptrackingApiKey) {
       paidProvider = 'myshiptracking';
       rows = await fetchMyShipTracking(config.myshiptrackingApiKey);
+    } else if (config.cruisemapperScrape) {
+      paidProvider = 'cruisemapper';
+      rows = await fetchCruiseMapper();
     } else {
       return;
     }
@@ -471,7 +616,9 @@ async function pollPaidPositions() {
 }
 
 function paidConfigured(): boolean {
-  return Boolean(config.vesselfinderApiKey || config.myshiptrackingApiKey);
+  return Boolean(
+    config.vesselfinderApiKey || config.myshiptrackingApiKey || config.cruisemapperScrape
+  );
 }
 
 export function initShipsStream() {
@@ -480,7 +627,8 @@ export function initShipsStream() {
     connectAIS();
     setInterval(evictStale, 5 * 60_000);
   }
-  // Paid by-IMO polling — reliable pins regardless of coverage.
+  // By-IMO polling — reliable pins regardless of aisstream coverage. Uses a paid
+  // provider if a key is set, otherwise the free CruiseMapper scrape.
   if (paidConfigured()) {
     pollPaidPositions();
     setInterval(pollPaidPositions, PAID_POLL_MS);
@@ -602,6 +750,7 @@ router.get('/debug', (_req, res) => {
       lastOkAt: paidLastOk || null,
       lastCount: paidLastCount,
       lastError: paidLastError,
+      scrapeNote: lastScrapeNote,
     },
     allowlist: {
       imoCount: ALLOWED_IMOS.size,
