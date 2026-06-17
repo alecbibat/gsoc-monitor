@@ -15,6 +15,8 @@ import { usePerfStore, QUALITY_LEVELS, QUALITY_META } from '../perf/perfStore';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { flyToLonLat } from '../cesium/flyTo';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
+import { FLEET_ROSTER, fleetColor } from '../layers/ships/fleet';
+import { api } from '../api/client';
 import { LayerToggle } from './LayerToggle';
 import { Section } from './Section';
 import { BasemapSwitcher } from './BasemapSwitcher';
@@ -82,6 +84,25 @@ export function Sidebar() {
     if (!shipsStatus.connected) return 'Stream offline — check the API key (see /api/ships/debug)';
     if (shipsStatus.messages === 0) return 'Subscribed · waiting for a ship to enter receiver range';
     return `Feed live (${shipsStatus.messages.toLocaleString()} msgs) · 0/${shipsStatus.total} ships in range yet`;
+  }
+
+  // Fly to a fleet ship from the roster. Ensures the ships layer is on so the
+  // icon is visible where we land, and fetches a position on demand if the layer
+  // hasn't loaded one yet (it defaults off).
+  async function flyToShip(mmsi: string) {
+    if (!(active as Record<string, boolean>).ships) toggleLayer('ships');
+    let ship = useShipsStatus.getState().ships.find((s) => s.mmsi === mmsi);
+    if (!ship) {
+      try {
+        const data = await api.ships();
+        useShipsStatus.getState().setShips(data.ships);
+        ship = data.ships.find((s) => s.mmsi === mmsi);
+      } catch {
+        /* no position available */
+      }
+    }
+    if (ship && viewer) flyToLonLat(viewer, ship.longitude, ship.latitude, 250_000);
+    setSidebarOpen(false);
   }
 
   function webcamsStatusText() {
@@ -451,6 +472,37 @@ export function Sidebar() {
               </div>
             </div>
           ))}
+
+          {/* Windstar fleet — same list, fly to a ship's live position */}
+          <div className="px-1">
+            <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-white/35">
+              <span>🚢</span>
+              <span>Windstar Ships</span>
+            </div>
+            <div className="space-y-px">
+              {FLEET_ROSTER.map((s) => {
+                const live = shipsStatus.ships.find((x) => x.mmsi === s.mmsi);
+                return (
+                  <button
+                    key={s.mmsi}
+                    onClick={() => flyToShip(s.mmsi)}
+                    className="flex w-full items-center gap-2 rounded px-3 py-1 text-left text-[12px] text-white/60 transition hover:bg-white/8 hover:text-white/90"
+                  >
+                    <span
+                      className="h-1.5 w-1.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: fleetColor(s.cls) }}
+                    />
+                    <span className="flex-1 truncate">{s.name}</span>
+                    {live && live.speedKt != null && live.speedKt > 0.5 && (
+                      <span className="shrink-0 font-mono text-[9px] text-white/30">
+                        {live.speedKt.toFixed(0)} kt
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </Section>
         </div>
       </div>

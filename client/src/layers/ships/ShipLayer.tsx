@@ -101,6 +101,10 @@ export function ShipLayer() {
 
         ds.entities.removeAll();
 
+        // Publish the full fleet (pre-filter) so the sidebar roster can fly to
+        // any ship regardless of the favorites-only globe filter.
+        useShipsStatus.getState().setShips(data.ships);
+
         const visible = favoritesOnly
           ? data.ships.filter((s) => favorites.includes(s.mmsi))
           : data.ships;
@@ -125,7 +129,7 @@ export function ShipLayer() {
               rotation: Cesium.Math.toRadians(-bearing),
               alignedAxis: Cesium.Cartesian3.UNIT_Z,
               color: Cesium.Color.WHITE.withAlpha(alpha),
-              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              // Default depth test so ships on the far side of the globe stay hidden.
             },
           });
 
@@ -184,7 +188,7 @@ export function ShipLayer() {
                 color: cesColor.withAlpha(0.7),
                 outlineColor: Cesium.Color.WHITE.withAlpha(0.6),
                 outlineWidth: 1,
-                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                // Default depth test so far-side markers stay hidden behind the globe.
               },
             });
           }

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { ShipState } from '../../types';
 
 interface ShipsStatusState {
   count: number;
@@ -9,6 +10,7 @@ interface ShipsStatusState {
   streaming: boolean; // AIS messages flowing right now
   messages: number; // total messages seen since boot
   matched: number; // allowlisted ships correlated to a live MMSI
+  ships: ShipState[]; // latest fleet positions, for the sidebar roster fly-to
   setStatus: (
     partial: Partial<
       Pick<
@@ -17,6 +19,7 @@ interface ShipsStatusState {
       >
     >
   ) => void;
+  setShips: (ships: ShipState[]) => void;
 }
 
 export const useShipsStatus = create<ShipsStatusState>((set) => ({
@@ -28,5 +31,7 @@ export const useShipsStatus = create<ShipsStatusState>((set) => ({
   streaming: false,
   messages: 0,
   matched: 0,
+  ships: [],
   setStatus: (partial) => set(partial),
+  setShips: (ships) => set({ ships }),
 }));
