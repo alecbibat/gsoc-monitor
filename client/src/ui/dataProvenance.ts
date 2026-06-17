@@ -1,0 +1,209 @@
+import type { BasemapId, LayerId } from '../types';
+
+export interface Provenance {
+  name: string;
+  icon: string;
+  source: string; // who provides it
+  method: string; // how it's gathered
+  trust: string; // why it can be trusted
+  url?: string; // canonical source link
+}
+
+// Per-layer provenance shown in the "i" info panel. Each entry explains where
+// the data comes from, how it's collected, and why it's trustworthy. Order here
+// is the order layers appear in the panel.
+export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
+  {
+    id: 'radar',
+    info: {
+      name: 'Precipitation Radar',
+      icon: '🌧',
+      source: 'RainViewer',
+      method:
+        'Aggregates national weather-service radar mosaics into map tiles, refreshed roughly every 10 minutes.',
+      trust:
+        'Composites official meteorological radar networks (e.g. NOAA/NWS NEXRAD in the US) — the same feed many consumer weather apps use.',
+      url: 'https://www.rainviewer.com',
+    },
+  },
+  {
+    id: 'earthquakes',
+    info: {
+      name: 'Earthquakes',
+      icon: '⚡',
+      source: 'USGS Earthquake Hazards Program',
+      method:
+        'Real-time GeoJSON feed of seismic events from global and US seismic networks, updated within minutes of each event.',
+      trust: 'The authoritative US government source and definitive public record for earthquakes.',
+      url: 'https://earthquake.usgs.gov',
+    },
+  },
+  {
+    id: 'alerts',
+    info: {
+      name: 'NWS Alerts',
+      icon: '⚠️',
+      source: 'US National Weather Service',
+      method:
+        'Active watches, warnings and advisories pulled live from the official NWS API (api.weather.gov), each with its own polygon/zone geometry.',
+      trust: "The US government's official severe-weather alerting system.",
+      url: 'https://www.weather.gov',
+    },
+  },
+  {
+    id: 'flights',
+    info: {
+      name: 'Flights (ADS-B)',
+      icon: '✈️',
+      source: 'adsb.fi community network',
+      method:
+        'Aircraft broadcast position and altitude over ADS-B; a volunteer network of ground receivers aggregates it. We track specific tail numbers and persist their last position when the transponder goes quiet.',
+      trust: "Read straight from each aircraft's own transponder; adsb.fi is an unfiltered community feed.",
+      url: 'https://adsb.fi',
+    },
+  },
+  {
+    id: 'hurricanes',
+    info: {
+      name: 'Hurricanes',
+      icon: '🌀',
+      source: 'NOAA National Hurricane Center',
+      method:
+        'Active tropical-cyclone positions, tracks and forecast cones served via NOAA’s ArcGIS feature service.',
+      trust: 'The official US authority for tropical-cyclone forecasts.',
+      url: 'https://www.nhc.noaa.gov',
+    },
+  },
+  {
+    id: 'lightning',
+    info: {
+      name: 'Lightning',
+      icon: '🌩',
+      source: 'Blitzortung.org',
+      method:
+        'A volunteer network of ground sensors times each strike’s radio signal (time-of-arrival) to triangulate its location, streamed live. Optional detector lines show the contributing sensors.',
+      trust: 'The same community network behind lightningmaps.org, widely used for real-time strike data.',
+      url: 'https://www.blitzortung.org',
+    },
+  },
+  {
+    id: 'fires',
+    info: {
+      name: 'Wildfires',
+      icon: '🔥',
+      source: 'NASA FIRMS (VIIRS / MODIS)',
+      method:
+        'Thermal anomalies (active-fire hotspots) detected by NASA satellites over the past 24 hours, served via ArcGIS.',
+      trust:
+        'NASA’s Fire Information for Resource Management System — the standard source for satellite fire detection.',
+      url: 'https://firms.modaps.eosdis.nasa.gov',
+    },
+  },
+  {
+    id: 'ships',
+    info: {
+      name: 'Ships (AIS)',
+      icon: '🚢',
+      source: 'AISStream.io',
+      method:
+        'Vessels broadcast position and identity over AIS; AISStream relays those transponder messages. We track a curated set of vessels.',
+      trust: "Direct from each ship's own AIS transponder, the maritime standard for vessel tracking.",
+      url: 'https://aisstream.io',
+    },
+  },
+  {
+    id: 'satellites',
+    info: {
+      name: 'Satellites',
+      icon: '🛰',
+      source: 'CelesTrak',
+      method:
+        'Two-line element sets from CelesTrak are propagated locally with the SGP4 model (satellite.js) to compute live positions.',
+      trust:
+        'CelesTrak is the long-standing public clearing-house for orbital data derived from US Space Force tracking.',
+      url: 'https://celestrak.org',
+    },
+  },
+  {
+    id: 'traffic',
+    info: {
+      name: 'Live Traffic',
+      icon: '🚗',
+      source: 'TomTom',
+      method:
+        'Real-time road-flow speeds and incident reports for the continental US, served as tiles plus incident details.',
+      trust: 'A major commercial traffic provider, the same data used in automotive navigation.',
+      url: 'https://www.tomtom.com',
+    },
+  },
+  {
+    id: 'osmBuildings',
+    info: {
+      name: '3D Buildings & Terrain',
+      icon: '🏙',
+      source: 'OpenStreetMap + Cesium World Terrain',
+      method:
+        'Building footprints and heights from OpenStreetMap, draped over Cesium ion’s global terrain mesh.',
+      trust: 'OpenStreetMap is the largest open community mapping project; terrain via Cesium ion.',
+      url: 'https://www.openstreetmap.org',
+    },
+  },
+  {
+    id: 'timezones',
+    info: {
+      name: 'Time Zones',
+      icon: '🕑',
+      source: 'Natural Earth',
+      method:
+        'Public-domain 10m time-zone boundary polygons; the displayed clock is computed locally from each zone’s UTC offset.',
+      trust: 'Natural Earth is a public-domain dataset curated by the cartographic community.',
+      url: 'https://www.naturalearthdata.com',
+    },
+  },
+  {
+    id: 'locations',
+    info: {
+      name: 'Property Pins',
+      icon: '📍',
+      source: 'Curated internal list',
+      method: 'Hand-maintained coordinates for the properties and assets this console monitors.',
+      trust: 'Maintained by your team — not a third-party feed.',
+    },
+  },
+];
+
+export const BASEMAP_PROVENANCE: Record<BasemapId, Provenance> = {
+  dark: {
+    name: 'Dark Basemap',
+    icon: '🗺',
+    source: 'CARTO + OpenStreetMap',
+    method: 'CARTO “dark matter” raster tiles rendered from OpenStreetMap data.',
+    trust: 'OpenStreetMap geometry styled by CARTO, a widely used basemap provider.',
+    url: 'https://carto.com',
+  },
+  light: {
+    name: 'Light Basemap',
+    icon: '🗺',
+    source: 'CARTO + OpenStreetMap',
+    method: 'CARTO “positron” raster tiles rendered from OpenStreetMap data.',
+    trust: 'OpenStreetMap geometry styled by CARTO, a widely used basemap provider.',
+    url: 'https://carto.com',
+  },
+  satellite: {
+    name: 'Satellite Basemap',
+    icon: '🛰',
+    source: 'Esri World Imagery',
+    method:
+      'High-resolution aerial/satellite imagery (Esri, Maxar, Earthstar) with an Esri boundary + place-label overlay.',
+    trust: 'Esri’s standard imagery basemap, sourced from commercial and government providers.',
+    url: 'https://www.esri.com',
+  },
+  topo: {
+    name: 'Topographic Basemap',
+    icon: '🗺',
+    source: 'OpenTopoMap',
+    method: 'Topographic raster tiles rendered from OpenStreetMap + SRTM elevation data.',
+    trust: 'Community topographic styling of open data (CC-BY-SA).',
+    url: 'https://opentopomap.org',
+  },
+};

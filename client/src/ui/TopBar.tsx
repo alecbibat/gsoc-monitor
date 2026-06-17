@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { SearchBar } from './SearchBar';
 import { WidgetLauncher } from '../widgets/WidgetLauncher';
 import { ScreensaverControls } from './ScreensaverControls';
+import { InfoPanel } from './InfoPanel';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { resetCamera } from '../cesium/flyTo';
 import { useTrackedHistory } from './useTrackedHistory';
@@ -295,12 +296,15 @@ export function TopBar() {
         {/* Screensaver modes — desktop only; mobile gets them in the drawer. */}
         <ScreensaverControls className="hidden md:flex" />
       </div>
-      {/* Right: widgets + search */}
-      <div className="flex w-full flex-wrap items-center gap-2 md:w-auto md:gap-3">
-        <WidgetLauncher />
-        <div className="pointer-events-auto w-full sm:w-auto">
-          <SearchBar />
+      {/* Right: widgets + search, with the info button tucked under the search */}
+      <div className="flex w-full flex-col items-end gap-2 md:w-auto">
+        <div className="flex w-full flex-wrap items-center justify-end gap-2 md:gap-3">
+          <WidgetLauncher />
+          <div className="pointer-events-auto w-full sm:w-auto">
+            <SearchBar />
+          </div>
         </div>
+        <InfoPanel />
       </div>
     </div>
   );
