@@ -13,7 +13,7 @@ const PARK_SOURCES = [
   'Grand Canyon NP News', 'Grand Canyon NP Alerts',
   'Death Valley NP News', 'Death Valley NP Alerts',
   'Glacier NP News', 'Glacier NP Alerts',
-  'Mount Rushmore NM News', 'Mount Rushmore NM Alerts',
+  'Mount Rushmore NP News', 'Mount Rushmore NP Alerts',
   'Yellowstone NP News', 'Yellowstone NP Alerts',
   'Rocky Mountain NP News', 'Rocky Mountain NP Alerts',
 ];
@@ -444,7 +444,7 @@ export function NewsWidget() {
             {PARK_SOURCES.map((s) => (
               <div key={s} className="flex items-center justify-between px-1 py-0.5">
                 <span className="text-[11px] text-white/40">{s}</span>
-                <span className="text-[9px] text-white/20">NPS RSS</span>
+                <span className="text-[9px] text-white/20">NPS API</span>
               </div>
             ))}
           </div>

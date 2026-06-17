@@ -22,6 +22,8 @@ import { ScreensaverController } from './screensaver/ScreensaverController';
 import { NationalParksController } from './screensaver/NationalParksController';
 import { IssController } from './screensaver/IssController';
 import { PinsController } from './screensaver/PinsController';
+import { HoverController } from './screensaver/HoverController';
+import { HoverOverlay } from './screensaver/HoverOverlay';
 import { PinsContextBox } from './screensaver/PinsContextBox';
 import { ScreensaverWatchCards } from './screensaver/ScreensaverWatchCards';
 import { GoogleEarthLayer } from './layers/earth3d/GoogleEarthLayer';
@@ -67,10 +69,12 @@ export default function App() {
         <NationalParksController />
         <IssController />
         <PinsController />
+        <HoverController />
         <PinsContextBox />
         <ScreensaverWatchCards />
         <ScreensaverToast />
         <MeasureOverlay />
+        <HoverOverlay />
         <PickChooser />
         <NewsTicker />
       </div>

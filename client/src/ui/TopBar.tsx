@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SearchBar } from './SearchBar';
 import { WidgetLauncher } from '../widgets/WidgetLauncher';
 import { ScreensaverControls } from './ScreensaverControls';
@@ -8,6 +8,15 @@ import { resetCamera } from '../cesium/flyTo';
 import { useTrackedHistory } from './useTrackedHistory';
 import { useUiStore } from './uiStore';
 import { useMeasureStore } from '../measure/measureStore';
+import {
+  fullscreenElement,
+  fullscreenSupported,
+  requestFullscreen,
+  exitFullscreen,
+  onFullscreenChange,
+  isStandalone,
+  isIOS,
+} from './fullscreen';
 
 function HamburgerButton() {
   const toggle = useUiStore((s) => s.toggleSidebar);
@@ -154,46 +163,76 @@ function ResetCameraButton() {
 }
 
 function FullscreenButton() {
-  const [isFs, setIsFs] = useState(
-    () => typeof document !== 'undefined' && Boolean(document.fullscreenElement)
-  );
+  const [isFs, setIsFs] = useState(() => Boolean(fullscreenElement()));
+  // iPhone Safari has no element-fullscreen API; show a one-tap hint pointing to
+  // Add-to-Home-Screen instead of a dead button. (Hidden if already standalone.)
+  const [showHint, setShowHint] = useState(false);
+  const hintTimer = useRef<number | null>(null);
+
+  const supported = fullscreenSupported();
+  const standalone = isStandalone();
+  const iosUnsupported = !supported && isIOS() && !standalone;
+
   useEffect(() => {
-    const onChange = () => setIsFs(Boolean(document.fullscreenElement));
-    document.addEventListener('fullscreenchange', onChange);
-    return () => document.removeEventListener('fullscreenchange', onChange);
+    const off = onFullscreenChange(() => setIsFs(Boolean(fullscreenElement())));
+    return off;
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (hintTimer.current) window.clearTimeout(hintTimer.current);
+    };
+  }, []);
+
+  // Don't render at all when the app is already running chrome-free (installed
+  // PWA / home-screen) — there's nothing to toggle.
+  if (standalone) return null;
+
   const toggle = () => {
-    if (document.fullscreenElement) {
-      document.exitFullscreen?.().catch(() => {});
-    } else {
-      document.documentElement.requestFullscreen?.().catch(() => {});
+    if (!supported) {
+      // iPhone Safari fallback: flash the install hint.
+      setShowHint(true);
+      if (hintTimer.current) window.clearTimeout(hintTimer.current);
+      hintTimer.current = window.setTimeout(() => setShowHint(false), 4200);
+      return;
     }
+    if (fullscreenElement()) exitFullscreen();
+    else requestFullscreen(document.documentElement);
   };
 
   return (
-    <button
-      onClick={toggle}
-      className="pointer-events-auto flex items-center justify-center rounded-lg border border-white/10 bg-ink-900/80 p-2 text-white/40 shadow-panel backdrop-blur-sm transition-all hover:text-white/70"
-      title={isFs ? 'Exit full screen' : 'Enter full screen'}
-      aria-label="Toggle full screen"
-    >
-      <svg
-        viewBox="0 0 24 24"
-        className="h-4 w-4"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+    <div className="relative">
+      <button
+        onClick={toggle}
+        className="pointer-events-auto flex items-center justify-center rounded-lg border border-white/10 bg-ink-900/80 p-2 text-white/40 shadow-panel backdrop-blur-sm transition-all hover:text-white/70"
+        title={iosUnsupported ? 'Full screen (Add to Home Screen on iPhone)' : isFs ? 'Exit full screen' : 'Enter full screen'}
+        aria-label="Toggle full screen"
       >
-        {isFs ? (
-          <path d="M9 3v3a3 3 0 0 1-3 3H3M21 9h-3a3 3 0 0 1-3-3V3M15 21v-3a3 3 0 0 1 3-3h3M3 15h3a3 3 0 0 1 3 3v3" />
-        ) : (
-          <path d="M3 9V5a2 2 0 0 1 2-2h4M21 9V5a2 2 0 0 0-2-2h-4M3 15v4a2 2 0 0 0 2 2h4M21 15v4a2 2 0 0 1-2 2h-4" />
-        )}
-      </svg>
-    </button>
+        <svg
+          viewBox="0 0 24 24"
+          className="h-4 w-4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          {isFs ? (
+            <path d="M9 3v3a3 3 0 0 1-3 3H3M21 9h-3a3 3 0 0 1-3-3V3M15 21v-3a3 3 0 0 1 3-3h3M3 15h3a3 3 0 0 1 3 3v3" />
+          ) : (
+            <path d="M3 9V5a2 2 0 0 1 2-2h4M21 9V5a2 2 0 0 0-2-2h-4M3 15v4a2 2 0 0 0 2 2h4M21 15v4a2 2 0 0 1-2 2h-4" />
+          )}
+        </svg>
+      </button>
+
+      {showHint && (
+        <div className="pointer-events-none absolute right-0 top-full z-50 mt-2 w-56 rounded-lg border border-white/10 bg-ink-900/95 p-2.5 text-[11px] leading-snug text-white/70 shadow-panel backdrop-blur-md">
+          iPhone Safari blocks full screen. Tap{' '}
+          <span className="font-semibold text-white/90">Share</span> →{' '}
+          <span className="font-semibold text-white/90">Add to Home Screen</span> to run GSOC Monitor full screen.
+        </div>
+      )}
+    </div>
   );
 }
 

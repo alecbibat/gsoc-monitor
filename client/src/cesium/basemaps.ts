@@ -19,9 +19,11 @@ interface BasemapDef {
   build: () => Cesium.ImageryProvider;
   // Optional ImageryLayer colour adjustments applied after the layer is added.
   adjust?: ImageryAdjust;
-  // Optional transparent reference overlay (place + boundary labels) drawn
-  // directly above the base imagery. Used by satellite, whose imagery carries
-  // no labels of its own.
+  // Optional transparent place/boundary label overlay drawn directly above the
+  // base imagery. Kept as its own layer so it can be hidden when the camera
+  // zooms in — town names otherwise overlap nearby geographic features at
+  // close range. The base imagery here is a label-free variant, so hiding the
+  // overlay leaves clean terrain/imagery behind.
   overlay?: ImagerySource;
 }
 
@@ -31,22 +33,40 @@ export const BASEMAPS: Record<BasemapId, BasemapDef> = {
     attribution: '© CARTO © OpenStreetMap contributors',
     build: () =>
       new Cesium.UrlTemplateImageryProvider({
-        url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+        url: 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png',
         subdomains: ['a', 'b', 'c', 'd'],
         maximumLevel: 18,
         credit: new Cesium.Credit('© CARTO © OpenStreetMap contributors'),
       }),
+    overlay: {
+      build: () =>
+        new Cesium.UrlTemplateImageryProvider({
+          url: 'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png',
+          subdomains: ['a', 'b', 'c', 'd'],
+          maximumLevel: 18,
+          credit: new Cesium.Credit('© CARTO'),
+        }),
+    },
   },
   light: {
     label: 'Light',
     attribution: '© CARTO © OpenStreetMap contributors',
     build: () =>
       new Cesium.UrlTemplateImageryProvider({
-        url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+        url: 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',
         subdomains: ['a', 'b', 'c', 'd'],
         maximumLevel: 18,
         credit: new Cesium.Credit('© CARTO © OpenStreetMap contributors'),
       }),
+    overlay: {
+      build: () =>
+        new Cesium.UrlTemplateImageryProvider({
+          url: 'https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png',
+          subdomains: ['a', 'b', 'c', 'd'],
+          maximumLevel: 18,
+          credit: new Cesium.Credit('© CARTO'),
+        }),
+    },
   },
   satellite: {
     label: 'Dark Sat',

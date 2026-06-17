@@ -1,81 +1,29 @@
 import { Router } from 'express';
 import { cache } from '../cache';
+import { config } from '../config';
 
 const router = Router();
-const UA = 'Mozilla/5.0 (compatible; gsoc-monitor/1.0)';
 
-interface ParkFeed {
-  url: string;
-  source: string;
-  park: string;
-  lat: number;
-  lon: number;
-}
+// NPS Data API — documented, stable, JSON. Far more reliable than scraping
+// per-park RSS pages (which NPS no longer publishes consistently). One alerts
+// request covers every park; news releases are fetched per park so each one
+// contributes its own latest items.
+const NPS_API = 'https://developer.nps.gov/api/v1';
 
-// NPS RSS feeds: news releases and closures/alerts for each tracked park.
-const PARK_FEEDS: ParkFeed[] = [
-  { url: 'https://www.nps.gov/grca/news/rss.htm',   source: 'Grand Canyon NP News',    park: 'Grand Canyon',   lat: 36.056,  lon: -112.139 },
-  { url: 'https://www.nps.gov/grca/alerts/rss.htm', source: 'Grand Canyon NP Alerts',  park: 'Grand Canyon',   lat: 36.056,  lon: -112.139 },
-  { url: 'https://www.nps.gov/deva/news/rss.htm',   source: 'Death Valley NP News',    park: 'Death Valley',   lat: 36.505,  lon: -117.079 },
-  { url: 'https://www.nps.gov/deva/alerts/rss.htm', source: 'Death Valley NP Alerts',  park: 'Death Valley',   lat: 36.505,  lon: -117.079 },
-  { url: 'https://www.nps.gov/glac/news/rss.htm',   source: 'Glacier NP News',         park: 'Glacier',        lat: 48.694,  lon: -113.718 },
-  { url: 'https://www.nps.gov/glac/alerts/rss.htm', source: 'Glacier NP Alerts',       park: 'Glacier',        lat: 48.694,  lon: -113.718 },
-  { url: 'https://www.nps.gov/moru/news/rss.htm',   source: 'Mount Rushmore NM News',  park: 'Mount Rushmore', lat: 43.879,  lon: -103.459 },
-  { url: 'https://www.nps.gov/moru/alerts/rss.htm', source: 'Mount Rushmore NM Alerts',park: 'Mount Rushmore', lat: 43.879,  lon: -103.459 },
-  { url: 'https://www.nps.gov/yell/news/rss.htm',   source: 'Yellowstone NP News',     park: 'Yellowstone',    lat: 44.428,  lon: -110.588 },
-  { url: 'https://www.nps.gov/yell/alerts/rss.htm', source: 'Yellowstone NP Alerts',   park: 'Yellowstone',    lat: 44.428,  lon: -110.588 },
-  { url: 'https://www.nps.gov/romo/news/rss.htm',   source: 'Rocky Mountain NP News',  park: 'Rocky Mountain', lat: 40.343,  lon: -105.683 },
-  { url: 'https://www.nps.gov/romo/alerts/rss.htm', source: 'Rocky Mountain NP Alerts',park: 'Rocky Mountain', lat: 40.343,  lon: -105.683 },
+// Tracked parks: parkCode → display name + map anchor.
+const PARKS: Array<{ code: string; name: string; lat: number; lon: number }> = [
+  { code: 'grca', name: 'Grand Canyon',   lat: 36.056, lon: -112.139 },
+  { code: 'deva', name: 'Death Valley',   lat: 36.505, lon: -117.079 },
+  { code: 'glac', name: 'Glacier',        lat: 48.694, lon: -113.718 },
+  { code: 'moru', name: 'Mount Rushmore', lat: 43.879, lon: -103.459 },
+  { code: 'yell', name: 'Yellowstone',    lat: 44.428, lon: -110.588 },
+  { code: 'romo', name: 'Rocky Mountain', lat: 40.343, lon: -105.683 },
 ];
 
-const CRITICAL_WORDS = ['life-threatening', 'critical', 'evacuate immediately'];
-const URGENT_WORDS = [
-  'closed', 'closure', 'emergency', 'hazard', 'warning', 'danger',
-  'evacuation', 'wildfire', 'flood', 'road closed', 'trail closed', 'area closed',
-];
+// Latest N news releases to keep per park.
+const PER_PARK = 10;
 
-function decodeXml(s: string): string {
-  return s
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
-    .replace(/&#0?39;/g, "'").replace(/&apos;/g, "'").replace(/&#x27;/g, "'")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
-    .replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
-}
-
-function xmlTag(block: string, name: string): string | null {
-  const m = block.match(new RegExp(`<${name}[^>]*>([\\s\\S]*?)</${name}>`, 'i'));
-  return m ? decodeXml(m[1]) : null;
-}
-
-function extractImage(block: string): string | null {
-  const patterns = [
-    /<media:thumbnail[^>]*url="([^"]+)"/i,
-    /<media:content[^>]*url="([^"]+)"[^>]*(?:medium="image"|type="image)/i,
-    /<enclosure[^>]*url="([^"]+)"[^>]*type="image/i,
-  ];
-  for (const re of patterns) {
-    const m = block.match(re);
-    if (m && /^https?:\/\//.test(m[1])) return m[1];
-  }
-  return null;
-}
-
-function parkSeverity(text: string): 'alert' | 'urgent' | 'critical' {
-  const t = text.toLowerCase();
-  if (CRITICAL_WORDS.some((w) => t.includes(w))) return 'critical';
-  if (URGENT_WORDS.some((w) => t.includes(w))) return 'urgent';
-  return 'alert';
-}
-
-function parkCategory(text: string): string {
-  const t = text.toLowerCase();
-  if (/closure|closed|road|trail|access|parking|entrance|fee|transport|shuttle|direction/.test(t)) return 'disaster';
-  if (/wildfire|fire|flood|storm|weather|earthquake/.test(t)) return 'disaster';
-  return 'environment';
-}
+const PARK_BY_CODE = new Map(PARKS.map((p) => [p.code, p]));
 
 interface ParkItem {
   id: string;
@@ -86,66 +34,152 @@ interface ParkItem {
   publishedAt: number;
   severity: 'alert' | 'urgent' | 'critical';
   category: string;
-  countryName: string;
+  countryName: string; // reused as the park name for display
   lat: number;
   lon: number;
 }
 
-async function fetchParkFeed(feed: ParkFeed): Promise<ParkItem[]> {
-  const r = await fetch(feed.url, {
-    signal: AbortSignal.timeout(8_000),
-    headers: { 'User-Agent': UA },
+interface NpsNewsRelease {
+  id?: string;
+  url?: string;
+  title?: string;
+  abstract?: string;
+  parkCode?: string;
+  releaseDate?: string;
+  image?: { url?: string } | null;
+}
+
+interface NpsAlert {
+  id?: string;
+  url?: string;
+  title?: string;
+  description?: string;
+  parkCode?: string;
+  category?: string; // "Danger" | "Caution" | "Information" | "Park Closure"
+  lastIndexedDate?: string;
+}
+
+function alertSeverity(category: string | undefined): 'alert' | 'urgent' | 'critical' {
+  switch ((category ?? '').toLowerCase()) {
+    case 'danger':
+      return 'critical';
+    case 'park closure':
+    case 'caution':
+      return 'urgent';
+    default:
+      return 'alert';
+  }
+}
+
+function idFrom(url: string, fallback: string): string {
+  const basis = url || fallback;
+  return Buffer.from(basis).toString('base64').slice(0, 24);
+}
+
+async function npsFetch<T>(path: string): Promise<T> {
+  const sep = path.includes('?') ? '&' : '?';
+  const url = `${NPS_API}${path}${sep}api_key=${encodeURIComponent(config.npsApiKey)}`;
+  const r = await fetch(url, {
+    signal: AbortSignal.timeout(10_000),
+    headers: { 'User-Agent': 'gsoc-monitor/1.0 (national-parks dashboard)' },
   });
-  if (!r.ok) throw new Error(`${feed.source} HTTP ${r.status}`);
-  const xml = await r.text();
-  const blocks = xml.match(/<item[\s\S]*?<\/item>/gi) ?? [];
-  const items: ParkItem[] = [];
-  for (const block of blocks) {
-    const title = xmlTag(block, 'title');
-    const link = (xmlTag(block, 'link') || '').trim();
-    if (!title || !link) continue;
-    const desc = xmlTag(block, 'description') || '';
-    const pub = xmlTag(block, 'pubDate');
-    const when = pub ? Date.parse(pub) : NaN;
-    items.push({
-      id: Buffer.from(link).toString('base64').slice(0, 20),
-      title,
-      url: link,
-      source: feed.source,
-      image: extractImage(block),
+  if (!r.ok) throw new Error(`NPS ${path} HTTP ${r.status}`);
+  return (await r.json()) as T;
+}
+
+// Latest PER_PARK news releases for a single park.
+async function fetchParkNews(park: { code: string; name: string; lat: number; lon: number }): Promise<ParkItem[]> {
+  const data = await npsFetch<{ data?: NpsNewsRelease[] }>(
+    `/newsreleases?parkCode=${park.code}&limit=${PER_PARK}`
+  );
+  const rows = (data.data ?? []).slice(0, PER_PARK);
+  return rows.map((n) => {
+    const when = n.releaseDate ? Date.parse(n.releaseDate) : NaN;
+    const url = (n.url ?? '').trim();
+    return {
+      id: idFrom(url, n.id ?? `${park.code}-${n.title}`),
+      title: n.title ?? 'Park news',
+      url: url || `https://www.nps.gov/${park.code}/`,
+      source: `${park.name} NP News`,
+      image: n.image?.url ?? null,
       publishedAt: Number.isNaN(when) ? Date.now() : when,
-      severity: parkSeverity(`${title} ${desc}`),
-      category: parkCategory(`${title} ${desc}`),
-      countryName: feed.park,
-      lat: feed.lat,
-      lon: feed.lon,
+      severity: 'alert',
+      category: 'environment',
+      countryName: park.name,
+      lat: park.lat,
+      lon: park.lon,
+    };
+  });
+}
+
+// Current alerts/closures across all tracked parks (single request).
+async function fetchAllAlerts(): Promise<ParkItem[]> {
+  const codes = PARKS.map((p) => p.code).join(',');
+  const data = await npsFetch<{ data?: NpsAlert[] }>(`/alerts?parkCode=${codes}&limit=120`);
+  const rows = data.data ?? [];
+  const items: ParkItem[] = [];
+  for (const a of rows) {
+    const park = PARK_BY_CODE.get(a.parkCode ?? '');
+    if (!park) continue;
+    const when = a.lastIndexedDate ? Date.parse(a.lastIndexedDate) : NaN;
+    const url = (a.url ?? '').trim();
+    items.push({
+      id: idFrom(url, a.id ?? `${a.parkCode}-${a.title}`),
+      title: a.category ? `${a.category}: ${a.title ?? ''}`.trim() : a.title ?? 'Park alert',
+      url: url || `https://www.nps.gov/${park.code}/planyourvisit/conditions.htm`,
+      source: `${park.name} NP Alerts`,
+      image: null,
+      publishedAt: Number.isNaN(when) ? Date.now() : when,
+      severity: alertSeverity(a.category),
+      category: 'disaster',
+      countryName: park.name,
+      lat: park.lat,
+      lon: park.lon,
     });
   }
   return items;
 }
 
-const CACHE_KEY = 'park-news:v1';
+const CACHE_KEY = 'park-news:v2';
 const SUCCESS_TTL = 10 * 60_000;
 let lastGood: { items: ParkItem[]; updated: number } | null = null;
 
 router.get('/', async (_req, res) => {
   const cached = cache.get<{ items: ParkItem[]; updated: number }>(CACHE_KEY);
-  if (cached) { res.json(cached); return; }
+  if (cached) {
+    res.json(cached);
+    return;
+  }
 
   try {
-    const results = await Promise.allSettled(PARK_FEEDS.map(fetchParkFeed));
+    const settled = await Promise.allSettled([
+      fetchAllAlerts(),
+      ...PARKS.map((p) => fetchParkNews(p)),
+    ]);
+
     const all: ParkItem[] = [];
     const seen = new Set<string>();
-    for (const r of results) {
-      if (r.status !== 'fulfilled') { console.error('[park-news] feed failed:', r.reason); continue; }
+    for (const r of settled) {
+      if (r.status !== 'fulfilled') {
+        console.error('[park-news] feed failed:', r.reason);
+        continue;
+      }
       for (const item of r.value) {
-        if (seen.has(item.url)) continue;
-        seen.add(item.url);
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
         all.push(item);
       }
     }
-    all.sort((a, b) => b.publishedAt - a.publishedAt);
-    const result = { items: all.slice(0, 200), updated: Date.now() };
+
+    // Alerts first (most actionable), then everything by recency.
+    all.sort((a, b) => {
+      const aAlert = a.category === 'disaster' ? 1 : 0;
+      const bAlert = b.category === 'disaster' ? 1 : 0;
+      if (aAlert !== bAlert) return bAlert - aAlert;
+      return b.publishedAt - a.publishedAt;
+    });
+
+    const result = { items: all, updated: Date.now() };
     if (result.items.length > 0) {
       cache.set(CACHE_KEY, result, SUCCESS_TTL);
       lastGood = result;
