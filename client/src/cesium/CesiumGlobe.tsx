@@ -4,6 +4,7 @@ import { BASEMAPS } from './basemaps';
 import { getPanelData } from './entityPanelLink';
 import { useLayersStore } from '../store/layersStore';
 import { usePanelStore } from '../panels/panelStore';
+import { usePickChooserStore, type PanelOpenData } from '../panels/pickChooserStore';
 import { useMeasureStore } from '../measure/measureStore';
 import { HOME_VIEW } from './flyTo';
 
@@ -61,12 +62,33 @@ export function CesiumGlobe({ children, onReady }: Props) {
       (click: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
         // While the measure tool owns the cursor, don't open entity panels.
         if (useMeasureStore.getState().active) return;
-        const picked = v.scene.pick(click.position);
-        const panelData = getPanelData(picked?.id);
-        if (panelData) {
-          usePanelStore.getState().open(panelData);
-          v.scene.requestRender();
+
+        // drillPick (not pick) so overlapping features — e.g. several stacked
+        // NWS alerts — all surface. Dedupe by panel id, keeping topmost order.
+        const picked = v.scene.drillPick(click.position, 16);
+        const seen = new Set<string>();
+        const datas: PanelOpenData[] = [];
+        for (const p of picked) {
+          const d = getPanelData(p?.id);
+          if (d && !seen.has(d.id)) {
+            seen.add(d.id);
+            datas.push(d);
+          }
         }
+
+        const chooser = usePickChooserStore.getState();
+        if (datas.length === 0) {
+          chooser.hide();
+          return;
+        }
+        if (datas.length === 1) {
+          chooser.hide();
+          usePanelStore.getState().open(datas[0]);
+          v.scene.requestRender();
+          return;
+        }
+        // Several features under one click — let the user choose which to open.
+        chooser.show(datas, click.position.x, click.position.y);
       },
       Cesium.ScreenSpaceEventType.LEFT_CLICK
     );

@@ -17,6 +17,7 @@ import { TopBar } from './ui/TopBar';
 import { Sidebar } from './ui/Sidebar';
 import { StarField } from './ui/StarField';
 import { PanelManager } from './panels/PanelManager';
+import { PickChooser } from './panels/PickChooser';
 import { ScreensaverController } from './screensaver/ScreensaverController';
 import { NationalParksController } from './screensaver/NationalParksController';
 import { IssController } from './screensaver/IssController';
@@ -65,6 +66,7 @@ export default function App() {
         <PinsController />
         <ScreensaverToast />
         <MeasureOverlay />
+        <PickChooser />
       </div>
     </CesiumContext.Provider>
   );
