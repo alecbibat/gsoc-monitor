@@ -11,6 +11,7 @@ import { useEarthStatus } from '../layers/earth3d/earthStore';
 import { useOsmStatus } from '../layers/osmBuildings/osmStore';
 import { useTrafficStatus } from '../layers/traffic/trafficStore';
 import { useTimeZonesStatus } from '../layers/timezones/timezonesStore';
+import { usePerfStore } from '../perf/perfStore';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { flyToLonLat } from '../cesium/flyTo';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
@@ -62,6 +63,8 @@ export function Sidebar() {
   const osmStatus = useOsmStatus();
   const trafficStatus = useTrafficStatus();
   const timeZonesStatus = useTimeZonesStatus();
+  const performanceMode = usePerfStore((s) => s.performanceMode);
+  const togglePerf = usePerfStore((s) => s.toggle);
   const screensaverActive = useScreensaverStore((s) => s.active);
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
   const setSidebarOpen = useUiStore((s) => s.setSidebarOpen);
@@ -138,6 +141,16 @@ export function Sidebar() {
                 : timeZonesStatus.ready
                   ? `${timeZonesStatus.count} zones · click zone for local time`
                   : 'Color-coded UTC offset bands · free')
+            }
+          />
+          <LayerToggle
+            label="Performance Mode"
+            active={performanceMode}
+            onToggle={togglePerf}
+            statusText={
+              performanceMode
+                ? '½ resolution, no AA/atmosphere · higher FPS'
+                : 'Lower resolution & effects to boost frame rate'
             }
           />
           <LayerToggle
