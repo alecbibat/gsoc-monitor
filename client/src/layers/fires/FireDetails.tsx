@@ -5,10 +5,10 @@ interface Props {
     frp: number | null;
     brightness: number | null;
     confidence: string;
-    satellite: string;
+    satellite: string | number;
     daynight: string;
-    acqDate: string;
-    acqTime: string;
+    acqDate: string | number | null;
+    acqTime: string | number | null;
   };
 }
 
@@ -20,12 +20,35 @@ function formatLon(lon: number): string {
   return `${Math.abs(lon).toFixed(3)}°${lon >= 0 ? 'E' : 'W'}`;
 }
 
-function formatAcq(date: string, time: string): string {
-  if (!date) return '—';
-  // FIRMS acq_time is "HHMM" (UTC). Render as date + HH:MM Z when present.
-  const t = time.padStart(4, '0');
-  const hhmm = time ? `${t.slice(0, 2)}:${t.slice(2)} UTC` : '';
-  return `${date}${hhmm ? ` ${hhmm}` : ''}`;
+// FIRMS fields arrive inconsistently from the ArcGIS GeoJSON feed: acq_date can
+// be a 'YYYY-MM-DD' string or epoch-ms (number / numeric string), and acq_time
+// can be an 'HHMM' string or a bare integer. Coerce defensively — a numeric
+// value here used to crash the whole panel (number has no .padStart).
+function formatDate(date: string | number | null | undefined): string {
+  if (date == null || date === '') return '';
+  if (typeof date === 'number' || /^\d{12,}$/.test(String(date))) {
+    const d = new Date(Number(date));
+    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  }
+  return String(date);
+}
+
+function formatTime(time: string | number | null | undefined): string {
+  if (time == null || time === '') return '';
+  const raw = String(time);
+  if (!/^\d+$/.test(raw)) return raw; // already formatted / unexpected — show as-is
+  const t = raw.padStart(4, '0');
+  return `${t.slice(0, 2)}:${t.slice(2)} UTC`;
+}
+
+function formatAcq(
+  date: string | number | null | undefined,
+  time: string | number | null | undefined
+): string {
+  const d = formatDate(date);
+  if (!d) return '—';
+  const t = formatTime(time);
+  return t ? `${d} ${t}` : d;
 }
 
 export function FireDetails({ payload }: Props) {

@@ -1,5 +1,6 @@
 import { usePanelStore } from './panelStore';
 import { Panel } from './Panel';
+import { PanelErrorBoundary } from './PanelErrorBoundary';
 import { EarthquakeDetails } from '../layers/earthquakes/EarthquakeDetails';
 import { AlertDetails } from '../layers/alerts/AlertDetails';
 import { FlightDetails } from '../layers/flights/FlightDetails';
@@ -30,20 +31,22 @@ export function PanelManager() {
         const accentClass = widget?.accentClass ?? ACCENT_BY_KIND[panel.kind];
         return (
           <Panel key={panel.id} panel={panel} accentClass={accentClass}>
-            {widget && widget.render()}
-            {panel.kind === 'earthquakes' && (
-              <EarthquakeDetails payload={panel.payload as never} />
-            )}
-            {panel.kind === 'alerts' && <AlertDetails payload={panel.payload as never} />}
-            {panel.kind === 'flights' && <FlightDetails payload={panel.payload as never} />}
-            {panel.kind === 'hurricanes' && (
-              <HurricaneDetails payload={panel.payload as never} />
-            )}
-            {panel.kind === 'fires' && <FireDetails payload={panel.payload as never} />}
-            {panel.kind === 'ships' && <ShipDetails payload={panel.payload as never} />}
-            {panel.kind === 'locations' && (
-              <LocationDetails payload={panel.payload as never} />
-            )}
+            <PanelErrorBoundary>
+              {widget && widget.render()}
+              {panel.kind === 'earthquakes' && (
+                <EarthquakeDetails payload={panel.payload as never} />
+              )}
+              {panel.kind === 'alerts' && <AlertDetails payload={panel.payload as never} />}
+              {panel.kind === 'flights' && <FlightDetails payload={panel.payload as never} />}
+              {panel.kind === 'hurricanes' && (
+                <HurricaneDetails payload={panel.payload as never} />
+              )}
+              {panel.kind === 'fires' && <FireDetails payload={panel.payload as never} />}
+              {panel.kind === 'ships' && <ShipDetails payload={panel.payload as never} />}
+              {panel.kind === 'locations' && (
+                <LocationDetails payload={panel.payload as never} />
+              )}
+            </PanelErrorBoundary>
           </Panel>
         );
       })}
