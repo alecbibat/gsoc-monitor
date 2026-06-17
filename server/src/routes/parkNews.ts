@@ -5,9 +5,9 @@ import { config } from '../config';
 const router = Router();
 
 // NPS Data API — documented, stable, JSON. Far more reliable than scraping
-// per-park RSS pages (which NPS no longer publishes consistently). One alerts
-// request covers every park; news releases are fetched per park so each one
-// contributes its own latest items.
+// per-park RSS pages (which NPS no longer publishes consistently). Both the
+// alerts and news releases are batched into a single request each so the total
+// hits stay to 2, well within DEMO_KEY's 5-req/hour-per-endpoint limit.
 const NPS_API = 'https://developer.nps.gov/api/v1';
 
 // Tracked parks: parkCode → display name + map anchor.
@@ -20,8 +20,8 @@ const PARKS: Array<{ code: string; name: string; lat: number; lon: number }> = [
   { code: 'romo', name: 'Rocky Mountain', lat: 40.343, lon: -105.683 },
 ];
 
-// Latest N news releases to keep per park.
-const PER_PARK = 10;
+// Latest N news releases to fetch across all parks combined; spread evenly.
+const TOTAL_NEWS = 60; // 10 per park × 6 parks
 
 const PARK_BY_CODE = new Map(PARKS.map((p) => [p.code, p]));
 
@@ -87,16 +87,20 @@ async function npsFetch<T>(path: string): Promise<T> {
   return (await r.json()) as T;
 }
 
-// Latest PER_PARK news releases for a single park.
-async function fetchParkNews(park: { code: string; name: string; lat: number; lon: number }): Promise<ParkItem[]> {
+// Latest news releases across all tracked parks — single batched request.
+async function fetchAllNewsReleases(): Promise<ParkItem[]> {
+  const codes = PARKS.map((p) => p.code).join(',');
   const data = await npsFetch<{ data?: NpsNewsRelease[] }>(
-    `/newsreleases?parkCode=${park.code}&limit=${PER_PARK}`
+    `/newsreleases?parkCode=${codes}&limit=${TOTAL_NEWS}`
   );
-  const rows = (data.data ?? []).slice(0, PER_PARK);
-  return rows.map((n) => {
+  const rows = data.data ?? [];
+  const items: ParkItem[] = [];
+  for (const n of rows) {
+    const park = PARK_BY_CODE.get(n.parkCode ?? '');
+    if (!park) continue;
     const when = n.releaseDate ? Date.parse(n.releaseDate) : NaN;
     const url = (n.url ?? '').trim();
-    return {
+    items.push({
       id: idFrom(url, n.id ?? `${park.code}-${n.title}`),
       title: n.title ?? 'Park news',
       url: url || `https://www.nps.gov/${park.code}/`,
@@ -108,8 +112,9 @@ async function fetchParkNews(park: { code: string; name: string; lat: number; lo
       countryName: park.name,
       lat: park.lat,
       lon: park.lon,
-    };
-  });
+    });
+  }
+  return items;
 }
 
 // Current alerts/closures across all tracked parks (single request).
@@ -140,7 +145,7 @@ async function fetchAllAlerts(): Promise<ParkItem[]> {
   return items;
 }
 
-const CACHE_KEY = 'park-news:v2';
+const CACHE_KEY = 'park-news:v3';
 const SUCCESS_TTL = 10 * 60_000;
 let lastGood: { items: ParkItem[]; updated: number } | null = null;
 
@@ -154,7 +159,7 @@ router.get('/', async (_req, res) => {
   try {
     const settled = await Promise.allSettled([
       fetchAllAlerts(),
-      ...PARKS.map((p) => fetchParkNews(p)),
+      fetchAllNewsReleases(),
     ]);
 
     const all: ParkItem[] = [];
