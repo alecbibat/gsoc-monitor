@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { SearchBar } from './SearchBar';
 import { WidgetLauncher } from '../widgets/WidgetLauncher';
 import { ScreensaverControls } from './ScreensaverControls';
@@ -315,6 +315,26 @@ function TrackedCounter() {
 }
 
 export function TopBar() {
+  const rightRef = useRef<HTMLDivElement>(null);
+  const setTopRightBottom = useUiStore((s) => s.setTopRightBottom);
+
+  // Publish the bottom edge of the right-hand cluster (search + info button) so
+  // the pins-screensaver watch column can start below it instead of guessing a
+  // fixed offset that breaks when the cluster wraps to a second row.
+  useLayoutEffect(() => {
+    const el = rightRef.current;
+    if (!el) return;
+    const measure = () => setTopRightBottom(el.getBoundingClientRect().bottom);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener('resize', measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [setTopRightBottom]);
+
   return (
     <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col gap-2 p-3 md:flex-row md:items-start md:justify-between md:gap-4 md:p-4">
       {/* Left: identity + camera controls + screensaver modes */}
@@ -336,7 +356,7 @@ export function TopBar() {
         <ScreensaverControls className="hidden md:flex" />
       </div>
       {/* Right: widgets + search, with the info button tucked under the search */}
-      <div className="flex w-full flex-col items-end gap-2 md:w-auto">
+      <div ref={rightRef} className="flex w-full flex-col items-end gap-2 md:w-auto">
         <div className="flex w-full flex-wrap items-center justify-end gap-2 md:gap-3">
           <WidgetLauncher />
           <div className="pointer-events-auto w-full sm:w-auto">

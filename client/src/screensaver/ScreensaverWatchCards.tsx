@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useScreensaverStore } from './screensaverStore';
+import { useUiStore } from '../ui/uiStore';
 import { useProximityStore } from '../widgets/proximity/proximityStore';
 import { HazardRows } from '../widgets/proximity/HazardRows';
 import { LightningTicker } from '../widgets/proximity/LightningTicker';
@@ -11,7 +12,8 @@ const COL_W = 240;     // matches the context minimap width
 const EDGE = 24;       // right-6 / bottom-6
 const CTX_H = 130;     // PinsContextBox MAP_H
 const CTX_GAP = 12;
-const TOPBAR_H = 88;   // clear the TopBar
+const TOPBAR_H = 88;   // fallback floor before the right cluster is measured
+const TOP_GAP = 12;    // breathing room below the search bar / info button
 const SCROLL_PX_PER_SEC = 24;
 
 export function ScreensaverWatchCards() {
@@ -20,6 +22,7 @@ export function ScreensaverWatchCards() {
   const result = useProximityStore((s) => s.result);
   const radiusMi = useProximityStore((s) => s.radiusMi);
   const scan = useProximityStore((s) => s.scan);
+  const topRightBottom = useUiStore((s) => s.topRightBottom);
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const blockRef = useRef<HTMLDivElement>(null);
@@ -53,6 +56,9 @@ export function ScreensaverWatchCards() {
 
   const durationS = Math.max(14, blockH / SCROLL_PX_PER_SEC);
   const bottom = EDGE + CTX_H + CTX_GAP;
+  // Start below the measured search/info cluster so the column never overlaps
+  // them; fall back to the fixed floor until the first measurement lands.
+  const top = Math.max(TOPBAR_H, topRightBottom + TOP_GAP);
 
   const cards =
     affected.length === 0 ? (
@@ -83,7 +89,7 @@ export function ScreensaverWatchCards() {
   return (
     <div
       className="pointer-events-none absolute right-6 z-30 flex flex-col gap-2"
-      style={{ top: TOPBAR_H, bottom, width: COL_W }}
+      style={{ top, bottom, width: COL_W }}
     >
       {/* Section label */}
       <div className="flex shrink-0 items-center gap-1.5 px-0.5">
