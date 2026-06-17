@@ -96,7 +96,7 @@ export function EarthquakeLayer() {
               width: sz,
               height: sz,
               verticalOrigin: Cesium.VerticalOrigin.CENTER,
-              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              // Default depth test so quakes on the far side of the globe stay hidden.
             },
           });
           attachPanelData(entity, {

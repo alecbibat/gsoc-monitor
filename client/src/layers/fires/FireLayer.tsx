@@ -212,7 +212,7 @@ export function FireLayer() {
             width: sz,
             height: Math.round(sz * 1.25), // flame is taller than wide
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            // Default depth test so hotspots on the far side of the globe stay hidden.
           },
         });
         attachPanelData(entity, {
