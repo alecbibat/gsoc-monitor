@@ -24,11 +24,12 @@ export function GoogleEarthLayer() {
         viewer?.scene.primitives.remove(tilesetRef.current);
         tilesetRef.current = null;
       }
+      setStatus({ ready: false });
       return;
     }
 
     if (!GOOGLE_KEY) {
-      setStatus({ error: 'Set VITE_GOOGLE_MAPS_KEY to enable' });
+      setStatus({ error: 'Set VITE_GOOGLE_MAPS_KEY to enable', ready: false });
       return;
     }
 
@@ -48,17 +49,18 @@ export function GoogleEarthLayer() {
         }
         tilesetRef.current = tileset;
         viewer.scene.primitives.add(tileset);
-        setStatus({ loading: false, error: null });
+        setStatus({ loading: false, error: null, ready: true });
         viewer.scene.requestRender();
       })
       .catch((err: unknown) => {
         if (!mounted) return;
         const msg = err instanceof Error ? err.message : String(err);
-        setStatus({ loading: false, error: `3D tiles: ${msg}` });
+        setStatus({ loading: false, error: `3D tiles: ${msg}`, ready: false });
       });
 
     return () => {
       mounted = false;
+      setStatus({ ready: false });
       if (tilesetRef.current && !tilesetRef.current.isDestroyed()) {
         viewer.scene.primitives.remove(tilesetRef.current);
         tilesetRef.current = null;

@@ -2,20 +2,31 @@ import * as Cesium from 'cesium';
 import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useScreensaverStore, type Poi } from './screensaverStore';
+import { useLayersStore } from '../store/layersStore';
+import { useEarthStatus } from '../layers/earth3d/earthStore';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
 
 const OVERVIEW_ALT = 9_000_000;
 const OVERVIEW_LAT = 38;
 const OVERVIEW_LON = -96;
 
-const DWELL_MIN_MS = 8_000;
-const DWELL_MAX_MS = 14_000;
-const INTERVAL_MIN_MS = 8_000;
-const INTERVAL_MAX_MS = 14_000;
+const DWELL_MIN_MS = 11_000;
+const DWELL_MAX_MS = 17_000;
+const INTERVAL_MIN_MS = 6_000;
+const INTERVAL_MAX_MS = 10_000;
 // Camera orbits slowly around each pin while dwelling.
-const ORBIT_PERIOD_MS = 28_000;
-const PITCH_RAD = Cesium.Math.toRadians(-38);
-const RANGE_M = 18_000;
+const ORBIT_PERIOD_MS = 32_000;
+
+// Close cinematic orbit — used when Google 3D tiles are loaded so the
+// photorealistic buildings and terrain are visible from a low, tilted angle.
+const CLOSE_RANGE_M = 1_600;
+const CLOSE_PITCH_RAD = Cesium.Math.toRadians(-28);
+// Safe high fallback orbit — used when 3D tiles aren't available (no API key)
+// or terrain height can't be sampled. Stays well above any terrain.
+const FAR_RANGE_M = 18_000;
+const FAR_PITCH_RAD = Cesium.Math.toRadians(-38);
+
+const METERS_PER_DEG_LAT = 110_574;
 
 // Flatten every pin across all groups into a single array.
 interface PinEntry {
@@ -52,6 +63,25 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
+// Sample the height of the topmost loaded surface (Google 3D tiles or globe)
+// at a point, forcing the most-detailed tiles there to stream in first. Returns
+// null when sampling is unsupported or fails so callers can fall back safely.
+async function sampleGroundHeight(
+  v: Cesium.Viewer,
+  lon: number,
+  lat: number
+): Promise<number | null> {
+  try {
+    if (!v.scene.sampleHeightSupported) return null;
+    const carto = Cesium.Cartographic.fromDegrees(lon, lat);
+    const [result] = await v.scene.sampleHeightMostDetailed([carto]);
+    const h = result?.height;
+    return typeof h === 'number' && Number.isFinite(h) ? h : null;
+  } catch {
+    return null;
+  }
+}
+
 export function PinsController() {
   const viewer = useCesiumViewer();
   const active = useScreensaverStore((s) => s.active);
@@ -79,6 +109,11 @@ export function PinsController() {
     v.scene.requestRenderMode = false;
     v.scene.maximumRenderTimeChange = 0;
 
+    // Turn on the Google photorealistic 3D tiles so the close-up orbits show
+    // real buildings and textured terrain. Restore the prior state on exit.
+    const prevEarth3d = useLayersStore.getState().active.earth3d;
+    if (!prevEarth3d) useLayersStore.getState().toggleLayer('earth3d');
+
     v.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(OVERVIEW_LON, OVERVIEW_LAT, OVERVIEW_ALT),
       duration: 2.5,
@@ -89,7 +124,7 @@ export function PinsController() {
       poiTimerRef.current = setTimeout(visitNext, rand(INTERVAL_MIN_MS, INTERVAL_MAX_MS));
     }
 
-    function visitNext() {
+    async function visitNext() {
       if (cancelledRef.current) return;
       if (queueRef.current.length === 0) queueRef.current = shuffle(ALL_PINS);
       const pin = queueRef.current.shift()!;
@@ -106,8 +141,27 @@ export function PinsController() {
       setPhase('flying-to');
       setCurrentPoi(poi);
 
+      // If the 3D tiles are loaded, sample the real ground/building height so we
+      // can orbit close to the terrain. Otherwise stay high and safe.
+      const tilesReady = useEarthStatus.getState().ready;
+      const groundH = tilesReady ? await sampleGroundHeight(v, pin.lon, pin.lat) : null;
+      if (cancelledRef.current) return;
+
+      const close = groundH !== null;
+      const range = close ? CLOSE_RANGE_M : FAR_RANGE_M;
+      const pitch = close ? CLOSE_PITCH_RAD : FAR_PITCH_RAD;
+      const baseH = close ? (groundH as number) : 0;
+      const target = Cesium.Cartesian3.fromDegrees(pin.lon, pin.lat, baseH);
+
+      // Fly straight to the heading=0 orbit position (south of and above the
+      // target) so the subsequent orbit begins seamlessly with no camera snap.
+      const back = range * Math.cos(-pitch); // metres south of target
+      const up = baseH + range * Math.sin(-pitch); // metres above ellipsoid
+      const startLat = pin.lat - back / METERS_PER_DEG_LAT;
+
       v.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(pin.lon, pin.lat, pin.altitudeM * 1.5),
+        destination: Cesium.Cartesian3.fromDegrees(pin.lon, startLat, up),
+        orientation: { heading: 0, pitch, roll: 0 },
         duration: 4.5,
         complete: () => {
           if (cancelledRef.current) return;
@@ -115,13 +169,12 @@ export function PinsController() {
 
           // Cinematic orbit around the pin while dwelling.
           const orbitStart = performance.now();
-          const target = Cesium.Cartesian3.fromDegrees(pin.lon, pin.lat, 0);
           const tick = () => {
             if (cancelledRef.current) return;
             const heading =
-              ((performance.now() - orbitStart) % ORBIT_PERIOD_MS) * Cesium.Math.TWO_PI /
+              (((performance.now() - orbitStart) % ORBIT_PERIOD_MS) * Cesium.Math.TWO_PI) /
               ORBIT_PERIOD_MS;
-            v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, PITCH_RAD, RANGE_M));
+            v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, pitch, range));
             rafRef.current = requestAnimationFrame(tick);
           };
           rafRef.current = requestAnimationFrame(tick);
@@ -158,13 +211,17 @@ export function PinsController() {
       if (dwellTimerRef.current) clearTimeout(dwellTimerRef.current);
       cancelAnimationFrame(rafRef.current);
       v.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+      // Restore the 3D tiles toggle to whatever it was before the screensaver.
+      if (!prevEarth3d && useLayersStore.getState().active.earth3d) {
+        useLayersStore.getState().toggleLayer('earth3d');
+      }
       v.scene.requestRenderMode = prevRenderMode;
       v.scene.maximumRenderTimeChange = prevMaxChange;
       v.scene.requestRender();
       setPhase('rotating');
       setCurrentPoi(null);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPins, viewer]);
 
   return null;
