@@ -145,7 +145,7 @@ export function ProximityWidget() {
       )}
 
       {/* Affected properties */}
-      <div className="hud-scroll max-h-[440px] space-y-1.5 overflow-y-auto pr-1">
+      <div className="space-y-1.5 pr-1">
         {affected.map((p) => (
           <div
             key={p.key}

@@ -214,7 +214,7 @@ export function NewsWidget() {
       </div>
 
       {/* Feed */}
-      <div className="hud-scroll max-h-[420px] space-y-1.5 overflow-y-auto pr-1">
+      <div className="space-y-1.5 pr-1">
         {visible.length === 0 && (
           <div className="py-6 text-center text-[12px] text-white/30">No stories match filters</div>
         )}
