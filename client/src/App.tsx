@@ -41,6 +41,7 @@ import { NewsTicker } from './widgets/news/NewsTicker';
 import { CrisisOverlay } from './crisis/CrisisOverlay';
 import { CrisisMapLayer } from './crisis/CrisisMapLayer';
 import { CrisisDrawController } from './crisis/CrisisDrawController';
+import { CrisisLayerPopup } from './crisis/CrisisLayerPopup';
 import { CrisisShareView } from './crisis/CrisisShareView';
 
 // Detect share link — renders a completely separate read-only view
@@ -99,6 +100,7 @@ export default function App() {
         <NewsTicker />
         <CrisisOverlay />
         <CrisisDrawController />
+        <CrisisLayerPopup />
       </div>
     </CesiumContext.Provider>
   );

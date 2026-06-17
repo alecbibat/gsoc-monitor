@@ -43,6 +43,8 @@ export type DrawLayerType =
   | 'fire-perimeter' | 'burned-area' | 'flood-zone'
   | 'staging-area' | 'exclusion-zone' | 'search-grid' | 'other';
 
+export type DrawGeometry = 'polygon' | 'line' | 'point';
+
 export interface DrawLayerPoint {
   lat: number;
   lon: number;
@@ -52,11 +54,28 @@ export interface DrawLayer {
   id: string;
   name: string;
   type: DrawLayerType;
+  geometry: DrawGeometry;
   color: string;
   visible: boolean;
   positions: DrawLayerPoint[];
-  closed: boolean;
   createdAt: string;
+}
+
+// One incident — a fully self-contained situation report.
+export interface Incident {
+  id: string;
+  createdAt: string;
+  incidentName: string;
+  incidentDatetime: string;
+  incidentLocation: string;
+  incidentType: IncidentType;
+  incidentStatus: IncidentStatus;
+  executiveSummary: string;
+  roles: IcsRole[];
+  assignments: PersonnelAssignment[];
+  actionLog: ActionLogEntry[];
+  drawLayers: DrawLayer[];
+  shareToken: string | null;
 }
 
 // Public shape sent to / received from the share endpoint
@@ -107,6 +126,29 @@ export const DEFAULT_ROLES: IcsRole[] = [
   { id: 'fin-cost',       title: 'Cost Unit Leader',                abbrev: 'COST', parentId: 'finance',   color: FIN_COLOR,  isCommandStaff: false, order: 3, builtin: true },
 ];
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+let _seq = Date.now();
+const uid = () => `c-${++_seq}`;
+
+function newIncident(): Incident {
+  return {
+    id: uid(),
+    createdAt: new Date().toISOString(),
+    incidentName: '',
+    incidentDatetime: '',
+    incidentLocation: '',
+    incidentType: 'other',
+    incidentStatus: 'active',
+    executiveSummary: '',
+    roles: DEFAULT_ROLES,
+    assignments: [],
+    actionLog: [],
+    drawLayers: [],
+    shareToken: null,
+  };
+}
+
 // ── Store ────────────────────────────────────────────────────────────────────
 
 interface CrisisFields {
@@ -118,184 +160,220 @@ interface CrisisFields {
   executiveSummary: string;
 }
 
-let _seq = Date.now();
-const uid = () => `c-${++_seq}`;
+export interface PickedLayer {
+  layerId: string;
+  x: number;
+  y: number;
+}
 
-interface CrisisState extends CrisisFields {
+interface CrisisState {
   open: boolean;
+  activeIncidentId: string | null;
   activeTab: CrisisTab;
-  shareToken: string | null;
-  roles: IcsRole[];
-  assignments: PersonnelAssignment[];
-  actionLog: ActionLogEntry[];
-  drawLayers: DrawLayer[];
   activeDrawLayerId: string | null;
-  // Core
+  pickedLayer: PickedLayer | null;
+  incidents: Incident[];
+
+  // Overlay
   toggle: () => void;
   close: () => void;
+  setOpen: (open: boolean) => void;
   setTab: (tab: CrisisTab) => void;
+
+  // Incident lifecycle
+  createIncident: () => string;
+  openIncident: (id: string) => void;
+  backToList: () => void;
+  removeIncident: (id: string) => void;
+
+  // Active-incident field updates
   update: (patch: Partial<CrisisFields>) => void;
-  // Share
   setShareToken: (token: string | null) => void;
+
   // Roles
   addRole: (role: Omit<IcsRole, 'id' | 'builtin'>) => void;
   updateRole: (id: string, patch: Partial<Omit<IcsRole, 'id' | 'builtin'>>) => void;
   removeRole: (id: string) => void;
   resetRoles: () => void;
+
   // Assignments
   assignRole: (roleId: string, name: string, org?: string) => void;
   endAssignment: (id: string) => void;
+
   // Action log
   addActionEntry: (type?: ActionEntryType) => void;
   updateActionEntry: (id: string, patch: Partial<Pick<ActionLogEntry, 'description' | 'attachmentName' | 'entryType'>>) => void;
   removeActionEntry: (id: string) => void;
+
   // Draw layers
   addDrawLayer: (layer: Omit<DrawLayer, 'id' | 'createdAt'>) => string;
   updateDrawLayer: (id: string, patch: Partial<Omit<DrawLayer, 'id' | 'createdAt'>>) => void;
   removeDrawLayer: (id: string) => void;
   setActiveDrawLayer: (id: string | null) => void;
-  // Full reset
-  reset: () => void;
+  setPickedLayer: (p: PickedLayer | null) => void;
 }
 
-const FIELD_DEFAULTS: CrisisFields = {
-  incidentName: '',
-  incidentDatetime: '',
-  incidentLocation: '',
-  incidentType: 'other',
-  incidentStatus: 'active',
-  executiveSummary: '',
-};
+// Select the currently-open incident (or null in list view).
+export const selectActive = (s: CrisisState): Incident | null =>
+  s.incidents.find((i) => i.id === s.activeIncidentId) ?? null;
+
+export const useActiveIncident = (): Incident | null => useCrisisStore(selectActive);
+
+// Find which incident owns a given draw layer id.
+export function incidentOfLayer(s: CrisisState, layerId: string): Incident | null {
+  return s.incidents.find((i) => i.drawLayers.some((l) => l.id === layerId)) ?? null;
+}
+
+// Patch the active incident immutably.
+function patchActive(s: CrisisState, fn: (inc: Incident) => Incident): Partial<CrisisState> {
+  if (!s.activeIncidentId) return {};
+  return { incidents: s.incidents.map((i) => (i.id === s.activeIncidentId ? fn(i) : i)) };
+}
+
+// Patch whichever incident owns the given layer.
+function patchLayerOwner(s: CrisisState, layerId: string, fn: (inc: Incident) => Incident): Partial<CrisisState> {
+  return {
+    incidents: s.incidents.map((i) =>
+      i.drawLayers.some((l) => l.id === layerId) ? fn(i) : i
+    ),
+  };
+}
 
 export const useCrisisStore = create<CrisisState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       open: false,
+      activeIncidentId: null,
       activeTab: 'situation-report',
-      shareToken: null,
-      roles: DEFAULT_ROLES,
-      assignments: [],
-      actionLog: [],
-      drawLayers: [],
       activeDrawLayerId: null,
-      ...FIELD_DEFAULTS,
+      pickedLayer: null,
+      incidents: [],
 
-      toggle: () => set((s) => ({ open: !s.open })),
+      toggle: () => set((s) => (s.open ? { open: false } : { open: true, activeIncidentId: null })),
       close: () => set({ open: false }),
+      setOpen: (open) => set({ open }),
       setTab: (activeTab) => set({ activeTab }),
-      update: (patch) => set(patch),
-      setShareToken: (shareToken) => set({ shareToken }),
+
+      createIncident: () => {
+        const inc = newIncident();
+        set((s) => ({ incidents: [...s.incidents, inc], activeIncidentId: inc.id, open: true }));
+        return inc.id;
+      },
+      openIncident: (id) => set({ activeIncidentId: id, open: true }),
+      backToList: () => set({ activeIncidentId: null }),
+      removeIncident: (id) =>
+        set((s) => ({
+          incidents: s.incidents.filter((i) => i.id !== id),
+          activeIncidentId: s.activeIncidentId === id ? null : s.activeIncidentId,
+        })),
+
+      update: (patch) => set((s) => patchActive(s, (inc) => ({ ...inc, ...patch }))),
+      setShareToken: (token) => set((s) => patchActive(s, (inc) => ({ ...inc, shareToken: token }))),
 
       addRole: (role) =>
-        set((s) => ({ roles: [...s.roles, { ...role, id: uid(), builtin: false }] })),
+        set((s) => patchActive(s, (inc) => ({ ...inc, roles: [...inc.roles, { ...role, id: uid(), builtin: false }] }))),
 
       updateRole: (id, patch) =>
-        set((s) => ({ roles: s.roles.map((r) => (r.id === id ? { ...r, ...patch } : r)) })),
+        set((s) => patchActive(s, (inc) => ({ ...inc, roles: inc.roles.map((r) => (r.id === id ? { ...r, ...patch } : r)) }))),
 
-      removeRole: (id) => {
-        const { roles } = get();
-        const toRemove = new Set<string>();
-        const collect = (pid: string) => {
-          toRemove.add(pid);
-          roles.filter((r) => r.parentId === pid).forEach((c) => collect(c.id));
-        };
-        collect(id);
-        set((s) => ({
-          roles: s.roles.filter((r) => !toRemove.has(r.id)),
-          assignments: s.assignments.filter((a) => !toRemove.has(a.roleId)),
-        }));
-      },
+      removeRole: (id) =>
+        set((s) => patchActive(s, (inc) => {
+          const toRemove = new Set<string>();
+          const collect = (pid: string) => {
+            toRemove.add(pid);
+            inc.roles.filter((r) => r.parentId === pid).forEach((c) => collect(c.id));
+          };
+          collect(id);
+          return {
+            ...inc,
+            roles: inc.roles.filter((r) => !toRemove.has(r.id)),
+            assignments: inc.assignments.filter((a) => !toRemove.has(a.roleId)),
+          };
+        })),
 
-      resetRoles: () => set({ roles: DEFAULT_ROLES }),
+      resetRoles: () => set((s) => patchActive(s, (inc) => ({ ...inc, roles: DEFAULT_ROLES }))),
 
-      assignRole: (roleId, name, org) => {
-        const now = new Date().toISOString();
-        set((s) => ({
-          assignments: [
-            ...s.assignments.map((a) =>
-              a.roleId === roleId && !a.endedAt ? { ...a, endedAt: now } : a
-            ),
-            { id: uid(), roleId, name, organization: org || undefined, startedAt: now },
-          ],
-        }));
-      },
+      assignRole: (roleId, name, org) =>
+        set((s) => patchActive(s, (inc) => {
+          const now = new Date().toISOString();
+          return {
+            ...inc,
+            assignments: [
+              ...inc.assignments.map((a) => (a.roleId === roleId && !a.endedAt ? { ...a, endedAt: now } : a)),
+              { id: uid(), roleId, name, organization: org || undefined, startedAt: now },
+            ],
+          };
+        })),
 
       endAssignment: (id) =>
-        set((s) => ({
-          assignments: s.assignments.map((a) =>
-            a.id === id ? { ...a, endedAt: new Date().toISOString() } : a
-          ),
-        })),
+        set((s) => patchActive(s, (inc) => ({
+          ...inc,
+          assignments: inc.assignments.map((a) => (a.id === id ? { ...a, endedAt: new Date().toISOString() } : a)),
+        }))),
 
       addActionEntry: (type = 'action') =>
-        set((s) => ({
-          actionLog: [
-            { id: uid(), timestamp: new Date().toISOString(), description: '', entryType: type },
-            ...s.actionLog,
-          ],
-        })),
+        set((s) => patchActive(s, (inc) => ({
+          ...inc,
+          actionLog: [{ id: uid(), timestamp: new Date().toISOString(), description: '', entryType: type }, ...inc.actionLog],
+        }))),
 
       updateActionEntry: (id, patch) =>
-        set((s) => ({
-          actionLog: s.actionLog.map((e) => (e.id === id ? { ...e, ...patch } : e)),
-        })),
+        set((s) => patchActive(s, (inc) => ({
+          ...inc,
+          actionLog: inc.actionLog.map((e) => (e.id === id ? { ...e, ...patch } : e)),
+        }))),
 
       removeActionEntry: (id) =>
-        set((s) => ({ actionLog: s.actionLog.filter((e) => e.id !== id) })),
+        set((s) => patchActive(s, (inc) => ({ ...inc, actionLog: inc.actionLog.filter((e) => e.id !== id) }))),
 
       addDrawLayer: (layer) => {
         const id = uid();
-        set((s) => ({
-          drawLayers: [
-            ...s.drawLayers,
-            { ...layer, id, createdAt: new Date().toISOString() },
-          ],
-        }));
+        set((s) => patchActive(s, (inc) => ({
+          ...inc,
+          drawLayers: [...inc.drawLayers, { ...layer, id, createdAt: new Date().toISOString() }],
+        })));
         return id;
       },
 
       updateDrawLayer: (id, patch) =>
-        set((s) => ({
-          drawLayers: s.drawLayers.map((l) => (l.id === id ? { ...l, ...patch } : l)),
-        })),
+        set((s) => patchLayerOwner(s, id, (inc) => ({
+          ...inc,
+          drawLayers: inc.drawLayers.map((l) => (l.id === id ? { ...l, ...patch } : l)),
+        }))),
 
       removeDrawLayer: (id) =>
         set((s) => ({
-          drawLayers: s.drawLayers.filter((l) => l.id !== id),
+          incidents: s.incidents.map((i) =>
+            i.drawLayers.some((l) => l.id === id) ? { ...i, drawLayers: i.drawLayers.filter((l) => l.id !== id) } : i
+          ),
           activeDrawLayerId: s.activeDrawLayerId === id ? null : s.activeDrawLayerId,
+          pickedLayer: s.pickedLayer?.layerId === id ? null : s.pickedLayer,
         })),
 
       setActiveDrawLayer: (id) => set({ activeDrawLayerId: id }),
-
-      reset: () =>
-        set({
-          ...FIELD_DEFAULTS,
-          roles: DEFAULT_ROLES,
-          assignments: [],
-          actionLog: [],
-          drawLayers: [],
-          activeDrawLayerId: null,
-          shareToken: null,
-        }),
+      setPickedLayer: (pickedLayer) => set({ pickedLayer }),
     }),
-    { name: 'gsoc-crisis-v2' }
+    {
+      name: 'gsoc-crisis-v3',
+      partialize: (s) => ({ incidents: s.incidents }),
+    }
   )
 );
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Share helper ──────────────────────────────────────────────────────────────
 
-export function extractPublicState(s: CrisisState, publishedAt?: string): CrisisPublicState {
+export function extractPublicState(inc: Incident, publishedAt?: string): CrisisPublicState {
   return {
-    incidentName: s.incidentName,
-    incidentDatetime: s.incidentDatetime,
-    incidentLocation: s.incidentLocation,
-    incidentType: s.incidentType,
-    incidentStatus: s.incidentStatus,
-    executiveSummary: s.executiveSummary,
-    roles: s.roles,
-    assignments: s.assignments,
-    actionLog: s.actionLog,
-    drawLayers: s.drawLayers,
+    incidentName: inc.incidentName,
+    incidentDatetime: inc.incidentDatetime,
+    incidentLocation: inc.incidentLocation,
+    incidentType: inc.incidentType,
+    incidentStatus: inc.incidentStatus,
+    executiveSummary: inc.executiveSummary,
+    roles: inc.roles,
+    assignments: inc.assignments,
+    actionLog: inc.actionLog,
+    drawLayers: inc.drawLayers,
     publishedAt: publishedAt ?? new Date().toISOString(),
     lastUpdated: new Date().toISOString(),
   };

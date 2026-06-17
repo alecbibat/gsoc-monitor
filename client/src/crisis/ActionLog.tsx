@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { useCrisisStore, type ActionLogEntry } from './crisisStore';
+import { useCrisisStore, selectActive, type ActionLogEntry } from './crisisStore';
 
 const TYPE_STYLES = {
   action: 'text-blue-300 bg-blue-400/15 border-blue-400/30',
@@ -19,7 +19,8 @@ function fmtTimestamp(iso: string) {
 // ── Table row ─────────────────────────────────────────────────────────────────
 
 function LogRow({ entry }: { entry: ActionLogEntry }) {
-  const { updateActionEntry, removeActionEntry } = useCrisisStore();
+  const updateActionEntry = useCrisisStore((s) => s.updateActionEntry);
+  const removeActionEntry = useCrisisStore((s) => s.removeActionEntry);
   const fileRef = useRef<HTMLInputElement>(null);
 
   return (
@@ -162,8 +163,8 @@ function TimelineView({ entries }: { entries: ActionLogEntry[] }) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function ActionLog() {
-  const actionLog = useCrisisStore((s) => s.actionLog);
-  const { addActionEntry } = useCrisisStore();
+  const actionLog = useCrisisStore((s) => selectActive(s)?.actionLog ?? []);
+  const addActionEntry = useCrisisStore((s) => s.addActionEntry);
   const [view, setView] = useState<'table' | 'timeline'>('table');
 
   return (

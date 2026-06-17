@@ -1,5 +1,8 @@
 import { useState } from 'react';
-import { useCrisisStore, type IncidentType, type IncidentStatus, type DrawLayerType } from '../crisisStore';
+import {
+  useCrisisStore, useActiveIncident,
+  type IncidentType, type IncidentStatus, type DrawLayerType, type DrawGeometry,
+} from '../crisisStore';
 import { IcsOrgChart } from '../IcsOrgChart';
 import { ActionLog } from '../ActionLog';
 
@@ -32,10 +35,16 @@ const DRAW_LAYER_TYPES: { value: DrawLayerType; label: string; color: string }[]
   { value: 'other',          label: 'Other',           color: '#a855f7' },
 ];
 
+const GEOMETRIES: { value: DrawGeometry; label: string; hint: string }[] = [
+  { value: 'polygon', label: 'Area',  hint: 'Filled zone' },
+  { value: 'line',    label: 'Line',  hint: 'Path / boundary' },
+  { value: 'point',   label: 'Point', hint: 'Single marker' },
+];
+
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-start gap-3">
-      <label className="w-24 shrink-0 pt-2 text-[10px] text-white/40">{label}</label>
+      <label className="w-24 shrink-0 pt-2 text-[10px] text-white/45">{label}</label>
       {children}
     </div>
   );
@@ -44,7 +53,7 @@ function FieldRow({ label, children }: { label: string; children: React.ReactNod
 function TextInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
   return (
     <input
-      className="flex-1 rounded border border-white/8 bg-white/5 px-2.5 py-1.5 text-[12px] text-white/80 placeholder-white/20 outline-none transition focus:border-white/20 focus:bg-white/8"
+      className="flex-1 rounded border border-white/10 bg-white/10 px-2.5 py-1.5 text-[12px] text-white/85 placeholder-white/30 outline-none transition focus:border-white/25 focus:bg-white/15"
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
@@ -55,26 +64,26 @@ function TextInput({ value, onChange, placeholder }: { value: string; onChange: 
 // ── Map Layers section ────────────────────────────────────────────────────────
 
 function MapLayersSection() {
-  const drawLayers = useCrisisStore((s) => s.drawLayers);
-  const { addDrawLayer, updateDrawLayer, removeDrawLayer, setActiveDrawLayer, close } = useCrisisStore();
+  const inc = useActiveIncident();
+  const addDrawLayer    = useCrisisStore((s) => s.addDrawLayer);
+  const updateDrawLayer = useCrisisStore((s) => s.updateDrawLayer);
+  const removeDrawLayer = useCrisisStore((s) => s.removeDrawLayer);
+  const setActiveDrawLayer = useCrisisStore((s) => s.setActiveDrawLayer);
+  const close = useCrisisStore((s) => s.close);
 
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<DrawLayerType>('fire-perimeter');
+  const [newGeom, setNewGeom] = useState<DrawGeometry>('polygon');
   const defaultColor = DRAW_LAYER_TYPES.find((t) => t.value === newType)?.color ?? '#ef4444';
   const [newColor, setNewColor] = useState(defaultColor);
+
+  const drawLayers = inc?.drawLayers ?? [];
 
   const startCreate = () => {
     const t = newName.trim();
     if (!t) return;
-    addDrawLayer({
-      name: t,
-      type: newType,
-      color: newColor,
-      visible: true,
-      positions: [],
-      closed: true,
-    });
+    addDrawLayer({ name: t, type: newType, geometry: newGeom, color: newColor, visible: true, positions: [] });
     setNewName('');
     setCreating(false);
   };
@@ -87,34 +96,29 @@ function MapLayersSection() {
   return (
     <section>
       <div className="mb-3 flex items-center gap-3">
-        <h3 className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/30">
-          Map Layers
-        </h3>
-        <span className="text-[9px] text-white/20">
-          Draw on the live map — layers stay visible while the incident is active
-        </span>
+        <h3 className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/35">Map Layers</h3>
+        <span className="text-[9px] text-white/25">Draw on the live map — layers stay visible while the incident is active</span>
         <button
           onClick={() => setCreating((v) => !v)}
-          className="ml-auto rounded border border-white/10 px-2.5 py-1 text-[9px] text-white/40 transition hover:border-white/20 hover:text-white/60"
+          className="ml-auto rounded border border-white/12 px-2.5 py-1 text-[9px] text-white/45 transition hover:border-white/25 hover:text-white/70"
         >
           {creating ? 'Cancel' : '+ New Layer'}
         </button>
       </div>
 
-      {/* Create form */}
       {creating && (
-        <div className="mb-3 rounded-lg border border-white/10 bg-white/3 p-3">
-          <div className="flex flex-wrap gap-2">
+        <div className="mb-3 space-y-2.5 rounded-lg border border-white/10 bg-white/5 p-3">
+          <div className="flex flex-wrap items-center gap-2">
             <input
               autoFocus
-              className="flex-1 rounded border border-white/8 bg-white/5 px-2 py-1.5 text-[12px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
+              className="flex-1 rounded border border-white/10 bg-white/10 px-2 py-1.5 text-[12px] text-white/85 outline-none placeholder-white/30 focus:border-white/25 focus:bg-white/15"
               placeholder="Layer name"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && startCreate()}
             />
             <select
-              className="rounded border border-white/8 bg-ink-900 px-2 py-1.5 text-[11px] text-white/70 outline-none"
+              className="rounded border border-white/10 bg-ink-900 px-2 py-1.5 text-[11px] text-white/75 outline-none"
               value={newType}
               onChange={(e) => {
                 const t = e.target.value as DrawLayerType;
@@ -127,7 +131,7 @@ function MapLayersSection() {
               ))}
             </select>
             <div className="flex items-center gap-2">
-              <label className="text-[9px] text-white/30">Color</label>
+              <label className="text-[9px] text-white/35">Color</label>
               <input
                 type="color"
                 className="h-7 w-9 cursor-pointer rounded border border-white/10 bg-transparent"
@@ -135,10 +139,31 @@ function MapLayersSection() {
                 onChange={(e) => setNewColor(e.target.value)}
               />
             </div>
+          </div>
+
+          {/* Geometry picker */}
+          <div className="flex items-center gap-2">
+            <span className="text-[9px] uppercase tracking-wider text-white/35">Shape</span>
+            <div className="flex gap-1">
+              {GEOMETRIES.map((g) => (
+                <button
+                  key={g.value}
+                  onClick={() => setNewGeom(g.value)}
+                  title={g.hint}
+                  className={`rounded border px-2.5 py-1 text-[10px] transition ${
+                    newGeom === g.value
+                      ? 'border-accent/40 bg-accent/15 text-accent'
+                      : 'border-white/10 text-white/40 hover:border-white/25 hover:text-white/65'
+                  }`}
+                >
+                  {g.label}
+                </button>
+              ))}
+            </div>
             <button
               onClick={startCreate}
               disabled={!newName.trim()}
-              className="rounded bg-accent/15 px-3 py-1.5 text-[10px] text-accent transition hover:bg-accent/25 disabled:opacity-30"
+              className="ml-auto rounded bg-accent/20 px-3 py-1.5 text-[10px] text-accent transition hover:bg-accent/30 disabled:opacity-30"
             >
               Create
             </button>
@@ -146,54 +171,40 @@ function MapLayersSection() {
         </div>
       )}
 
-      {/* Layer list */}
       <div className="space-y-1.5 rounded-lg border border-white/8 bg-ink-950/60 p-3">
         {drawLayers.length === 0 ? (
-          <p className="py-3 text-center text-[11px] text-white/25">
+          <p className="py-3 text-center text-[11px] text-white/30">
             No map layers — create one above and draw on the live map
           </p>
         ) : (
           drawLayers.map((layer) => (
-            <div key={layer.id} className="flex items-center gap-2 rounded border border-white/6 bg-white/3 px-3 py-2">
-              {/* Color dot */}
+            <div key={layer.id} className="flex items-center gap-2 rounded border border-white/8 bg-white/5 px-3 py-2">
               <div className="h-3 w-3 shrink-0 rounded-full" style={{ background: layer.color }} />
-
-              {/* Name + type */}
               <div className="min-w-0 flex-1">
-                <span className="text-[11px] text-white/75">{layer.name}</span>
-                <span className="ml-2 text-[9px] text-white/30">
-                  {DRAW_LAYER_TYPES.find((t) => t.value === layer.type)?.label}
+                <span className="text-[11px] text-white/80">{layer.name}</span>
+                <span className="ml-2 text-[9px] text-white/35">
+                  {DRAW_LAYER_TYPES.find((t) => t.value === layer.type)?.label} · {layer.geometry}
                 </span>
                 {layer.positions.length > 0 && (
-                  <span className="ml-2 text-[9px] text-white/25">
-                    {layer.positions.length} pts
-                  </span>
+                  <span className="ml-2 text-[9px] text-white/30">{layer.positions.length} pts</span>
                 )}
               </div>
-
-              {/* Visible toggle */}
               <button
                 onClick={() => updateDrawLayer(layer.id, { visible: !layer.visible })}
-                className={`text-[11px] transition ${layer.visible ? 'text-white/50 hover:text-white/75' : 'text-white/20 hover:text-white/40'}`}
+                className={`text-[11px] transition ${layer.visible ? 'text-white/55 hover:text-white/80' : 'text-white/20 hover:text-white/40'}`}
                 title={layer.visible ? 'Hide' : 'Show'}
               >
                 {layer.visible ? '👁' : '🚫'}
               </button>
-
-              {/* Draw */}
               <button
                 onClick={() => startDraw(layer.id)}
-                className="rounded border border-accent/25 bg-accent/8 px-2 py-0.5 text-[9px] text-accent/70 transition hover:border-accent/40 hover:text-accent"
+                className="rounded border border-accent/25 bg-accent/10 px-2 py-0.5 text-[9px] text-accent/80 transition hover:border-accent/40 hover:text-accent"
               >
-                Draw
+                {layer.positions.length > 0 ? 'Redraw' : 'Draw'}
               </button>
-
-              {/* Delete */}
               <button
-                onClick={() => {
-                  if (confirm(`Remove layer "${layer.name}"?`)) removeDrawLayer(layer.id);
-                }}
-                className="text-[11px] text-white/20 transition hover:text-red-400/70"
+                onClick={() => { if (confirm(`Remove layer "${layer.name}"?`)) removeDrawLayer(layer.id); }}
+                className="text-[11px] text-white/25 transition hover:text-red-400/70"
                 title="Delete layer"
               >
                 ✕
@@ -209,67 +220,53 @@ function MapLayersSection() {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export function SituationReport() {
-  const store = useCrisisStore();
+  const inc = useActiveIncident();
+  const update = useCrisisStore((s) => s.update);
+
+  if (!inc) return null;
 
   return (
     <div className="space-y-6">
 
       {/* Row 1: Executive Summary + Incident Information */}
-      <div className="grid grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
 
-        {/* Executive Summary */}
         <section className="flex flex-col">
-          <h3 className="mb-2.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white/30">
-            Executive Summary
-          </h3>
+          <h3 className="mb-2.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white/35">Executive Summary</h3>
           <textarea
-            className="flex-1 resize-none rounded-lg border border-white/10 bg-white/4 px-3.5 py-3 text-[13px] leading-relaxed text-white/80 placeholder-white/20 outline-none transition focus:border-white/20 focus:bg-white/5"
+            className="flex-1 resize-none rounded-lg border border-white/12 bg-white/8 px-3.5 py-3 text-[13px] leading-relaxed text-white/85 placeholder-white/30 outline-none transition focus:border-white/25 focus:bg-white/12"
             placeholder="Provide a concise summary of the incident, current situation, key impacts, and priority actions required. Update as conditions evolve."
-            value={store.executiveSummary}
-            onChange={(e) => store.update({ executiveSummary: e.target.value })}
-            rows={9}
+            value={inc.executiveSummary}
+            onChange={(e) => update({ executiveSummary: e.target.value })}
+            rows={8}
           />
         </section>
 
-        {/* Incident Information */}
         <section>
-          <h3 className="mb-2.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white/30">
-            Incident Information
-          </h3>
-          <div className="space-y-2.5 rounded-lg border border-white/10 bg-white/4 p-4">
-
+          <h3 className="mb-2.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white/35">Incident Information</h3>
+          <div className="space-y-2.5 rounded-lg border border-white/12 bg-white/8 p-4">
             <FieldRow label="Name">
-              <TextInput
-                value={store.incidentName}
-                onChange={(v) => store.update({ incidentName: v })}
-                placeholder="e.g. Maui Wildfire Complex"
-              />
+              <TextInput value={inc.incidentName} onChange={(v) => update({ incidentName: v })} placeholder="e.g. Maui Wildfire Complex" />
             </FieldRow>
 
             <FieldRow label="Date / Time">
               <input
                 type="datetime-local"
-                className="flex-1 rounded border border-white/8 bg-white/5 px-2.5 py-1.5 text-[12px] text-white/80 outline-none transition focus:border-white/20 focus:bg-white/8"
-                value={store.incidentDatetime}
-                onChange={(e) => store.update({ incidentDatetime: e.target.value })}
+                className="flex-1 rounded border border-white/10 bg-white/10 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25 focus:bg-white/15"
+                value={inc.incidentDatetime}
+                onChange={(e) => update({ incidentDatetime: e.target.value })}
               />
             </FieldRow>
 
             <FieldRow label="Location">
-              <TextInput
-                value={store.incidentLocation}
-                onChange={(v) => store.update({ incidentLocation: v })}
-                placeholder="Affected area or address"
-              />
+              <TextInput value={inc.incidentLocation} onChange={(v) => update({ incidentLocation: v })} placeholder="Affected area or address" />
             </FieldRow>
 
             <FieldRow label="Type">
               <select
-                className="flex-1 rounded border border-white/8 bg-ink-900 px-2.5 py-1.5 text-[12px] text-white/80 outline-none transition focus:border-white/20"
-                value={store.incidentType}
-                onChange={(e) =>
-                  store.update({ incidentType: e.target.value as IncidentType })
-                }
+                className="flex-1 rounded border border-white/10 bg-ink-900 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25"
+                value={inc.incidentType}
+                onChange={(e) => update({ incidentType: e.target.value as IncidentType })}
               >
                 {INCIDENT_TYPES.map(({ value, label }) => (
                   <option key={value} value={value}>{label}</option>
@@ -282,11 +279,11 @@ export function SituationReport() {
                 {(['active', 'contained', 'resolved'] as const).map((s) => (
                   <button
                     key={s}
-                    onClick={() => store.update({ incidentStatus: s })}
+                    onClick={() => update({ incidentStatus: s })}
                     className={`rounded-full border px-3 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition ${
-                      store.incidentStatus === s
+                      inc.incidentStatus === s
                         ? STATUS_STYLES[s]
-                        : 'border-white/10 text-white/30 hover:border-white/20 hover:text-white/50'
+                        : 'border-white/12 text-white/35 hover:border-white/25 hover:text-white/55'
                     }`}
                   >
                     {s}
@@ -294,7 +291,6 @@ export function SituationReport() {
                 ))}
               </div>
             </FieldRow>
-
           </div>
         </section>
       </div>
@@ -302,12 +298,8 @@ export function SituationReport() {
       {/* ICS / NIMS Org Chart */}
       <section>
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/30">
-            ICS / NIMS Organizational Structure
-          </h3>
-          <span className="text-[9px] text-white/20">
-            Click any role to assign personnel or edit
-          </span>
+          <h3 className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/35">ICS / NIMS Organizational Structure</h3>
+          <span className="text-[9px] text-white/25">Click any role to assign personnel or edit</span>
         </div>
         <div className="rounded-lg border border-white/8 bg-ink-950/60 px-6 py-5">
           <IcsOrgChart />

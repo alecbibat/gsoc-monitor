@@ -270,9 +270,8 @@ function MeasureButton() {
 function CrisisButton() {
   const toggle       = useCrisisStore((s) => s.toggle);
   const open         = useCrisisStore((s) => s.open);
-  const status       = useCrisisStore((s) => s.incidentStatus);
-  const incidentName = useCrisisStore((s) => s.incidentName);
-  const isActive     = status === 'active' && incidentName !== '';
+  const activeCount  = useCrisisStore((s) => s.incidents.filter((i) => i.incidentStatus === 'active').length);
+  const isActive     = activeCount > 0;
 
   return (
     <button
@@ -309,6 +308,11 @@ function CrisisButton() {
         <line x1="12" y1="17" x2="12.01" y2="17" />
       </svg>
       <span className="text-[11px] font-bold uppercase tracking-[0.1em]">Crisis</span>
+      {isActive && (
+        <span className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500/30 px-1 text-[9px] font-bold text-red-300">
+          {activeCount}
+        </span>
+      )}
     </button>
   );
 }

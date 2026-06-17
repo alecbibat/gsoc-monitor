@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  useCrisisStore,
+  useCrisisStore, selectActive,
   type IcsRole,
   IC_COLOR, CMD_COLOR, OPS_COLOR, PLAN_COLOR, LOG_COLOR, FIN_COLOR,
 } from './crisisStore';
@@ -77,7 +77,7 @@ function NodeCard({
   onSelect: () => void;
 }) {
   const activeAssignment = useCrisisStore((s) =>
-    s.assignments.find((a) => a.roleId === role.id && !a.endedAt)
+    selectActive(s)?.assignments.find((a) => a.roleId === role.id && !a.endedAt)
   );
 
   return (
@@ -123,9 +123,9 @@ function RoleSubtree({
   depth?: number;
 }) {
   const [kidsCollapsed, setKidsCollapsed] = useState(depth >= 1);
-  const role = useCrisisStore((s) => s.roles.find((r) => r.id === roleId));
+  const role = useCrisisStore((s) => selectActive(s)?.roles.find((r) => r.id === roleId));
   const allChildren = useCrisisStore((s) =>
-    s.roles.filter((r) => r.parentId === roleId).sort((a, b) => a.order - b.order)
+    (selectActive(s)?.roles ?? []).filter((r) => r.parentId === roleId).sort((a, b) => a.order - b.order)
   );
 
   if (!role) return null;
@@ -198,14 +198,18 @@ function RoleSubtree({
 // ── Edit panel ────────────────────────────────────────────────────────────────
 
 function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void }) {
-  const role = useCrisisStore((s) => s.roles.find((r) => r.id === roleId));
+  const role = useCrisisStore((s) => selectActive(s)?.roles.find((r) => r.id === roleId));
   const assignments = useCrisisStore((s) =>
-    s.assignments.filter((a) => a.roleId === roleId).sort(
+    (selectActive(s)?.assignments ?? []).filter((a) => a.roleId === roleId).sort(
       (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
     )
   );
-  const roles = useCrisisStore((s) => s.roles);
-  const { updateRole, removeRole, assignRole, endAssignment, addRole } = useCrisisStore();
+  const roles = useCrisisStore((s) => selectActive(s)?.roles ?? []);
+  const updateRole    = useCrisisStore((s) => s.updateRole);
+  const removeRole    = useCrisisStore((s) => s.removeRole);
+  const assignRole    = useCrisisStore((s) => s.assignRole);
+  const endAssignment = useCrisisStore((s) => s.endAssignment);
+  const addRole       = useCrisisStore((s) => s.addRole);
 
   const [nameInput, setNameInput] = useState('');
   const [orgInput, setOrgInput] = useState('');
@@ -266,14 +270,14 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
       {/* Title + abbrev */}
       <div className="space-y-1.5">
         <input
-          className="w-full rounded border border-white/8 bg-white/5 px-2 py-1 text-[12px] text-white/80 outline-none focus:border-white/20"
+          className="w-full rounded border border-white/8 bg-white/10 px-2 py-1 text-[12px] text-white/80 outline-none focus:border-white/20"
           value={role.title}
           disabled={role.builtin}
           onChange={(e) => updateRole(roleId, { title: e.target.value })}
           placeholder="Role title"
         />
         <input
-          className="w-full rounded border border-white/8 bg-white/5 px-2 py-1 text-[10px] text-white/60 outline-none focus:border-white/20"
+          className="w-full rounded border border-white/8 bg-white/10 px-2 py-1 text-[10px] text-white/60 outline-none focus:border-white/20"
           value={role.abbrev ?? ''}
           disabled={role.builtin}
           onChange={(e) => updateRole(roleId, { abbrev: e.target.value || undefined })}
@@ -308,7 +312,7 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
           {activeAssignment ? 'Reassign' : 'Assign Personnel'}
         </p>
         {activeAssignment && (
-          <div className="mb-2 flex items-center justify-between rounded border border-white/8 bg-white/5 px-2 py-1.5">
+          <div className="mb-2 flex items-center justify-between rounded border border-white/8 bg-white/10 px-2 py-1.5">
             <div>
               <p className="text-[11px] text-white/80">{activeAssignment.name}</p>
               {activeAssignment.organization && (
@@ -324,14 +328,14 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
           </div>
         )}
         <input
-          className="mb-1 w-full rounded border border-white/8 bg-white/5 px-2 py-1 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
+          className="mb-1 w-full rounded border border-white/8 bg-white/10 px-2 py-1 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
           placeholder="Full name"
           value={nameInput}
           onChange={(e) => setNameInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleAssign()}
         />
         <input
-          className="mb-2 w-full rounded border border-white/8 bg-white/5 px-2 py-1 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
+          className="mb-2 w-full rounded border border-white/8 bg-white/10 px-2 py-1 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
           placeholder="Organization (optional)"
           value={orgInput}
           onChange={(e) => setOrgInput(e.target.value)}
@@ -376,13 +380,13 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
           <div className="space-y-1.5 rounded border border-white/10 bg-white/3 p-2">
             <p className="text-[9px] font-bold uppercase tracking-wider text-white/35">New Sub-role</p>
             <input
-              className="w-full rounded border border-white/8 bg-white/5 px-2 py-1 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
+              className="w-full rounded border border-white/8 bg-white/10 px-2 py-1 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
               placeholder="Title"
               value={childTitle}
               onChange={(e) => setChildTitle(e.target.value)}
             />
             <input
-              className="w-full rounded border border-white/8 bg-white/5 px-2 py-1 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
+              className="w-full rounded border border-white/8 bg-white/10 px-2 py-1 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
               placeholder="Abbreviation"
               value={childAbbrev}
               onChange={(e) => setChildAbbrev(e.target.value)}
@@ -449,7 +453,7 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
 export function IcsOrgChart() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const rootRoles = useCrisisStore((s) =>
-    s.roles.filter((r) => r.parentId === null).sort((a, b) => a.order - b.order)
+    (selectActive(s)?.roles ?? []).filter((r) => r.parentId === null).sort((a, b) => a.order - b.order)
   );
 
   const handleSelect = (id: string) => {

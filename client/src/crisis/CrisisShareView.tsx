@@ -245,7 +245,7 @@ export function CrisisShareView({ token }: { token: string }) {
                 <div key={layer.id} className="flex items-center gap-2 rounded border border-white/6 bg-white/3 px-3 py-2">
                   <div className="h-3 w-3 shrink-0 rounded-full" style={{ background: layer.color }} />
                   <span className="text-[11px] text-white/70">{layer.name}</span>
-                  <span className="text-[9px] text-white/30">{layer.type}</span>
+                  <span className="text-[9px] text-white/30">{layer.type} · {layer.geometry}</span>
                   <span className="ml-auto text-[9px] text-white/25">{layer.positions.length} points</span>
                 </div>
               ))}

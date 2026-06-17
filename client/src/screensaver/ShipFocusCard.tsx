@@ -34,7 +34,7 @@ export function ShipFocusCard() {
 
   return (
     <div
-      className={`pointer-events-none absolute bottom-14 left-1/2 z-30 w-[min(400px,calc(100vw-2rem))] -translate-x-1/2 transition-all duration-500 ${
+      className={`pointer-events-none absolute bottom-36 left-1/2 z-30 w-[min(400px,calc(100vw-2rem))] -translate-x-1/2 transition-all duration-500 ${
         visible ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
       }`}
     >
