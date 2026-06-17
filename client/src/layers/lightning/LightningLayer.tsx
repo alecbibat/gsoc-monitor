@@ -94,9 +94,9 @@ const RING_COLOR = hex('#bfe9ff'); // pale shockwave
 // detected the flash. Drawing a faint line from each sensor to the strike
 // point reproduces the classic lightningmaps.org "detector" view. Optional —
 // off by default, since a busy storm multiplies the line count.
-const DETECTOR_LIFE_MS = 600; // detector lines fade out fast (~0.6s)
-const DETECTOR_COLOR = hex('#8fe8ff'); // pale cyan signal line
-const MAX_DETECTORS_PER_STRIKE = 14; // cap stations drawn per strike
+const DETECTOR_LIFE_MS = 850; // fade fast, but linger long enough to register
+const DETECTOR_COLOR = hex('#9fefff'); // pale cyan signal line
+const MAX_DETECTORS_PER_STRIKE = 8; // nearest N stations only — fewer, cleaner lines
 // Each strike draws its own short-lived lines; many can overlap during a storm,
 // so keep a generous cap. The quick fade keeps them from piling up.
 const MAX_DETECTOR_GROUPS = 60;
@@ -240,9 +240,14 @@ export function LightningLayer() {
       return RING_COLOR.withAlpha(Math.max(0, 0.45 * (1 - p)));
     };
 
+    // Quick fade-in then a smooth fade-out so each line reads cleanly instead of
+    // snapping on and abruptly vanishing.
     const detectorAlpha = (start: number): number => {
       const p = Math.min(1, (performance.now() - start) / DETECTOR_LIFE_MS);
-      return Math.max(0, 0.6 * (1 - p)); // bright pop, then a quick fade to 0
+      const PEAK = 0.75;
+      const RISE = 0.15;
+      const env = p < RISE ? p / RISE : 1 - (p - RISE) / (1 - RISE);
+      return Math.max(0, PEAK * env);
     };
 
     const animate = () => {
@@ -274,9 +279,17 @@ export function LightningLayer() {
       lat: number,
       sig: Array<{ lat?: number; lon?: number }>
     ) => {
+      // Draw lines only to the nearest contributing stations — fewer, more
+      // relevant lines read far cleaner than the full sensor list crisscrossing
+      // the globe.
       const stations = sig
-        .filter((s) => typeof s.lat === 'number' && typeof s.lon === 'number')
-        .slice(0, MAX_DETECTORS_PER_STRIKE);
+        .filter((s): s is { lat: number; lon: number } => {
+          return typeof s.lat === 'number' && typeof s.lon === 'number';
+        })
+        .map((s) => ({ s, d: (s.lat - lat) ** 2 + (s.lon - lon) ** 2 }))
+        .sort((a, b) => a.d - b.d)
+        .slice(0, MAX_DETECTORS_PER_STRIKE)
+        .map((x) => x.s);
       if (stations.length === 0) return;
 
       // Evict the oldest group only if we're at the concurrency cap.
@@ -291,8 +304,8 @@ export function LightningLayer() {
       for (const st of stations) {
         const line = ds.entities.add({
           polyline: {
-            positions: [Cesium.Cartesian3.fromDegrees(st.lon!, st.lat!), strikePos],
-            width: 1,
+            positions: [Cesium.Cartesian3.fromDegrees(st.lon, st.lat), strikePos],
+            width: 1.5,
             arcType: Cesium.ArcType.GEODESIC, // follow the curve over long baselines
             material: new Cesium.ColorMaterialProperty(
               new Cesium.CallbackProperty(() => DETECTOR_COLOR.withAlpha(detectorAlpha(start)), false)
