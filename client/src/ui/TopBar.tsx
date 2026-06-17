@@ -69,20 +69,33 @@ function LiveClock() {
   );
 }
 
-function relativeDeploy(iso: string): { rel: string; abs: string } {
+function formatDeploy(iso: string): { local: string; tz: string; rel: string; full: string } {
   const then = new Date(iso);
-  const abs = then.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  // Local date + 24h time, e.g. "Jun 17, 22:09" — converted to the viewer's
+  // own timezone from the UTC build timestamp.
+  const local = then.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const tz =
+    new Intl.DateTimeFormat([], { timeZoneName: 'short' })
+      .formatToParts(then)
+      .find((p) => p.type === 'timeZoneName')?.value ?? '';
   const sec = Math.max(0, (Date.now() - then.getTime()) / 1000);
   let rel: string;
   if (sec < 60) rel = 'just now';
   else if (sec < 3600) rel = `${Math.floor(sec / 60)}m ago`;
   else if (sec < 86_400) rel = `${Math.floor(sec / 3600)}h ago`;
   else rel = `${Math.floor(sec / 86_400)}d ago`;
-  return { rel, abs };
+  const full = then.toLocaleString([], { dateStyle: 'full', timeStyle: 'long' });
+  return { local, tz, rel, full };
 }
 
 // Shows when the currently-served build was deployed (build timestamp baked in
-// by Vite). Refreshes the relative label every minute.
+// by Vite), in the viewer's local time. Refreshes the relative label every minute.
 function DeployStamp() {
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -91,18 +104,22 @@ function DeployStamp() {
   }, []);
 
   const iso = typeof __BUILD_TIME__ === 'string' ? __BUILD_TIME__ : new Date().toISOString();
-  const { rel, abs } = relativeDeploy(iso);
+  const { local, tz, rel, full } = formatDeploy(iso);
 
   return (
     <div
       className="pointer-events-auto hidden items-center gap-1.5 rounded-lg border border-white/10 bg-ink-900/80 px-2.5 py-2 shadow-panel backdrop-blur-sm sm:flex"
-      title={`Latest deploy: ${abs}`}
+      title={`Latest deploy: ${full} (${rel})`}
     >
       <span className="h-1.5 w-1.5 rounded-full bg-accent-ok/70" />
       <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
         deployed
       </span>
-      <span className="font-mono text-[11px] font-semibold text-white/70">{rel}</span>
+      <span className="font-mono text-[11px] font-semibold tabular-nums text-white/75">
+        {local}
+        {tz ? ` ${tz}` : ''}
+      </span>
+      <span className="text-[10px] font-medium text-white/35">· {rel}</span>
     </div>
   );
 }
