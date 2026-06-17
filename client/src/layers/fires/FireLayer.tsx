@@ -4,6 +4,7 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { useFiresStatus } from './firesStore';
+import { LOCATION_GROUPS } from '../locations/locations';
 
 // NASA FIRMS VIIRS active-fire detections, served (no API key) through Esri's
 // CORS-enabled Living Atlas feature service and queried by viewport so the
@@ -14,6 +15,44 @@ const SERVICE =
 
 const MAX_FIRES = 2500; // strongest-by-FRP hotspots we draw at once
 const FALLBACK_LAYER_ID = 0; // "past 24 hrs" sublayer if name discovery fails
+
+// "Only near pins" filter. When enabled in the UI we ignore the viewport and
+// instead query a fixed box around each location group, then keep only hotspots
+// within 50 statute miles of an actual pin — so the alert works at any zoom.
+const FIFTY_MILES_M = 80_467;
+
+const ALL_PINS: Array<[number, number]> = LOCATION_GROUPS.flatMap((g) =>
+  g.locations.map((l) => [l.lon, l.lat] as [number, number])
+);
+
+function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6_371_000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function nearAnyPin(lat: number, lon: number): boolean {
+  return ALL_PINS.some(([plon, plat]) => haversineM(lat, lon, plat, plon) <= FIFTY_MILES_M);
+}
+
+// One padded query envelope per location group (a group is often a single pin).
+// Padding a little past 50 mi keeps the precise per-point filter above honest.
+const PIN_ENVELOPES: string[] = LOCATION_GROUPS.map((g) => {
+  const lats = g.locations.map((l) => l.lat);
+  const lons = g.locations.map((l) => l.lon);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLon = Math.min(...lons);
+  const maxLon = Math.max(...lons);
+  const latPad = 50 / 69; // ~0.72° per 50 mi
+  const maxAbsLat = Math.max(Math.abs(minLat), Math.abs(maxLat));
+  const lonPad = Math.min(3, 50 / (69 * Math.cos((maxAbsLat * Math.PI) / 180)));
+  return `${minLon - lonPad},${minLat - latPad},${maxLon + lonPad},${maxLat + latPad}`;
+});
 
 interface ServiceLayer {
   id: number;
@@ -102,6 +141,7 @@ function debounce<T extends (...args: never[]) => void>(fn: T, ms: number) {
 export function FireLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.fires);
+  const nearPinsOnly = useLayersStore((s) => s.firesNearPinsOnly);
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
   const layerIdRef = useRef<number | null>(null);
 
@@ -127,6 +167,7 @@ export function FireLayer() {
     }
 
     let cancelled = false;
+    let lastErr: unknown = null;
 
     // Discover the "past 24 hrs" sublayer once, by name, with an index fallback.
     const resolveLayerId = async (): Promise<number> => {
@@ -149,30 +190,20 @@ export function FireLayer() {
       return layerIdRef.current;
     };
 
-    const load = async () => {
-      const layerId = await resolveLayerId();
-      if (cancelled) return;
-
-      const rect = viewer.camera.computeViewRectangle();
-      const xmin = rect ? Cesium.Math.toDegrees(rect.west) : -180;
-      const xmax = rect ? Cesium.Math.toDegrees(rect.east) : 180;
-      const ymin = rect ? Cesium.Math.toDegrees(rect.south) : -90;
-      const ymax = rect ? Cesium.Math.toDegrees(rect.north) : 90;
-      const envelope = `${xmin},${ymin},${xmax},${ymax}`;
-
+    // Fetch + parse one ArcGIS envelope; returns null only on a hard failure.
+    const fetchEnvelope = async (
+      layerId: number,
+      envelope: string
+    ): Promise<GeoJSON.Feature[] | null> => {
       const base =
         `${SERVICE}/${layerId}/query?where=1%3D1` +
         `&geometry=${encodeURIComponent(envelope)}&geometryType=esriGeometryEnvelope` +
         `&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&outSR=4326` +
         `&resultRecordCount=${MAX_FIRES}&f=geojson`;
-
-      // Prefer the strongest fires first (matters only when we hit the cap at
-      // global zoom), but don't let a schema surprise on that field break the
-      // whole layer — fall back to an unordered query.
+      // Prefer the strongest fires first (matters only when we hit the cap), but
+      // don't let a schema surprise on that field break the layer — fall back to
+      // an unordered query.
       const candidates = [`${base}&orderByFields=frp%20DESC`, base];
-
-      let features: GeoJSON.Feature[] | null = null;
-      let lastErr: unknown = null;
       for (const url of candidates) {
         try {
           const r = await fetch(url);
@@ -181,12 +212,55 @@ export function FireLayer() {
             continue;
           }
           const j = (await r.json()) as { features?: GeoJSON.Feature[] };
-          features = j.features ?? [];
-          break;
+          return j.features ?? [];
         } catch (err) {
           lastErr = err;
         }
       }
+      return null;
+    };
+
+    const load = async () => {
+      const layerId = await resolveLayerId();
+      if (cancelled) return;
+
+      let features: GeoJSON.Feature[] | null;
+
+      if (nearPinsOnly) {
+        // Query a fixed box around each pin group (independent of the camera),
+        // then keep only hotspots truly within 50 mi of a pin.
+        const results = await Promise.all(
+          PIN_ENVELOPES.map((env) => fetchEnvelope(layerId, env))
+        );
+        if (cancelled) return;
+        if (results.every((r) => r === null)) {
+          features = null; // every region failed — surface the error
+        } else {
+          const seen = new Set<string>();
+          features = [];
+          for (const r of results) {
+            if (!r) continue;
+            for (const f of r) {
+              if (f.geometry?.type !== 'Point') continue;
+              const [lon, lat] = f.geometry.coordinates as [number, number];
+              if (!nearAnyPin(lat, lon)) continue;
+              // Adjacent group boxes can overlap, so dedupe by position.
+              const key = `${lon.toFixed(4)},${lat.toFixed(4)}`;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              features.push(f);
+            }
+          }
+        }
+      } else {
+        const rect = viewer.camera.computeViewRectangle();
+        const xmin = rect ? Cesium.Math.toDegrees(rect.west) : -180;
+        const xmax = rect ? Cesium.Math.toDegrees(rect.east) : 180;
+        const ymin = rect ? Cesium.Math.toDegrees(rect.south) : -90;
+        const ymax = rect ? Cesium.Math.toDegrees(rect.north) : 90;
+        features = await fetchEnvelope(layerId, `${xmin},${ymin},${xmax},${ymax}`);
+      }
+
       if (cancelled) return;
       if (features == null) {
         console.error('FIRMS fire feed fetch failed', lastErr);
@@ -237,7 +311,7 @@ export function FireLayer() {
 
       useFiresStatus.getState().setStatus({
         count: drawn,
-        capped: drawn >= MAX_FIRES,
+        capped: !nearPinsOnly && drawn >= MAX_FIRES,
         error: null,
       });
       viewer.scene.requestRender();
@@ -245,15 +319,16 @@ export function FireLayer() {
 
     load();
     const debouncedLoad = debounce(load, 800);
-    viewer.camera.moveEnd.addEventListener(debouncedLoad);
+    // In near-pins mode the regions are fixed, so we don't refetch on pan/zoom.
+    if (!nearPinsOnly) viewer.camera.moveEnd.addEventListener(debouncedLoad);
     const interval = setInterval(load, 5 * 60_000);
 
     return () => {
       cancelled = true;
       clearInterval(interval);
-      viewer.camera.moveEnd.removeEventListener(debouncedLoad);
+      if (!nearPinsOnly) viewer.camera.moveEnd.removeEventListener(debouncedLoad);
     };
-  }, [viewer, active]);
+  }, [viewer, active, nearPinsOnly]);
 
   return null;
 }

@@ -34,6 +34,8 @@ export function Sidebar() {
   const shipFavorites = useLayersStore((s) => s.shipFavorites);
   const shipPaths = useLayersStore((s) => s.shipPaths);
   const setShipPaths = useLayersStore((s) => s.setShipPaths);
+  const firesNearPinsOnly = useLayersStore((s) => s.firesNearPinsOnly);
+  const setFiresNearPinsOnly = useLayersStore((s) => s.setFiresNearPinsOnly);
   const flightsStatus = useFlightsStatus();
   const alertsStatus = useAlertsStatus();
   const hurricanesStatus = useHurricanesStatus();
@@ -129,11 +131,23 @@ export function Sidebar() {
             onToggle={() => toggleLayer('fires')}
             statusText={
               firesStatus.error ??
-              `${firesStatus.count.toLocaleString()} hotspots${
-                firesStatus.capped ? ' (top 2,500)' : ''
-              } · 24h`
+              (firesNearPinsOnly
+                ? `${firesStatus.count.toLocaleString()} hotspots within 50 mi of pins · 24h`
+                : `${firesStatus.count.toLocaleString()} hotspots${
+                    firesStatus.capped ? ' (top 2,500)' : ''
+                  } · 24h`)
             }
-          />
+          >
+            <label className="flex items-center gap-2 pt-1 text-[11px] text-white/60">
+              <input
+                type="checkbox"
+                checked={firesNearPinsOnly}
+                onChange={(e) => setFiresNearPinsOnly(e.target.checked)}
+                className="accent-accent"
+              />
+              Only near pins (50 mi)
+            </label>
+          </LayerToggle>
         </Section>
 
         <Section title="Tracking">
