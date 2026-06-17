@@ -23,6 +23,7 @@ import { NationalParksController } from './screensaver/NationalParksController';
 import { IssController } from './screensaver/IssController';
 import { PinsController } from './screensaver/PinsController';
 import { PinsContextBox } from './screensaver/PinsContextBox';
+import { ScreensaverWatchCards } from './screensaver/ScreensaverWatchCards';
 import { GoogleEarthLayer } from './layers/earth3d/GoogleEarthLayer';
 import { OsmBuildingsLayer } from './layers/osmBuildings/OsmBuildingsLayer';
 import { TrafficLayer } from './layers/traffic/TrafficLayer';
@@ -67,6 +68,7 @@ export default function App() {
         <IssController />
         <PinsController />
         <PinsContextBox />
+        <ScreensaverWatchCards />
         <ScreensaverToast />
         <MeasureOverlay />
         <PickChooser />

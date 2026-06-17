@@ -5,9 +5,11 @@ import { useScreensaverStore } from '../../screensaver/screensaverStore';
 import { useNewsStore } from './newsStore';
 
 // A horizontally-scrolling headline ticker pinned to the bottom of the screen.
-// Shown only while the Breaking News panel is closed (the panel and the ticker
-// are two views of the same feed). It keeps the shared news store fresh on its
-// own interval so headlines are live even if the panel has never been opened.
+// Shown while the Breaking News panel is closed (the panel and the ticker are
+// two views of the same feed), and also kept up during the pins screensaver so
+// the property tour still surfaces live headlines along the bottom. It keeps the
+// shared news store fresh on its own interval so headlines are live even if the
+// panel has never been opened.
 const REFRESH_MS = 5 * 60_000;
 
 const SEVERITY_DOT: Record<string, string> = {
@@ -27,11 +29,14 @@ export function NewsTicker() {
   const newsPanelOpen = usePanelStore((s) => s.panels.some((p) => p.kind === 'news-feed'));
   const openPanel = usePanelStore((s) => s.open);
   const screensaverActive = useScreensaverStore((s) => s.active);
+  const screensaverMode = useScreensaverStore((s) => s.mode);
 
-  // The ticker is the active news consumer only while the panel is closed and
-  // the screensaver isn't running; fetch on its own cadence in that case so it
-  // doesn't double-fetch against the panel's own loop.
-  const active = !newsPanelOpen && !screensaverActive;
+  // The ticker is the active news consumer while the panel is closed and either
+  // the screensaver is off or we're in the pins (property-tour) screensaver. It
+  // fetches on its own cadence in that case so it doesn't double-fetch against
+  // the panel's own loop. Other screensaver modes hide it to keep the scene clean.
+  const inPins = screensaverActive && screensaverMode === 'pins';
+  const active = !newsPanelOpen && (!screensaverActive || inPins);
 
   useEffect(() => {
     if (!active) return;
@@ -64,7 +69,13 @@ export function NewsTicker() {
   const loop = [...visible, ...visible];
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-10 md:left-72">
+    // In pins mode the bottom-right corner holds the context minimap + watch
+    // column, so pull the ticker's right edge in (desktop only) to clear it.
+    <div
+      className={`fixed bottom-0 left-0 right-0 z-10 md:left-72 ${
+        inPins ? 'md:right-[280px]' : ''
+      }`}
+    >
       <div className="flex h-9 items-center border-t border-white/10 bg-ink-900/85 backdrop-blur-sm">
         {/* Label — click to open the full Breaking News panel. */}
         <button

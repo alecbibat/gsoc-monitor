@@ -85,3 +85,19 @@ body {
 .animate-marquee:hover {
   animation-play-state: paused;
 }
+
+/* Vertical credits-roll for the screensaver property-watch column. Content is
+   duplicated with a symmetric trailing gap, so translating one block (-50%)
+   loops with no visible seam. */
+@keyframes marquee-vertical {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-50%);
+  }
+}
+
+.animate-marquee-vertical {
+  animation: marquee-vertical linear infinite;
+}
