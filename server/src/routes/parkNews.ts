@@ -44,9 +44,23 @@ interface NpsNewsRelease {
   url?: string;
   title?: string;
   abstract?: string;
+  // The newsreleases endpoint (unlike /alerts) does not carry a top-level
+  // parkCode — the park reference lives in relatedParks[]. We keep parkCode
+  // as an optional fallback in case the shape ever changes.
   parkCode?: string;
+  relatedParks?: Array<{ parkCode?: string }>;
   releaseDate?: string;
   image?: { url?: string } | null;
+}
+
+// Resolve a news release to one of our tracked parks. Scans relatedParks[]
+// first (the documented location), then falls back to a top-level parkCode.
+function trackedParkFor(n: NpsNewsRelease): (typeof PARKS)[number] | undefined {
+  for (const rp of n.relatedParks ?? []) {
+    const hit = PARK_BY_CODE.get(rp.parkCode ?? '');
+    if (hit) return hit;
+  }
+  return PARK_BY_CODE.get(n.parkCode ?? '');
 }
 
 interface NpsAlert {
@@ -96,7 +110,7 @@ async function fetchAllNewsReleases(): Promise<ParkItem[]> {
   const rows = data.data ?? [];
   const items: ParkItem[] = [];
   for (const n of rows) {
-    const park = PARK_BY_CODE.get(n.parkCode ?? '');
+    const park = trackedParkFor(n);
     if (!park) continue;
     const when = n.releaseDate ? Date.parse(n.releaseDate) : NaN;
     const url = (n.url ?? '').trim();
@@ -145,7 +159,7 @@ async function fetchAllAlerts(): Promise<ParkItem[]> {
   return items;
 }
 
-const CACHE_KEY = 'park-news:v3';
+const CACHE_KEY = 'park-news:v4';
 const SUCCESS_TTL = 10 * 60_000;
 let lastGood: { items: ParkItem[]; updated: number } | null = null;
 
