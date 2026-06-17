@@ -30,6 +30,7 @@ import { TimeZonesLayer } from './layers/timezones/TimeZonesLayer';
 import { MeasureController } from './measure/MeasureController';
 import { MeasureOverlay } from './measure/MeasureOverlay';
 import { ScreensaverToast } from './screensaver/ScreensaverToast';
+import { NewsTicker } from './widgets/news/NewsTicker';
 
 export default function App() {
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
@@ -69,6 +70,7 @@ export default function App() {
         <ScreensaverToast />
         <MeasureOverlay />
         <PickChooser />
+        <NewsTicker />
       </div>
     </CesiumContext.Provider>
   );
