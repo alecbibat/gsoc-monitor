@@ -19,8 +19,9 @@ export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starli
 // Standalone dockable widgets that aren't tied to a clicked map entity.
 export type WidgetId = 'pentagon-pizza' | 'news-feed' | 'fear-greed' | 'defcon' | 'proximity';
 
-// Anything that can occupy a dockable panel.
-export type PanelKind = LayerId | WidgetId;
+// Anything that can occupy a dockable panel. 'property-watch' is a popped-out
+// single-property hazard window spawned from the Property Watch widget.
+export type PanelKind = LayerId | WidgetId | 'property-watch';
 
 export type BasemapId = 'dark' | 'light' | 'satellite' | 'topo';
 

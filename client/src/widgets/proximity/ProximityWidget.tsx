@@ -1,71 +1,31 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { flyToLonLat } from '../../cesium/flyTo';
 import { MILES_TO_M } from '../../lib/geo';
-import { scanProximity, type PropertyHazards, type ScanResult } from './proximityScan';
+import { usePanelStore } from '../../panels/panelStore';
+import type { PropertyHazards } from './proximityScan';
+import { useProximityStore } from './proximityStore';
 import { LightningTicker } from './LightningTicker';
+import { HazardRows } from './HazardRows';
+import { timeAgo } from './format';
 
 const RADII = [50, 100, 200] as const;
 const REFRESH_MS = 5 * 60_000;
 
-function timeAgo(ms: number): string {
-  const diff = Date.now() - ms;
-  if (diff < 60_000) return 'just now';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return `${Math.floor(diff / 86_400_000)}d ago`;
-}
-
-function expiresText(iso: string): string | null {
-  if (!iso) return null;
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return null;
-  const diff = t - Date.now();
-  if (diff <= 0) return 'expiring';
-  if (diff < 3_600_000) return `${Math.max(1, Math.round(diff / 60_000))}m left`;
-  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h left`;
-  return `${Math.round(diff / 86_400_000)}d left`;
-}
-
-function fmtMiles(mi: number): string {
-  return mi < 10 ? mi.toFixed(1) : Math.round(mi).toString();
-}
-
-// Matches the earthquake layer's magnitude-tier palette.
-function quakeColor(mag: number): string {
-  if (mag >= 6) return '#ff5d5d';
-  if (mag >= 4.5) return '#ffb84d';
-  if (mag >= 2.5) return '#ffe14d';
-  return '#52e3a4';
-}
-
 export function ProximityWidget() {
   const viewer = useCesiumViewer();
-  const [radiusMi, setRadiusMi] = useState<number>(100);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [result, setResult] = useState<ScanResult | null>(null);
-  const [loading, setLoading] = useState(true);
-  const cancelledRef = useRef(false);
+  const radiusMi = useProximityStore((s) => s.radiusMi);
+  const setRadius = useProximityStore((s) => s.setRadius);
+  const result = useProximityStore((s) => s.result);
+  const loading = useProximityStore((s) => s.loading);
+  const scan = useProximityStore((s) => s.scan);
+  const openPanel = usePanelStore((s) => s.open);
 
   useEffect(() => {
-    cancelledRef.current = false;
-    setLoading(true);
-    const run = async () => {
-      try {
-        const r = await scanProximity(radiusMi);
-        if (cancelledRef.current) return;
-        setResult(r);
-      } finally {
-        if (!cancelledRef.current) setLoading(false);
-      }
-    };
-    run();
-    const id = setInterval(run, REFRESH_MS);
-    return () => {
-      cancelledRef.current = true;
-      clearInterval(id);
-    };
-  }, [radiusMi, refreshKey]);
+    scan();
+    const id = setInterval(() => scan(), REFRESH_MS);
+    return () => clearInterval(id);
+  }, [scan]);
 
   const affected = result?.properties ?? [];
   const downFeeds = result
@@ -84,6 +44,23 @@ export function ProximityWidget() {
     flyToLonLat(viewer, p.location.lon, p.location.lat, height);
   };
 
+  const popOut = (p: PropertyHazards) => {
+    openPanel({
+      id: `property-${p.key}`,
+      kind: 'property-watch',
+      title: p.location.name,
+      subtitle: p.group.name,
+      payload: {
+        key: p.key,
+        groupName: p.group.name,
+        groupIcon: p.group.icon,
+        name: p.location.name,
+        lat: p.location.lat,
+        lon: p.location.lon,
+      },
+    });
+  };
+
   return (
     <div className="flex flex-col gap-3">
       {/* Status line */}
@@ -99,7 +76,7 @@ export function ProximityWidget() {
           </span>
         )}
         <button
-          onClick={() => setRefreshKey((k) => k + 1)}
+          onClick={() => scan(true)}
           className="flex items-center gap-1 text-white/30 transition hover:text-white/60"
           title="Refresh now"
         >
@@ -117,7 +94,7 @@ export function ProximityWidget() {
           {RADII.map((r) => (
             <button
               key={r}
-              onClick={() => setRadiusMi(r)}
+              onClick={() => setRadius(r)}
               className={`flex-1 rounded-md border px-2 py-1 text-[11px] font-semibold transition ${
                 radiusMi === r
                   ? 'border-accent/50 bg-accent/15 text-accent'
@@ -170,85 +147,43 @@ export function ProximityWidget() {
       {/* Affected properties */}
       <div className="hud-scroll max-h-[440px] space-y-1.5 overflow-y-auto pr-1">
         {affected.map((p) => (
-          <button
+          <div
             key={p.key}
-            onClick={() => focus(p)}
-            className="group block w-full rounded-lg border border-white/5 bg-white/5 px-3 py-2.5 text-left transition hover:border-white/15 hover:bg-white/10"
+            className="group relative rounded-lg border border-white/5 bg-white/5 transition hover:border-white/15 hover:bg-white/10"
           >
-            {/* Property header */}
-            <div className="flex items-center gap-2">
-              <span aria-hidden className="text-[14px]">
-                {p.group.icon}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-white/85 group-hover:text-white">
-                {p.location.name}
-              </span>
-              <span className="shrink-0 text-[10px] text-white/30">{p.group.name}</span>
-            </div>
-
-            {/* Alert chips */}
-            {p.alerts.length > 0 && (
-              <div className="mt-1.5 flex flex-wrap gap-1">
-                {p.alerts.map((a) => {
-                  const left = expiresText(a.expires);
-                  return (
-                    <span
-                      key={a.id}
-                      className="flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium"
-                      style={{
-                        color: a.colorHex,
-                        borderColor: `${a.colorHex}55`,
-                        background: `${a.colorHex}14`,
-                      }}
-                      title={a.headline ?? a.areaDesc}
-                    >
-                      <span
-                        className="h-1.5 w-1.5 shrink-0 rounded-full"
-                        style={{ background: a.colorHex }}
-                      />
-                      {a.event}
-                      {left && <span className="text-white/35">· {left}</span>}
-                    </span>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Fire summary */}
-            {p.fires.length > 0 && (
-              <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-accent-warn/90">
-                <span aria-hidden>🔥</span>
-                <span>
-                  {p.fires.length} hotspot{p.fires.length > 1 ? 's' : ''} within {radiusMi} mi
-                  {p.nearestFireMi != null && (
-                    <span className="text-white/40"> · nearest {fmtMiles(p.nearestFireMi)} mi</span>
-                  )}
+            <button onClick={() => focus(p)} className="block w-full px-3 py-2.5 pr-9 text-left">
+              {/* Property header */}
+              <div className="flex items-center gap-2">
+                <span aria-hidden className="text-[14px]">
+                  {p.group.icon}
                 </span>
-              </div>
-            )}
-
-            {/* Earthquake summary */}
-            {p.quakes.length > 0 && (
-              <div
-                className="mt-1.5 flex items-center gap-1.5 text-[11px]"
-                style={{ color: quakeColor(p.maxQuakeMag ?? 0) }}
-                title={p.quakes
-                  .slice(0, 5)
-                  .map((q) => `M${q.mag.toFixed(1)} · ${q.place || 'unknown'} · ${timeAgo(q.time)}`)
-                  .join('\n')}
-              >
-                <span aria-hidden>◎</span>
-                <span>
-                  {p.quakes.length === 1
-                    ? `M${p.quakes[0].mag.toFixed(1)} earthquake`
-                    : `${p.quakes.length} earthquakes · max M${(p.maxQuakeMag ?? 0).toFixed(1)}`}
-                  {p.nearestQuakeMi != null && (
-                    <span className="text-white/40"> · nearest {fmtMiles(p.nearestQuakeMi)} mi</span>
-                  )}
+                <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-white/85 group-hover:text-white">
+                  {p.location.name}
                 </span>
+                <span className="shrink-0 text-[10px] text-white/30">{p.group.name}</span>
               </div>
-            )}
-          </button>
+
+              <HazardRows hazards={p} radiusMi={radiusMi} />
+            </button>
+
+            {/* Pop out into its own dockable window */}
+            <button
+              onClick={() => popOut(p)}
+              title="Pop out to window"
+              aria-label="Pop out to window"
+              className="absolute right-1.5 top-1.5 rounded p-1 text-white/30 transition hover:bg-white/10 hover:text-white/70"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M14 4h6m0 0v6m0-6L10 14M18 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
         ))}
 
         {result && affected.length === 0 && !loading && (
@@ -262,7 +197,7 @@ export function ProximityWidget() {
       <p className="border-t border-white/8 pt-2 text-[10px] leading-snug text-white/25">
         Cross-references your {result?.scannedCount ?? ''} properties against NASA FIRMS active-fire
         detections (past 24 h), live NWS alerts, and USGS earthquakes (M2.5+, past 7 days). Click a
-        property to fly there.
+        property to fly there, or pop it out into its own window.
       </p>
     </div>
   );

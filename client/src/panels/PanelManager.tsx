@@ -9,6 +9,7 @@ import { FireDetails } from '../layers/fires/FireDetails';
 import { ShipDetails } from '../layers/ships/ShipDetails';
 import { SatelliteDetails } from '../layers/satellites/SatelliteDetails';
 import { LocationDetails } from '../layers/locations/LocationDetails';
+import { PropertyDetail } from '../widgets/proximity/PropertyDetail';
 import { WIDGET_BY_ID } from '../widgets/registry';
 
 const ACCENT_BY_KIND: Record<string, string> = {
@@ -21,6 +22,7 @@ const ACCENT_BY_KIND: Record<string, string> = {
   ships: 'border-accent/40',
   satellites: 'border-sky-400/40',
   locations: 'border-violet-500/40',
+  'property-watch': 'border-accent-ok/40',
 };
 
 export function PanelManager() {
@@ -50,6 +52,9 @@ export function PanelManager() {
               )}
               {panel.kind === 'locations' && (
                 <LocationDetails payload={panel.payload as never} />
+              )}
+              {panel.kind === 'property-watch' && (
+                <PropertyDetail payload={panel.payload as never} />
               )}
             </PanelErrorBoundary>
           </Panel>
