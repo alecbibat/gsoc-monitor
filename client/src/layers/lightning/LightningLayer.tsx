@@ -94,10 +94,12 @@ const RING_COLOR = hex('#bfe9ff'); // pale shockwave
 // detected the flash. Drawing a faint line from each sensor to the strike
 // point reproduces the classic lightningmaps.org "detector" view. Optional —
 // off by default, since a busy storm multiplies the line count.
-const DETECTOR_LIFE_MS = 1200; // how long each detector line lingers before fading
+const DETECTOR_LIFE_MS = 600; // detector lines fade out fast (~0.6s)
 const DETECTOR_COLOR = hex('#8fe8ff'); // pale cyan signal line
 const MAX_DETECTORS_PER_STRIKE = 14; // cap stations drawn per strike
-const MAX_DETECTOR_GROUPS = 50; // cap concurrent strikes showing lines
+// Only the most recent strike shows detector lines — a new strike clears the
+// previous strike's lines (a "refresh") instead of letting them pile up.
+const MAX_DETECTOR_GROUPS = 1;
 
 // A jagged vertical path from high altitude straight down onto the strike point.
 // Top and bottom are anchored on the point; the horizontal wander peaks in the
@@ -240,7 +242,7 @@ export function LightningLayer() {
 
     const detectorAlpha = (start: number): number => {
       const p = Math.min(1, (performance.now() - start) / DETECTOR_LIFE_MS);
-      return Math.max(0, 0.5 * (1 - p)); // fade 0.5 -> 0 over its life
+      return Math.max(0, 0.6 * (1 - p)); // bright pop, then a quick fade to 0
     };
 
     const animate = () => {
@@ -277,8 +279,9 @@ export function LightningLayer() {
         .slice(0, MAX_DETECTORS_PER_STRIKE);
       if (stations.length === 0) return;
 
-      // Evict the oldest group if we're at the concurrency cap.
-      if (detectors.length >= MAX_DETECTOR_GROUPS) {
+      // Refresh: clear any still-showing lines from prior strikes so this new
+      // strike's detector lines replace them (cap is 1, so this empties them).
+      while (detectors.length >= MAX_DETECTOR_GROUPS) {
         const old = detectors.shift();
         if (old) for (const line of old.lines) ds.entities.remove(line);
       }
