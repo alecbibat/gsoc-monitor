@@ -143,20 +143,24 @@ interface StormAgg {
   fcstTau: number; // lowest forecast hour seen (used only when no observed fix)
 }
 
-// NHC tropical-cyclone glyph (two opposing arms around an eye), tinted by the
-// Saffir–Simpson colour so category reads at a glance against any basemap.
+// Three-arm spiral cyclone glyph. Each arm is a cubic bezier starting at radius
+// 10 from the eye and sweeping ~130° clockwise to radius ~24, computed by exact
+// 120° rotation so the blades are perfectly symmetric.
 function hurricaneIcon(color: string): string {
+  // arm1: top → far-right → lower-right
+  // arm2/3: arm1 rotated 120° / 240° around (32,32)
   const arms =
-    '<path d="M32 11 C17 11 17 31 32 31 C41 31 41 22 33 22"/>' +
-    '<path d="M32 53 C47 53 47 33 32 33 C23 33 23 42 31 42"/>';
+    '<path d="M32 22 C48 18 56 34 50 48"/>' +
+    '<path d="M41 37 C36 53 18 52 9 40"/>' +
+    '<path d="M23 37 C12 25 22 10 37 8"/>';
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">` +
     `<g fill="none" stroke-linecap="round">` +
     `<g stroke="#04161c" stroke-width="9">${arms}</g>` +
     `<g stroke="${color}" stroke-width="5.5">${arms}</g>` +
     `</g>` +
-    `<circle cx="32" cy="32" r="5" fill="#04161c"/>` +
-    `<circle cx="32" cy="32" r="3" fill="${color}"/>` +
+    `<circle cx="32" cy="32" r="8" fill="#04161c"/>` +
+    `<circle cx="32" cy="32" r="5.5" fill="${color}"/>` +
     `</svg>`;
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
