@@ -14,8 +14,8 @@ const RELAYS = [
   'wss://ws8.blitzortung.org/',
 ];
 
-const STRIKE_LIFETIME_MS = 30_000; // how long a flash lingers before fading out
-const MAX_STRIKES = 900; // hard cap so a busy storm can't flood the scene
+const STRIKE_LIFETIME_MS = 600_000; // how long a flash lingers before fading out (10 min)
+const MAX_STRIKES = 2_500; // hard cap so a busy storm can't flood the scene
 const TICK_MS = 250; // fade/cleanup cadence (smooth enough for the strike flash)
 
 // LZW-style decompressor matching Blitzortung's wire format. Frames are JSON
