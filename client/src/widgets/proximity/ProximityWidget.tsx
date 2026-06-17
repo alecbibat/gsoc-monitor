@@ -11,7 +11,8 @@ function timeAgo(ms: number): string {
   const diff = Date.now() - ms;
   if (diff < 60_000) return 'just now';
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  return `${Math.floor(diff / 3_600_000)}h ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
 function expiresText(iso: string): string | null {
@@ -27,6 +28,14 @@ function expiresText(iso: string): string | null {
 
 function fmtMiles(mi: number): string {
   return mi < 10 ? mi.toFixed(1) : Math.round(mi).toString();
+}
+
+// Matches the earthquake layer's magnitude-tier palette.
+function quakeColor(mag: number): string {
+  if (mag >= 6) return '#ff5d5d';
+  if (mag >= 4.5) return '#ffb84d';
+  if (mag >= 2.5) return '#ffe14d';
+  return '#52e3a4';
 }
 
 export function ProximityWidget() {
@@ -58,7 +67,14 @@ export function ProximityWidget() {
   }, [radiusMi, refreshKey]);
 
   const affected = result?.properties ?? [];
-  const bothDown = result && result.fireError && result.alertError;
+  const downFeeds = result
+    ? ([
+        result.fireError ? 'fires' : null,
+        result.alertError ? 'alerts' : null,
+        result.quakeError ? 'earthquakes' : null,
+      ].filter(Boolean) as string[])
+    : [];
+  const allDown = downFeeds.length === 3;
 
   const focus = (p: PropertyHazards) => {
     if (!viewer) return;
@@ -73,12 +89,12 @@ export function ProximityWidget() {
       <div className="flex items-center justify-between text-[11px]">
         {loading && !result ? (
           <span className="text-white/40">Scanning…</span>
-        ) : bothDown ? (
+        ) : allDown ? (
           <span className="text-accent-danger">Hazard feeds unreachable</span>
         ) : (
           <span className="flex items-center gap-1.5 text-accent-ok">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-ok" />
-            FIRMS + NWS · live
+            FIRMS + NWS + USGS · live
           </span>
         )}
         <button
@@ -140,10 +156,10 @@ export function ProximityWidget() {
       )}
 
       {/* Partial-failure note */}
-      {result && !bothDown && (result.fireError || result.alertError) && (
+      {result && !allDown && downFeeds.length > 0 && (
         <div className="text-[10px] text-white/30">
-          {result.fireError ? 'Fire feed unavailable' : 'NWS feed unavailable'} — showing{' '}
-          {result.fireError ? 'alerts' : 'fires'} only.
+          {downFeeds.join(' + ')} feed{downFeeds.length > 1 ? 's' : ''} unavailable — partial
+          results.
         </div>
       )}
 
@@ -206,6 +222,28 @@ export function ProximityWidget() {
                 </span>
               </div>
             )}
+
+            {/* Earthquake summary */}
+            {p.quakes.length > 0 && (
+              <div
+                className="mt-1.5 flex items-center gap-1.5 text-[11px]"
+                style={{ color: quakeColor(p.maxQuakeMag ?? 0) }}
+                title={p.quakes
+                  .slice(0, 5)
+                  .map((q) => `M${q.mag.toFixed(1)} · ${q.place || 'unknown'} · ${timeAgo(q.time)}`)
+                  .join('\n')}
+              >
+                <span aria-hidden>◎</span>
+                <span>
+                  {p.quakes.length === 1
+                    ? `M${p.quakes[0].mag.toFixed(1)} earthquake`
+                    : `${p.quakes.length} earthquakes · max M${(p.maxQuakeMag ?? 0).toFixed(1)}`}
+                  {p.nearestQuakeMi != null && (
+                    <span className="text-white/40"> · nearest {fmtMiles(p.nearestQuakeMi)} mi</span>
+                  )}
+                </span>
+              </div>
+            )}
           </button>
         ))}
 
@@ -219,7 +257,8 @@ export function ProximityWidget() {
       {/* Footnote */}
       <p className="border-t border-white/8 pt-2 text-[10px] leading-snug text-white/25">
         Cross-references your {result?.scannedCount ?? ''} properties against NASA FIRMS active-fire
-        detections (past 24 h) and live NWS alerts. Click a property to fly there.
+        detections (past 24 h), live NWS alerts, and USGS earthquakes (M2.5+, past 7 days). Click a
+        property to fly there.
       </p>
     </div>
   );
