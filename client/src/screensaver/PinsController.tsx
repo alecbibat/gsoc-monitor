@@ -33,7 +33,7 @@ const METERS_PER_DEG_LON_EQ = 111_320;
 
 // How much vertical clearance to keep between the camera and the highest
 // terrain/building it passes over during the orbit.
-const CLEARANCE_M = 350;
+const CLEARANCE_M = 500;
 // Points sampled around each orbit ring to find the tallest obstruction.
 const RING_SAMPLES = 12;
 // If clearing the terrain would require pulling back further than this, the
@@ -75,12 +75,11 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-// Sample the topmost loaded surface (terrain + OSM buildings, or Google 3D
-// tiles) at the pin AND around two rings encircling the orbit path, forcing the
-// most-detailed tiles to stream in first. Returns the pin's ground height plus
-// the maximum height found anywhere on the rings, so the caller can lift the
-// camera above any ridge/building it would otherwise swing into. Returns nulls
-// when sampling is unsupported or fails so callers can fall back to a safe orbit.
+// Sample terrain heights at the pin and around two rings encircling the orbit
+// path. Uses sampleTerrainMostDetailed (terrain-provider query) rather than
+// scene.sampleHeightMostDetailed so it works before flying to the location —
+// scene.sampleHeightMostDetailed requires the destination tiles to already be
+// in the camera frustum, which they aren't until after flyTo completes.
 async function sampleArea(
   v: Cesium.Viewer,
   lon: number,
@@ -88,7 +87,10 @@ async function sampleArea(
   ringRadiusM: number
 ): Promise<{ base: number | null; max: number | null }> {
   try {
-    if (!v.scene.sampleHeightSupported) return { base: null, max: null };
+    // EllipsoidTerrainProvider returns height=0 everywhere — not useful.
+    if (v.terrainProvider instanceof Cesium.EllipsoidTerrainProvider) {
+      return { base: null, max: null };
+    }
     const mPerDegLon = METERS_PER_DEG_LON_EQ * Math.cos(Cesium.Math.toRadians(lat));
     const cartos: Cesium.Cartographic[] = [Cesium.Cartographic.fromDegrees(lon, lat)];
     // Two concentric rings (the orbit radius and double it) catch terrain that
@@ -101,7 +103,7 @@ async function sampleArea(
         cartos.push(Cesium.Cartographic.fromDegrees(lon + dLon, lat + dLat));
       }
     }
-    const results = await v.scene.sampleHeightMostDetailed(cartos);
+    const results = await Cesium.sampleTerrainMostDetailed(v.terrainProvider, cartos);
     const heights = results
       .map((r) => r?.height)
       .filter((h): h is number => typeof h === 'number' && Number.isFinite(h));
