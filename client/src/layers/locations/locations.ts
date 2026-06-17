@@ -57,6 +57,20 @@ export const LOCATION_GROUPS: LocationGroup[] = [
     ],
   },
   {
+    id: 'centennial-airport',
+    name: 'Centennial Airport',
+    color: '#f59e0b',
+    icon: '✈️',
+    locations: [
+      {
+        name: 'Centennial Airport - Anschutz Hangar',
+        lat: 39.57483310207554,
+        lon: -104.8476671226168,
+        altitudeM: 12_000,
+      },
+    ],
+  },
+  {
     id: 'yellowstone',
     name: 'Yellowstone NP',
     color: '#10b981',
