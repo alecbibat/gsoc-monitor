@@ -45,19 +45,76 @@ const SEVERITY_RANK: Record<string, number> = {
   Unknown: 0,
 };
 
+const c = (hex: string) => Cesium.Color.fromCssColorString(hex);
+
+// Severity is still used for draw-order (most severe drawn last/on top) and as the
+// fallback colour when an event doesn't match a known hazard family.
 function severityColor(severity: string): Cesium.Color {
   switch (severity) {
     case 'Extreme':
-      return Cesium.Color.fromCssColorString('#ff3b3b');
+      return c('#ff3b3b');
     case 'Severe':
-      return Cesium.Color.fromCssColorString('#ff8a3d');
+      return c('#ff8a3d');
     case 'Moderate':
-      return Cesium.Color.fromCssColorString('#ffe14d');
+      return c('#ffe14d');
     case 'Minor':
-      return Cesium.Color.fromCssColorString('#52a9ff');
+      return c('#52a9ff');
     default:
-      return Cesium.Color.fromCssColorString('#9aa5b1');
+      return c('#9aa5b1');
   }
+}
+
+// Colour by hazard TYPE (the NWS `event` string), not just severity, so the map
+// reads semantically: floods are blue, thunderstorms yellow, fire orange, winter
+// icy, and the genuinely life-threatening events (tornado, tsunami, flash flood,
+// storm surge, hurricane, extreme wind) get bold, saturated, mutually-distinct
+// colours so they jump off the map on any basemap. Checks run most-specific
+// first; `severity` shades a few families (Warning vs Watch/Advisory).
+function alertColor(event: string, severity: string): Cesium.Color {
+  const e = event.toLowerCase();
+  const isWarning = e.includes('warning') || e.includes('emergency');
+  const isWatch = e.includes('watch');
+
+  // --- Life-threatening: bold, vivid, each a distinct hue ---
+  if (e.includes('tornado')) return c('#ff1f4f'); // crimson
+  if (e.includes('tsunami')) return c('#b026ff'); // electric purple
+  if (e.includes('extreme wind')) return c('#ff3d00'); // orange-red
+  if (e.includes('flash flood')) return c('#00c8ff'); // bright cyan
+  if (e.includes('storm surge')) return c('#6a5cff'); // violet-blue
+  if (e.includes('hurricane') && !e.includes('wind')) return c('#ff2d95'); // hot magenta
+  if (e.includes('typhoon') || e.includes('tropical storm')) return c('#ff2d95');
+
+  // --- Flooding family: shades of blue (Warning darkest) ---
+  if (e.includes('flood') || e.includes('seiche')) {
+    return c(isWarning ? '#1769ff' : isWatch ? '#4d94ff' : '#86b6ff');
+  }
+
+  // --- Thunderstorms: yellow ---
+  if (e.includes('thunderstorm')) return c(isWarning ? '#ffd60a' : '#ffe98a');
+
+  // --- Fire / red-flag: orange ---
+  if (e.includes('fire') || e.includes('red flag') || e.includes('smoke')) return c('#ff8a1e');
+
+  // --- Excessive heat: amber-red ---
+  if (e.includes('heat') || (e.includes('hot') && isWarning)) return c('#ff6024');
+
+  // --- Winter / cold: icy lavender (desaturated to stay distinct from flood blue) ---
+  if (/winter|snow|\bice\b|icy|blizzard|freez|frost|sleet|wind chill|cold|avalanche/.test(e)) {
+    return c(e.includes('blizzard') || e.includes('ice storm') ? '#8fa8e0' : '#b9c4e8');
+  }
+
+  // --- Wind (non-tornado): khaki ---
+  if (e.includes('wind') || e.includes('gale')) return c('#caa54a');
+
+  // --- Marine / coastal hazards: teal ---
+  if (e.includes('marine') || e.includes('small craft') || e.includes('rip current') || e.includes('surf'))
+    return c('#23c2b8');
+
+  // --- Air quality / dust / ash / fog: muted brown-grey ---
+  if (/air quality|dust|ashfall|\bfog\b/.test(e)) return c('#9a8a7a');
+
+  // --- Anything else: fall back to severity ---
+  return severityColor(severity);
 }
 
 function extractRings(geometry: GeoJSON.Geometry | null | undefined): number[][][] {
@@ -192,7 +249,7 @@ export function AlertsLayer() {
           const rings = alertRings(alert, counties);
           if (rings.length === 0) continue;
           const p = alert.properties;
-          const color = severityColor(p.severity ?? 'Unknown');
+          const color = alertColor(p.event ?? '', p.severity ?? 'Unknown');
           const id = p.id ?? alert.id ?? `${drawn}`;
 
           rings.forEach((ring, idx) => {
