@@ -14,10 +14,22 @@ interface Props {
   onReady?: (viewer: Cesium.Viewer | null) => void;
 }
 
+function applyAdjust(
+  layer: Cesium.ImageryLayer,
+  adjust?: { brightness?: number; contrast?: number; saturation?: number; gamma?: number }
+) {
+  if (!adjust) return;
+  if (adjust.brightness != null) layer.brightness = adjust.brightness;
+  if (adjust.contrast != null) layer.contrast = adjust.contrast;
+  if (adjust.saturation != null) layer.saturation = adjust.saturation;
+  if (adjust.gamma != null) layer.gamma = adjust.gamma;
+}
+
 export function CesiumGlobe({ children, onReady }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
   const baseLayerRef = useRef<Cesium.ImageryLayer | null>(null);
+  const overlayLayerRef = useRef<Cesium.ImageryLayer | null>(null);
   const basemap = useLayersStore((s) => s.basemap);
   const qualityLevel = usePerfStore((s) => s.qualityLevel);
 
@@ -107,20 +119,32 @@ export function CesiumGlobe({ children, onReady }: Props) {
 
   useEffect(() => {
     if (!viewer) return;
+    const layers = viewer.imageryLayers;
     const def = BASEMAPS[basemap];
-    const newLayer = viewer.imageryLayers.addImageryProvider(def.build());
-    // Apply optional colour adjustments (e.g. the dark-satellite look).
-    if (def.adjust) {
-      if (def.adjust.brightness != null) newLayer.brightness = def.adjust.brightness;
-      if (def.adjust.contrast != null) newLayer.contrast = def.adjust.contrast;
-      if (def.adjust.saturation != null) newLayer.saturation = def.adjust.saturation;
-      if (def.adjust.gamma != null) newLayer.gamma = def.adjust.gamma;
+
+    const prevBase = baseLayerRef.current;
+    const prevOverlay = overlayLayerRef.current;
+
+    // Add the new base imagery and (optionally) its label overlay, then lower
+    // each to the bottom so the final stack is base → overlay → data layers.
+    const baseLayer = layers.addImageryProvider(def.build());
+    applyAdjust(baseLayer, def.adjust);
+
+    let overlayLayer: Cesium.ImageryLayer | null = null;
+    if (def.overlay) {
+      overlayLayer = layers.addImageryProvider(def.overlay.build());
+      applyAdjust(overlayLayer, def.overlay.adjust);
+      layers.lowerToBottom(overlayLayer);
     }
-    viewer.imageryLayers.lowerToBottom(newLayer);
-    if (baseLayerRef.current) {
-      viewer.imageryLayers.remove(baseLayerRef.current, true);
-    }
-    baseLayerRef.current = newLayer;
+    layers.lowerToBottom(baseLayer);
+
+    // Remove the previous layers only after the new ones are in place so the
+    // swap doesn't flash the empty globe.
+    if (prevOverlay) layers.remove(prevOverlay, true);
+    if (prevBase) layers.remove(prevBase, true);
+
+    baseLayerRef.current = baseLayer;
+    overlayLayerRef.current = overlayLayer;
     viewer.scene.requestRender();
   }, [viewer, basemap]);
 

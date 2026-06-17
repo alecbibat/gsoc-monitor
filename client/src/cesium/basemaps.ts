@@ -1,17 +1,28 @@
 import * as Cesium from 'cesium';
 import type { BasemapId } from '../types';
 
+interface ImageryAdjust {
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
+  gamma?: number;
+}
+
+interface ImagerySource {
+  build: () => Cesium.ImageryProvider;
+  adjust?: ImageryAdjust;
+}
+
 interface BasemapDef {
   label: string;
   attribution: string;
   build: () => Cesium.ImageryProvider;
   // Optional ImageryLayer colour adjustments applied after the layer is added.
-  adjust?: {
-    brightness?: number;
-    contrast?: number;
-    saturation?: number;
-    gamma?: number;
-  };
+  adjust?: ImageryAdjust;
+  // Optional transparent reference overlay (place + boundary labels) drawn
+  // directly above the base imagery. Used by satellite, whose imagery carries
+  // no labels of its own.
+  overlay?: ImagerySource;
 }
 
 export const BASEMAPS: Record<BasemapId, BasemapDef> = {
@@ -48,6 +59,17 @@ export const BASEMAPS: Record<BasemapId, BasemapDef> = {
       }),
     // Darken Esri imagery into a muted "night satellite" look so overlays pop.
     adjust: { brightness: 0.68, contrast: 1.1, saturation: 0.75, gamma: 1.3 },
+    // Transparent boundaries + place labels (countries, states/provinces,
+    // cities) so the imagery isn't an unlabelled blank. Light text with dark
+    // halos, designed by Esri to overlay World Imagery.
+    overlay: {
+      build: () =>
+        new Cesium.UrlTemplateImageryProvider({
+          url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+          maximumLevel: 13,
+          credit: new Cesium.Credit('Esri'),
+        }),
+    },
   },
   topo: {
     label: 'Topographic',
