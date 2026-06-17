@@ -18,8 +18,11 @@ export interface LocationPayload {
 
 const LEG_META = {
   hospital: { label: 'Hospital', icon: '🏥', color: '#ef4444' },
+  police: { label: 'Police', icon: '🚓', color: '#2563eb' },
   hotel: { label: 'Hotel', icon: '🏨', color: '#38bdf8' },
 } as const;
+
+type LegKind = keyof typeof LEG_META;
 
 function fmtDist(m: number): string {
   const mi = m / 1609.34;
@@ -57,7 +60,7 @@ function LegCard({
   optionLabel,
 }: {
   leg: DirectionsLeg;
-  kind: 'hospital' | 'hotel';
+  kind: LegKind;
   origin: { lat: number; lon: number };
   optionLabel?: string | null;
 }) {
@@ -172,7 +175,7 @@ function LegSection({
   onSelect,
 }: {
   legs: DirectionsLeg[];
-  kind: 'hospital' | 'hotel';
+  kind: LegKind;
   origin: { lat: number; lon: number };
   selectedIdx: number;
   onSelect: (i: number) => void;
@@ -182,7 +185,7 @@ function LegSection({
   if (!legs || legs.length === 0) {
     return (
       <div className="rounded-lg border border-white/8 bg-white/4 p-2.5 text-[12px] text-white/40">
-        {meta.icon} No {kind} found within range
+        {meta.icon} No {kind === 'police' ? 'police station' : kind} found within range
       </div>
     );
   }
@@ -231,9 +234,11 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [hospitalIdx, setHospitalIdx] = useState(0);
+  const [policeIdx, setPoliceIdx] = useState(0);
   const [hotelIdx, setHotelIdx] = useState(0);
 
   const selHospital = data && data.hospitals.length ? data.hospitals[Math.min(hospitalIdx, data.hospitals.length - 1)] : null;
+  const selPolice = data && data.police?.length ? data.police[Math.min(policeIdx, data.police.length - 1)] : null;
   const selHotel = data && data.hotels.length ? data.hotels[Math.min(hotelIdx, data.hotels.length - 1)] : null;
 
   // Fly to the pin when the panel opens.
@@ -254,6 +259,7 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
         if (!cancelled) {
           setData(d);
           setHospitalIdx(0);
+          setPoliceIdx(0);
           setHotelIdx(0);
           setLoading(false);
         }
@@ -289,7 +295,7 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
       },
     });
 
-    for (const leg of [selHospital, selHotel]) {
+    for (const leg of [selHospital, selPolice, selHotel]) {
       if (!leg) continue;
       const meta = LEG_META[leg.category];
       const color = Cesium.Color.fromCssColorString(meta.color);
@@ -365,7 +371,7 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
     // The globe only renders on demand, so drive a render loop to animate the
     // pulse while a route is on screen. Stops when the panel closes.
     let raf = 0;
-    if (selHospital || selHotel) {
+    if (selHospital || selPolice || selHotel) {
       const tick = () => {
         viewer.scene.requestRender();
         raf = requestAnimationFrame(tick);
@@ -378,7 +384,7 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
       viewer.dataSources.remove(ds, true);
       viewer.scene.requestRender();
     };
-  }, [viewer, selHospital, selHotel, payload.lat, payload.lon, payload.color]);
+  }, [viewer, selHospital, selPolice, selHotel, payload.lat, payload.lon, payload.color]);
 
   return (
     <div className="space-y-3 p-1">
@@ -424,7 +430,7 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
         {loading && (
           <div className="flex items-center gap-2 py-2 text-[12px] text-white/50">
             <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/20 border-t-white/70" />
-            Finding nearest hospital &amp; hotel…
+            Finding nearest hospital, police &amp; hotel…
           </div>
         )}
 
@@ -445,6 +451,13 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
               origin={data.origin}
               selectedIdx={hospitalIdx}
               onSelect={setHospitalIdx}
+            />
+            <LegSection
+              legs={data.police}
+              kind="police"
+              origin={data.origin}
+              selectedIdx={policeIdx}
+              onSelect={setPoliceIdx}
             />
             <LegSection
               legs={data.hotels}

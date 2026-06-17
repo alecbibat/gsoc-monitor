@@ -178,7 +178,7 @@ export interface RouteStep {
 
 export interface DirectionsLeg {
   name: string;
-  category: 'hospital' | 'hotel';
+  category: 'hospital' | 'hotel' | 'police';
   lat: number;
   lon: number;
   distanceM: number;
@@ -192,6 +192,7 @@ export interface DirectionsResponse {
   origin: { lat: number; lon: number };
   hospitals: DirectionsLeg[];
   hotels: DirectionsLeg[];
+  police: DirectionsLeg[];
 }
 
 export interface PizzaPlaceBusyness {
