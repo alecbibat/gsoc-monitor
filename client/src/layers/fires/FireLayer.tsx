@@ -16,10 +16,10 @@ const SERVICE =
 const MAX_FIRES = 2500; // strongest-by-FRP hotspots we draw at once
 const FALLBACK_LAYER_ID = 0; // "past 24 hrs" sublayer if name discovery fails
 
-// "Only near pins" filter. When enabled in the UI we ignore the viewport and
-// instead query a fixed box around each location group, then keep only hotspots
-// within 50 statute miles of an actual pin — so the alert works at any zoom.
-const FIFTY_MILES_M = 80_467;
+// "Near pins" filter. When active we ignore the viewport and instead query a
+// fixed box around each location group, then keep only hotspots within the
+// selected radius (50 / 100 / 200 mi) of an actual pin.
+const MILES_TO_M = 1_609.344;
 
 const ALL_PINS: Array<[number, number]> = LOCATION_GROUPS.flatMap((g) =>
   g.locations.map((l) => [l.lon, l.lat] as [number, number])
@@ -35,12 +35,13 @@ function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): num
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-function nearAnyPin(lat: number, lon: number): boolean {
-  return ALL_PINS.some(([plon, plat]) => haversineM(lat, lon, plat, plon) <= FIFTY_MILES_M);
+function nearAnyPin(lat: number, lon: number, radiusM: number): boolean {
+  return ALL_PINS.some(([plon, plat]) => haversineM(lat, lon, plat, plon) <= radiusM);
 }
 
-// One padded query envelope per location group (a group is often a single pin).
-// Padding a little past 50 mi keeps the precise per-point filter above honest.
+// Query envelopes are padded for the maximum supported radius (200 mi) so the
+// same set of boxes works for all three distance options. The haversine check
+// above does the precise per-hotspot filtering.
 const PIN_ENVELOPES: string[] = LOCATION_GROUPS.map((g) => {
   const lats = g.locations.map((l) => l.lat);
   const lons = g.locations.map((l) => l.lon);
@@ -48,9 +49,9 @@ const PIN_ENVELOPES: string[] = LOCATION_GROUPS.map((g) => {
   const maxLat = Math.max(...lats);
   const minLon = Math.min(...lons);
   const maxLon = Math.max(...lons);
-  const latPad = 50 / 69; // ~0.72° per 50 mi
+  const latPad = 200 / 69; // ~2.9° per 200 mi
   const maxAbsLat = Math.max(Math.abs(minLat), Math.abs(maxLat));
-  const lonPad = Math.min(3, 50 / (69 * Math.cos((maxAbsLat * Math.PI) / 180)));
+  const lonPad = Math.min(6, 200 / (69 * Math.cos((maxAbsLat * Math.PI) / 180)));
   return `${minLon - lonPad},${minLat - latPad},${maxLon + lonPad},${maxLat + latPad}`;
 });
 
@@ -141,7 +142,7 @@ function debounce<T extends (...args: never[]) => void>(fn: T, ms: number) {
 export function FireLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.fires);
-  const nearPinsOnly = useLayersStore((s) => s.firesNearPinsOnly);
+  const nearMiles = useLayersStore((s) => s.firesNearMiles);
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
   const layerIdRef = useRef<number | null>(null);
 
@@ -226,9 +227,10 @@ export function FireLayer() {
 
       let features: GeoJSON.Feature[] | null;
 
-      if (nearPinsOnly) {
+      if (nearMiles > 0) {
         // Query a fixed box around each pin group (independent of the camera),
-        // then keep only hotspots truly within 50 mi of a pin.
+        // then keep only hotspots within the selected radius of a pin.
+        const radiusM = nearMiles * MILES_TO_M;
         const results = await Promise.all(
           PIN_ENVELOPES.map((env) => fetchEnvelope(layerId, env))
         );
@@ -243,7 +245,7 @@ export function FireLayer() {
             for (const f of r) {
               if (f.geometry?.type !== 'Point') continue;
               const [lon, lat] = f.geometry.coordinates as [number, number];
-              if (!nearAnyPin(lat, lon)) continue;
+              if (!nearAnyPin(lat, lon, radiusM)) continue;
               // Adjacent group boxes can overlap, so dedupe by position.
               const key = `${lon.toFixed(4)},${lat.toFixed(4)}`;
               if (seen.has(key)) continue;
@@ -311,7 +313,7 @@ export function FireLayer() {
 
       useFiresStatus.getState().setStatus({
         count: drawn,
-        capped: !nearPinsOnly && drawn >= MAX_FIRES,
+        capped: nearMiles === 0 && drawn >= MAX_FIRES,
         error: null,
       });
       viewer.scene.requestRender();
@@ -320,15 +322,15 @@ export function FireLayer() {
     load();
     const debouncedLoad = debounce(load, 800);
     // In near-pins mode the regions are fixed, so we don't refetch on pan/zoom.
-    if (!nearPinsOnly) viewer.camera.moveEnd.addEventListener(debouncedLoad);
+    if (nearMiles === 0) viewer.camera.moveEnd.addEventListener(debouncedLoad);
     const interval = setInterval(load, 5 * 60_000);
 
     return () => {
       cancelled = true;
       clearInterval(interval);
-      if (!nearPinsOnly) viewer.camera.moveEnd.removeEventListener(debouncedLoad);
+      if (nearMiles === 0) viewer.camera.moveEnd.removeEventListener(debouncedLoad);
     };
-  }, [viewer, active, nearPinsOnly]);
+  }, [viewer, active, nearMiles]);
 
   return null;
 }

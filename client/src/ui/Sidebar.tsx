@@ -34,8 +34,8 @@ export function Sidebar() {
   const shipFavorites = useLayersStore((s) => s.shipFavorites);
   const shipPaths = useLayersStore((s) => s.shipPaths);
   const setShipPaths = useLayersStore((s) => s.setShipPaths);
-  const firesNearPinsOnly = useLayersStore((s) => s.firesNearPinsOnly);
-  const setFiresNearPinsOnly = useLayersStore((s) => s.setFiresNearPinsOnly);
+  const firesNearMiles = useLayersStore((s) => s.firesNearMiles);
+  const setFiresNearMiles = useLayersStore((s) => s.setFiresNearMiles);
   const flightsStatus = useFlightsStatus();
   const alertsStatus = useAlertsStatus();
   const hurricanesStatus = useHurricanesStatus();
@@ -131,22 +131,33 @@ export function Sidebar() {
             onToggle={() => toggleLayer('fires')}
             statusText={
               firesStatus.error ??
-              (firesNearPinsOnly
-                ? `${firesStatus.count.toLocaleString()} hotspots within 50 mi of pins · 24h`
+              (firesNearMiles > 0
+                ? `${firesStatus.count.toLocaleString()} hotspots within ${firesNearMiles} mi of pins · 24h`
                 : `${firesStatus.count.toLocaleString()} hotspots${
                     firesStatus.capped ? ' (top 2,500)' : ''
                   } · 24h`)
             }
           >
-            <label className="flex items-center gap-2 pt-1 text-[11px] text-white/60">
-              <input
-                type="checkbox"
-                checked={firesNearPinsOnly}
-                onChange={(e) => setFiresNearPinsOnly(e.target.checked)}
-                className="accent-accent"
-              />
-              Only near pins (50 mi)
-            </label>
+            <div className="pt-1">
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-white/30">
+                Near pins
+              </div>
+              <div className="flex gap-1">
+                {([0, 50, 100, 200] as const).map((mi) => (
+                  <button
+                    key={mi}
+                    onClick={() => setFiresNearMiles(mi)}
+                    className={`flex-1 rounded px-1 py-1 text-[11px] font-medium transition ${
+                      firesNearMiles === mi
+                        ? 'bg-accent/20 text-accent'
+                        : 'bg-white/5 text-white/50 hover:bg-white/10'
+                    }`}
+                  >
+                    {mi === 0 ? 'Off' : `${mi} mi`}
+                  </button>
+                ))}
+              </div>
+            </div>
           </LayerToggle>
         </Section>
 

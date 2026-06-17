@@ -17,8 +17,8 @@ interface LayersState {
   toggleShipFavorite: (mmsi: string) => void;
   shipPaths: boolean;
   setShipPaths: (v: boolean) => void;
-  firesNearPinsOnly: boolean;
-  setFiresNearPinsOnly: (v: boolean) => void;
+  firesNearMiles: 0 | 50 | 100 | 200;
+  setFiresNearMiles: (v: 0 | 50 | 100 | 200) => void;
   earthquakeMagnitude: 'significant' | '4.5' | '2.5' | '1.0' | 'all';
   earthquakePeriod: 'hour' | 'day' | 'week';
   setEarthquakeFilter: (
@@ -71,8 +71,8 @@ export const useLayersStore = create<LayersState>()(
       },
       shipPaths: true,
       setShipPaths: (v) => set({ shipPaths: v }),
-      firesNearPinsOnly: false,
-      setFiresNearPinsOnly: (v) => set({ firesNearPinsOnly: v }),
+      firesNearMiles: 0,
+      setFiresNearMiles: (v) => set({ firesNearMiles: v }),
       earthquakeMagnitude: '2.5',
       earthquakePeriod: 'day',
       setEarthquakeFilter: (partial) =>
@@ -89,7 +89,7 @@ export const useLayersStore = create<LayersState>()(
         flightFavorites: state.flightFavorites,
         shipFavorites: state.shipFavorites,
         shipPaths: state.shipPaths,
-        firesNearPinsOnly: state.firesNearPinsOnly,
+        firesNearMiles: state.firesNearMiles,
       }),
     }
   )
