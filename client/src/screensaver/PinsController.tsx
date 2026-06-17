@@ -17,10 +17,12 @@ const INTERVAL_MAX_MS = 10_000;
 // Camera orbits slowly around each pin while dwelling.
 const ORBIT_PERIOD_MS = 45_000;
 
-// Close cinematic orbit — used when Google 3D tiles are loaded so the
-// photorealistic buildings and terrain are visible from a low, tilted angle.
-const CLOSE_RANGE_M = 1_600;
-const CLOSE_PITCH_RAD = Cesium.Math.toRadians(-28);
+// Close cinematic orbit — used when OSM buildings + terrain (or Google 3D
+// tiles) are loaded so real geometry is visible from a low, tilted angle.
+// Range and pitch are chosen so the camera stays ≥ 1 km above sampled
+// terrain even at grand-canyon/yellowstone elevations.
+const CLOSE_RANGE_M = 2_200;
+const CLOSE_PITCH_RAD = Cesium.Math.toRadians(-35);
 // Safe high fallback orbit — used when 3D tiles aren't available (no API key)
 // or terrain height can't be sampled. Stays well above any terrain.
 const FAR_RANGE_M = 18_000;
@@ -165,12 +167,21 @@ export function PinsController() {
 
           // Cinematic orbit around the pin while dwelling.
           const orbitStart = performance.now();
+          const sinPitch = Math.max(Math.abs(Math.sin(pitch)), 0.1);
+          const safeFloor = baseH + 80; // minimum absolute camera height (m)
           const tick = () => {
             if (cancelledRef.current) return;
             const heading =
               (((performance.now() - orbitStart) % ORBIT_PERIOD_MS) * Cesium.Math.TWO_PI) /
               ORBIT_PERIOD_MS;
             v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, pitch, range));
+            // Guard: if terrain wasn't fully sampled before orbit started,
+            // the camera could sit below the ground. Clamp range upward until
+            // the camera clears the safe floor without changing heading/pitch.
+            if (v.camera.positionCartographic.height < safeFloor) {
+              const adjRange = (safeFloor - baseH) / sinPitch;
+              v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, pitch, adjRange));
+            }
             rafRef.current = requestAnimationFrame(tick);
           };
           rafRef.current = requestAnimationFrame(tick);

@@ -4,6 +4,7 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { useAlertsStatus } from './alertsStore';
+import { useScreensaverStore } from '../../screensaver/screensaverStore';
 
 // Fetched directly from the browser: NWS sends CORS headers, so this avoids the
 // server-side User-Agent restrictions that block api.weather.gov from a proxy.
@@ -175,8 +176,21 @@ function alertRings(
 export function AlertsLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.alerts);
+  const screensaverMode = useScreensaverStore((s) => s.mode);
+  const screensaverPhase = useScreensaverStore((s) => s.phase);
+  const screensaverActive = useScreensaverStore((s) => s.active);
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
   const lastSigRef = useRef<string>('');
+
+  // Hide alert polygon tints during the PINS screensaver close-up orbit —
+  // the coloured fills look wrong at building-level altitude.
+  useEffect(() => {
+    const ds = dsRef.current;
+    if (!ds || !viewer) return;
+    const closeUp = screensaverActive && screensaverMode === 'pins' && screensaverPhase === 'at-poi';
+    ds.show = !closeUp;
+    viewer.scene.requestRender();
+  }, [viewer, screensaverActive, screensaverMode, screensaverPhase]);
 
   useEffect(() => {
     if (!viewer) return;

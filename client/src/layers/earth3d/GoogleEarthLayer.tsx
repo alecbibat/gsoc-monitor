@@ -40,10 +40,13 @@ export function GoogleEarthLayer() {
       `https://tile.googleapis.com/v1/3dtiles/root.json?key=${GOOGLE_KEY}`,
       {
         showCreditsOnScreen: true,
-        // Higher SSE = coarser tiles loaded = ~60% fewer requests with
-        // minimal visible quality loss at our typical orbit distances.
-        maximumScreenSpaceError: 48,
+        // Very high SSE = heavily coarse tiles = ~96% fewer requests vs the
+        // default of 16. Buildings are blocky but still recognisably 3D.
+        // The OSM Buildings layer is the primary free 3D source; Google tiles
+        // are an optional manual toggle — use sparingly to avoid API charges.
+        maximumScreenSpaceError: 512,
         preloadWhenHidden: false,
+        dynamicScreenSpaceError: true,
       }
     )
       .then((tileset) => {

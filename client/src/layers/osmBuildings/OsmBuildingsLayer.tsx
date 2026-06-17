@@ -46,6 +46,21 @@ export function OsmBuildingsLayer() {
           tileset.destroy();
           return;
         }
+        // Height-based colour gradient: short buildings are dark blue-grey;
+        // skyscrapers trend toward a brighter steel blue so they read as tall
+        // in the dark monitoring palette without needing real textures.
+        tileset.style = new Cesium.Cesium3DTileStyle({
+          color: {
+            conditions: [
+              ["${feature['cesium#estimatedHeight']} >= 200", "color('#6fa8d0', 0.97)"],
+              ["${feature['cesium#estimatedHeight']} >= 100", "color('#5580a8', 0.95)"],
+              ["${feature['cesium#estimatedHeight']} >= 50",  "color('#456890', 0.92)"],
+              ["${feature['cesium#estimatedHeight']} >= 25",  "color('#3a5878', 0.89)"],
+              ["${feature['cesium#estimatedHeight']} >= 10",  "color('#304a64', 0.86)"],
+              ["true",                                         "color('#263d52', 0.82)"],
+            ],
+          },
+        });
         tilesetRef.current = tileset;
         viewer.scene.primitives.add(tileset);
         setStatus({ loading: false, ready: true, error: null });

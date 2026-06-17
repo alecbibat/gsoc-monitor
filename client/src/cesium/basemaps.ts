@@ -47,7 +47,7 @@ export const BASEMAPS: Record<BasemapId, BasemapDef> = {
         credit: new Cesium.Credit('Esri, Maxar, Earthstar Geographics'),
       }),
     // Darken Esri imagery into a muted "night satellite" look so overlays pop.
-    adjust: { brightness: 0.48, contrast: 1.15, saturation: 0.62, gamma: 1.45 },
+    adjust: { brightness: 0.68, contrast: 1.1, saturation: 0.75, gamma: 1.3 },
   },
   topo: {
     label: 'Topographic',

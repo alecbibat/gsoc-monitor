@@ -29,6 +29,10 @@ export function LocationsLayer() {
           billboard: {
             image: pinUrl,
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            // Clamp to terrain so pins sit on mountain surfaces (Yellowstone,
+            // Grand Canyon, etc.) rather than appearing underground when World
+            // Terrain or OSM buildings + terrain are active.
+            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
             width: 24,
             height: 32,
@@ -42,6 +46,7 @@ export function LocationsLayer() {
             outlineWidth: 2,
             outlineColor: Cesium.Color.fromCssColorString('#0a0c10').withAlpha(0.9),
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
             pixelOffset: new Cesium.Cartesian2(0, -36),
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 800_000),
