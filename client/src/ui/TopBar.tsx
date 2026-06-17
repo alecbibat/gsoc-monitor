@@ -8,6 +8,7 @@ import { resetCamera } from '../cesium/flyTo';
 import { useTrackedHistory } from './useTrackedHistory';
 import { useUiStore } from './uiStore';
 import { useMeasureStore } from '../measure/measureStore';
+import { useCrisisStore } from '../crisis/crisisStore';
 import {
   fullscreenElement,
   fullscreenSupported,
@@ -266,6 +267,52 @@ function MeasureButton() {
   );
 }
 
+function CrisisButton() {
+  const toggle       = useCrisisStore((s) => s.toggle);
+  const open         = useCrisisStore((s) => s.open);
+  const status       = useCrisisStore((s) => s.incidentStatus);
+  const incidentName = useCrisisStore((s) => s.incidentName);
+  const isActive     = status === 'active' && incidentName !== '';
+
+  return (
+    <button
+      onClick={toggle}
+      className={`pointer-events-auto flex items-center gap-1.5 rounded-lg border px-3 py-1.5 shadow-panel backdrop-blur-sm transition-all ${
+        open
+          ? 'border-red-500/60 bg-red-500/20 text-red-400'
+          : isActive
+          ? 'border-red-500/45 bg-red-500/12 text-red-400/90 hover:border-red-500/60 hover:bg-red-500/18'
+          : 'border-red-500/22 bg-red-500/6 text-red-500/55 hover:border-red-500/38 hover:text-red-400/80'
+      }`}
+      title="Crisis Management"
+      aria-label="Open Crisis Management"
+    >
+      {isActive && (
+        <span className="relative flex h-1.5 w-1.5 shrink-0">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-70" />
+          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-red-400" />
+        </span>
+      )}
+      <svg
+        width="13"
+        height="13"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="shrink-0"
+      >
+        <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+        <line x1="12" y1="9" x2="12" y2="13" />
+        <line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+      <span className="text-[11px] font-bold uppercase tracking-[0.1em]">Crisis</span>
+    </button>
+  );
+}
+
 // Tiny SVG sparkline for the items-tracked counter.
 function Sparkline({ history }: { history: number[] }) {
   if (history.length < 2) return null;
@@ -352,6 +399,7 @@ export function TopBar() {
         <ResetCameraButton />
         <FullscreenButton />
         <MeasureButton />
+        <CrisisButton />
         {/* Screensaver modes — desktop only; mobile gets them in the drawer. */}
         <ScreensaverControls className="hidden md:flex" />
       </div>

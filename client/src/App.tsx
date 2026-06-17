@@ -38,6 +38,7 @@ import { MeasureController } from './measure/MeasureController';
 import { MeasureOverlay } from './measure/MeasureOverlay';
 import { ScreensaverToast } from './screensaver/ScreensaverToast';
 import { NewsTicker } from './widgets/news/NewsTicker';
+import { CrisisOverlay } from './crisis/CrisisOverlay';
 
 export default function App() {
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
@@ -85,6 +86,7 @@ export default function App() {
         <HoverOverlay />
         <PickChooser />
         <NewsTicker />
+        <CrisisOverlay />
       </div>
     </CesiumContext.Provider>
   );
