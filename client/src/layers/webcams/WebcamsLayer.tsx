@@ -4,7 +4,7 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
 import { attachPanelData } from '../../cesium/entityPanelLink';
-import { useWebcamsStatus } from './webcamsStore';
+import { useWebcamsStatus, useWebcamsData } from './webcamsStore';
 import type { Webcam } from '../../types';
 
 // A camera glyph on a rounded pin. Colored amber when the cam is offline so
@@ -67,6 +67,8 @@ export function WebcamsLayer() {
           viewer.scene.requestRender();
           return;
         }
+
+        useWebcamsData.getState().setWebcams(data.webcams);
 
         ds.entities.removeAll();
         for (const cam of data.webcams) {

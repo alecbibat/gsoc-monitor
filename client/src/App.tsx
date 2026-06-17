@@ -27,6 +27,7 @@ import { HoverController } from './screensaver/HoverController';
 import { HoverOverlay } from './screensaver/HoverOverlay';
 import { PinsContextBox } from './screensaver/PinsContextBox';
 import { ScreensaverWatchCards } from './screensaver/ScreensaverWatchCards';
+import { WebcamScreensaverCallouts } from './screensaver/WebcamScreensaverCallouts';
 import { GoogleEarthLayer } from './layers/earth3d/GoogleEarthLayer';
 import { OsmBuildingsLayer } from './layers/osmBuildings/OsmBuildingsLayer';
 import { TrafficLayer } from './layers/traffic/TrafficLayer';
@@ -74,6 +75,7 @@ export default function App() {
         <HoverController />
         <PinsContextBox />
         <ScreensaverWatchCards />
+        <WebcamScreensaverCallouts />
         <ScreensaverToast />
         <MeasureOverlay />
         <HoverOverlay />
