@@ -6,17 +6,26 @@ import { api } from '../../api/client';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { useFlightsStatus } from './flightsStore';
 
-// These are always shown worldwide regardless of camera viewport (no zoom gate).
-const TRACKED_TAILS = new Set(['N10AZ', 'N14NA', 'N154LA']);
-
 function planeIconDataUri(color: string): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M32 2 L36 22 L58 40 L58 46 L36 38 L36 50 L46 58 L46 62 L32 58 L18 62 L18 58 L28 50 L28 38 L6 46 L6 40 L28 22 Z" fill="${color}" stroke="#05222b" stroke-width="2"/></svg>`;
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-// Tracked tails get an amber icon; unknown aircraft (shouldn't normally appear) get blue.
-const TRACKED_ICON = planeIconDataUri('#ffb84d');
-const DEFAULT_ICON = planeIconDataUri('#3ddcff');
+const AIRBORNE_ICON = planeIconDataUri('#ffb84d');
+const GROUND_ICON = planeIconDataUri('#9fb4c4');
+
+// Beyond this many seconds since the last ADS-B report the aircraft is treated
+// as parked/offline: drawn on the ground, dimmed, with a "last seen" note.
+const LIVE_WINDOW_SEC = 180;
+
+function lastSeenText(sec: number): string {
+  if (sec < LIVE_WINDOW_SEC) return 'live';
+  const m = Math.round(sec / 60);
+  if (m < 60) return `last seen ${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `last seen ${h}h ago`;
+  return `last seen ${Math.round(h / 24)}d ago`;
+}
 
 export function FlightLayer() {
   const viewer = useCesiumViewer();
@@ -54,24 +63,31 @@ export function FlightLayer() {
 
         for (const flight of data.flights) {
           if (flight.longitude == null || flight.latitude == null) continue;
-          const isTracked =
-            (flight.registration && TRACKED_TAILS.has(flight.registration.trim())) ||
-            (flight.callsign && TRACKED_TAILS.has(flight.callsign.trim()));
+
+          const stale = flight.lastSeenSec > LIVE_WINDOW_SEC;
+          const grounded = flight.onGround || stale;
+          // Airborne: draw at true altitude. Grounded/parked: clamp to surface.
+          const altitude = grounded ? 0 : (flight.altitudeFt ?? 0) * 0.3048;
+          const alpha = stale ? 0.5 : grounded ? 0.85 : 1;
+
           const entity = ds.entities.add({
             id: `flight-${flight.icao24}`,
-            position: Cesium.Cartesian3.fromDegrees(flight.longitude, flight.latitude, 0),
+            position: Cesium.Cartesian3.fromDegrees(flight.longitude, flight.latitude, altitude),
             billboard: {
-              image: isTracked ? TRACKED_ICON : DEFAULT_ICON,
+              image: grounded ? GROUND_ICON : AIRBORNE_ICON,
               width: 30,
               height: 30,
               rotation: Cesium.Math.toRadians(-(flight.track ?? 0)),
               alignedAxis: Cesium.Cartesian3.UNIT_Z,
+              color: Cesium.Color.WHITE.withAlpha(alpha),
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
             },
             label: {
               text: flight.registration ?? flight.callsign ?? '',
               font: '11px monospace',
-              fillColor: Cesium.Color.fromCssColorString('#ffb84d'),
+              fillColor: Cesium.Color.fromCssColorString(grounded ? '#9fb4c4' : '#ffb84d').withAlpha(
+                stale ? 0.7 : 1
+              ),
               outlineColor: Cesium.Color.fromCssColorString('#05222b'),
               outlineWidth: 3,
               style: Cesium.LabelStyle.FILL_AND_OUTLINE,
@@ -84,7 +100,11 @@ export function FlightLayer() {
             id: `flight-${flight.icao24}`,
             kind: 'flights',
             title: flight.registration ?? flight.callsign?.trim() ?? flight.icao24.toUpperCase(),
-            subtitle: [flight.type, flight.onGround ? 'On ground' : 'Airborne']
+            subtitle: [
+              flight.type,
+              grounded ? 'On ground' : 'Airborne',
+              lastSeenText(flight.lastSeenSec),
+            ]
               .filter(Boolean)
               .join(' · '),
             payload: { ...flight },
