@@ -29,13 +29,15 @@ const FLEET: FleetShip[] = [
 const ALLOWED_IMOS = new Set(FLEET.map((s) => s.imo));
 const FLEET_MMSIS = FLEET.map((s) => s.mmsi);
 
-// aisstream subscription mode. A narrow FiltersShipMMSI is efficient but returns
-// nothing whenever aisstream's (small, community) receiver network isn't hearing
-// those exact MMSIs. The firehose — default — streams every ship aisstream sees,
-// and because the fleet's MMSIs are pre-seeded into allowedMmsis we catch ours
-// the moment they appear, with no dependence on a static-data message. Set
-// AIS_MMSI_FILTER=1 to switch back to the narrow filter.
-const USE_MMSI_FILTER = process.env.AIS_MMSI_FILTER === '1';
+// aisstream subscription mode. The firehose streams every ship aisstream sees
+// worldwide — useful once as a diagnostic (it proved none of the fleet are in
+// the community receiver network: 150k+ messages, 0 fleet matches), but that's
+// ~5 GB/day of inbound data for zero benefit now that CruiseMapper is the
+// reliable position source. So we default to the narrow FiltersShipMMSI: it
+// sips almost no data and still delivers a live update the moment one of the
+// fleet sails into a receiver's range, supplementing the 2-hourly scrape. Set
+// AIS_MMSI_FILTER=0 to fall back to the firehose (e.g. if scraping ever breaks).
+const USE_MMSI_FILTER = process.env.AIS_MMSI_FILTER !== '0';
 
 interface VesselData {
   mmsi: string;
@@ -315,8 +317,8 @@ function connectAIS() {
     ws = new WebSocket('wss://stream.aisstream.io/v0/stream');
 
     ws.on('open', () => {
-      // Whole-world box is mandatory. We optionally narrow to the fleet MMSIs;
-      // by default we take the firehose and match against the pre-seeded fleet.
+      // Whole-world box is mandatory. By default we narrow to the fleet MMSIs
+      // (lightweight, live supplement); AIS_MMSI_FILTER=0 takes the firehose.
       const sub: Record<string, unknown> = {
         APIKey: config.aisstreamApiKey,
         BoundingBoxes: [[[-90, -180], [90, 180]]],
