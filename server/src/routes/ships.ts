@@ -148,6 +148,11 @@ interface Snapshot {
   savedAt: number;
 }
 
+// How many ships were restored from disk at startup, and how old that snapshot
+// was — surfaced in /api/ships/debug so a restart's recovery is visible.
+let snapshotLoadedCount = 0;
+let snapshotLoadedAgeMin: number | null = null;
+
 function saveSnapshot(): void {
   try {
     const snap: Snapshot = {
@@ -177,8 +182,10 @@ function loadSnapshot(): void {
     for (const { mmsi, pts } of snap.history ?? []) {
       if (pts.length > 0 && FLEET_MMSIS.includes(mmsi)) history.set(mmsi, pts);
     }
-    const loaded = [...tracked.keys()].length;
-    if (loaded > 0) console.log(`[ships] loaded ${loaded} ships from snapshot (${Math.round(ageMs / 60_000)} min old)`);
+    snapshotLoadedCount = [...tracked.keys()].length;
+    snapshotLoadedAgeMin = Math.round(ageMs / 60_000);
+    if (snapshotLoadedCount > 0)
+      console.log(`[ships] loaded ${snapshotLoadedCount} ships from snapshot (${snapshotLoadedAgeMin} min old)`);
   } catch {
     // No snapshot yet — start fresh.
   }
@@ -766,19 +773,55 @@ function trackedByImo() {
   });
 }
 
-// Plain-language read of the current state so the failure mode is obvious at a
-// glance from a browser.
+function providerLabel(): string {
+  switch (paidProvider) {
+    case 'cruisemapper':
+      return 'CruiseMapper';
+    case 'vesselfinder':
+      return 'VesselFinder';
+    case 'myshiptracking':
+      return 'MyShipTracking';
+    default:
+      return 'the position feed';
+  }
+}
+
+// Plain-language read of the current state so the situation is obvious at a
+// glance from a browser. A by-IMO source (CruiseMapper scrape or a paid key) is
+// now the primary way ships reach the map, so lead with whether ships are
+// actually shown and from where; aisstream is a live supplement whose silence
+// is expected when no fleet ship is in a community receiver's range.
 function diagnose(perImo: ReturnType<typeof trackedByImo>): string {
-  if (!config.aisstreamApiKey) return 'No AISSTREAM_API_KEY is set in this environment — that is why nothing shows.';
-  const state = wsStateName();
-  if (state !== 'open')
-    return `WebSocket is "${state}" (last error: ${lastError ?? 'none'}). Likely an invalid/expired key or blocked outbound WebSocket.`;
-  if (totalMessages === 0)
-    return `Connected and subscribed to the ${ALLOWED_IMOS.size}-ship fleet, but no messages yet — most likely none of them are in a receiver's range right now (they pin to last-known once seen). Only suspect the key if this persists for many hours.`;
+  const total = ALLOWED_IMOS.size;
   const matched = perImo.filter((p) => p.matched).length;
-  if (matched === 0)
-    return `Stream is live (${totalMessages.toLocaleString()} msgs) but none of the ${ALLOWED_IMOS.size} tracked ships have appeared — a terrestrial-coverage gap. They pin to last-known the moment one is seen.`;
-  return `Working: ${matched} of ${ALLOWED_IMOS.size} tracked ships seen.`;
+  const aisOpen = wsStateName() === 'open';
+  const aisSupp = aisOpen
+    ? ' aisstream is connected as a live supplement (silent until a ship enters receiver range).'
+    : '';
+
+  // Primary: are ships on the map, and where from?
+  if (matched > 0) {
+    const head =
+      matched === total
+        ? `Working: all ${total} ships on the map`
+        : `${matched} of ${total} ships on the map`;
+    const via = paidProvider ? ` via ${providerLabel()}` : '';
+    return `${head}${via}.${aisSupp}`;
+  }
+
+  // No ships shown — diagnose the by-IMO source first, then aisstream.
+  if (paidConfigured()) {
+    const src = providerLabel();
+    if (paidLastError) return `No ships yet — ${src} poll failed: ${paidLastError}.`;
+    if (lastScrapeNote && /blocked/i.test(lastScrapeNote))
+      return `No ships yet — ${src} is being blocked: ${lastScrapeNote}.`;
+    if (paidLastOk === 0) return `No ships yet — ${src} has not finished its first poll.`;
+    return `No ships yet — ${src} returned no positions${lastScrapeNote ? ` (${lastScrapeNote})` : ''}.`;
+  }
+  if (!config.aisstreamApiKey) return 'No position source configured (no scrape, no paid key, no AISSTREAM_API_KEY).';
+  if (!aisOpen)
+    return `aisstream WebSocket is "${wsStateName()}" (last error: ${lastError ?? 'none'}).`;
+  return `aisstream connected but none of the ${total} ships are in receiver range yet.`;
 }
 
 // GET /api/ships/debug — connection, stream-volume and per-ship match state.
@@ -817,7 +860,9 @@ router.get('/debug', (_req, res) => {
     },
     snapshot: {
       path: SNAPSHOT_PATH,
-      loaded: [...tracked.keys()].length,
+      loadedAtStartup: snapshotLoadedCount,
+      ageAtStartupMin: snapshotLoadedAgeMin,
+      trackedNow: tracked.size,
     },
     diagnosis: diagnose(perImo),
     updated: now,
