@@ -9,6 +9,36 @@ import { useTimeZonesStatus } from './timezonesStore';
 const DATA_URL =
   'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_10m_time_zones.geojson';
 
+// The NE10m data contains ~49 Arctic coordinates nudged just past the pole
+// (latitude 90.0001+). Cesium's rhumb-line tessellation computes isometric
+// latitude log(tan(π/4 + φ/2)), which diverges to ∞/NaN at |lat| ≥ 90° and
+// crashes polygon geometry creation ("Invalid array length"). Clamp every
+// coordinate just inside the valid range to keep the math finite.
+const MAX_ABS_LAT = 89.99;
+function clampLon(v: number): number {
+  return v < -180 ? -180 : v > 180 ? 180 : v;
+}
+function clampLat(v: number): number {
+  return v < -MAX_ABS_LAT ? -MAX_ABS_LAT : v > MAX_ABS_LAT ? MAX_ABS_LAT : v;
+}
+type Ring = number[][];
+function clampRing(ring: Ring): void {
+  for (const c of ring) {
+    if (c.length >= 2) {
+      c[0] = clampLon(c[0]);
+      c[1] = clampLat(c[1]);
+    }
+  }
+}
+function sanitizeGeometry(geom: GeoJSON.Geometry | null): void {
+  if (!geom) return;
+  if (geom.type === 'Polygon') {
+    (geom.coordinates as Ring[]).forEach(clampRing);
+  } else if (geom.type === 'MultiPolygon') {
+    (geom.coordinates as Ring[][]).forEach((poly) => poly.forEach(clampRing));
+  }
+}
+
 // Try several property-name spellings that appear in different NE releases.
 function parseOffset(props: Record<string, unknown>): number | null {
   const raw =
@@ -87,14 +117,23 @@ export function TimeZonesLayer() {
     setStatus({ loading: true, error: null });
     let mounted = true;
 
-    Cesium.GeoJsonDataSource.load(DATA_URL, {
-      stroke: Cesium.Color.WHITE.withAlpha(0.20),
-      strokeWidth: 0.8,
-      fill: Cesium.Color.TRANSPARENT, // overridden per entity below
-      clampToGround: false,
-    })
-      .then((ds) => {
-        if (!mounted) { return; }
+    (async () => {
+      try {
+        // Fetch + sanitize ourselves so we can clamp the out-of-range Arctic
+        // coordinates before Cesium's tessellator ever sees them.
+        const resp = await fetch(DATA_URL);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const gj = (await resp.json()) as GeoJSON.FeatureCollection;
+        for (const feature of gj.features) sanitizeGeometry(feature.geometry);
+        if (!mounted) return;
+
+        const ds = await Cesium.GeoJsonDataSource.load(gj, {
+          stroke: Cesium.Color.WHITE.withAlpha(0.20),
+          strokeWidth: 0.8,
+          fill: Cesium.Color.TRANSPARENT, // overridden per entity below
+          clampToGround: false,
+        });
+        if (!mounted) return;
 
         let count = 0;
         for (const entity of ds.entities.values) {
@@ -117,18 +156,13 @@ export function TimeZonesLayer() {
           entity.polygon.outline = new Cesium.ConstantProperty(true);
           entity.polygon.outlineWidth = new Cesium.ConstantProperty(1);
           entity.polygon.height = new Cesium.ConstantProperty(0);
-          // Prevent Cesium's rhumb-line subdivider from blowing up on large
-          // cross-antimeridian / polar polygons (RangeError: Invalid array length).
-          // NONE = straight Cartesian edges, no geodesic interpolation needed
-          // for these already-dense NE10m boundaries.
-          entity.polygon.arcType = new Cesium.ConstantProperty(Cesium.ArcType.NONE);
 
           if (offset !== null) {
             const label = offsetLabel(offset);
             const time = currentTimeAt(offset);
             const tzName =
-              (props?.['TZ_NAME1ST'] as string | undefined) ??
-              (props?.['time_zone'] as string | undefined) ??
+              (props?.['tz_name1st'] as string | undefined) ||
+              (props?.['time_zone'] as string | undefined) ||
               label;
             entity.name = label;
             entity.description = new Cesium.ConstantProperty(`
@@ -147,12 +181,12 @@ export function TimeZonesLayer() {
         viewer.dataSources.add(ds);
         setStatus({ loading: false, ready: true, count, error: null });
         viewer.scene.requestRender();
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (!mounted) return;
         const msg = err instanceof Error ? err.message : String(err);
         setStatus({ loading: false, error: `Timezones: ${msg}` });
-      });
+      }
+    })();
 
     return () => { mounted = false; };
   }, [viewer, active]);
