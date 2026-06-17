@@ -15,7 +15,9 @@ import { LOCATION_GROUPS } from '../layers/locations/locations';
 import { LayerToggle } from './LayerToggle';
 import { Section } from './Section';
 import { BasemapSwitcher } from './BasemapSwitcher';
+import { ScreensaverControls } from './ScreensaverControls';
 import { RadarControls } from '../layers/radar/RadarControls';
+import { useUiStore } from './uiStore';
 import type { SatelliteGroup } from '../types';
 
 const MAGNITUDES: Array<{ value: '1.0' | '2.5' | '4.5' | 'significant'; label: string }> = [
@@ -57,6 +59,8 @@ export function Sidebar() {
   const earthStatus = useEarthStatus();
   const osmStatus = useOsmStatus();
   const screensaverActive = useScreensaverStore((s) => s.active);
+  const sidebarOpen = useUiStore((s) => s.sidebarOpen);
+  const setSidebarOpen = useUiStore((s) => s.setSidebarOpen);
   const viewer = useCesiumViewer();
   const locationsActive = (active as Record<string, boolean>).locations ?? true;
 
@@ -77,14 +81,47 @@ export function Sidebar() {
     return `${shown} satellites · live`;
   }
 
+  // On md+ the sidebar is always docked. On small screens it's an off-canvas
+  // drawer toggled by the TopBar hamburger. The screensaver hides it entirely.
+  const translate = screensaverActive
+    ? '-translate-x-full'
+    : sidebarOpen
+      ? 'translate-x-0'
+      : '-translate-x-full md:translate-x-0';
+
   return (
-    <div
-      className={`pointer-events-auto absolute left-0 top-0 z-10 flex h-full w-72 flex-col border-r border-white/10 bg-ink-900/85 pt-20 shadow-panel backdrop-blur-sm transition-transform duration-700 ease-in-out ${
-        screensaverActive ? '-translate-x-full' : 'translate-x-0'
-      }`}
-    >
-      <div className="hud-scroll flex-1 overflow-y-auto px-2 pb-4">
-        <Section title="Base Map">
+    <>
+      {/* Mobile backdrop — tap to dismiss the drawer. */}
+      {sidebarOpen && !screensaverActive && (
+        <div
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden
+        />
+      )}
+      <div
+        className={`pointer-events-auto absolute left-0 top-0 z-50 flex h-full w-72 max-w-[85vw] flex-col border-r border-white/10 bg-ink-900/95 pt-16 shadow-panel backdrop-blur-sm transition-transform duration-500 ease-in-out md:z-10 md:max-w-none md:bg-ink-900/85 md:pt-20 ${translate}`}
+      >
+        {/* Mobile-only close button. */}
+        <button
+          onClick={() => setSidebarOpen(false)}
+          className="absolute right-2 top-3 rounded-md p-1.5 text-white/50 transition hover:bg-white/10 hover:text-white md:hidden"
+          aria-label="Close menu"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M6 6L18 18M6 18L18 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </button>
+        <div className="hud-scroll flex-1 overflow-y-auto px-2 pb-4">
+          {/* Screensaver modes — mobile only; desktop has them in the TopBar. */}
+          <div className="md:hidden">
+            <Section title="Screensaver">
+              <div className="px-1 pb-1">
+                <ScreensaverControls />
+              </div>
+            </Section>
+          </div>
+          <Section title="Base Map">
           <BasemapSwitcher />
           <LayerToggle
             label="3D Buildings & Terrain"
@@ -323,9 +360,10 @@ export function Sidebar() {
                 {group.locations.map((loc) => (
                   <button
                     key={loc.name}
-                    onClick={() =>
-                      viewer && flyToLonLat(viewer, loc.lon, loc.lat, loc.altitudeM ?? 30_000)
-                    }
+                    onClick={() => {
+                      if (viewer) flyToLonLat(viewer, loc.lon, loc.lat, loc.altitudeM ?? 30_000);
+                      setSidebarOpen(false); // dismiss the drawer on mobile
+                    }}
                     className="flex w-full items-center gap-2 rounded px-3 py-1 text-left text-[12px] text-white/60 transition hover:bg-white/8 hover:text-white/90"
                   >
                     <span
@@ -339,7 +377,8 @@ export function Sidebar() {
             </div>
           ))}
         </Section>
+        </div>
       </div>
-    </div>
+    </>
   );
 }

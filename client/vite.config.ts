@@ -13,6 +13,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const cesiumBuildRootPath = path.resolve(__dirname, '../node_modules/cesium/Build');
 
 export default defineConfig({
+  // Stamped at build time (i.e. when Heroku builds the slug) so the UI can show
+  // when the latest deploy went out.
+  define: {
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+  },
   plugins: [
     react(),
     cesium({

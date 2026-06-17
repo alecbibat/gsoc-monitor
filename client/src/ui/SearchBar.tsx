@@ -62,7 +62,7 @@ export function SearchBar() {
   }
 
   return (
-    <div className="relative w-80">
+    <div className="relative w-full sm:w-80">
       <form onSubmit={handleSubmit} className="relative">
         <input
           value={query}

@@ -1,41 +1,31 @@
 import { useEffect, useState } from 'react';
 import { SearchBar } from './SearchBar';
 import { WidgetLauncher } from '../widgets/WidgetLauncher';
-import { useScreensaverStore } from '../screensaver/screensaverStore';
-import type { ScreensaverMode } from '../screensaver/screensaverStore';
+import { ScreensaverControls } from './ScreensaverControls';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { resetCamera } from '../cesium/flyTo';
 import { useTrackedHistory } from './useTrackedHistory';
+import { useUiStore } from './uiStore';
 
-function ScreensaverButton({
-  mode,
-  label,
-  title,
-}: {
-  mode: ScreensaverMode;
-  label: string;
-  title: string;
-}) {
-  const active = useScreensaverStore((s) => s.active);
-  const currentMode = useScreensaverStore((s) => s.mode);
-  const toggle = useScreensaverStore((s) => s.toggle);
-
-  const isOn = active && currentMode === mode;
-
+function HamburgerButton() {
+  const toggle = useUiStore((s) => s.toggleSidebar);
   return (
     <button
-      onClick={() => toggle(mode)}
-      className={`pointer-events-auto flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold tracking-widest shadow-panel backdrop-blur-sm transition-all ${
-        isOn
-          ? 'border-accent/40 bg-accent/10 text-accent'
-          : 'border-white/10 bg-ink-900/80 text-white/40 hover:text-white/70'
-      }`}
-      title={title}
+      onClick={toggle}
+      className="pointer-events-auto flex items-center justify-center rounded-lg border border-white/10 bg-ink-900/80 p-2.5 text-white/70 shadow-panel backdrop-blur-sm transition hover:text-white md:hidden"
+      aria-label="Toggle menu"
     >
-      <span
-        className={`h-1.5 w-1.5 rounded-full ${isOn ? 'animate-pulse bg-accent' : 'bg-white/20'}`}
-      />
-      {label}
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      >
+        <path d="M4 6h16M4 12h16M4 18h16" />
+      </svg>
     </button>
   );
 }
@@ -66,7 +56,7 @@ function LiveClock() {
 
   return (
     <div
-      className="pointer-events-auto flex items-baseline gap-1.5 rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 shadow-panel backdrop-blur-sm"
+      className="pointer-events-auto hidden items-baseline gap-1.5 rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 shadow-panel backdrop-blur-sm sm:flex"
       title={fullDate}
     >
       <span className="font-mono text-[13px] font-semibold tabular-nums tracking-wider text-white/90">
@@ -75,6 +65,44 @@ function LiveClock() {
       <span className="text-[10px] font-semibold uppercase tracking-wider text-white/35">
         {tzAbbr}
       </span>
+    </div>
+  );
+}
+
+function relativeDeploy(iso: string): { rel: string; abs: string } {
+  const then = new Date(iso);
+  const abs = then.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  const sec = Math.max(0, (Date.now() - then.getTime()) / 1000);
+  let rel: string;
+  if (sec < 60) rel = 'just now';
+  else if (sec < 3600) rel = `${Math.floor(sec / 60)}m ago`;
+  else if (sec < 86_400) rel = `${Math.floor(sec / 3600)}h ago`;
+  else rel = `${Math.floor(sec / 86_400)}d ago`;
+  return { rel, abs };
+}
+
+// Shows when the currently-served build was deployed (build timestamp baked in
+// by Vite). Refreshes the relative label every minute.
+function DeployStamp() {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const iso = typeof __BUILD_TIME__ === 'string' ? __BUILD_TIME__ : new Date().toISOString();
+  const { rel, abs } = relativeDeploy(iso);
+
+  return (
+    <div
+      className="pointer-events-auto hidden items-center gap-1.5 rounded-lg border border-white/10 bg-ink-900/80 px-2.5 py-2 shadow-panel backdrop-blur-sm sm:flex"
+      title={`Latest deploy: ${abs}`}
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-accent-ok/70" />
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+        deployed
+      </span>
+      <span className="font-mono text-[11px] font-semibold text-white/70">{rel}</span>
     </div>
   );
 }
@@ -101,7 +129,51 @@ function ResetCameraButton() {
         <path d="M12 3v3M12 18v3M3 12h3M18 12h3" />
         <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
       </svg>
-      RESET
+      <span className="hidden sm:inline">RESET</span>
+    </button>
+  );
+}
+
+function FullscreenButton() {
+  const [isFs, setIsFs] = useState(
+    () => typeof document !== 'undefined' && Boolean(document.fullscreenElement)
+  );
+  useEffect(() => {
+    const onChange = () => setIsFs(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  const toggle = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.().catch(() => {});
+    } else {
+      document.documentElement.requestFullscreen?.().catch(() => {});
+    }
+  };
+
+  return (
+    <button
+      onClick={toggle}
+      className="pointer-events-auto flex items-center justify-center rounded-lg border border-white/10 bg-ink-900/80 p-2 text-white/40 shadow-panel backdrop-blur-sm transition-all hover:text-white/70"
+      title={isFs ? 'Exit full screen' : 'Enter full screen'}
+      aria-label="Toggle full screen"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {isFs ? (
+          <path d="M9 3v3a3 3 0 0 1-3 3H3M21 9h-3a3 3 0 0 1-3-3V3M15 21v-3a3 3 0 0 1 3-3h3M3 15h3a3 3 0 0 1 3 3v3" />
+        ) : (
+          <path d="M3 9V5a2 2 0 0 1 2-2h4M21 9V5a2 2 0 0 0-2-2h-4M3 15v4a2 2 0 0 0 2 2h4M21 15v4a2 2 0 0 1-2 2h-4" />
+        )}
+      </svg>
     </button>
   );
 }
@@ -138,7 +210,7 @@ function TrackedCounter() {
   const { total, history } = useTrackedHistory();
   return (
     <div
-      className="pointer-events-auto flex items-center gap-2 rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 text-white/60 shadow-panel backdrop-blur-sm"
+      className="pointer-events-auto hidden items-center gap-2 rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 text-white/60 shadow-panel backdrop-blur-sm lg:flex"
       title="Total items currently tracked across all active layers"
     >
       <Sparkline history={history} />
@@ -156,43 +228,28 @@ function TrackedCounter() {
 
 export function TopBar() {
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-4 p-4">
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col gap-2 p-3 md:flex-row md:items-start md:justify-between md:gap-4 md:p-4">
       {/* Left: identity + camera controls + screensaver modes */}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2 md:gap-3">
+        <HamburgerButton />
         <div className="pointer-events-auto flex items-center gap-2 rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 shadow-panel backdrop-blur-sm">
           <span className="h-2 w-2 animate-pulse rounded-full bg-accent-ok shadow-glow" />
           <span className="font-mono text-[13px] font-semibold tracking-[0.2em] text-white/90">
             GSOC<span className="text-accent">MONITOR</span>
           </span>
         </div>
+        <DeployStamp />
         <LiveClock />
         <TrackedCounter />
         <ResetCameraButton />
-        <ScreensaverButton
-          mode="global"
-          label="GLOBAL"
-          title="Globe rotates and visits active alerts, earthquakes, and strategic POIs"
-        />
-        <ScreensaverButton
-          mode="national-parks"
-          label="PARKS"
-          title="Tour national parks and office locations with county highlighting"
-        />
-        <ScreensaverButton
-          mode="pins"
-          label="PINS"
-          title="Orbit each tracked property location with a cinematic close-up"
-        />
-        <ScreensaverButton
-          mode="iss"
-          label="ISS"
-          title="Follow the International Space Station in real time"
-        />
+        <FullscreenButton />
+        {/* Screensaver modes — desktop only; mobile gets them in the drawer. */}
+        <ScreensaverControls className="hidden md:flex" />
       </div>
       {/* Right: widgets + search */}
-      <div className="flex items-center gap-3">
+      <div className="flex w-full flex-wrap items-center gap-2 md:w-auto md:gap-3">
         <WidgetLauncher />
-        <div className="pointer-events-auto">
+        <div className="pointer-events-auto w-full sm:w-auto">
           <SearchBar />
         </div>
       </div>
