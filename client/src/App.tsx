@@ -25,6 +25,8 @@ import { GoogleEarthLayer } from './layers/earth3d/GoogleEarthLayer';
 import { OsmBuildingsLayer } from './layers/osmBuildings/OsmBuildingsLayer';
 import { TrafficLayer } from './layers/traffic/TrafficLayer';
 import { TimeZonesLayer } from './layers/timezones/TimeZonesLayer';
+import { MeasureController } from './measure/MeasureController';
+import { MeasureOverlay } from './measure/MeasureOverlay';
 import { ScreensaverToast } from './screensaver/ScreensaverToast';
 
 export default function App() {
@@ -51,6 +53,7 @@ export default function App() {
           <OsmBuildingsLayer />
           <GoogleEarthLayer />
           <TrafficLayer />
+          <MeasureController />
         </CesiumGlobe>
         <TopBar />
         <Sidebar />
@@ -61,6 +64,7 @@ export default function App() {
         <IssController />
         <PinsController />
         <ScreensaverToast />
+        <MeasureOverlay />
       </div>
     </CesiumContext.Provider>
   );

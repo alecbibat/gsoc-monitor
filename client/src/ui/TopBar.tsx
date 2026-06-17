@@ -6,6 +6,7 @@ import { useCesiumViewer } from '../cesium/CesiumContext';
 import { resetCamera } from '../cesium/flyTo';
 import { useTrackedHistory } from './useTrackedHistory';
 import { useUiStore } from './uiStore';
+import { useMeasureStore } from '../measure/measureStore';
 
 function HamburgerButton() {
   const toggle = useUiStore((s) => s.toggleSidebar);
@@ -195,6 +196,36 @@ function FullscreenButton() {
   );
 }
 
+function MeasureButton() {
+  const active = useMeasureStore((s) => s.active);
+  const toggle = useMeasureStore((s) => s.toggle);
+  return (
+    <button
+      onClick={toggle}
+      className={`pointer-events-auto flex items-center justify-center rounded-lg border p-2 shadow-panel backdrop-blur-sm transition-all ${
+        active
+          ? 'border-accent/40 bg-accent/10 text-accent'
+          : 'border-white/10 bg-ink-900/80 text-white/40 hover:text-white/70'
+      }`}
+      title="Measure distance or area"
+      aria-label="Measure tool"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M2 12 L12 2 L22 12 L12 22 Z" />
+        <path d="M6.5 9.5 L8 11 M9.5 6.5 L11 8 M12.5 12.5 L14 14 M15.5 9.5 L17 11" />
+      </svg>
+    </button>
+  );
+}
+
 // Tiny SVG sparkline for the items-tracked counter.
 function Sparkline({ history }: { history: number[] }) {
   if (history.length < 2) return null;
@@ -260,6 +291,7 @@ export function TopBar() {
         <TrackedCounter />
         <ResetCameraButton />
         <FullscreenButton />
+        <MeasureButton />
         {/* Screensaver modes — desktop only; mobile gets them in the drawer. */}
         <ScreensaverControls className="hidden md:flex" />
       </div>

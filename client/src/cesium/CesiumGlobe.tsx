@@ -4,6 +4,7 @@ import { BASEMAPS } from './basemaps';
 import { getPanelData } from './entityPanelLink';
 import { useLayersStore } from '../store/layersStore';
 import { usePanelStore } from '../panels/panelStore';
+import { useMeasureStore } from '../measure/measureStore';
 import { HOME_VIEW } from './flyTo';
 
 interface Props {
@@ -58,6 +59,8 @@ export function CesiumGlobe({ children, onReady }: Props) {
 
     v.screenSpaceEventHandler.setInputAction(
       (click: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
+        // While the measure tool owns the cursor, don't open entity panels.
+        if (useMeasureStore.getState().active) return;
         const picked = v.scene.pick(click.position);
         const panelData = getPanelData(picked?.id);
         if (panelData) {
