@@ -6,7 +6,7 @@ import { useLayersStore } from '../store/layersStore';
 import { usePanelStore } from '../panels/panelStore';
 import { usePickChooserStore, type PanelOpenData } from '../panels/pickChooserStore';
 import { useMeasureStore } from '../measure/measureStore';
-import { usePerfStore } from '../perf/perfStore';
+import { usePerfStore, QUALITY_SETTINGS } from '../perf/perfStore';
 import { HOME_VIEW } from './flyTo';
 
 interface Props {
@@ -19,7 +19,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
   const baseLayerRef = useRef<Cesium.ImageryLayer | null>(null);
   const basemap = useLayersStore((s) => s.basemap);
-  const performanceMode = usePerfStore((s) => s.performanceMode);
+  const qualityLevel = usePerfStore((s) => s.qualityLevel);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -124,42 +124,27 @@ export function CesiumGlobe({ children, onReady }: Props) {
     viewer.scene.requestRender();
   }, [viewer, basemap]);
 
-  // Performance mode: drop render resolution, anti-aliasing, terrain detail and
-  // atmosphere/lighting to lift FPS on thin clients; restore them when off.
+  // Render quality: graduated trade of resolution, anti-aliasing, terrain detail
+  // and atmosphere/lighting for frame rate, driven by the quality slider.
   useEffect(() => {
     if (!viewer) return;
     const scene = viewer.scene;
     const globe = scene.globe;
-    if (performanceMode) {
-      // Render ~half the pixels — the single biggest win when fill-rate bound.
-      viewer.resolutionScale = 0.65;
-      scene.postProcessStages.fxaa.enabled = false;
-      try {
-        scene.msaaSamples = 1;
-      } catch {
-        /* MSAA unsupported — ignore */
-      }
-      globe.maximumScreenSpaceError = 4; // coarser terrain/imagery = fewer tiles
-      globe.enableLighting = false;
-      globe.showGroundAtmosphere = false;
-      scene.fog.enabled = false;
-      if (scene.skyAtmosphere) scene.skyAtmosphere.show = false;
-    } else {
-      viewer.resolutionScale = 1;
-      scene.postProcessStages.fxaa.enabled = true;
-      try {
-        scene.msaaSamples = 4;
-      } catch {
-        /* ignore */
-      }
-      globe.maximumScreenSpaceError = 2;
-      globe.enableLighting = true;
-      globe.showGroundAtmosphere = true;
-      scene.fog.enabled = true;
-      if (scene.skyAtmosphere) scene.skyAtmosphere.show = true;
+    const s = QUALITY_SETTINGS[qualityLevel];
+    viewer.resolutionScale = s.resolutionScale;
+    scene.postProcessStages.fxaa.enabled = s.fxaa;
+    try {
+      scene.msaaSamples = s.msaa;
+    } catch {
+      /* MSAA unsupported — ignore */
     }
+    globe.maximumScreenSpaceError = s.maximumScreenSpaceError; // coarser = fewer tiles
+    globe.enableLighting = s.lighting;
+    globe.showGroundAtmosphere = s.atmosphere;
+    scene.fog.enabled = s.fog;
+    if (scene.skyAtmosphere) scene.skyAtmosphere.show = s.atmosphere;
     scene.requestRender();
-  }, [viewer, performanceMode]);
+  }, [viewer, qualityLevel]);
 
   return (
     <div ref={containerRef} className="absolute inset-0">

@@ -11,7 +11,7 @@ import { useEarthStatus } from '../layers/earth3d/earthStore';
 import { useOsmStatus } from '../layers/osmBuildings/osmStore';
 import { useTrafficStatus } from '../layers/traffic/trafficStore';
 import { useTimeZonesStatus } from '../layers/timezones/timezonesStore';
-import { usePerfStore } from '../perf/perfStore';
+import { usePerfStore, QUALITY_LEVELS, QUALITY_META } from '../perf/perfStore';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { flyToLonLat } from '../cesium/flyTo';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
@@ -63,8 +63,8 @@ export function Sidebar() {
   const osmStatus = useOsmStatus();
   const trafficStatus = useTrafficStatus();
   const timeZonesStatus = useTimeZonesStatus();
-  const performanceMode = usePerfStore((s) => s.performanceMode);
-  const togglePerf = usePerfStore((s) => s.toggle);
+  const qualityLevel = usePerfStore((s) => s.qualityLevel);
+  const setQualityLevel = usePerfStore((s) => s.setQualityLevel);
   const screensaverActive = useScreensaverStore((s) => s.active);
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
   const setSidebarOpen = useUiStore((s) => s.setSidebarOpen);
@@ -143,16 +143,32 @@ export function Sidebar() {
                   : 'Color-coded UTC offset bands · free')
             }
           />
-          <LayerToggle
-            label="Performance Mode"
-            active={performanceMode}
-            onToggle={togglePerf}
-            statusText={
-              performanceMode
-                ? '½ resolution, no AA/atmosphere · higher FPS'
-                : 'Lower resolution & effects to boost frame rate'
-            }
-          />
+          {/* Render quality slider — quality ↔ performance. */}
+          <div className="px-1 py-2">
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-[13px] font-medium text-white/80">Render Quality</span>
+              <span className="text-[11px] font-semibold text-accent">
+                {QUALITY_META[qualityLevel].label}
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={QUALITY_LEVELS.length - 1}
+              step={1}
+              value={QUALITY_LEVELS.indexOf(qualityLevel)}
+              onChange={(e) => setQualityLevel(QUALITY_LEVELS[Number(e.target.value)])}
+              className="w-full cursor-pointer accent-[#3ddcff]"
+              aria-label="Render quality"
+            />
+            <div className="mt-0.5 flex justify-between text-[9px] font-semibold uppercase tracking-wider text-white/30">
+              <span>Quality</span>
+              <span>Performance</span>
+            </div>
+            <div className="mt-1 text-[11px] leading-snug text-white/40">
+              {QUALITY_META[qualityLevel].desc}
+            </div>
+          </div>
           <LayerToggle
             label="3D Buildings & Terrain"
             active={(active as Record<string, boolean>).osmBuildings ?? false}
