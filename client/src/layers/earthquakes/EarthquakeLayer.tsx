@@ -6,11 +6,47 @@ import { api } from '../../api/client';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import type { EarthquakeFeature } from '../../types';
 
-function magnitudeColor(mag: number): Cesium.Color {
-  if (mag >= 6) return Cesium.Color.fromCssColorString('#ff5d5d');
-  if (mag >= 4.5) return Cesium.Color.fromCssColorString('#ffb84d');
-  if (mag >= 2.5) return Cesium.Color.fromCssColorString('#ffe14d');
-  return Cesium.Color.fromCssColorString('#52e3a4');
+// Concentric seismic-ring SVG billboard — 3 ripple rings + epicenter dot,
+// color and pixel size keyed on magnitude tier.
+type MagTier = 'major' | 'strong' | 'moderate' | 'minor';
+
+function magTier(mag: number): MagTier {
+  if (mag >= 6) return 'major';
+  if (mag >= 4.5) return 'strong';
+  if (mag >= 2.5) return 'moderate';
+  return 'minor';
+}
+
+const MAG_COLORS: Record<MagTier, { hex: string; size: number }> = {
+  major:    { hex: '#ff5d5d', size: 40 },
+  strong:   { hex: '#ffb84d', size: 32 },
+  moderate: { hex: '#ffe14d', size: 26 },
+  minor:    { hex: '#52e3a4', size: 20 },
+};
+
+function makeEqSvg(tier: MagTier): string {
+  const { hex } = MAG_COLORS[tier];
+  // Three concentric ripple rings with decreasing opacity outward, plus a
+  // filled center dot marking the epicenter.
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">` +
+    `<circle cx="20" cy="20" r="17" fill="none" stroke="${hex}" stroke-width="1.5" opacity="0.3"/>` +
+    `<circle cx="20" cy="20" r="11.5" fill="none" stroke="${hex}" stroke-width="2" opacity="0.55"/>` +
+    `<circle cx="20" cy="20" r="6.5" fill="none" stroke="${hex}" stroke-width="2.5" opacity="0.85"/>` +
+    `<circle cx="20" cy="20" r="3" fill="${hex}"/>` +
+    `</svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+const eqIconCache = new Map<MagTier, string>();
+function eqIcon(mag: number): string {
+  const tier = magTier(mag);
+  if (!eqIconCache.has(tier)) eqIconCache.set(tier, makeEqSvg(tier));
+  return eqIconCache.get(tier)!;
+}
+
+function eqIconSize(mag: number): number {
+  return MAG_COLORS[magTier(mag)].size;
 }
 
 export function EarthquakeLayer() {
@@ -51,14 +87,16 @@ export function EarthquakeLayer() {
         for (const feature of data.features as unknown as EarthquakeFeature[]) {
           const [lon, lat, depthKm] = feature.geometry.coordinates;
           const mag = feature.properties.mag ?? 0;
+          const sz = eqIconSize(mag);
           const entity = ds.entities.add({
             id: `eq-${feature.id}`,
             position: Cesium.Cartesian3.fromDegrees(lon, lat),
-            point: {
-              pixelSize: 6 + Math.max(0, mag) * 3,
-              color: magnitudeColor(mag).withAlpha(0.85),
-              outlineColor: Cesium.Color.BLACK.withAlpha(0.6),
-              outlineWidth: 1,
+            billboard: {
+              image: eqIcon(mag),
+              width: sz,
+              height: sz,
+              verticalOrigin: Cesium.VerticalOrigin.CENTER,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
             },
           });
           attachPanelData(entity, {

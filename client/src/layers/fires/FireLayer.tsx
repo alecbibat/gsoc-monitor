@@ -38,18 +38,46 @@ function asNumber(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-// Colour + size ramp on Fire Radiative Power (MW): hotter fires read redder.
-function fireColor(frp: number | undefined): Cesium.Color {
+// Layered flame SVG billboard — 3 color zones (outer body, mid flame, hot
+// core) keyed on FRP tier so we generate exactly 4 distinct data URIs.
+type FrpTier = 'extreme' | 'high' | 'med' | 'low';
+
+function frpTier(frp: number | undefined): FrpTier {
   const f = frp ?? 0;
-  if (f >= 100) return Cesium.Color.fromCssColorString('#ff2d1a');
-  if (f >= 30) return Cesium.Color.fromCssColorString('#ff6a1a');
-  if (f >= 8) return Cesium.Color.fromCssColorString('#ff9d2e');
-  return Cesium.Color.fromCssColorString('#ffc24d');
+  if (f >= 100) return 'extreme';
+  if (f >= 30) return 'high';
+  if (f >= 8) return 'med';
+  return 'low';
 }
 
-function fireSize(frp: number | undefined): number {
-  const f = frp ?? 0;
-  return Math.min(16, 4 + Math.sqrt(f));
+const FIRE_COLORS: Record<FrpTier, { outer: string; mid: string; size: number }> = {
+  extreme: { outer: '#ff2d1a', mid: '#ff9d2e', size: 28 },
+  high:    { outer: '#ff6a1a', mid: '#ffb84d', size: 24 },
+  med:     { outer: '#ff9d2e', mid: '#ffd84d', size: 20 },
+  low:     { outer: '#ffc24d', mid: '#fff08a', size: 17 },
+};
+
+function makeFireSvg(tier: FrpTier): string {
+  const { outer, mid } = FIRE_COLORS[tier];
+  // Three nested flame paths: outer body → mid flame → white-hot core.
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 30">` +
+    `<path d="M12 1C8.5 5.5 5 11 5 17C5 22.5 8 28 12 28C16 28 19 22.5 19 17C19 11 15.5 5.5 12 1Z" fill="${outer}"/>` +
+    `<path d="M12 9C10 12.5 8 15.5 8 18.5C8 22.5 9.7 26 12 26C14.3 26 16 22.5 16 18.5C16 15.5 14 12.5 12 9Z" fill="${mid}"/>` +
+    `<path d="M12 17C10.8 18.8 10.5 20.2 10.5 21.5C10.5 23.5 11.1 24.8 12 24.8C12.9 24.8 13.5 23.5 13.5 21.5C13.5 20.2 13.2 18.8 12 17Z" fill="#fff8b0" opacity="0.95"/>` +
+    `</svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+const fireIconCache = new Map<FrpTier, string>();
+function fireIcon(frp: number | undefined): string {
+  const tier = frpTier(frp);
+  if (!fireIconCache.has(tier)) fireIconCache.set(tier, makeFireSvg(tier));
+  return fireIconCache.get(tier)!;
+}
+
+function fireIconSize(frp: number | undefined): number {
+  return FIRE_COLORS[frpTier(frp)].size;
 }
 
 function confidenceLabel(raw: unknown): string {
@@ -174,17 +202,17 @@ export function FireLayer() {
         const [lon, lat] = f.geometry.coordinates as [number, number];
         const p = (f.properties ?? undefined) as Record<string, unknown> | undefined;
         const frp = asNumber(pick(p, ['frp', 'FRP']));
-        const color = fireColor(frp);
         const id = `fire-${drawn}`;
+        const sz = fireIconSize(frp);
         const entity = ds.entities.add({
           id,
           position: Cesium.Cartesian3.fromDegrees(lon, lat),
-          point: {
-            pixelSize: fireSize(frp),
-            color: color.withAlpha(0.9),
-            outlineColor: Cesium.Color.BLACK.withAlpha(0.45),
-            outlineWidth: 1,
-            // Default depth test so hotspots behind the globe stay hidden.
+          billboard: {
+            image: fireIcon(frp),
+            width: sz,
+            height: Math.round(sz * 1.25), // flame is taller than wide
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
         });
         attachPanelData(entity, {
