@@ -262,6 +262,17 @@ export function Sidebar() {
               </div>
             </div>
           </LayerToggle>
+          <button
+            onClick={() => {
+              if (!active.satellites) toggleLayer('satellites');
+              if (satelliteGroup !== 'stations') setSatelliteGroup('stations');
+              satellitesStatus.requestFocusIss();
+            }}
+            className="mx-1 mt-1 flex w-[calc(100%-0.5rem)] items-center gap-2 rounded-md border border-amber-300/30 bg-amber-300/10 px-2.5 py-1.5 text-left text-[12px] font-medium text-amber-100 transition hover:bg-amber-300/20"
+          >
+            <span className="text-[14px]">🛰️</span>
+            Track the ISS
+          </button>
         </Section>
 
         <Section title="Locations">
