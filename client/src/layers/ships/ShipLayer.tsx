@@ -196,6 +196,9 @@ export function ShipLayer() {
           error: null,
           noKey: false,
           connected: data.connected ?? true,
+          streaming: data.streaming ?? false,
+          messages: data.messages ?? 0,
+          matched: data.matched ?? 0,
         });
         viewer.scene.requestRender();
       } catch (err) {

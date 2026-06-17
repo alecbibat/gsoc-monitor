@@ -150,6 +150,9 @@ export interface ShipsResponse {
   ships: ShipState[];
   updated: number;
   connected?: boolean;
+  streaming?: boolean; // messages flowing in the last 60s
+  messages?: number; // total AIS messages seen since boot
+  matched?: number; // allowlisted ships correlated to a live MMSI
   total?: number; // size of the allowlist
 }
 

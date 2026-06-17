@@ -95,6 +95,17 @@ const VESSEL_CAP = 50_000;
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+// --- Diagnostics (surfaced via GET /api/ships/debug) -----------------------
+// Enough signal to tell apart the failure modes: no key, can't connect/auth,
+// connected-but-silent, live-but-out-of-range, or actually working.
+let connectAttempts = 0;
+let lastConnectAt = 0;
+let lastError: string | null = null;
+let totalMessages = 0;
+let positionReports = 0;
+let staticReports = 0;
+let lastMessageAt = 0;
+
 function evictStale() {
   const cutoff = Date.now() - 15 * 60_000;
   for (const [mmsi, v] of vessels) {
@@ -119,6 +130,7 @@ function handleMessage(raw: string) {
   const now = Date.now();
 
   if (type === 'PositionReport') {
+    positionReports++;
     const pr = msg.Message?.PositionReport ?? {};
     const lat = typeof pr.Latitude === 'number' ? pr.Latitude : null;
     const lon = typeof pr.Longitude === 'number' ? pr.Longitude : null;
@@ -164,6 +176,7 @@ function handleMessage(raw: string) {
       recordHistory(mmsi, lat, lon, now);
     }
   } else if (type === 'ShipStaticData') {
+    staticReports++;
     const sd = msg.Message?.ShipStaticData ?? {};
     const imo = typeof sd.ImoNumber === 'number' && sd.ImoNumber > 0 ? sd.ImoNumber : null;
     const info: StaticInfo = {
@@ -204,6 +217,8 @@ function connectAIS() {
   }
 
   try {
+    connectAttempts++;
+    lastConnectAt = Date.now();
     ws = new WebSocket('wss://stream.aisstream.io/v0/stream');
 
     ws.on('open', () => {
@@ -217,7 +232,11 @@ function connectAIS() {
       console.log('AIS stream connected');
     });
 
-    ws.on('message', (data: WebSocket.RawData) => handleMessage(data.toString()));
+    ws.on('message', (data: WebSocket.RawData) => {
+      totalMessages++;
+      lastMessageAt = Date.now();
+      handleMessage(data.toString());
+    });
 
     ws.on('close', () => {
       ws = null;
@@ -225,10 +244,12 @@ function connectAIS() {
     });
 
     ws.on('error', (err) => {
+      lastError = err.message;
       console.error('AIS WebSocket error:', err.message);
       ws?.terminate();
     });
   } catch (err) {
+    lastError = String(err);
     reconnectTimer = setTimeout(connectAIS, 5_000);
     console.error('AIS connect failed:', err);
   }
@@ -268,7 +289,94 @@ router.get('/', (_req, res) => {
     ships: result,
     updated: now,
     connected: ws !== null && ws.readyState === WebSocket.OPEN,
+    streaming: lastMessageAt > 0 && now - lastMessageAt < 60_000,
+    messages: totalMessages,
+    matched: allowedMmsis.size,
     total: ALLOWED_IMOS.size,
+  });
+});
+
+function wsStateName(): string {
+  if (!ws) return 'closed';
+  switch (ws.readyState) {
+    case WebSocket.CONNECTING:
+      return 'connecting';
+    case WebSocket.OPEN:
+      return 'open';
+    case WebSocket.CLOSING:
+      return 'closing';
+    default:
+      return 'closed';
+  }
+}
+
+// Per-IMO snapshot of the allowlist: which of the tracked ships we've actually
+// correlated to a live MMSI, and where/when we last saw them.
+function trackedByImo() {
+  const now = Date.now();
+  const byImo = new Map<number, VesselData>();
+  for (const v of tracked.values()) {
+    if (v.imo == null) continue;
+    const prev = byImo.get(v.imo);
+    if (!prev || v.updatedAt > prev.updatedAt) byImo.set(v.imo, v);
+  }
+  return [...ALLOWED_IMOS].map((imo) => {
+    const v = byImo.get(imo);
+    return {
+      imo,
+      matched: !!v,
+      mmsi: v?.mmsi ?? null,
+      name: v?.name ?? null,
+      lat: v?.latitude ?? null,
+      lon: v?.longitude ?? null,
+      lastSeenSec: v ? Math.round((now - v.updatedAt) / 1000) : null,
+    };
+  });
+}
+
+// Plain-language read of the current state so the failure mode is obvious at a
+// glance from a browser.
+function diagnose(perImo: ReturnType<typeof trackedByImo>): string {
+  if (!config.aisstreamApiKey) return 'No AISSTREAM_API_KEY is set in this environment — that is why nothing shows.';
+  const state = wsStateName();
+  if (state !== 'open')
+    return `WebSocket is "${state}" (last error: ${lastError ?? 'none'}). Likely an invalid/expired key or blocked outbound WebSocket.`;
+  if (totalMessages === 0)
+    return 'Connected, but zero messages received — the key is probably unauthorized or aisstream rejected the subscription.';
+  const matched = perImo.filter((p) => p.matched).length;
+  if (matched === 0)
+    return `Stream is live (${totalMessages.toLocaleString()} msgs) but none of the ${ALLOWED_IMOS.size} tracked ships have appeared — a terrestrial-coverage gap. They pin to last-known the moment one is seen.`;
+  return `Working: ${matched} of ${ALLOWED_IMOS.size} tracked ships seen.`;
+}
+
+// GET /api/ships/debug — connection, stream-volume and per-ship match state.
+router.get('/debug', (_req, res) => {
+  const now = Date.now();
+  const perImo = trackedByImo();
+  res.json({
+    keyConfigured: Boolean(config.aisstreamApiKey),
+    ws: {
+      state: wsStateName(),
+      connectAttempts,
+      lastConnectAt: lastConnectAt || null,
+      lastError,
+      lastMessageAt: lastMessageAt || null,
+      secSinceLastMessage: lastMessageAt ? Math.round((now - lastMessageAt) / 1000) : null,
+      streaming: lastMessageAt > 0 && now - lastMessageAt < 60_000,
+    },
+    stream: {
+      totalMessages,
+      positionReports,
+      staticReports,
+      distinctVesselsInMemory: vessels.size,
+    },
+    allowlist: {
+      imoCount: ALLOWED_IMOS.size,
+      matchedMmsis: [...allowedMmsis],
+      ships: perImo,
+    },
+    diagnosis: diagnose(perImo),
+    updated: now,
   });
 });
 

@@ -73,10 +73,15 @@ export function Sidebar() {
   const locationsActive = (active as Record<string, boolean>).locations ?? true;
 
   function shipsStatusText() {
-    if (shipsStatus.noKey) return 'Set AISSTREAM_API_KEY to enable';
+    if (shipsStatus.noKey) return 'No AISSTREAM_API_KEY set in this environment';
     if (shipsStatus.error) return shipsStatus.error;
-    const conn = shipsStatus.connected ? ' · live' : '';
-    return `${shipsStatus.count}/${shipsStatus.total} vessels tracked${conn}`;
+    // Distinguish the failure modes so "nothing shows" is diagnosable at a glance.
+    if (shipsStatus.count > 0) {
+      return `${shipsStatus.count}/${shipsStatus.total} ships · last-known${shipsStatus.streaming ? ' · live feed' : ''}`;
+    }
+    if (!shipsStatus.connected) return 'Stream offline — check the API key (see /api/ships/debug)';
+    if (shipsStatus.messages === 0) return 'Connected but no data — key likely unauthorized';
+    return `Feed live (${shipsStatus.messages.toLocaleString()} msgs) · 0/${shipsStatus.total} ships in range yet`;
   }
 
   function webcamsStatusText() {
