@@ -80,7 +80,7 @@ export function Sidebar() {
       return `${shipsStatus.count}/${shipsStatus.total} ships · last-known${shipsStatus.streaming ? ' · live feed' : ''}`;
     }
     if (!shipsStatus.connected) return 'Stream offline — check the API key (see /api/ships/debug)';
-    if (shipsStatus.messages === 0) return 'Connected but no data — key likely unauthorized';
+    if (shipsStatus.messages === 0) return 'Subscribed · waiting for a ship to enter receiver range';
     return `Feed live (${shipsStatus.messages.toLocaleString()} msgs) · 0/${shipsStatus.total} ships in range yet`;
   }
 

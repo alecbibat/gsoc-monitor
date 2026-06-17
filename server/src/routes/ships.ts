@@ -377,7 +377,7 @@ function diagnose(perImo: ReturnType<typeof trackedByImo>): string {
   if (state !== 'open')
     return `WebSocket is "${state}" (last error: ${lastError ?? 'none'}). Likely an invalid/expired key or blocked outbound WebSocket.`;
   if (totalMessages === 0)
-    return 'Connected, but zero messages received — the key is probably unauthorized or aisstream rejected the subscription.';
+    return `Connected and subscribed to the ${ALLOWED_IMOS.size}-ship fleet, but no messages yet — most likely none of them are in a receiver's range right now (they pin to last-known once seen). Only suspect the key if this persists for many hours.`;
   const matched = perImo.filter((p) => p.matched).length;
   if (matched === 0)
     return `Stream is live (${totalMessages.toLocaleString()} msgs) but none of the ${ALLOWED_IMOS.size} tracked ships have appeared — a terrestrial-coverage gap. They pin to last-known the moment one is seen.`;
