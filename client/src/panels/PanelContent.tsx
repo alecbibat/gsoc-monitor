@@ -7,6 +7,7 @@ import { ShipDetails } from '../layers/ships/ShipDetails';
 import { SatelliteDetails } from '../layers/satellites/SatelliteDetails';
 import { LocationDetails } from '../layers/locations/LocationDetails';
 import { PropertyDetail } from '../widgets/proximity/PropertyDetail';
+import { TimezonePanel } from '../layers/timezones/TimezonePanel';
 import { WIDGET_BY_ID } from '../widgets/registry';
 import type { PanelData } from './panelStore';
 
@@ -46,6 +47,7 @@ export function PanelContent({ panel }: { panel: PanelData }) {
       {panel.kind === 'satellites' && <SatelliteDetails payload={panel.payload as never} />}
       {panel.kind === 'locations' && <LocationDetails payload={panel.payload as never} />}
       {panel.kind === 'property-watch' && <PropertyDetail payload={panel.payload as never} />}
+      {panel.kind === 'timezones' && <TimezonePanel payload={panel.payload} />}
     </>
   );
 }

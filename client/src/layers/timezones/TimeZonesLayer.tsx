@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { useTimeZonesStatus } from './timezonesStore';
+import { attachPanelData } from '../../cesium/entityPanelLink';
 
 // Natural Earth 10m timezone polygons via jsDelivr CDN — no API key required.
 // Source: https://github.com/nvkelso/natural-earth-vector
@@ -83,14 +84,6 @@ function offsetLabel(offset: number): string {
   return m === 0 ? `UTC${sign}${h}` : `UTC${sign}${h}:${String(m).padStart(2, '0')}`;
 }
 
-// Current wall-clock time in a given UTC offset, returned as HH:MM:SS.
-function currentTimeAt(utcHours: number): string {
-  const now = Date.now();
-  const offsetMs = utcHours * 3_600_000;
-  // Compute UTC milliseconds, then shift by the zone's offset.
-  const d = new Date(now + new Date().getTimezoneOffset() * 60_000 + offsetMs);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-}
 
 export function TimeZonesLayer() {
   const viewer = useCesiumViewer();
@@ -159,19 +152,18 @@ export function TimeZonesLayer() {
 
           if (offset !== null) {
             const label = offsetLabel(offset);
-            const time = currentTimeAt(offset);
             const tzName =
               (props?.['tz_name1st'] as string | undefined) ||
               (props?.['time_zone'] as string | undefined) ||
               label;
             entity.name = label;
-            entity.description = new Cesium.ConstantProperty(`
-              <div style="font-family:monospace;padding:4px 0;line-height:1.6">
-                <div style="font-size:15px;font-weight:bold;margin-bottom:4px">${label}</div>
-                <div><span style="color:#aaa">Current time</span> &nbsp;${time}</div>
-                ${tzName !== label ? `<div><span style="color:#aaa">Zone</span> &nbsp;${tzName}</div>` : ''}
-              </div>
-            `);
+            attachPanelData(entity, {
+              id: `timezone-${label}`,
+              kind: 'timezones',
+              title: label,
+              subtitle: tzName !== label ? tzName : undefined,
+              payload: { offset, label, tzName },
+            });
           }
 
           count++;
