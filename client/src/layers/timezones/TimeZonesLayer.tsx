@@ -117,6 +117,11 @@ export function TimeZonesLayer() {
           entity.polygon.outline = new Cesium.ConstantProperty(true);
           entity.polygon.outlineWidth = new Cesium.ConstantProperty(1);
           entity.polygon.height = new Cesium.ConstantProperty(0);
+          // Prevent Cesium's rhumb-line subdivider from blowing up on large
+          // cross-antimeridian / polar polygons (RangeError: Invalid array length).
+          // NONE = straight Cartesian edges, no geodesic interpolation needed
+          // for these already-dense NE10m boundaries.
+          entity.polygon.arcType = new Cesium.ConstantProperty(Cesium.ArcType.NONE);
 
           if (offset !== null) {
             const label = offsetLabel(offset);
