@@ -4,6 +4,7 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { LOCATION_GROUPS } from './locations';
+import { useScreensaverStore } from '../../screensaver/screensaverStore';
 
 export function LocationsLayer() {
   const viewer = useCesiumViewer();
@@ -54,6 +55,10 @@ export function LocationsLayer() {
             backgroundColor: Cesium.Color.fromCssColorString('#0a0c10').withAlpha(0.7),
             backgroundPadding: new Cesium.Cartesian2(5, 3),
             scale: 1.0,
+            show: new Cesium.CallbackProperty(() => {
+              const { active, mode } = useScreensaverStore.getState();
+              return !(active && mode === 'pins');
+            }, false),
           },
         });
 
