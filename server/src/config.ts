@@ -5,6 +5,12 @@ export const config = {
   // aisstream.io API key — free at https://aisstream.io — add as AISSTREAM_API_KEY
   // in Heroku Config Vars. Without it the layer shows a no-key placeholder.
   aisstreamApiKey: process.env.AISSTREAM_API_KEY || '',
+  // Optional paid AIS providers for reliable by-IMO positions (free aisstream
+  // can't always see the fleet). Set EITHER one and the server polls the fleet's
+  // positions and drops them onto the map as pins. VesselFinder is self-serve
+  // (https://api.vesselfinder.com); MyShipTracking is the other supported option.
+  vesselfinderApiKey: process.env.VESSELFINDER_API_KEY || '',
+  myshiptrackingApiKey: process.env.MYSHIPTRACKING_API_KEY || '',
   // NPS Data API key — free at https://www.nps.gov/subjects/developer/get-started.htm.
   // DEMO_KEY works out of the box (rate-limited); set NPS_API_KEY in Config Vars
   // for production headroom. Used for park news releases + alerts/closures.

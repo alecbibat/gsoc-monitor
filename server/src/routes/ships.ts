@@ -290,14 +290,199 @@ function connectAIS() {
   }
 }
 
+// --- Paid by-IMO position polling ------------------------------------------
+// Free aisstream can't always see the fleet. When a paid provider key is set we
+// poll the fleet's positions by IMO and write them into the same `tracked` map
+// the client renders as pins — so the ships reliably show up regardless of
+// community-receiver coverage. Free aisstream stays on as a live supplement;
+// whichever source reported most recently wins in the response dedupe.
+// Poll cadence — tunable via SHIPS_POLL_MINUTES; defaults cheap since cruise
+// ships move slowly and last-known is fine. On VesselFinder (1 credit/ship/poll)
+// the fleet runs ~ ships × polls/month credits: 120 min ≈ 2,500 credits/month
+// for 7 ships (~€85 on the €330/10k pack); raise the interval to spend less.
+const PAID_POLL_MS = Math.max(15, Number(process.env.SHIPS_POLL_MINUTES) || 120) * 60_000;
+
+interface PaidPosition {
+  imo: number | null;
+  mmsi: string | null;
+  lat: number | null;
+  lon: number | null;
+  speedKt: number | null;
+  courseDeg: number | null;
+  headingDeg: number | null;
+  navStatus: number | null;
+  destination: string | null;
+  name: string | null;
+  t: number; // fix time (ms)
+}
+
+let paidProvider: string | null = null;
+let paidLastOk = 0;
+let paidLastError: string | null = null;
+let paidLastCount = 0;
+
+function pnum(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function pickField<T = unknown>(o: Record<string, unknown>, ...keys: string[]): T | undefined {
+  for (const k of keys) if (o[k] != null) return o[k] as T;
+  return undefined;
+}
+
+async function fetchJson(url: string, headers?: Record<string, string>): Promise<unknown> {
+  const r = await fetch(url, {
+    signal: AbortSignal.timeout(12_000),
+    headers: { 'User-Agent': 'gsoc-monitor/1.0', Accept: 'application/json', ...(headers ?? {}) },
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+// VesselFinder Vessels API — one request returns all fleet IMOs; each row has an
+// AIS object with the position/voyage fields (confirmed schema).
+async function fetchVesselFinder(key: string): Promise<PaidPosition[]> {
+  const imos = FLEET.map((s) => s.imo).join(',');
+  const data = await fetchJson(
+    `https://api.vesselfinder.com/vessels?userkey=${encodeURIComponent(key)}&imo=${imos}`
+  );
+  const rows = Array.isArray(data) ? data : [];
+  return rows.map((row) => {
+    const r = row as Record<string, unknown>;
+    const ais = (r.AIS ?? r.ais ?? r) as Record<string, unknown>;
+    const ts = pickField<string>(ais, 'TIMESTAMP', 'timestamp');
+    const t = ts ? Date.parse(ts) : NaN;
+    return {
+      imo: pnum(pickField(ais, 'IMO', 'imo')),
+      mmsi: ((): string | null => {
+        const m = pickField(ais, 'MMSI', 'mmsi');
+        return m != null ? String(m) : null;
+      })(),
+      lat: pnum(pickField(ais, 'LATITUDE', 'latitude', 'lat')),
+      lon: pnum(pickField(ais, 'LONGITUDE', 'longitude', 'lon', 'lng')),
+      speedKt: pnum(pickField(ais, 'SPEED', 'speed')),
+      courseDeg: pnum(pickField(ais, 'COURSE', 'course')),
+      headingDeg: pnum(pickField(ais, 'HEADING', 'heading')),
+      navStatus: pnum(pickField(ais, 'NAVSTAT', 'navstat')),
+      destination: (pickField<string>(ais, 'DESTINATION', 'destination') ?? null) || null,
+      name: (pickField<string>(ais, 'NAME', 'name') ?? null) || null,
+      t: Number.isNaN(t) ? Date.now() : t,
+    };
+  });
+}
+
+// MyShipTracking bulk endpoint — comma-separated IMOs in one request; response
+// is a { data: [...] } envelope. Field names parsed defensively.
+async function fetchMyShipTracking(key: string): Promise<PaidPosition[]> {
+  const imos = FLEET.map((s) => s.imo).join(',');
+  const data = (await fetchJson(
+    `https://api.myshiptracking.com/api/v2/vessel/bulk?imo=${imos}&response=simple`,
+    { Authorization: `Bearer ${key}` }
+  )) as { data?: unknown };
+  const rows = Array.isArray(data?.data) ? (data.data as Record<string, unknown>[]) : [];
+  return rows.map((v) => {
+    const ts = pickField<string | number>(v, 'received', 'timestamp', 'last_position_time', 'time');
+    const t = typeof ts === 'number' ? ts * (ts < 1e12 ? 1000 : 1) : ts ? Date.parse(String(ts)) : NaN;
+    return {
+      imo: pnum(pickField(v, 'imo', 'IMO')),
+      mmsi: ((): string | null => {
+        const m = pickField(v, 'mmsi', 'MMSI');
+        return m != null ? String(m) : null;
+      })(),
+      lat: pnum(pickField(v, 'lat', 'latitude', 'LAT')),
+      lon: pnum(pickField(v, 'lng', 'lon', 'longitude', 'LON')),
+      speedKt: pnum(pickField(v, 'speed', 'sog', 'SPEED')),
+      courseDeg: pnum(pickField(v, 'course', 'cog', 'COURSE')),
+      headingDeg: pnum(pickField(v, 'heading', 'true_heading', 'HEADING')),
+      navStatus: pnum(pickField(v, 'nav_status', 'navstat', 'status')),
+      destination: (pickField<string>(v, 'destination', 'dest') ?? null) || null,
+      name: (pickField<string>(v, 'name', 'vessel_name', 'shipname') ?? null) || null,
+      t: Number.isNaN(t) ? Date.now() : t,
+    };
+  });
+}
+
+function applyPaidPosition(r: PaidPosition) {
+  if (r.lat == null || r.lon == null || Math.abs(r.lat) > 90 || Math.abs(r.lon) > 180) return;
+  const ship =
+    (r.imo != null ? FLEET.find((s) => s.imo === r.imo) : undefined) ??
+    (r.mmsi ? FLEET.find((s) => s.mmsi === r.mmsi) : undefined);
+  const mmsi = ship?.mmsi ?? r.mmsi ?? (r.imo != null ? `imo-${r.imo}` : null);
+  if (!mmsi) return;
+  const now = Number.isFinite(r.t) ? r.t : Date.now();
+  const existing = tracked.get(mmsi);
+  const record: VesselData = {
+    mmsi,
+    imo: ship?.imo ?? r.imo ?? existing?.imo ?? null,
+    name: ship?.name ?? r.name ?? existing?.name ?? null,
+    callsign: existing?.callsign ?? null,
+    shipType: existing?.shipType ?? 60,
+    latitude: r.lat,
+    longitude: r.lon,
+    speedKt: r.speedKt ?? existing?.speedKt ?? null,
+    heading: r.headingDeg != null && r.headingDeg !== 511 ? r.headingDeg : existing?.heading ?? null,
+    course: r.courseDeg != null && r.courseDeg < 360 ? r.courseDeg : existing?.course ?? null,
+    navStatus: r.navStatus ?? existing?.navStatus ?? null,
+    destination: r.destination ?? existing?.destination ?? null,
+    updatedAt: now,
+  };
+  allowedMmsis.add(mmsi);
+  tracked.set(mmsi, record);
+  recordHistory(mmsi, r.lat, r.lon, now);
+}
+
+async function pollPaidPositions() {
+  try {
+    let rows: PaidPosition[];
+    if (config.vesselfinderApiKey) {
+      paidProvider = 'vesselfinder';
+      rows = await fetchVesselFinder(config.vesselfinderApiKey);
+    } else if (config.myshiptrackingApiKey) {
+      paidProvider = 'myshiptracking';
+      rows = await fetchMyShipTracking(config.myshiptrackingApiKey);
+    } else {
+      return;
+    }
+    let applied = 0;
+    for (const r of rows) {
+      if (r.lat != null && r.lon != null) {
+        applyPaidPosition(r);
+        applied++;
+      }
+    }
+    paidLastOk = Date.now();
+    paidLastError = null;
+    paidLastCount = applied;
+  } catch (err) {
+    paidLastError = String(err);
+    console.error('[ships] paid poll failed:', err);
+  }
+}
+
+function paidConfigured(): boolean {
+  return Boolean(config.vesselfinderApiKey || config.myshiptrackingApiKey);
+}
+
 export function initShipsStream() {
-  if (!config.aisstreamApiKey) return;
-  connectAIS();
-  setInterval(evictStale, 5 * 60_000);
+  // Free AIS stream — live updates when a ship is in community-receiver range.
+  if (config.aisstreamApiKey) {
+    connectAIS();
+    setInterval(evictStale, 5 * 60_000);
+  }
+  // Paid by-IMO polling — reliable pins regardless of coverage.
+  if (paidConfigured()) {
+    pollPaidPositions();
+    setInterval(pollPaidPositions, PAID_POLL_MS);
+  }
 }
 
 router.get('/', (_req, res) => {
-  if (!config.aisstreamApiKey) {
+  if (!config.aisstreamApiKey && !paidConfigured()) {
     res.json({ source: 'no-key', ships: [], updated: Date.now() });
     return;
   }
@@ -404,6 +589,13 @@ router.get('/debug', (_req, res) => {
       positionReports,
       staticReports,
       distinctVesselsInMemory: vessels.size,
+    },
+    paid: {
+      configured: paidConfigured(),
+      provider: paidProvider,
+      lastOkAt: paidLastOk || null,
+      lastCount: paidLastCount,
+      lastError: paidLastError,
     },
     allowlist: {
       imoCount: ALLOWED_IMOS.size,
