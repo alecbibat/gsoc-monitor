@@ -89,6 +89,16 @@ const MAX_ANIMS = 80; // concurrent bolt animations (storm safety valve)
 const BOLT_COLOR = hex('#f2f9ff'); // blue-white bolt
 const RING_COLOR = hex('#bfe9ff'); // pale shockwave
 
+// --- Detector lines ----------------------------------------------------------
+// Blitzortung strike frames carry a `sig` array of the ground sensors that
+// detected the flash. Drawing a faint line from each sensor to the strike
+// point reproduces the classic lightningmaps.org "detector" view. Optional —
+// off by default, since a busy storm multiplies the line count.
+const DETECTOR_LIFE_MS = 1200; // how long each detector line lingers before fading
+const DETECTOR_COLOR = hex('#8fe8ff'); // pale cyan signal line
+const MAX_DETECTORS_PER_STRIKE = 14; // cap stations drawn per strike
+const MAX_DETECTOR_GROUPS = 50; // cap concurrent strikes showing lines
+
 // A jagged vertical path from high altitude straight down onto the strike point.
 // Top and bottom are anchored on the point; the horizontal wander peaks in the
 // middle so it reads as a forking bolt rather than a wobbly line.
@@ -168,6 +178,12 @@ export function LightningLayer() {
       ring: Cesium.Entity;
     }
     const anims: BoltAnim[] = [];
+    // Detector lines are grouped per strike so they fade and retire together.
+    interface DetectorAnim {
+      start: number;
+      lines: Cesium.Entity[];
+    }
+    const detectors: DetectorAnim[] = [];
     let rafId: number | null = null;
 
     const boltPositions = (a: BoltAnim): Cesium.Cartesian3[] => {
@@ -222,6 +238,11 @@ export function LightningLayer() {
       return RING_COLOR.withAlpha(Math.max(0, 0.45 * (1 - p)));
     };
 
+    const detectorAlpha = (start: number): number => {
+      const p = Math.min(1, (performance.now() - start) / DETECTOR_LIFE_MS);
+      return Math.max(0, 0.5 * (1 - p)); // fade 0.5 -> 0 over its life
+    };
+
     const animate = () => {
       const now = performance.now();
       const ttl = Math.max(BOLT_LIFE_MS, RING_LIFE_MS);
@@ -232,12 +253,54 @@ export function LightningLayer() {
           anims.splice(i, 1);
         }
       }
-      if (anims.length) {
+      for (let i = detectors.length - 1; i >= 0; i--) {
+        if (now - detectors[i].start >= DETECTOR_LIFE_MS) {
+          for (const line of detectors[i].lines) ds.entities.remove(line);
+          detectors.splice(i, 1);
+        }
+      }
+      if (anims.length || detectors.length) {
         viewer.scene.requestRender();
         rafId = requestAnimationFrame(animate);
       } else {
         rafId = null;
       }
+    };
+
+    const spawnDetectors = (
+      lon: number,
+      lat: number,
+      sig: Array<{ lat?: number; lon?: number }>
+    ) => {
+      const stations = sig
+        .filter((s) => typeof s.lat === 'number' && typeof s.lon === 'number')
+        .slice(0, MAX_DETECTORS_PER_STRIKE);
+      if (stations.length === 0) return;
+
+      // Evict the oldest group if we're at the concurrency cap.
+      if (detectors.length >= MAX_DETECTOR_GROUPS) {
+        const old = detectors.shift();
+        if (old) for (const line of old.lines) ds.entities.remove(line);
+      }
+
+      const start = performance.now();
+      const strikePos = Cesium.Cartesian3.fromDegrees(lon, lat);
+      const group: DetectorAnim = { start, lines: [] };
+      for (const st of stations) {
+        const line = ds.entities.add({
+          polyline: {
+            positions: [Cesium.Cartesian3.fromDegrees(st.lon!, st.lat!), strikePos],
+            width: 1,
+            arcType: Cesium.ArcType.GEODESIC, // follow the curve over long baselines
+            material: new Cesium.ColorMaterialProperty(
+              new Cesium.CallbackProperty(() => DETECTOR_COLOR.withAlpha(detectorAlpha(start)), false)
+            ),
+          },
+        });
+        group.lines.push(line);
+      }
+      detectors.push(group);
+      if (rafId == null) rafId = requestAnimationFrame(animate);
     };
 
     const spawnBolt = (lon: number, lat: number) => {
@@ -297,7 +360,12 @@ export function LightningLayer() {
 
       ws.onmessage = (event) => {
         if (cancelled || typeof event.data !== 'string') return;
-        let strike: { lat?: number; lon?: number; time?: number } | null = null;
+        let strike: {
+          lat?: number;
+          lon?: number;
+          time?: number;
+          sig?: Array<{ lat?: number; lon?: number }>;
+        } | null = null;
         try {
           strike = JSON.parse(inflate(event.data));
         } catch {
@@ -330,6 +398,12 @@ export function LightningLayer() {
 
         // Fire the dramatic descending bolt + ground shockwave.
         spawnBolt(strike.lon, strike.lat);
+
+        // Optional detector lines from each contributing sensor to the strike.
+        // Read the toggle live so flipping it doesn't reconnect the socket.
+        if (useLayersStore.getState().lightningDetectorLines && Array.isArray(strike.sig)) {
+          spawnDetectors(strike.lon, strike.lat, strike.sig);
+        }
 
         // Enforce the cap by evicting the oldest strikes.
         if (strikes.size > MAX_STRIKES) {

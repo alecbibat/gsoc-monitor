@@ -19,6 +19,7 @@ import { Section } from './Section';
 import { BasemapSwitcher } from './BasemapSwitcher';
 import { ScreensaverControls } from './ScreensaverControls';
 import { RadarControls } from '../layers/radar/RadarControls';
+import { LightningControls } from '../layers/lightning/LightningControls';
 import { useUiStore } from './uiStore';
 import type { SatelliteGroup } from '../types';
 
@@ -216,7 +217,9 @@ export function Sidebar() {
                   ? `${lightningStatus.ratePerMin} strikes/min · live`
                   : 'Connecting to network…'
             }
-          />
+          >
+            <LightningControls />
+          </LayerToggle>
         </Section>
 
         <Section title="Hazards">
