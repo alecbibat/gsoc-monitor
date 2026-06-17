@@ -134,11 +134,26 @@ export function TrafficLayer() {
     async function fetchAndDraw() {
       if (!mounted) return;
       try {
+        // v5 incidentDetails requires an explicit `fields` selector. Omit the
+        // traffic-model id (`t`) so TomTom uses its latest model automatically.
+        const fields =
+          '{incidents{type,geometry{type,coordinates},' +
+          'properties{iconCategory,magnitudeOfDelay,from,to,roadNumbers}}}';
         const resp = await fetch(
           `https://api.tomtom.com/traffic/services/5/incidentDetails` +
-            `?key=${TOMTOM_KEY}&bbox=${US_BBOX}&language=en-US&t=1100&timeValidityFilter=present`
+            `?key=${TOMTOM_KEY}&bbox=${US_BBOX}` +
+            `&fields=${encodeURIComponent(fields)}` +
+            `&language=en-US&timeValidityFilter=present`
         );
-        if (!resp.ok) throw new Error(`TomTom ${resp.status}`);
+        if (!resp.ok) {
+          if (resp.status === 403) {
+            throw new Error(
+              '403 — key rejected. Enable the Traffic APIs for this key and ' +
+                'remove any domain/referrer restriction in the TomTom dashboard.'
+            );
+          }
+          throw new Error(`TomTom ${resp.status}`);
+        }
         const data: { incidents?: Incident[] } = await resp.json();
         if (!mounted || !dsRef.current) return;
 
