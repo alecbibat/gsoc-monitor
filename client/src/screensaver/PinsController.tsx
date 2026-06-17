@@ -2,7 +2,6 @@ import * as Cesium from 'cesium';
 import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useScreensaverStore, type Poi } from './screensaverStore';
-import { useLayersStore } from '../store/layersStore';
 import { useEarthStatus } from '../layers/earth3d/earthStore';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
 
@@ -109,11 +108,6 @@ export function PinsController() {
     v.scene.requestRenderMode = false;
     v.scene.maximumRenderTimeChange = 0;
 
-    // Turn on the Google photorealistic 3D tiles so the close-up orbits show
-    // real buildings and textured terrain. Restore the prior state on exit.
-    const prevEarth3d = useLayersStore.getState().active.earth3d;
-    if (!prevEarth3d) useLayersStore.getState().toggleLayer('earth3d');
-
     v.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(OVERVIEW_LON, OVERVIEW_LAT, OVERVIEW_ALT),
       duration: 2.5,
@@ -211,10 +205,6 @@ export function PinsController() {
       if (dwellTimerRef.current) clearTimeout(dwellTimerRef.current);
       cancelAnimationFrame(rafRef.current);
       v.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
-      // Restore the 3D tiles toggle to whatever it was before the screensaver.
-      if (!prevEarth3d && useLayersStore.getState().active.earth3d) {
-        useLayersStore.getState().toggleLayer('earth3d');
-      }
       v.scene.requestRenderMode = prevRenderMode;
       v.scene.maximumRenderTimeChange = prevMaxChange;
       v.scene.requestRender();

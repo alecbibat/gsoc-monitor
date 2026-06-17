@@ -90,7 +90,11 @@ export function Sidebar() {
             onToggle={() => toggleLayer('earth3d')}
             statusText={
               earthStatus.error ??
-              (earthStatus.loading ? 'Loading 3D tiles…' : 'Photorealistic buildings & terrain')
+              (earthStatus.loading
+                ? 'Loading 3D tiles…'
+                : earthStatus.ready
+                  ? 'Active — metered API, turn off when done'
+                  : 'Photorealistic buildings & terrain · metered')
             }
           />
         </Section>
