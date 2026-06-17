@@ -5,6 +5,59 @@ import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { useHurricanesStatus } from './hurricanesStore';
 import { classifyStorm } from './classify';
+import {
+  attachForecast,
+  getForecast,
+  useHurricaneHover,
+  type ForecastHoverInfo,
+} from './hurricaneHoverStore';
+
+// The eye spins ~once every 5s; renders are throttled to ~22fps while at least
+// one storm is on screen (the layer otherwise sits idle under requestRenderMode).
+const SPIN_PERIOD_MS = 5_000;
+const SPIN_FRAME_MS = 45;
+
+const FCST_DOT_SIZE = 7; // resting forecast-point dot
+const FCST_DOT_HOVER = 12; // enlarged while hovered
+
+// Cesium billboard rotation is counter-clockwise-positive in screen space, which
+// matches Northern-Hemisphere cyclonic rotation; Southern storms spin the other
+// way, so we flip the sign by latitude for a true-to-life swirl.
+function spinAngle(latSign: number): number {
+  return latSign * ((performance.now() / SPIN_PERIOD_MS) * Cesium.Math.TWO_PI);
+}
+
+const TIME_FMT = new Intl.DateTimeFormat('en-US', {
+  weekday: 'short',
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+  timeZone: 'UTC',
+  hour12: true,
+});
+
+// Forecast points carry a valid time in one of several shapes depending on the
+// advisory; prefer NHC's pre-formatted local label, else parse VALIDTIME.
+function forecastTimeLabel(p: Record<string, unknown> | undefined): string | null {
+  const label = pick<string>(p, ['FLDATELBL', 'DATELBL', 'datelbl', 'TIMELABEL']);
+  if (typeof label === 'string' && label.trim()) return label.trim();
+
+  const vt = pick(p, ['VALIDTIME', 'validTime', 'FCSTTIME', 'SYNOPTIME']);
+  if (typeof vt === 'string') {
+    const m = vt.match(/^(\d{2})(\d{2})(\d{2})\/(\d{2})(\d{2})$/); // YYMMDD/HHMM UTC
+    if (m) {
+      const d = new Date(Date.UTC(2000 + +m[1], +m[2] - 1, +m[3], +m[4], +m[5]));
+      if (!Number.isNaN(d.getTime())) return `${TIME_FMT.format(d)} UTC`;
+    }
+  }
+  const n = asNumber(vt);
+  if (n != null) {
+    const d = new Date(n > 1e12 ? n : n * 1000);
+    if (!Number.isNaN(d.getTime())) return `${TIME_FMT.format(d)} UTC`;
+  }
+  return null;
+}
 
 // Esri's hosted "Active Hurricanes" feature service mirrors the NOAA/National
 // Hurricane Center live advisory GIS feed and, unlike www.nhc.noaa.gov, sends
@@ -138,6 +191,65 @@ export function HurricaneLayer() {
 
     let cancelled = false;
 
+    // --- Spinning-eye render pump --------------------------------------------
+    // CallbackProperties on each billboard's rotation read the clock; this RAF
+    // loop just asks Cesium to render (throttled) while storms are present, and
+    // idles itself the moment the scene is storm-free.
+    let spinRaf: number | null = null;
+    let lastSpin = 0;
+    const spinFrame = () => {
+      if (cancelled) {
+        spinRaf = null;
+        return;
+      }
+      const now = performance.now();
+      if (now - lastSpin >= SPIN_FRAME_MS) {
+        lastSpin = now;
+        viewer.scene.requestRender();
+      }
+      spinRaf = requestAnimationFrame(spinFrame);
+    };
+    const ensureSpin = (on: boolean) => {
+      if (on && spinRaf == null) spinRaf = requestAnimationFrame(spinFrame);
+      else if (!on && spinRaf != null) {
+        cancelAnimationFrame(spinRaf);
+        spinRaf = null;
+      }
+    };
+
+    // --- Hover tooltip over forecast points ----------------------------------
+    // The tooltip itself is an HTML overlay driven by the store, so a Cesium
+    // render is only needed when the highlighted dot actually changes.
+    let hovered: Cesium.Entity | null = null;
+    const setHovered = (e: Cesium.Entity | null) => {
+      if (hovered === e) return;
+      if (hovered?.point) hovered.point.pixelSize = new Cesium.ConstantProperty(FCST_DOT_SIZE);
+      hovered = e;
+      if (e?.point) e.point.pixelSize = new Cesium.ConstantProperty(FCST_DOT_HOVER);
+      viewer.scene.requestRender();
+    };
+    const hoverHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    hoverHandler.setInputAction((movement: Cesium.ScreenSpaceEventHandler.MotionEvent) => {
+      const picked = viewer.scene.pick(movement.endPosition);
+      const info = getForecast(picked?.id);
+      if (info) {
+        const rect = viewer.scene.canvas.getBoundingClientRect();
+        useHurricaneHover
+          .getState()
+          .show(info, rect.left + movement.endPosition.x, rect.top + movement.endPosition.y);
+        setHovered(picked.id as Cesium.Entity);
+      } else {
+        useHurricaneHover.getState().hide();
+        setHovered(null);
+      }
+    }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+    // Moving the cursor off the canvas stops firing MOUSE_MOVE, so clear there.
+    const onPointerLeave = () => {
+      useHurricaneHover.getState().hide();
+      setHovered(null);
+    };
+    viewer.scene.canvas.addEventListener('pointerleave', onPointerLeave);
+
     // Resolve a sublayer id by matching keywords against its display name.
     const findId = (layers: ServiceLayer[], ...needles: string[]): number | undefined =>
       layers.find((l) => {
@@ -265,12 +377,15 @@ export function HurricaneLayer() {
         .sort()
         .join('|');
       if (sig === lastSigRef.current) {
+        ensureSpin(named.length > 0);
         useHurricanesStatus.getState().setStatus({ count: named.length, error: null });
         return;
       }
       lastSigRef.current = sig;
 
       ds.entities.removeAll();
+      hovered = null;
+      useHurricaneHover.getState().hide();
 
       // 1) Cone of uncertainty (drawn first so everything else sits on top).
       for (const f of cones) {
@@ -318,20 +433,41 @@ export function HurricaneLayer() {
         }
       }
 
-      // 4) Forecast position dots along the track.
+      // 4) Forecast position dots along the track. Each is tinted by its
+      //    predicted category and carries the valid time + intensity for hover.
       for (const f of fcstPts) {
         const coord = pointCoord(f.geometry);
         if (!coord) continue;
-        ds.entities.add({
+        const p = f.properties ?? undefined;
+        const agg = storms.get(stormKey(p));
+        const name =
+          pick<string>(p, ['STORMNAME', 'stormName', 'NAME']) ?? agg?.name ?? 'Tropical Cyclone';
+        const windKt = asNumber(pick(p, ['MAXWIND', 'INTENSITY', 'maxwind']));
+        const gustKt = asNumber(pick(p, ['GUST', 'gust']));
+        const tau = asNumber(pick(p, ['TAU', 'FCSTHR', 'FLHR', 'FCSTPRD']));
+        const type = pick<string>(p, ['STORMTYPE', 'stormType', 'TYPE']);
+        const cls = classifyStorm(type, windKt);
+        const info: ForecastHoverInfo = {
+          name,
+          tau: tau ?? null,
+          validLabel: forecastTimeLabel(p),
+          windKt: windKt ?? null,
+          gustKt: gustKt ?? null,
+          classLabel: cls.label,
+          category: cls.category,
+          color: cls.color,
+        };
+        const dot = ds.entities.add({
           position: Cesium.Cartesian3.fromDegrees(coord[0], coord[1]),
           point: {
-            pixelSize: 5,
-            color: Cesium.Color.fromCssColorString('#ffe9a6').withAlpha(0.9),
+            pixelSize: FCST_DOT_SIZE,
+            color: Cesium.Color.fromCssColorString(cls.color).withAlpha(0.95),
             outlineColor: Cesium.Color.BLACK.withAlpha(0.6),
             outlineWidth: 1,
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
         });
+        attachForecast(dot, info);
       }
 
       // 5) The storm itself — category-tinted glyph + label, clickable for a panel.
@@ -345,6 +481,8 @@ export function HurricaneLayer() {
             image: hurricaneIcon(info.color),
             width: 42,
             height: 42,
+            // Swirl the eye — cyclonic sense depends on the hemisphere.
+            rotation: new Cesium.CallbackProperty(() => spinAngle(s.lat! >= 0 ? 1 : -1), false),
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
           label: {
@@ -380,6 +518,7 @@ export function HurricaneLayer() {
         });
       }
 
+      ensureSpin(named.length > 0);
       useHurricanesStatus.getState().setStatus({ count: named.length, error: null });
       viewer.scene.requestRender();
     };
@@ -390,6 +529,11 @@ export function HurricaneLayer() {
     return () => {
       cancelled = true;
       clearInterval(interval);
+      if (spinRaf != null) cancelAnimationFrame(spinRaf);
+      viewer.scene.canvas.removeEventListener('pointerleave', onPointerLeave);
+      hoverHandler.destroy();
+      hovered = null;
+      useHurricaneHover.getState().hide();
     };
   }, [viewer, active]);
 

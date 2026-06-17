@@ -12,6 +12,7 @@ import { FireLayer } from './layers/fires/FireLayer';
 import { ShipLayer } from './layers/ships/ShipLayer';
 import { SatelliteLayer } from './layers/satellites/SatelliteLayer';
 import { LocationsLayer } from './layers/locations/LocationsLayer';
+import { HurricaneTooltip } from './layers/hurricanes/HurricaneTooltip';
 import { TopBar } from './ui/TopBar';
 import { Sidebar } from './ui/Sidebar';
 import { StarField } from './ui/StarField';
@@ -43,6 +44,7 @@ export default function App() {
         </CesiumGlobe>
         <TopBar />
         <Sidebar />
+        <HurricaneTooltip />
         <PanelManager />
         <ScreensaverController />
         <NationalParksController />
