@@ -1,65 +1,27 @@
 import { usePanelStore } from './panelStore';
 import { Panel } from './Panel';
 import { PanelErrorBoundary } from './PanelErrorBoundary';
-import { EarthquakeDetails } from '../layers/earthquakes/EarthquakeDetails';
-import { AlertDetails } from '../layers/alerts/AlertDetails';
-import { FlightDetails } from '../layers/flights/FlightDetails';
-import { HurricaneDetails } from '../layers/hurricanes/HurricaneDetails';
-import { FireDetails } from '../layers/fires/FireDetails';
-import { ShipDetails } from '../layers/ships/ShipDetails';
-import { SatelliteDetails } from '../layers/satellites/SatelliteDetails';
-import { LocationDetails } from '../layers/locations/LocationDetails';
-import { PropertyDetail } from '../widgets/proximity/PropertyDetail';
-import { WIDGET_BY_ID } from '../widgets/registry';
-
-const ACCENT_BY_KIND: Record<string, string> = {
-  earthquakes: 'border-accent-warn/40',
-  alerts: 'border-accent-danger/40',
-  flights: 'border-accent/40',
-  radar: 'border-accent/40',
-  hurricanes: 'border-accent-warn/40',
-  fires: 'border-accent-warn/40',
-  ships: 'border-accent/40',
-  satellites: 'border-sky-400/40',
-  locations: 'border-violet-500/40',
-  'property-watch': 'border-accent-ok/40',
-};
+import { PanelContent, panelAccent } from './PanelContent';
+import { MobilePanelDeck } from './MobilePanelDeck';
+import { useIsMobile } from '../ui/useIsMobile';
 
 export function PanelManager() {
   const panels = usePanelStore((s) => s.panels);
+  const isMobile = useIsMobile();
+
+  // On phones, floating/dockable windows are replaced by a single swipeable
+  // card deck (no drag, resize, or dock zones).
+  if (isMobile) return <MobilePanelDeck />;
 
   return (
     <>
-      {panels.map((panel) => {
-        const widget = WIDGET_BY_ID[panel.kind];
-        const accentClass = widget?.accentClass ?? ACCENT_BY_KIND[panel.kind];
-        return (
-          <Panel key={panel.id} panel={panel} accentClass={accentClass}>
-            <PanelErrorBoundary>
-              {widget && widget.render()}
-              {panel.kind === 'earthquakes' && (
-                <EarthquakeDetails payload={panel.payload as never} />
-              )}
-              {panel.kind === 'alerts' && <AlertDetails payload={panel.payload as never} />}
-              {panel.kind === 'flights' && <FlightDetails payload={panel.payload as never} />}
-              {panel.kind === 'hurricanes' && (
-                <HurricaneDetails payload={panel.payload as never} />
-              )}
-              {panel.kind === 'fires' && <FireDetails payload={panel.payload as never} />}
-              {panel.kind === 'ships' && <ShipDetails payload={panel.payload as never} />}
-              {panel.kind === 'satellites' && (
-                <SatelliteDetails payload={panel.payload as never} />
-              )}
-              {panel.kind === 'locations' && (
-                <LocationDetails payload={panel.payload as never} />
-              )}
-              {panel.kind === 'property-watch' && (
-                <PropertyDetail payload={panel.payload as never} />
-              )}
-            </PanelErrorBoundary>
-          </Panel>
-        );
-      })}
+      {panels.map((panel) => (
+        <Panel key={panel.id} panel={panel} accentClass={panelAccent(panel.kind)}>
+          <PanelErrorBoundary>
+            <PanelContent panel={panel} />
+          </PanelErrorBoundary>
+        </Panel>
+      ))}
     </>
   );
 }
