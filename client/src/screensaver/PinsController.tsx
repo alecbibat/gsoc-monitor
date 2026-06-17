@@ -5,6 +5,8 @@ import { useScreensaverStore, type Poi } from './screensaverStore';
 import { useEarthStatus } from '../layers/earth3d/earthStore';
 import { useOsmStatus } from '../layers/osmBuildings/osmStore';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
+import { useShipsStatus } from '../layers/ships/shipsStore';
+import { FLEET_ROSTER, fleetColor } from '../layers/ships/fleet';
 
 const OVERVIEW_ALT = 9_000_000;
 const OVERVIEW_LAT = 38;
@@ -40,8 +42,9 @@ const RING_SAMPLES = 12;
 // site is too extreme for a close orbit — use the far safe orbit instead.
 const MAX_CLOSE_RANGE_M = 28_000;
 
-// Flatten every pin across all groups into a single array.
+// Static pin list built from all location groups.
 interface PinEntry {
+  kind: 'pin';
   name: string;
   groupName: string;
   groupIcon: string;
@@ -51,8 +54,24 @@ interface PinEntry {
   altitudeM: number;
 }
 
+// Live ship entry built from the latest store state on each queue refresh.
+interface ShipEntry {
+  kind: 'ship';
+  name: string;
+  lat: number;
+  lon: number;
+  mmsi: string;
+  cls: 'STAR' | 'WIND';
+  color: string;
+  speedKt: number | null;
+  heading: number | null;
+}
+
+type VisitEntry = PinEntry | ShipEntry;
+
 const ALL_PINS: PinEntry[] = LOCATION_GROUPS.flatMap((g) =>
   g.locations.map((loc) => ({
+    kind: 'pin' as const,
     name: loc.name,
     groupName: g.name,
     groupIcon: g.icon,
@@ -62,6 +81,30 @@ const ALL_PINS: PinEntry[] = LOCATION_GROUPS.flatMap((g) =>
     altitudeM: loc.altitudeM ?? 12_000,
   }))
 );
+
+// Snap the current live ship positions from the store for interleaving into
+// the visit queue. Only includes ships that have a known position.
+function buildShipEntries(): ShipEntry[] {
+  return useShipsStatus.getState().ships.flatMap((ship) => {
+    const fleet = FLEET_ROSTER.find((f) => f.mmsi === ship.mmsi);
+    if (!fleet) return [];
+    return [{
+      kind: 'ship' as const,
+      name: ship.name?.trim() || fleet.name,
+      lat: ship.latitude,
+      lon: ship.longitude,
+      mmsi: ship.mmsi,
+      cls: fleet.cls,
+      color: fleetColor(fleet.cls),
+      speedKt: ship.speedKt,
+      heading: ship.heading ?? ship.course ?? null,
+    }];
+  });
+}
+
+// Orbit parameters for ships (over open ocean — no terrain sampling needed).
+const SHIP_RANGE_M  = 2_000;
+const SHIP_PITCH_RAD = Cesium.Math.toRadians(-28);
 
 function rand(min: number, max: number) {
   return min + Math.random() * (max - min);
@@ -125,7 +168,7 @@ export function PinsController() {
   const setCurrentPoi = useScreensaverStore((s) => s.setCurrentPoi);
 
   const cancelledRef = useRef(false);
-  const queueRef = useRef<PinEntry[]>([]);
+  const queueRef = useRef<VisitEntry[]>([]);
   const poiTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rafRef = useRef(0);
@@ -137,7 +180,7 @@ export function PinsController() {
     const v = viewer;
 
     cancelledRef.current = false;
-    queueRef.current = shuffle(ALL_PINS);
+    queueRef.current = shuffle([...ALL_PINS, ...buildShipEntries()]);
 
     const prevRenderMode = v.scene.requestRenderMode;
     const prevMaxChange = v.scene.maximumRenderTimeChange;
@@ -156,8 +199,67 @@ export function PinsController() {
 
     async function visitNext() {
       if (cancelledRef.current) return;
-      if (queueRef.current.length === 0) queueRef.current = shuffle(ALL_PINS);
-      const pin = queueRef.current.shift()!;
+      if (queueRef.current.length === 0) {
+        // Refresh ships on each full cycle so the positions stay current.
+        queueRef.current = shuffle([...ALL_PINS, ...buildShipEntries()]);
+      }
+      const entry = queueRef.current.shift()!;
+
+      // ── Ship orbit (no terrain sampling — ships are over ocean at height 0) ──
+      if (entry.kind === 'ship') {
+        const poi: Poi = {
+          title: entry.name,
+          description: '🚢 Windstar Fleet',
+          lat: entry.lat,
+          lon: entry.lon,
+          altitudeM: SHIP_RANGE_M,
+          category: 'ship',
+          meta: {
+            mmsi: entry.mmsi,
+            cls: entry.cls,
+            speedKt: entry.speedKt,
+            heading: entry.heading,
+          },
+        };
+        setPhase('flying-to');
+        setCurrentPoi(poi);
+
+        const pitch    = SHIP_PITCH_RAD;
+        const range    = SHIP_RANGE_M;
+        const upFactor = Math.sin(-pitch);
+        const back     = range * Math.cos(-pitch);
+        const startLat = entry.lat - back / METERS_PER_DEG_LAT;
+
+        v.camera.flyTo({
+          destination: Cesium.Cartesian3.fromDegrees(entry.lon, startLat, range * upFactor),
+          orientation: { heading: 0, pitch, roll: 0 },
+          duration: 4.5,
+          complete: () => {
+            if (cancelledRef.current) return;
+            setPhase('at-poi');
+            const target = Cesium.Cartesian3.fromDegrees(entry.lon, entry.lat, 0);
+            const orbitStart = performance.now();
+            const tick = () => {
+              if (cancelledRef.current) return;
+              const heading =
+                (((performance.now() - orbitStart) % ORBIT_PERIOD_MS) * Cesium.Math.TWO_PI) /
+                ORBIT_PERIOD_MS;
+              v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, pitch, range));
+              rafRef.current = requestAnimationFrame(tick);
+            };
+            rafRef.current = requestAnimationFrame(tick);
+            dwellTimerRef.current = setTimeout(() => {
+              cancelAnimationFrame(rafRef.current);
+              v.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+              leaveAndReturn();
+            }, rand(DWELL_MIN_MS, DWELL_MAX_MS));
+          },
+        });
+        return;
+      }
+
+      // ── Property pin orbit ──────────────────────────────────────────────────
+      const pin = entry;
 
       const poi: Poi = {
         title: pin.name,
@@ -188,28 +290,22 @@ export function PinsController() {
       if (sample.base !== null) {
         baseH = sample.base;
         pitch = CLOSE_PITCH_RAD;
-        const upFactor = Math.sin(-pitch); // vertical component of the range
-        // The camera traces a horizontal circle, so its absolute height is
-        // constant: baseH + range*upFactor. Pick a range large enough that this
-        // height clears the tallest terrain/building anywhere on the orbit ring.
+        const upFactor = Math.sin(-pitch);
         const requiredCamH = (sample.max ?? baseH) + CLEARANCE_M;
         const neededRange = (requiredCamH - baseH) / upFactor;
         range = Math.max(CLOSE_RANGE_M, neededRange);
         if (range > MAX_CLOSE_RANGE_M) {
-          // Terrain too extreme for a close orbit — fall back to the far view.
           pitch = FAR_PITCH_RAD;
           range = FAR_RANGE_M;
         }
       }
 
-      const upFactor = Math.sin(-pitch);
+      const upFactor  = Math.sin(-pitch);
       const outFactor = Math.cos(-pitch);
       const target = Cesium.Cartesian3.fromDegrees(pin.lon, pin.lat, baseH);
 
-      // Fly straight to the heading=0 orbit position (south of and above the
-      // target) so the subsequent orbit begins seamlessly with no camera snap.
-      const back = range * outFactor; // metres south of target
-      const up = baseH + range * upFactor; // absolute camera height (clears ring)
+      const back     = range * outFactor;
+      const up       = baseH + range * upFactor;
       const startLat = pin.lat - back / METERS_PER_DEG_LAT;
 
       v.camera.flyTo({
@@ -220,9 +316,6 @@ export function PinsController() {
           if (cancelledRef.current) return;
           setPhase('at-poi');
 
-          // Cinematic orbit around the pin while dwelling. The camera traces a
-          // horizontal circle at a constant height already proven (by the ring
-          // sampling above) to clear the tallest obstruction on the path.
           const orbitStart = performance.now();
           const tick = () => {
             if (cancelledRef.current) return;

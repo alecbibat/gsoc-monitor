@@ -1,35 +1,39 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 
-// A genuine 3D wireframe of the vessel, rendered with Three.js and slowly
-// rotating on its vertical axis. Two hull/​superstructure builds: a multi-deck
-// motor yacht (Star class) and a tall-masted sailing ship (Wind class).
+// Genuine 3D wireframe rendered with Three.js, slowly rotating on its vertical
+// axis. Two hull builds: a multi-deck motor yacht (Star class) and a
+// multi-masted sailing yacht (Wind class), each shaped to match Windstar's
+// actual vessels.
 
-// Low-poly hull: a pointed-bow, transom-stern boat shape defined by hand so the
-// wireframe reads as a ship from every angle (an extruded slab would not).
-function buildHull(beam: number): THREE.BufferGeometry {
-  const hl = 3; // half length
-  const hb = beam / 2; // half beam
-  const deckY = 1;
-  const keelY = 0;
+// Low-poly hull shared by both classes. `halfLen` sets the bow-to-stern
+// half-length; `beam` sets the max breadth. The bow rises slightly above the
+// stern (foredeck) and narrows to a single stem point.
+function buildHull(beam: number, halfLen = 3.5): THREE.BufferGeometry {
+  const hl = halfLen;
+  const hb = beam / 2;
+  const dY = 1.0;          // freeboard (deck height above keel)
+  const kY = 0;
   const positions = new Float32Array([
-    -hl, deckY, -hb,            // 0 stern deck port
-    -hl, deckY, hb,             // 1 stern deck stbd
-    hl * 0.45, deckY, -hb,      // 2 mid deck port
-    hl * 0.45, deckY, hb,       // 3 mid deck stbd
-    hl, deckY, 0,               // 4 bow deck point
-    -hl, keelY, -hb * 0.45,     // 5 stern keel port
-    -hl, keelY, hb * 0.45,      // 6 stern keel stbd
-    hl * 0.45, keelY, -hb * 0.45, // 7 mid keel port
-    hl * 0.45, keelY, hb * 0.45,  // 8 mid keel stbd
-    hl, keelY + 0.35, 0,        // 9 bow forefoot (rises toward bow)
+    // deck edge ─ port then stbd, stern to mid, bow
+    -hl,     dY,       -hb,          // 0 stern deck port
+    -hl,     dY,        hb,          // 1 stern deck stbd
+     hl*0.4, dY*1.12, -hb,          // 2 mid deck port  (foredeck rises slightly)
+     hl*0.4, dY*1.12,  hb,          // 3 mid deck stbd
+     hl,     dY*1.22,   0,          // 4 bow stem
+    // keel/bilge
+    -hl,     kY,       -hb*0.38,    // 5 stern keel port
+    -hl,     kY,        hb*0.38,    // 6 stern keel stbd
+     hl*0.4, kY,       -hb*0.32,    // 7 mid keel port
+     hl*0.4, kY,        hb*0.32,    // 8 mid keel stbd
+     hl,     kY+0.28,   0,          // 9 forefoot
   ]);
   const index = [
-    0, 2, 7, 0, 7, 5, 2, 4, 9, 2, 9, 7, // port side
-    1, 6, 8, 1, 8, 3, 3, 8, 9, 3, 9, 4, // starboard side
-    5, 7, 8, 5, 8, 6, 7, 9, 8,          // bottom
-    0, 1, 3, 0, 3, 2, 2, 3, 4,          // deck
-    0, 5, 6, 0, 6, 1,                   // transom
+    0,2,7, 0,7,5, 2,4,9, 2,9,7,      // port side
+    1,6,8, 1,8,3, 3,8,9, 3,9,4,      // stbd side
+    5,7,8, 5,8,6, 7,9,8,              // bottom
+    0,1,3, 0,3,2, 2,3,4,              // deck
+    0,5,6, 0,6,1,                     // transom
   ];
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -38,7 +42,6 @@ function buildHull(beam: number): THREE.BufferGeometry {
   return g;
 }
 
-// Wrap a geometry's significant edges as line segments, then drop the source.
 function edgesOf(geom: THREE.BufferGeometry, mat: THREE.LineBasicMaterial, threshold = 20): THREE.LineSegments {
   const e = new THREE.EdgesGeometry(geom, threshold);
   const ls = new THREE.LineSegments(e, mat);
@@ -46,53 +49,106 @@ function edgesOf(geom: THREE.BufferGeometry, mat: THREE.LineBasicMaterial, thres
   return ls;
 }
 
-function segments(points: number[], mat: THREE.LineBasicMaterial): THREE.LineSegments {
+function segments(pts: number[], mat: THREE.LineBasicMaterial): THREE.LineSegments {
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
   return new THREE.LineSegments(g, mat);
 }
 
+// Star-class motor yacht: ~159 m long, five deck superstructure, single funnel
+// positioned aft-of-center, bridge wings, communications mast, foremast.
 function buildStar(ship: THREE.Group, mat: THREE.LineBasicMaterial) {
-  const beam = 1.5;
-  ship.add(edgesOf(buildHull(beam), mat));
-  // Three stacked, tapering deck houses.
+  const hl = 4.5;
+  const beam = 1.3;
+  ship.add(edgesOf(buildHull(beam, hl), mat));
+
+  // Five stacked deck boxes, each progressively narrower and shifted forward,
+  // reflecting the stepped cruise-ship silhouette when viewed from the side.
+  // [width, height, beam-fraction, x-center, y-base]
   const decks: [number, number, number, number, number][] = [
-    // width(x), height, depth(z), x-offset, y
-    [3.6, 0.5, beam * 0.92, -0.2, 1.25],
-    [2.6, 0.45, beam * 0.78, -0.1, 1.7],
-    [1.5, 0.4, beam * 0.6, 0.1, 2.1],
+    [7.0, 0.42, 0.93, -0.50, 1.00],  // main deck
+    [5.8, 0.40, 0.85, -0.10, 1.42],  // promenade
+    [4.6, 0.38, 0.76,  0.30, 1.82],  // lido
+    [3.6, 0.36, 0.66,  0.60, 2.20],  // observation
+    [2.6, 0.34, 0.54,  0.90, 2.56],  // bridge deck
   ];
-  for (const [w, h, d, x, y] of decks) {
-    const box = edgesOf(new THREE.BoxGeometry(w, h, d), mat);
-    box.position.set(x, y, 0);
+  for (const [w, h, bf, x, y] of decks) {
+    const box = edgesOf(new THREE.BoxGeometry(w, h, beam * bf), mat);
+    box.position.set(x, y + h / 2, 0);
     ship.add(box);
   }
-  // Funnel.
-  const funnel = edgesOf(new THREE.CylinderGeometry(0.18, 0.22, 0.5, 10), mat);
-  funnel.position.set(0.15, 2.45, 0);
+
+  // Bridge wings — thin horizontal platforms at the forward ends of the bridge
+  const bwX  = 0.90 + 2.6 / 2;         // bow edge of bridge deck (x = 2.2)
+  const bwY  = 2.56 + 0.17;             // mid-height of bridge
+  const bwHB = (beam * 0.54) / 2;       // half-beam of bridge deck
+  ship.add(segments([bwX, bwY, bwHB,  bwX, bwY, bwHB + 0.26], mat));
+  ship.add(segments([bwX, bwY, -bwHB, bwX, bwY, -bwHB - 0.26], mat));
+
+  // Single funnel, aft of centre, rising above the lido deck
+  const funnel = edgesOf(new THREE.CylinderGeometry(0.17, 0.23, 0.80, 8), mat);
+  funnel.position.set(-1.65, 2.20 + 0.40, 0);
   ship.add(funnel);
-  // Short radar mast above the bridge.
-  ship.add(segments([0.1, 2.3, 0, 0.1, 3.0, 0, -0.1, 2.85, 0, 0.3, 2.85, 0], mat));
+
+  // Radar/comms mast above the bridge
+  const mX   = 1.50;
+  const mBase = 2.56 + 0.34;
+  ship.add(segments([mX, mBase, 0, mX, mBase + 0.92, 0], mat));
+  ship.add(segments([mX, mBase + 0.72, -0.34, mX, mBase + 0.72, 0.34], mat));
+
+  // Foremast at the bow
+  ship.add(segments([2.85, 1.10, 0, 2.85, 2.55, 0], mat));
 }
 
+// Wind-class sailing yacht: 4 or 5 Dynarig masts, each with a triangular sail
+// outline (mast, boom, leeches). Running stays connect masthead to next mast
+// base. Long bowsprit forward with a forestay to the first mast.
 function buildWind(ship: THREE.Group, mat: THREE.LineBasicMaterial, mastCount: number) {
-  const beam = 1.15;
-  ship.add(edgesOf(buildHull(beam), mat));
-  // One low deckhouse — sailing ships sit close to the water.
-  const house = edgesOf(new THREE.BoxGeometry(2.6, 0.4, beam * 0.82), mat);
-  house.position.set(-0.2, 1.2, 0);
+  const hl  = 4.5;
+  const beam = 0.88;
+  ship.add(edgesOf(buildHull(beam, hl), mat));
+
+  // Low deckhouse
+  const house = edgesOf(new THREE.BoxGeometry(4.0, 0.38, beam * 0.84), mat);
+  house.position.set(-0.2, 1.19, 0);
   ship.add(house);
 
-  const xs = mastCount === 5 ? [-2, -1, 0, 1, 2] : [-1.8, -0.6, 0.6, 1.8];
+  const xs = mastCount === 5
+    ? [-3.2, -1.6, 0.0, 1.6, 3.2]
+    : [-2.8, -0.95, 0.95, 2.8];
+
+  const mastH  = 3.9;  // masthead y
+  const boomY  = 1.12; // boom / foot-of-sail height
+  const boomHW = 0.78; // half-span of boom and crossyard
+
   const pts: number[] = [];
   for (const x of xs) {
-    pts.push(x, 1, 0, x, 3.6, 0); // mast
-    pts.push(x, 3.2, -0.95, x, 3.2, 0.95); // crossyard (athwartships)
-    pts.push(x, 3.6, 0, x + 0.95, 1.05, 0); // forestay rigging
-    pts.push(x, 3.6, 0, x - 0.95, 1.05, 0); // backstay rigging
+    // Mast (vertical spar)
+    pts.push(x, boomY, 0,  x, mastH, 0);
+    // Boom (athwartships spar at foot of sail)
+    pts.push(x, boomY, -boomHW,  x, boomY, boomHW);
+    // Crossyard (athwartships spar at head of sail, slightly inboard)
+    pts.push(x, mastH - 0.18, -boomHW * 0.9,  x, mastH - 0.18, boomHW * 0.9);
+    // Port leech (diagonal sail edge: masthead to boom port end)
+    pts.push(x, mastH, 0,  x, boomY, -boomHW);
+    // Stbd leech
+    pts.push(x, mastH, 0,  x, boomY, boomHW);
   }
-  // Bowsprit.
-  pts.push(3, 1.05, 0, 3.9, 0.95, 0);
+
+  // Running stays: masthead of each forward mast down to deck of the next aft mast
+  for (let i = 0; i < xs.length - 1; i++) {
+    pts.push(xs[i], mastH, 0,  xs[i + 1], boomY + 0.05, 0);
+  }
+
+  // Bowsprit (angled forward and slightly down from the stem)
+  const bowX = hl - 0.1;
+  const spritTip = [bowX + 1.1, 0.72, 0];
+  pts.push(bowX, 1.12, 0,  ...spritTip);
+  // Forestay from bowsprit tip to first mast
+  pts.push(...spritTip,  xs[0], mastH, 0);
+  // Bobstay (from bowsprit tip down to forefoot)
+  pts.push(...spritTip,  bowX, 0.28, 0);
+
   ship.add(segments(pts, mat));
 }
 
@@ -112,9 +168,9 @@ export function ShipModel3D({ variant, color, masts = 4, width = 190, height = 1
     if (!mount) return;
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(38, width / height, 0.1, 100);
-    camera.position.set(0, 2.7, 8.6);
-    camera.lookAt(0, 1.25, 0);
+    const camera = new THREE.PerspectiveCamera(35, width / height, 0.1, 100);
+    camera.position.set(0, 3.2, 11.5);
+    camera.lookAt(0, 1.6, 0);
 
     const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     renderer.setSize(width, height);
@@ -125,15 +181,14 @@ export function ShipModel3D({ variant, color, masts = 4, width = 190, height = 1
     const ship = new THREE.Group();
     if (variant === 'star') buildStar(ship, mat);
     else buildWind(ship, mat, masts);
-    // Centre the hull vertically in frame.
-    ship.position.y = -0.4;
+    ship.position.y = -0.6;
     scene.add(ship);
 
     let raf = 0;
     let last = performance.now();
     const animate = () => {
       const now = performance.now();
-      ship.rotation.y += ((now - last) / 1000) * 0.7; // ~9 s per revolution
+      ship.rotation.y += ((now - last) / 1000) * 0.65;
       last = now;
       renderer.render(scene, camera);
       raf = requestAnimationFrame(animate);

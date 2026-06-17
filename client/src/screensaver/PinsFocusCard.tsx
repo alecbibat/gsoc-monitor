@@ -37,11 +37,11 @@ export function PinsFocusCard() {
   // during the brief gap between pins.
   const [shown, setShown] = useState<Poi | null>(null);
   useEffect(() => {
-    if (poi) setShown(poi);
+    if (poi && poi.category !== 'ship') setShown(poi);
   }, [poi]);
 
-  if (!isPins || !shown) return null;
-  const visible = poi !== null;
+  if (!isPins || !shown || shown.category === 'ship') return null;
+  const visible = poi !== null && poi.category !== 'ship';
 
   const info = findGroup(shown);
   const match =

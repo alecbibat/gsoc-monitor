@@ -6,9 +6,10 @@ export interface Poi {
   lat: number;
   lon: number;
   altitudeM: number;
-  category: 'earthquake' | 'weather' | 'landmark' | 'hurricane' | 'park' | 'news' | 'iss' | 'pin';
+  category: 'earthquake' | 'weather' | 'landmark' | 'hurricane' | 'park' | 'news' | 'iss' | 'pin' | 'ship';
   imageUrl?: string | null;
   url?: string;
+  meta?: Record<string, unknown>;
 }
 
 export type ScreensaverMode = 'global' | 'national-parks' | 'iss' | 'pins';

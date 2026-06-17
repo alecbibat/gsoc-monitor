@@ -57,6 +57,12 @@ const DEFAULT_WIDTH = 360;
 const DEFAULT_HEIGHT = 420;
 const CASCADE_OFFSET = 32;
 
+// Per-kind overrides so content-heavy panels open tall enough to avoid
+// unnecessary scrolling on most screens.
+const KIND_HEIGHTS: Partial<Record<PanelKind, number>> = {
+  ships: 630,
+};
+
 export const usePanelStore = create<PanelsState>((set, get) => ({
   panels: [],
   topZ: 10,
@@ -79,10 +85,14 @@ export const usePanelStore = create<PanelsState>((set, get) => ({
         : 600;
     const y = margin + 64 + (dockedCount % 4) * CASCADE_OFFSET;
 
+    const rawH = KIND_HEIGHTS[panel.kind] ?? DEFAULT_HEIGHT;
+    const maxH = typeof window !== 'undefined' ? window.innerHeight - 100 : DEFAULT_HEIGHT;
+    const height = Math.min(rawH, maxH);
+
     set({
       panels: [
         ...get().panels,
-        { ...panel, x, y, width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT, z: nextZ, dockedTo: null },
+        { ...panel, x, y, width: DEFAULT_WIDTH, height, z: nextZ, dockedTo: null },
       ],
       topZ: nextZ,
     });
