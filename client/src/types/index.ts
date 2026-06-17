@@ -178,7 +178,7 @@ export interface RouteStep {
 
 export interface DirectionsLeg {
   name: string;
-  category: 'hospital' | 'hotel' | 'police';
+  category: 'hospital' | 'hotel' | 'police' | 'fire_station';
   lat: number;
   lon: number;
   distanceM: number;
@@ -193,6 +193,15 @@ export interface DirectionsResponse {
   hospitals: DirectionsLeg[];
   hotels: DirectionsLeg[];
   police: DirectionsLeg[];
+  fireStations: DirectionsLeg[];
+}
+
+export interface DriveResult {
+  distanceM: number;
+  durationS: number;
+  geometry: Array<[number, number]>; // [lon, lat] pairs
+  steps: RouteStep[];
+  routed: boolean;
 }
 
 export interface PizzaPlaceBusyness {

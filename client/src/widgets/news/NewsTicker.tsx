@@ -5,15 +5,20 @@ import { useScreensaverStore } from '../../screensaver/screensaverStore';
 import { useNewsStore } from './newsStore';
 
 // A horizontally-scrolling headline ticker pinned to the bottom of the screen.
-// Shown while the Breaking News panel is closed (the panel and the ticker are
-// two views of the same feed), and also kept up during the pins screensaver so
-// the property tour still surfaces live headlines along the bottom. It keeps the
-// shared news store fresh on its own interval so headlines are live even if the
-// panel has never been opened.
+// Shown while the Breaking News panel is closed, and kept alive during the pins
+// screensaver. Mode-aware: shows park news or world breaking news depending on
+// the newsMode toggle in the news store.
 const REFRESH_MS = 5 * 60_000;
+const PARK_REFRESH_MS = 10 * 60_000;
 
 const SEVERITY_DOT: Record<string, string> = {
   alert: '#60a5fa',
+  urgent: '#fbbf24',
+  critical: '#f87171',
+};
+
+const PARK_SEVERITY_DOT: Record<string, string> = {
+  alert: '#4ade80',
   urgent: '#fbbf24',
   critical: '#f87171',
 };
@@ -26,20 +31,24 @@ export function NewsTicker() {
   const setData = useNewsStore((s) => s.setData);
   const setError = useNewsStore((s) => s.setError);
 
+  const parkItems = useNewsStore((s) => s.parkItems);
+  const setParkData = useNewsStore((s) => s.setParkData);
+  const setParkError = useNewsStore((s) => s.setParkError);
+
+  const newsMode = useNewsStore((s) => s.newsMode);
+  const setNewsMode = useNewsStore((s) => s.setNewsMode);
+
   const newsPanelOpen = usePanelStore((s) => s.panels.some((p) => p.kind === 'news-feed'));
   const openPanel = usePanelStore((s) => s.open);
   const screensaverActive = useScreensaverStore((s) => s.active);
   const screensaverMode = useScreensaverStore((s) => s.mode);
 
-  // The ticker is the active news consumer while the panel is closed and either
-  // the screensaver is off or we're in the pins (property-tour) screensaver. It
-  // fetches on its own cadence in that case so it doesn't double-fetch against
-  // the panel's own loop. Other screensaver modes hide it to keep the scene clean.
   const inPins = screensaverActive && screensaverMode === 'pins';
   const active = !newsPanelOpen && (!screensaverActive || inPins);
 
+  // Breaking news fetch (active when ticker is visible and mode is breaking).
   useEffect(() => {
-    if (!active) return;
+    if (!active || newsMode !== 'breaking') return;
     let cancelled = false;
     const fetchNews = async () => {
       try {
@@ -51,48 +60,69 @@ export function NewsTicker() {
     };
     fetchNews();
     const id = setInterval(fetchNews, REFRESH_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [active, newsMode, customSources, setData, setError]);
+
+  // Park news fetch (active when ticker is visible and mode is park).
+  useEffect(() => {
+    if (!active || newsMode !== 'park') return;
+    let cancelled = false;
+    const fetchPark = async () => {
+      try {
+        const res = await api.parkNews();
+        if (!cancelled) setParkData(res.items, res.updated);
+      } catch (e) {
+        if (!cancelled) setParkError(String(e));
+      }
     };
-  }, [active, customSources, setData, setError]);
+    fetchPark();
+    const id = setInterval(fetchPark, PARK_REFRESH_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [active, newsMode, setParkData, setParkError]);
 
   if (!active) return null;
 
-  const visible = items.filter(
-    (i) => severityFilter.has(i.severity) && categoryFilter.has(i.category)
-  );
+  const isPark = newsMode === 'park';
+
+  const visible = isPark
+    ? parkItems
+    : items.filter((i) => severityFilter.has(i.severity) && categoryFilter.has(i.category as never));
+
   if (visible.length === 0) return null;
 
-  // Constant scroll speed regardless of headline count; duplicated for the loop.
   const durationS = Math.max(24, visible.length * 7);
   const loop = [...visible, ...visible];
+  const dotMap = isPark ? PARK_SEVERITY_DOT : SEVERITY_DOT;
 
   return (
-    // In pins mode the bottom-right corner holds the context minimap + watch
-    // column, so pull the ticker's right edge in (desktop only) to clear it.
     <div
       className={`fixed bottom-0 left-0 right-0 z-10 md:left-72 ${
         inPins ? 'md:right-[280px]' : ''
       }`}
     >
       <div className="flex h-9 items-center border-t border-white/10 bg-ink-900/85 backdrop-blur-sm">
-        {/* Label — click to open the full Breaking News panel. */}
+        {/* Label — click to open the news panel. */}
         <button
           onClick={() =>
             openPanel({
               id: 'widget-news-feed',
               kind: 'news-feed',
-              title: 'Breaking News',
-              subtitle: 'GDELT · live feed',
+              title: isPark ? 'Park News' : 'Breaking News',
+              subtitle: isPark ? 'NPS · live feed' : 'RSS · live feed',
               payload: {},
             })
           }
-          className="flex h-full shrink-0 items-center gap-1.5 border-r border-white/10 bg-red-500/10 px-3 text-[10px] font-bold uppercase tracking-widest text-red-300 transition hover:bg-red-500/20"
-          title="Open Breaking News panel"
+          className={`flex h-full shrink-0 items-center gap-1.5 border-r border-white/10 px-3 text-[10px] font-bold uppercase tracking-widest transition ${
+            isPark
+              ? 'bg-green-500/10 text-green-300 hover:bg-green-500/20'
+              : 'bg-red-500/10 text-red-300 hover:bg-red-500/20'
+          }`}
+          title={isPark ? 'Open Park News panel' : 'Open Breaking News panel'}
         >
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />
-          Breaking
+          <span
+            className={`h-1.5 w-1.5 animate-pulse rounded-full ${isPark ? 'bg-green-400' : 'bg-red-400'}`}
+          />
+          {isPark ? 'Parks' : 'Breaking'}
         </button>
 
         {/* Scrolling headlines. */}
@@ -111,15 +141,26 @@ export function NewsTicker() {
               >
                 <span
                   className="h-1.5 w-1.5 shrink-0 rounded-full"
-                  style={{ background: SEVERITY_DOT[item.severity] ?? '#94a3b8' }}
+                  style={{ background: dotMap[item.severity] ?? '#94a3b8' }}
                 />
-                <span className="shrink-0 text-white/40">{item.source}</span>
+                <span className="shrink-0 text-white/40">
+                  {isPark ? item.countryName : item.source}
+                </span>
                 <span className="text-white/75 transition group-hover:text-white">{item.title}</span>
                 <span className="ml-2 text-white/15">•</span>
               </a>
             ))}
           </div>
         </div>
+
+        {/* Mode toggle pill */}
+        <button
+          onClick={() => setNewsMode(isPark ? 'breaking' : 'park')}
+          className="shrink-0 border-l border-white/10 px-2.5 py-1 text-[9px] font-semibold uppercase tracking-wider text-white/30 transition hover:text-white/60"
+          title={isPark ? 'Switch to breaking news' : 'Switch to park news'}
+        >
+          {isPark ? '🌍' : '🌲'}
+        </button>
       </div>
     </div>
   );

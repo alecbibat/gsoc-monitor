@@ -12,6 +12,8 @@ export type CategoryFilter =
   | 'health'
   | 'environment';
 
+export type NewsMode = 'breaking' | 'park';
+
 export interface CustomSource {
   url: string;
   label: string;
@@ -23,6 +25,7 @@ const ALL_CATEGORIES = new Set<CategoryFilter>([
 ]);
 
 interface NewsState {
+  // Breaking news
   items: NewsItem[];
   updated: number | null;
   loading: boolean;
@@ -31,6 +34,14 @@ interface NewsState {
   categoryFilter: Set<CategoryFilter>;
   seenIds: Set<string>;
   customSources: CustomSource[];
+  // Park news
+  parkItems: NewsItem[];
+  parkUpdated: number | null;
+  parkLoading: boolean;
+  parkError: string | null;
+  // Mode
+  newsMode: NewsMode;
+
   setData: (items: NewsItem[], updated: number) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
@@ -38,6 +49,10 @@ interface NewsState {
   toggleCategory: (c: CategoryFilter) => void;
   addCustomSource: (source: CustomSource) => void;
   removeCustomSource: (url: string) => void;
+  setParkData: (items: NewsItem[], updated: number) => void;
+  setParkLoading: (loading: boolean) => void;
+  setParkError: (error: string | null) => void;
+  setNewsMode: (mode: NewsMode) => void;
 }
 
 export const useNewsStore = create<NewsState>()(
@@ -51,6 +66,12 @@ export const useNewsStore = create<NewsState>()(
       categoryFilter: new Set(ALL_CATEGORIES),
       seenIds: new Set(),
       customSources: [],
+      parkItems: [],
+      parkUpdated: null,
+      parkLoading: false,
+      parkError: null,
+      newsMode: 'breaking',
+
       setData: (items, updated) =>
         set((s) => {
           const newIds = new Set([...s.seenIds, ...items.map((i) => i.id)]);
@@ -77,10 +98,14 @@ export const useNewsStore = create<NewsState>()(
         }),
       removeCustomSource: (url) =>
         set((s) => ({ customSources: s.customSources.filter((c) => c.url !== url) })),
+      setParkData: (parkItems, parkUpdated) => set({ parkItems, parkUpdated, parkLoading: false, parkError: null }),
+      setParkLoading: (parkLoading) => set({ parkLoading }),
+      setParkError: (parkError) => set({ parkError, parkLoading: false }),
+      setNewsMode: (newsMode) => set({ newsMode }),
     }),
     {
       name: 'gsoc-news',
-      partialize: (state) => ({ customSources: state.customSources }),
+      partialize: (state) => ({ customSources: state.customSources, newsMode: state.newsMode }),
     }
   )
 );

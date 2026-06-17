@@ -13,6 +13,8 @@ import newsRouter from './routes/news';
 import countyRouter from './routes/county';
 import parkRouter from './routes/park';
 import directionsRouter from './routes/directions';
+import driveRouter from './routes/route';
+import parkNewsRouter from './routes/parkNews';
 import satellitesRouter from './routes/satellites';
 
 dotenv.config();
@@ -32,6 +34,8 @@ app.use('/api/news', newsRouter);
 app.use('/api/county', countyRouter);
 app.use('/api/park', parkRouter);
 app.use('/api/directions', directionsRouter);
+app.use('/api/drive', driveRouter);
+app.use('/api/park-news', parkNewsRouter);
 app.use('/api/satellites', satellitesRouter);
 
 // Start AIS WebSocket stream (after dotenv so env vars are available).

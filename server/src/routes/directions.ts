@@ -11,15 +11,16 @@ const OSRM = 'https://router.project-osrm.org';
 
 const UA = 'gsoc-monitor/1.0 (national-parks dashboard)';
 
-type LegKind = 'hospital' | 'hotel' | 'police';
+type LegKind = 'hospital' | 'hotel' | 'police' | 'fire_station';
 
 // Generic fallback name + dedup distance per category.
 const GENERIC: Record<LegKind, string> = {
   hospital: 'Hospital',
   hotel: 'Hotel',
   police: 'Police Station',
+  fire_station: 'Fire Station',
 };
-const DEDUP_GAP_M: Record<LegKind, number> = { hospital: 250, hotel: 60, police: 200 };
+const DEDUP_GAP_M: Record<LegKind, number> = { hospital: 250, hotel: 60, police: 200, fire_station: 200 };
 
 interface Poi {
   name: string;
@@ -50,6 +51,7 @@ interface DirectionsResult {
   hospitals: Leg[];
   hotels: Leg[];
   police: Leg[];
+  fireStations: Leg[];
 }
 
 // How many alternatives (A/B/C…) to return per category.
@@ -74,6 +76,7 @@ const RADII: Record<LegKind, number[]> = {
   hospital: [12_000, 45_000, 120_000, 260_000],
   hotel: [5_000, 15_000, 45_000, 90_000],
   police: [12_000, 45_000, 130_000, 280_000],
+  fire_station: [12_000, 45_000, 130_000, 280_000],
 };
 
 function overpassFilter(kind: LegKind): string {
@@ -84,6 +87,8 @@ function overpassFilter(kind: LegKind): string {
       return 'nwr["tourism"="hotel"]';
     case 'police':
       return 'nwr["amenity"="police"]';
+    case 'fire_station':
+      return 'nwr["amenity"="fire_station"]';
   }
 }
 
@@ -293,8 +298,8 @@ router.get('/', async (req, res) => {
   }
 
   // Pins are static, so cache aggressively (per ~11 m grid cell). Key is
-  // versioned (v3) since the response shape now also returns police options.
-  const key = `directions:v3:${lat.toFixed(4)}:${lon.toFixed(4)}`;
+  // versioned (v4) since the response shape now also returns fireStations.
+  const key = `directions:v4:${lat.toFixed(4)}:${lon.toFixed(4)}`;
   const cached = cache.get<DirectionsResult>(key);
   if (cached) {
     res.json(cached);
@@ -302,7 +307,7 @@ router.get('/', async (req, res) => {
   }
 
   try {
-    const [hospitals, hotels, police] = await Promise.all([
+    const [hospitals, hotels, police, fireStations] = await Promise.all([
       buildLegs(lat, lon, 'hospital', OPTIONS_PER_KIND).catch((e) => {
         console.error('[directions] hospital legs failed:', e);
         return [] as Leg[];
@@ -315,11 +320,15 @@ router.get('/', async (req, res) => {
         console.error('[directions] police legs failed:', e);
         return [] as Leg[];
       }),
+      buildLegs(lat, lon, 'fire_station', 1).catch((e) => {
+        console.error('[directions] fire_station legs failed:', e);
+        return [] as Leg[];
+      }),
     ]);
 
-    const result: DirectionsResult = { origin: { lat, lon }, hospitals, hotels, police };
+    const result: DirectionsResult = { origin: { lat, lon }, hospitals, hotels, police, fireStations };
     // Only cache a useful answer; otherwise let the next click retry.
-    if (hospitals.length || hotels.length || police.length) {
+    if (hospitals.length || hotels.length || police.length || fireStations.length) {
       cache.set(key, result, 24 * 60 * 60_000);
     }
     res.json(result);

@@ -39,4 +39,9 @@ export const api = {
   park: (code: string) => getJson<GeoJSON.FeatureCollection>(`/api/park/${code}`),
   directions: (lat: number, lon: number) =>
     getJson<import('../types').DirectionsResponse>(`/api/directions?lat=${lat}&lon=${lon}`),
+  drive: (fromLat: number, fromLon: number, toLat: number, toLon: number) =>
+    getJson<import('../types').DriveResult>(
+      `/api/drive?fromLat=${fromLat}&fromLon=${fromLon}&toLat=${toLat}&toLon=${toLon}`
+    ),
+  parkNews: () => getJson<import('../types').NewsResponse>('/api/park-news'),
 };
