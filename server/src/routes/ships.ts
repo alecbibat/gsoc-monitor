@@ -27,6 +27,14 @@ const FLEET: FleetShip[] = [
 const ALLOWED_IMOS = new Set(FLEET.map((s) => s.imo));
 const FLEET_MMSIS = FLEET.map((s) => s.mmsi);
 
+// aisstream subscription mode. A narrow FiltersShipMMSI is efficient but returns
+// nothing whenever aisstream's (small, community) receiver network isn't hearing
+// those exact MMSIs. The firehose — default — streams every ship aisstream sees,
+// and because the fleet's MMSIs are pre-seeded into allowedMmsis we catch ours
+// the moment they appear, with no dependence on a static-data message. Set
+// AIS_MMSI_FILTER=1 to switch back to the narrow filter.
+const USE_MMSI_FILTER = process.env.AIS_MMSI_FILTER === '1';
+
 interface VesselData {
   mmsi: string;
   imo: number | null;
@@ -253,18 +261,16 @@ function connectAIS() {
     ws = new WebSocket('wss://stream.aisstream.io/v0/stream');
 
     ws.on('open', () => {
-      ws?.send(
-        JSON.stringify({
-          APIKey: config.aisstreamApiKey,
-          // Whole-world box is mandatory; FiltersShipMMSI then narrows the feed
-          // to just the tracked fleet, so we get those ships wherever they are
-          // the instant any receiver sees them instead of the global firehose.
-          BoundingBoxes: [[[-90, -180], [90, 180]]],
-          FiltersShipMMSI: FLEET_MMSIS,
-          FilterMessageTypes: ['PositionReport', 'ShipStaticData'],
-        })
-      );
-      console.log('AIS stream connected');
+      // Whole-world box is mandatory. We optionally narrow to the fleet MMSIs;
+      // by default we take the firehose and match against the pre-seeded fleet.
+      const sub: Record<string, unknown> = {
+        APIKey: config.aisstreamApiKey,
+        BoundingBoxes: [[[-90, -180], [90, 180]]],
+        FilterMessageTypes: ['PositionReport', 'ShipStaticData'],
+      };
+      if (USE_MMSI_FILTER) sub.FiltersShipMMSI = FLEET_MMSIS;
+      ws?.send(JSON.stringify(sub));
+      console.log(`AIS stream connected (${USE_MMSI_FILTER ? 'MMSI filter' : 'firehose'})`);
     });
 
     ws.on('message', (data: WebSocket.RawData) => {
