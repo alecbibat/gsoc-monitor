@@ -101,6 +101,17 @@ export const useLayersStore = create<LayersState>()(
         firesNearMiles: state.firesNearMiles,
         satelliteGroup: state.satelliteGroup,
       }),
+      // The Google photorealistic 3D layer (earth3d) hits a metered API and its
+      // UI control has been removed. Force it off on every hydration so a value
+      // persisted from before the control was pulled can never auto-activate it.
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<LayersState>;
+        return {
+          ...current,
+          ...p,
+          active: { ...current.active, ...(p.active ?? {}), earth3d: false },
+        } as LayersState;
+      },
     }
   )
 );

@@ -7,7 +7,6 @@ import { useFiresStatus } from '../layers/fires/firesStore';
 import { useShipsStatus } from '../layers/ships/shipsStore';
 import { useSatellitesStatus } from '../layers/satellites/satellitesStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
-import { useEarthStatus } from '../layers/earth3d/earthStore';
 import { useOsmStatus } from '../layers/osmBuildings/osmStore';
 import { useTrafficStatus } from '../layers/traffic/trafficStore';
 import { useTimeZonesStatus } from '../layers/timezones/timezonesStore';
@@ -59,7 +58,6 @@ export function Sidebar() {
   const firesStatus = useFiresStatus();
   const shipsStatus = useShipsStatus();
   const satellitesStatus = useSatellitesStatus();
-  const earthStatus = useEarthStatus();
   const osmStatus = useOsmStatus();
   const trafficStatus = useTrafficStatus();
   const timeZonesStatus = useTimeZonesStatus();
@@ -182,19 +180,10 @@ export function Sidebar() {
                   : 'Real 3D buildings worldwide · free (Cesium ion)')
             }
           />
-          <LayerToggle
-            label="Photorealistic 3D (Google)"
-            active={(active as Record<string, boolean>).earth3d ?? false}
-            onToggle={() => toggleLayer('earth3d')}
-            statusText={
-              earthStatus.error ??
-              (earthStatus.loading
-                ? 'Loading 3D tiles…'
-                : earthStatus.ready
-                  ? '⚠ Active — metered API, turn off when done'
-                  : 'Photo-textured tiles · metered, use sparingly')
-            }
-          />
+          {/* Photorealistic 3D (Google) is intentionally hidden: it hits a
+              metered Google API and we don't want it toggled by accident. The
+              layer + store stay wired up (see GoogleEarthLayer / earthStore) so
+              it can be re-enabled later — there's just no UI control for it. */}
         </Section>
 
         <Section title="Weather">
