@@ -8,6 +8,7 @@ import { useShipsStatus } from '../layers/ships/shipsStore';
 import { useSatellitesStatus } from '../layers/satellites/satellitesStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { useEarthStatus } from '../layers/earth3d/earthStore';
+import { useOsmStatus } from '../layers/osmBuildings/osmStore';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { flyToLonLat } from '../cesium/flyTo';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
@@ -54,6 +55,7 @@ export function Sidebar() {
   const shipsStatus = useShipsStatus();
   const satellitesStatus = useSatellitesStatus();
   const earthStatus = useEarthStatus();
+  const osmStatus = useOsmStatus();
   const screensaverActive = useScreensaverStore((s) => s.active);
   const viewer = useCesiumViewer();
   const locationsActive = (active as Record<string, boolean>).locations ?? true;
@@ -85,7 +87,20 @@ export function Sidebar() {
         <Section title="Base Map">
           <BasemapSwitcher />
           <LayerToggle
-            label="Google Earth 3D Tiles"
+            label="3D Buildings & Terrain"
+            active={(active as Record<string, boolean>).osmBuildings ?? false}
+            onToggle={() => toggleLayer('osmBuildings')}
+            statusText={
+              osmStatus.error ??
+              (osmStatus.loading
+                ? 'Loading buildings & terrain…'
+                : osmStatus.ready
+                  ? 'OSM buildings + world terrain · free'
+                  : 'Real 3D buildings worldwide · free (Cesium ion)')
+            }
+          />
+          <LayerToggle
+            label="Photorealistic 3D (Google)"
             active={(active as Record<string, boolean>).earth3d ?? false}
             onToggle={() => toggleLayer('earth3d')}
             statusText={
@@ -93,8 +108,8 @@ export function Sidebar() {
               (earthStatus.loading
                 ? 'Loading 3D tiles…'
                 : earthStatus.ready
-                  ? 'Active — metered API, turn off when done'
-                  : 'Photorealistic buildings & terrain · metered')
+                  ? '⚠ Active — metered API, turn off when done'
+                  : 'Photo-textured tiles · metered, use sparingly')
             }
           />
         </Section>

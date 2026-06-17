@@ -20,7 +20,7 @@ const ISS_SATNUM = '25544';
 // heading slowly orbits it, so the Earth wheels past underneath.
 const PITCH = Cesium.Math.toRadians(-32);
 const RANGE_M = 2_600_000;
-const ORBIT_PERIOD_MS = 70_000; // one full camera orbit around the station
+const ORBIT_PERIOD_MS = 100_000; // one full camera orbit around the station
 const POI_THROTTLE_MS = 1000; // how often the toast text refreshes
 
 // Self-contained "follow the ISS" screensaver. It fetches the station TLE

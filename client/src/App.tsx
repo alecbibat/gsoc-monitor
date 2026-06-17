@@ -22,6 +22,7 @@ import { NationalParksController } from './screensaver/NationalParksController';
 import { IssController } from './screensaver/IssController';
 import { PinsController } from './screensaver/PinsController';
 import { GoogleEarthLayer } from './layers/earth3d/GoogleEarthLayer';
+import { OsmBuildingsLayer } from './layers/osmBuildings/OsmBuildingsLayer';
 import { ScreensaverToast } from './screensaver/ScreensaverToast';
 
 export default function App() {
@@ -44,6 +45,7 @@ export default function App() {
           <ShipLayer />
           <SatelliteLayer />
           <LocationsLayer />
+          <OsmBuildingsLayer />
           <GoogleEarthLayer />
         </CesiumGlobe>
         <TopBar />

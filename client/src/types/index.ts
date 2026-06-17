@@ -9,6 +9,7 @@ export type LayerId =
   | 'ships'
   | 'satellites'
   | 'locations'
+  | 'osmBuildings'
   | 'earth3d';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';

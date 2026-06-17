@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useScreensaverStore, type Poi } from './screensaverStore';
 import { useEarthStatus } from '../layers/earth3d/earthStore';
+import { useOsmStatus } from '../layers/osmBuildings/osmStore';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
 
 const OVERVIEW_ALT = 9_000_000;
@@ -14,7 +15,7 @@ const DWELL_MAX_MS = 17_000;
 const INTERVAL_MIN_MS = 6_000;
 const INTERVAL_MAX_MS = 10_000;
 // Camera orbits slowly around each pin while dwelling.
-const ORBIT_PERIOD_MS = 32_000;
+const ORBIT_PERIOD_MS = 45_000;
 
 // Close cinematic orbit — used when Google 3D tiles are loaded so the
 // photorealistic buildings and terrain are visible from a low, tilted angle.
@@ -135,9 +136,10 @@ export function PinsController() {
       setPhase('flying-to');
       setCurrentPoi(poi);
 
-      // If the 3D tiles are loaded, sample the real ground/building height so we
-      // can orbit close to the terrain. Otherwise stay high and safe.
-      const tilesReady = useEarthStatus.getState().ready;
+      // If a 3D source (OSM buildings + terrain, or Google tiles) is loaded,
+      // sample the real ground/building height so we can orbit close to the
+      // terrain. Otherwise stay high and safe over the flat globe.
+      const tilesReady = useOsmStatus.getState().ready || useEarthStatus.getState().ready;
       const groundH = tilesReady ? await sampleGroundHeight(v, pin.lon, pin.lat) : null;
       if (cancelledRef.current) return;
 

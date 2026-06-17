@@ -45,6 +45,7 @@ export const useLayersStore = create<LayersState>()(
         ships: false,
         satellites: false,
         locations: true,
+        osmBuildings: false,
         earth3d: false,
       },
       basemap: 'dark',
