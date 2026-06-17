@@ -5,6 +5,7 @@ import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { useLightningStatus } from '../layers/lightning/lightningStore';
 import { useFiresStatus } from '../layers/fires/firesStore';
 import { useShipsStatus } from '../layers/ships/shipsStore';
+import { useSatellitesStatus } from '../layers/satellites/satellitesStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { flyToLonLat } from '../cesium/flyTo';
@@ -13,12 +14,21 @@ import { LayerToggle } from './LayerToggle';
 import { Section } from './Section';
 import { BasemapSwitcher } from './BasemapSwitcher';
 import { RadarControls } from '../layers/radar/RadarControls';
+import type { SatelliteGroup } from '../types';
 
 const MAGNITUDES: Array<{ value: '1.0' | '2.5' | '4.5' | 'significant'; label: string }> = [
   { value: '1.0', label: 'M1.0+' },
   { value: '2.5', label: 'M2.5+' },
   { value: '4.5', label: 'M4.5+' },
   { value: 'significant', label: 'Significant' },
+];
+
+const SATELLITE_GROUPS: Array<{ value: SatelliteGroup; label: string }> = [
+  { value: 'stations', label: 'Stations' },
+  { value: 'visual', label: 'Brightest' },
+  { value: 'gps', label: 'GPS' },
+  { value: 'weather', label: 'Weather' },
+  { value: 'starlink', label: 'Starlink' },
 ];
 
 export function Sidebar() {
@@ -36,12 +46,15 @@ export function Sidebar() {
   const setShipPaths = useLayersStore((s) => s.setShipPaths);
   const firesNearMiles = useLayersStore((s) => s.firesNearMiles);
   const setFiresNearMiles = useLayersStore((s) => s.setFiresNearMiles);
+  const satelliteGroup = useLayersStore((s) => s.satelliteGroup);
+  const setSatelliteGroup = useLayersStore((s) => s.setSatelliteGroup);
   const flightsStatus = useFlightsStatus();
   const alertsStatus = useAlertsStatus();
   const hurricanesStatus = useHurricanesStatus();
   const lightningStatus = useLightningStatus();
   const firesStatus = useFiresStatus();
   const shipsStatus = useShipsStatus();
+  const satellitesStatus = useSatellitesStatus();
   const screensaverActive = useScreensaverStore((s) => s.active);
   const viewer = useCesiumViewer();
   const locationsActive = (active as Record<string, boolean>).locations ?? true;
@@ -51,6 +64,16 @@ export function Sidebar() {
     if (shipsStatus.error) return shipsStatus.error;
     const conn = shipsStatus.connected ? ' · live' : '';
     return `${shipsStatus.count}/${shipsStatus.total} vessels tracked${conn}`;
+  }
+
+  function satellitesStatusText() {
+    if (satellitesStatus.error) return satellitesStatus.error;
+    if (satellitesStatus.loading) return 'Loading orbital data…';
+    const shown = satellitesStatus.count.toLocaleString();
+    if (satellitesStatus.total > satellitesStatus.count) {
+      return `${shown} of ${satellitesStatus.total.toLocaleString()} satellites · live`;
+    }
+    return `${shown} satellites · live`;
   }
 
   return (
@@ -208,6 +231,36 @@ export function Sidebar() {
               />
               Show past &amp; future paths
             </label>
+          </LayerToggle>
+        </Section>
+
+        <Section title="Space">
+          <LayerToggle
+            label="Satellites (CelesTrak)"
+            active={active.satellites}
+            onToggle={() => toggleLayer('satellites')}
+            statusText={satellitesStatusText()}
+          >
+            <div className="pt-1">
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-white/30">
+                Group
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {SATELLITE_GROUPS.map((g) => (
+                  <button
+                    key={g.value}
+                    onClick={() => setSatelliteGroup(g.value)}
+                    className={`rounded px-1.5 py-1 text-[11px] font-medium transition ${
+                      satelliteGroup === g.value
+                        ? 'bg-accent/20 text-accent'
+                        : 'bg-white/5 text-white/50 hover:bg-white/10'
+                    }`}
+                  >
+                    {g.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </LayerToggle>
         </Section>
 

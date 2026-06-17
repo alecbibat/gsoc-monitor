@@ -22,6 +22,8 @@ export const api = {
     ),
   pizza: () => getJson<import('../types').PizzaBusyness>('/api/pizza'),
   ships: () => getJson<import('../types').ShipsResponse>('/api/ships'),
+  satellites: (group: import('../types').SatelliteGroup) =>
+    getJson<import('../types').SatellitesResponse>(`/api/satellites?group=${group}`),
   news: (extras?: Array<{ url: string; label: string }>) => {
     if (extras && extras.length > 0) {
       const param = encodeURIComponent(JSON.stringify(extras));

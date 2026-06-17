@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { BasemapId, LayerId } from '../types';
+import type { BasemapId, LayerId, SatelliteGroup } from '../types';
 
 interface LayersState {
   active: Record<LayerId, boolean>;
@@ -19,6 +19,8 @@ interface LayersState {
   setShipPaths: (v: boolean) => void;
   firesNearMiles: 0 | 50 | 100 | 200;
   setFiresNearMiles: (v: 0 | 50 | 100 | 200) => void;
+  satelliteGroup: SatelliteGroup;
+  setSatelliteGroup: (v: SatelliteGroup) => void;
   earthquakeMagnitude: 'significant' | '4.5' | '2.5' | '1.0' | 'all';
   earthquakePeriod: 'hour' | 'day' | 'week';
   setEarthquakeFilter: (
@@ -41,6 +43,7 @@ export const useLayersStore = create<LayersState>()(
         lightning: false,
         fires: false,
         ships: false,
+        satellites: false,
         locations: true,
       },
       basemap: 'dark',
@@ -73,6 +76,8 @@ export const useLayersStore = create<LayersState>()(
       setShipPaths: (v) => set({ shipPaths: v }),
       firesNearMiles: 0,
       setFiresNearMiles: (v) => set({ firesNearMiles: v }),
+      satelliteGroup: 'stations',
+      setSatelliteGroup: (v) => set({ satelliteGroup: v }),
       earthquakeMagnitude: '2.5',
       earthquakePeriod: 'day',
       setEarthquakeFilter: (partial) =>
@@ -90,6 +95,7 @@ export const useLayersStore = create<LayersState>()(
         shipFavorites: state.shipFavorites,
         shipPaths: state.shipPaths,
         firesNearMiles: state.firesNearMiles,
+        satelliteGroup: state.satelliteGroup,
       }),
     }
   )

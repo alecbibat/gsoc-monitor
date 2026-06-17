@@ -9,6 +9,7 @@ Global Situational & Operational Conditions Monitor — a real-time 3D globe das
 - **Earthquakes** — USGS live feed, magnitude-scaled colored points, click for details panel.
 - **NWS Weather Alerts** — every active alert, including zone/county-based ones (winter, heat, flood, red-flag) resolved to polygons server-side; severity-coded overlays with full alert text in click panels.
 - **Live flights** — adsb.fi ADS-B (free, no key), plane icons rotated to heading, favorites list, auto-refresh when camera moves.
+- **Satellites** — CelesTrak TLE + satellite.js SGP4 propagation; real-time orbits for Space Stations / Brightest / GPS / Weather / Starlink groups, click any satellite to trace its orbit ring and read live position, altitude, speed, and orbital elements.
 - **Search** — geocode (Nominatim), raw lat/lon input, auto-fly to results.
 - **Dockable panels** — any entity click opens a draggable/resizable detail window; multiple can be open at once.
 
@@ -37,6 +38,7 @@ npm run dev:client
 | adsb.fi (flights) | No key needed | Free open ADS-B data, ~1 req/sec (the server caches to stay under it). |
 | NWS (api.weather.gov) | No key needed | Set `NWS_USER_AGENT` to identify your app per NWS policy: `"my-app (me@email.com)"`. Used for both alerts and zone-geometry lookups. |
 | USGS Earthquakes | No key needed | Fully public. |
+| CelesTrak (satellites) | No key needed | Public TLE data; the server caches each group for 2h per CelesTrak's guidance. |
 | RainViewer | No key needed | Fully public tile CDN. |
 | Nominatim (geocoding) | No key needed | Uses OSM data; `NWS_USER_AGENT` string is also used here as User-Agent per their policy. |
 
@@ -86,4 +88,4 @@ The architecture is designed for easy extension. For each new layer:
 4. Add a proxy route under `server/src/routes/`
 5. Add a toggle to `Sidebar.tsx`
 
-Planned next layers: hurricanes (NOAA NHC), lightning (Blitzortung), FIRMS fire hotspots, ships (AISStream), satellite tracker (CelesTrak TLE + satellite.js).
+Shipped since: hurricanes (NOAA NHC), lightning (Blitzortung), FIRMS fire hotspots, ships (AISStream), satellite tracker (CelesTrak TLE + satellite.js).

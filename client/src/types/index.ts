@@ -7,7 +7,10 @@ export type LayerId =
   | 'lightning'
   | 'fires'
   | 'ships'
+  | 'satellites'
   | 'locations';
+
+export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
 // Standalone dockable widgets that aren't tied to a clicked map entity.
 export type WidgetId = 'pentagon-pizza' | 'news-feed';
@@ -81,6 +84,20 @@ export interface FlightState {
   verticalRateFpm: number | null;
   squawk: string | null;
   lastSeenSec: number;
+}
+
+export interface SatelliteTle {
+  name: string;
+  satnum: string;
+  intlDesig: string;
+  line1: string;
+  line2: string;
+}
+
+export interface SatellitesResponse {
+  group: SatelliteGroup;
+  satellites: SatelliteTle[];
+  updated: number;
 }
 
 export interface RadarFrame {
