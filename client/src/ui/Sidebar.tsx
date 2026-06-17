@@ -9,6 +9,7 @@ import { useSatellitesStatus } from '../layers/satellites/satellitesStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { useEarthStatus } from '../layers/earth3d/earthStore';
 import { useOsmStatus } from '../layers/osmBuildings/osmStore';
+import { useTrafficStatus } from '../layers/traffic/trafficStore';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { flyToLonLat } from '../cesium/flyTo';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
@@ -58,6 +59,7 @@ export function Sidebar() {
   const satellitesStatus = useSatellitesStatus();
   const earthStatus = useEarthStatus();
   const osmStatus = useOsmStatus();
+  const trafficStatus = useTrafficStatus();
   const screensaverActive = useScreensaverStore((s) => s.active);
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
   const setSidebarOpen = useUiStore((s) => s.setSidebarOpen);
@@ -246,6 +248,24 @@ export function Sidebar() {
               </div>
             </div>
           </LayerToggle>
+        </Section>
+
+        <Section title="Traffic">
+          <LayerToggle
+            label="Live Traffic (TomTom)"
+            active={active.traffic}
+            onToggle={() => toggleLayer('traffic')}
+            statusText={
+              trafficStatus.noKey
+                ? 'Set VITE_TOMTOM_KEY to enable'
+                : trafficStatus.error ??
+                  (trafficStatus.loading
+                    ? 'Loading incidents…'
+                    : trafficStatus.ready
+                      ? `${trafficStatus.incidentCount} incidents · US · live`
+                      : 'Road flow + incidents · continental US')
+            }
+          />
         </Section>
 
         <Section title="Tracking">

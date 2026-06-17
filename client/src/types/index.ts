@@ -10,7 +10,8 @@ export type LayerId =
   | 'satellites'
   | 'locations'
   | 'osmBuildings'
-  | 'earth3d';
+  | 'earth3d'
+  | 'traffic';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
