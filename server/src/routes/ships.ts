@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import WebSocket from 'ws';
+import fs from 'fs';
+import path from 'path';
 import { config } from '../config';
 
 const router = Router();
@@ -126,6 +128,58 @@ function recordHistory(mmsi: string, lat: number, lon: number, t: number): void 
   h.push({ lat, lon, t });
   const cutoff = t - MAX_TRACK_AGE_MS;
   while (h.length > MAX_TRACK_POINTS || (h.length > 0 && h[0].t < cutoff)) h.shift();
+}
+
+// --- Position snapshot (last-known persistence) -----------------------------
+// Written to disk after every successful poll so the fleet stays on the map
+// across server restarts and Heroku deploys. The snapshot file lives at
+// SHIPS_SNAPSHOT_PATH (default: <server root>/ships-snapshot.json) — on Heroku
+// this persists within a dyno's lifetime but is wiped on a fresh deploy. That's
+// fine: CruiseMapper scrapes at startup anyway, so ships reappear within ~15 s.
+const SNAPSHOT_PATH =
+  process.env.SHIPS_SNAPSHOT_PATH ??
+  path.join(__dirname, '../../ships-snapshot.json');
+
+interface Snapshot {
+  tracked: VesselData[];
+  history: { mmsi: string; pts: TrackPoint[] }[];
+  savedAt: number;
+}
+
+function saveSnapshot(): void {
+  try {
+    const snap: Snapshot = {
+      tracked: [...tracked.values()],
+      history: [...history.entries()].map(([mmsi, pts]) => ({ mmsi, pts })),
+      savedAt: Date.now(),
+    };
+    fs.writeFileSync(SNAPSHOT_PATH, JSON.stringify(snap));
+  } catch {
+    // Non-fatal — the app works fine without it.
+  }
+}
+
+function loadSnapshot(): void {
+  try {
+    const raw = fs.readFileSync(SNAPSHOT_PATH, 'utf8');
+    const snap = JSON.parse(raw) as Snapshot;
+    const ageMs = Date.now() - (snap.savedAt ?? 0);
+    // Ignore snapshots older than 7 days — stale positions are misleading.
+    if (ageMs > 7 * 24 * 60 * 60_000) return;
+    for (const v of snap.tracked ?? []) {
+      if (v.mmsi && FLEET_MMSIS.includes(v.mmsi)) {
+        tracked.set(v.mmsi, v);
+        allowedMmsis.add(v.mmsi);
+      }
+    }
+    for (const { mmsi, pts } of snap.history ?? []) {
+      if (pts.length > 0 && FLEET_MMSIS.includes(mmsi)) history.set(mmsi, pts);
+    }
+    const loaded = [...tracked.keys()].length;
+    if (loaded > 0) console.log(`[ships] loaded ${loaded} ships from snapshot (${Math.round(ageMs / 60_000)} min old)`);
+  } catch {
+    // No snapshot yet — start fresh.
+  }
 }
 
 // Prevent unbounded memory growth from the global AIS stream.
@@ -609,6 +663,7 @@ async function pollPaidPositions() {
     paidLastOk = Date.now();
     paidLastError = null;
     paidLastCount = applied;
+    saveSnapshot();
   } catch (err) {
     paidLastError = String(err);
     console.error('[ships] paid poll failed:', err);
@@ -622,6 +677,7 @@ function paidConfigured(): boolean {
 }
 
 export function initShipsStream() {
+  loadSnapshot();
   // Free AIS stream — live updates when a ship is in community-receiver range.
   if (config.aisstreamApiKey) {
     connectAIS();
@@ -756,6 +812,10 @@ router.get('/debug', (_req, res) => {
       imoCount: ALLOWED_IMOS.size,
       matchedMmsis: [...allowedMmsis],
       ships: perImo,
+    },
+    snapshot: {
+      path: SNAPSHOT_PATH,
+      loaded: [...tracked.keys()].length,
     },
     diagnosis: diagnose(perImo),
     updated: now,
