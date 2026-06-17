@@ -1,5 +1,6 @@
 import { useLayersStore } from '../../store/layersStore';
 import { shipTypeLabel } from './ShipLayer';
+import { ShipClassCard } from './ShipClassCard';
 
 const NAV_STATUS: Record<number, string> = {
   0: 'Underway (engine)',
@@ -67,6 +68,8 @@ export function ShipDetails({ payload }: Props) {
           {isFavorite ? '★ Favorited' : '☆ Add favorite'}
         </button>
       </div>
+
+      <ShipClassCard mmsi={payload.mmsi} />
 
       <dl className="grid grid-cols-2 gap-y-1.5 text-[13px]">
         <dt className="text-white/40">IMO</dt>
