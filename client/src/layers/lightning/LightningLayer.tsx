@@ -97,9 +97,9 @@ const RING_COLOR = hex('#bfe9ff'); // pale shockwave
 const DETECTOR_LIFE_MS = 600; // detector lines fade out fast (~0.6s)
 const DETECTOR_COLOR = hex('#8fe8ff'); // pale cyan signal line
 const MAX_DETECTORS_PER_STRIKE = 14; // cap stations drawn per strike
-// Only the most recent strike shows detector lines — a new strike clears the
-// previous strike's lines (a "refresh") instead of letting them pile up.
-const MAX_DETECTOR_GROUPS = 1;
+// Each strike draws its own short-lived lines; many can overlap during a storm,
+// so keep a generous cap. The quick fade keeps them from piling up.
+const MAX_DETECTOR_GROUPS = 60;
 
 // A jagged vertical path from high altitude straight down onto the strike point.
 // Top and bottom are anchored on the point; the horizontal wander peaks in the
@@ -279,9 +279,8 @@ export function LightningLayer() {
         .slice(0, MAX_DETECTORS_PER_STRIKE);
       if (stations.length === 0) return;
 
-      // Refresh: clear any still-showing lines from prior strikes so this new
-      // strike's detector lines replace them (cap is 1, so this empties them).
-      while (detectors.length >= MAX_DETECTOR_GROUPS) {
+      // Evict the oldest group only if we're at the concurrency cap.
+      if (detectors.length >= MAX_DETECTOR_GROUPS) {
         const old = detectors.shift();
         if (old) for (const line of old.lines) ds.entities.remove(line);
       }
