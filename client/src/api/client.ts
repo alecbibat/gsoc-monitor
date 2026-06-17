@@ -44,4 +44,5 @@ export const api = {
       `/api/drive?fromLat=${fromLat}&fromLon=${fromLon}&toLat=${toLat}&toLon=${toLon}`
     ),
   parkNews: () => getJson<import('../types').NewsResponse>('/api/park-news'),
+  webcams: () => getJson<import('../types').WebcamsResponse>('/api/webcams'),
 };

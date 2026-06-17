@@ -170,6 +170,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
       trust: 'Maintained by your team — not a third-party feed.',
     },
   },
+  {
+    id: 'webcams',
+    info: {
+      name: 'Public Webcams',
+      icon: '📷',
+      source: 'Windy Webcams',
+      method:
+        'Public and traffic webcams within 10 miles of each property pin, found by radius search against the Windy Webcams API. The live view is Windy’s embedded player; each entry links back to the camera’s owner where known.',
+      trust:
+        'Windy aggregates publicly broadcast camera feeds (DOT traffic cams, scenic cams) from their operators; imagery is attributed to Windy.com.',
+      url: 'https://www.windy.com/webcams',
+    },
+  },
 ];
 
 export const BASEMAP_PROVENANCE: Record<BasemapId, Provenance> = {

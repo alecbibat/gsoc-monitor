@@ -5,6 +5,7 @@ import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { useLightningStatus } from '../layers/lightning/lightningStore';
 import { useFiresStatus } from '../layers/fires/firesStore';
 import { useShipsStatus } from '../layers/ships/shipsStore';
+import { useWebcamsStatus } from '../layers/webcams/webcamsStore';
 import { useSatellitesStatus } from '../layers/satellites/satellitesStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { useOsmStatus } from '../layers/osmBuildings/osmStore';
@@ -58,6 +59,7 @@ export function Sidebar() {
   const lightningStatus = useLightningStatus();
   const firesStatus = useFiresStatus();
   const shipsStatus = useShipsStatus();
+  const webcamsStatus = useWebcamsStatus();
   const satellitesStatus = useSatellitesStatus();
   const osmStatus = useOsmStatus();
   const trafficStatus = useTrafficStatus();
@@ -75,6 +77,12 @@ export function Sidebar() {
     if (shipsStatus.error) return shipsStatus.error;
     const conn = shipsStatus.connected ? ' · live' : '';
     return `${shipsStatus.count}/${shipsStatus.total} vessels tracked${conn}`;
+  }
+
+  function webcamsStatusText() {
+    if (webcamsStatus.noKey) return 'Set WINDY_API_KEY to enable';
+    if (webcamsStatus.error) return webcamsStatus.error;
+    return `${webcamsStatus.count} cams within 10 mi of pins`;
   }
 
   function satellitesStatusText() {
@@ -340,6 +348,12 @@ export function Sidebar() {
               Show past &amp; future paths
             </label>
           </LayerToggle>
+          <LayerToggle
+            label="Webcams"
+            active={active.webcams}
+            onToggle={() => toggleLayer('webcams')}
+            statusText={webcamsStatusText()}
+          />
         </Section>
 
         <Section title="Space">

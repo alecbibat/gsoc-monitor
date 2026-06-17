@@ -12,7 +12,8 @@ export type LayerId =
   | 'osmBuildings'
   | 'earth3d'
   | 'traffic'
-  | 'timezones';
+  | 'timezones'
+  | 'webcams';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
@@ -217,4 +218,27 @@ export interface PizzaBusyness {
   source: 'besttime' | 'no-key' | 'error';
   places: PizzaPlaceBusyness[];
   updated: number;
+}
+
+export interface Webcam {
+  id: string;
+  title: string;
+  lat: number;
+  lon: number;
+  status: string;
+  lastUpdated: number | null; // epoch ms, or null if unknown
+  previewUrl: string | null; // tokened still (short-lived) — fallback only
+  playerEmbedUrl: string | null; // stable iframe live view
+  detailUrl: string | null; // webcam page on Windy
+  providerUrl: string | null; // owner's site, when known
+  categories: string[];
+  nearestPin: string;
+  distanceMi: number;
+}
+
+export interface WebcamsResponse {
+  source: 'windy' | 'no-key' | 'error';
+  webcams: Webcam[];
+  updated: number;
+  stale?: boolean;
 }
