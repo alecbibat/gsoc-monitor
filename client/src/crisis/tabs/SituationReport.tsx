@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
   useCrisisStore, useActiveIncident,
-  type IncidentType, type IncidentStatus, type DrawLayerType, type DrawGeometry,
+  type IncidentType, type IncidentStatus, type DrawLayerType, type DrawGeometry, type DrawLayer,
 } from '../crisisStore';
 import { IcsOrgChart } from '../IcsOrgChart';
 import { ActionLog } from '../ActionLog';
+import { parseCoords } from '../parseCoords';
 
 const STATUS_STYLES: Record<IncidentStatus, string> = {
   active:    'border-red-500/50 bg-red-500/15 text-red-400',
@@ -61,6 +62,120 @@ function TextInput({ value, onChange, placeholder }: { value: string; onChange: 
   );
 }
 
+// ── Coord import panel ────────────────────────────────────────────────────────
+
+const COORD_HINT: Record<DrawGeometry, string> = {
+  polygon: 'Paste one lat, lon pair per line to draw the polygon outline.',
+  line:    'Paste one lat, lon pair per line for each waypoint along the line.',
+  point:   'Paste a single lat, lon pair for the marker location.',
+};
+
+const COORD_EXAMPLE: Record<DrawGeometry, string> = {
+  polygon: '34.0522, -118.2437\n34.0531, -118.2301\n34.0412, -118.2285\n34.0398, -118.2420',
+  line:    '34.0522, -118.2437\n34.0531, -118.2301\n34.0412, -118.2285',
+  point:   '34.0522, -118.2437',
+};
+
+function CoordImportPanel({ layer, onClose }: { layer: DrawLayer; onClose: () => void }) {
+  const updateDrawLayer = useCrisisStore((s) => s.updateDrawLayer);
+  const [raw, setRaw] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<number | null>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => { taRef.current?.focus(); }, []);
+
+  const geom = layer.geometry;
+
+  const handleChange = (v: string) => {
+    setRaw(v);
+    setError(null);
+    setPreview(null);
+    if (!v.trim()) return;
+    const result = parseCoords(v);
+    if (result.points.length > 0) setPreview(result.points.length);
+    if (result.error && result.points.length === 0) setError(result.error);
+  };
+
+  const handleApply = () => {
+    const result = parseCoords(raw);
+    if (result.points.length === 0) {
+      setError(result.error ?? 'No valid coordinates found.');
+      return;
+    }
+    const pts = geom === 'point' ? [result.points[0]] : result.points;
+    updateDrawLayer(layer.id, { positions: pts });
+    onClose();
+  };
+
+  return (
+    <div className="mt-1.5 rounded-lg border border-white/10 bg-white/4 p-3 space-y-2.5">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="text-[10px] font-semibold text-white/55">Import coordinates</p>
+          <p className="text-[9px] text-white/30 mt-0.5">{COORD_HINT[geom]}</p>
+        </div>
+        <button onClick={onClose} className="mt-0.5 text-white/25 hover:text-white/55 text-[11px]">✕</button>
+      </div>
+
+      <textarea
+        ref={taRef}
+        className="w-full resize-none rounded border border-white/10 bg-white/8 px-2.5 py-2 font-mono text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
+        rows={geom === 'point' ? 2 : 5}
+        placeholder={COORD_EXAMPLE[geom]}
+        value={raw}
+        onChange={(e) => handleChange(e.target.value)}
+        onKeyDown={(e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') handleApply();
+        }}
+        spellCheck={false}
+      />
+
+      <div className="flex items-center gap-2">
+        {preview !== null && !error && (
+          <span className="text-[9px] text-accent-ok">
+            ✓ {preview} point{preview !== 1 ? 's' : ''} parsed
+            {geom === 'point' && preview > 1 ? ' — first point will be used' : ''}
+          </span>
+        )}
+        {error && (
+          <span className="text-[9px] text-red-400/80">{error}</span>
+        )}
+        <div className="ml-auto flex gap-2">
+          <p className="self-center text-[8px] text-white/20">⌘ Enter to apply</p>
+          <button
+            onClick={handleApply}
+            disabled={!raw.trim()}
+            className="rounded bg-accent/20 px-3 py-1 text-[10px] text-accent transition hover:bg-accent/30 disabled:opacity-30"
+          >
+            Apply
+          </button>
+        </div>
+      </div>
+
+      <details className="group">
+        <summary className="cursor-pointer text-[8px] text-white/20 hover:text-white/40 list-none flex items-center gap-1">
+          <span className="group-open:rotate-90 inline-block transition-transform">▶</span>
+          Accepted formats
+        </summary>
+        <div className="mt-1.5 space-y-1 rounded border border-white/8 bg-white/3 px-3 py-2">
+          {[
+            ['Decimal degrees (Google Maps)', '37.7749, -122.4194'],
+            ['With cardinal letters', '37.7749° N, 122.4194° W'],
+            ['DMS', '37° 46\' 29" N, 122° 25\' 16" W'],
+            ['WKT (lon lat order)', 'POLYGON ((-122.4 37.7, -122.3 37.8, ...))'],
+          ].map(([fmt, ex]) => (
+            <div key={fmt} className="flex flex-col gap-0.5">
+              <span className="text-[8px] text-white/30">{fmt}</span>
+              <code className="text-[8px] text-white/50 font-mono">{ex}</code>
+            </div>
+          ))}
+        </div>
+      </details>
+    </div>
+  );
+}
+
 // ── Map Layers section ────────────────────────────────────────────────────────
 
 function MapLayersSection() {
@@ -77,6 +192,7 @@ function MapLayersSection() {
   const [newGeom, setNewGeom] = useState<DrawGeometry>('polygon');
   const defaultColor = DRAW_LAYER_TYPES.find((t) => t.value === newType)?.color ?? '#ef4444';
   const [newColor, setNewColor] = useState(defaultColor);
+  const [coordLayerId, setCoordLayerId] = useState<string | null>(null);
 
   const drawLayers = inc?.drawLayers ?? [];
 
@@ -178,37 +294,55 @@ function MapLayersSection() {
           </p>
         ) : (
           drawLayers.map((layer) => (
-            <div key={layer.id} className="flex items-center gap-2 rounded border border-white/8 bg-white/5 px-3 py-2">
-              <div className="h-3 w-3 shrink-0 rounded-full" style={{ background: layer.color }} />
-              <div className="min-w-0 flex-1">
-                <span className="text-[11px] text-white/80">{layer.name}</span>
-                <span className="ml-2 text-[9px] text-white/35">
-                  {DRAW_LAYER_TYPES.find((t) => t.value === layer.type)?.label} · {layer.geometry}
-                </span>
-                {layer.positions.length > 0 && (
-                  <span className="ml-2 text-[9px] text-white/30">{layer.positions.length} pts</span>
-                )}
+            <div key={layer.id} className="rounded border border-white/8 bg-white/5">
+              <div className="flex items-center gap-2 px-3 py-2">
+                <div className="h-3 w-3 shrink-0 rounded-full" style={{ background: layer.color }} />
+                <div className="min-w-0 flex-1">
+                  <span className="text-[11px] text-white/80">{layer.name}</span>
+                  <span className="ml-2 text-[9px] text-white/35">
+                    {DRAW_LAYER_TYPES.find((t) => t.value === layer.type)?.label} · {layer.geometry}
+                  </span>
+                  {layer.positions.length > 0 && (
+                    <span className="ml-2 text-[9px] text-white/30">{layer.positions.length} pts</span>
+                  )}
+                </div>
+                <button
+                  onClick={() => updateDrawLayer(layer.id, { visible: !layer.visible })}
+                  className={`text-[11px] transition ${layer.visible ? 'text-white/55 hover:text-white/80' : 'text-white/20 hover:text-white/40'}`}
+                  title={layer.visible ? 'Hide' : 'Show'}
+                >
+                  {layer.visible ? '👁' : '🚫'}
+                </button>
+                <button
+                  onClick={() => setCoordLayerId((id) => id === layer.id ? null : layer.id)}
+                  className={`rounded border px-2 py-0.5 text-[9px] transition ${
+                    coordLayerId === layer.id
+                      ? 'border-white/25 bg-white/10 text-white/70'
+                      : 'border-white/12 text-white/35 hover:border-white/22 hover:text-white/60'
+                  }`}
+                  title="Import from coordinates"
+                >
+                  Coords
+                </button>
+                <button
+                  onClick={() => startDraw(layer.id)}
+                  className="rounded border border-accent/25 bg-accent/10 px-2 py-0.5 text-[9px] text-accent/80 transition hover:border-accent/40 hover:text-accent"
+                >
+                  {layer.positions.length > 0 ? 'Redraw' : 'Draw'}
+                </button>
+                <button
+                  onClick={() => { if (confirm(`Remove layer "${layer.name}"?`)) removeDrawLayer(layer.id); }}
+                  className="text-[11px] text-white/25 transition hover:text-red-400/70"
+                  title="Delete layer"
+                >
+                  ✕
+                </button>
               </div>
-              <button
-                onClick={() => updateDrawLayer(layer.id, { visible: !layer.visible })}
-                className={`text-[11px] transition ${layer.visible ? 'text-white/55 hover:text-white/80' : 'text-white/20 hover:text-white/40'}`}
-                title={layer.visible ? 'Hide' : 'Show'}
-              >
-                {layer.visible ? '👁' : '🚫'}
-              </button>
-              <button
-                onClick={() => startDraw(layer.id)}
-                className="rounded border border-accent/25 bg-accent/10 px-2 py-0.5 text-[9px] text-accent/80 transition hover:border-accent/40 hover:text-accent"
-              >
-                {layer.positions.length > 0 ? 'Redraw' : 'Draw'}
-              </button>
-              <button
-                onClick={() => { if (confirm(`Remove layer "${layer.name}"?`)) removeDrawLayer(layer.id); }}
-                className="text-[11px] text-white/25 transition hover:text-red-400/70"
-                title="Delete layer"
-              >
-                ✕
-              </button>
+              {coordLayerId === layer.id && (
+                <div className="border-t border-white/8 px-3 pb-3">
+                  <CoordImportPanel layer={layer} onClose={() => setCoordLayerId(null)} />
+                </div>
+              )}
             </div>
           ))
         )}
