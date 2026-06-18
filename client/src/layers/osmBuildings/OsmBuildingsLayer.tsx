@@ -61,6 +61,16 @@ export function OsmBuildingsLayer() {
             ],
           },
         });
+        // Cap GPU memory. Cesium defaults to cacheBytes 512MB + overflow 512MB
+        // (~1GB), which the pins screensaver's continuous close-up orbits over
+        // dense cities can exhaust on a constrained GPU — losing the WebGL
+        // context and blacking out the globe. Bounding it to ~320MB keeps the
+        // buildings detailed while leaving the context healthy.
+        tileset.cacheBytes = 192 * 1024 * 1024;
+        tileset.maximumCacheOverflowBytes = 128 * 1024 * 1024;
+        // Coarsen tiles near the horizon during the screensaver's oblique
+        // ground-level orbits — far fewer tiles loaded, less memory churn.
+        tileset.dynamicScreenSpaceError = true;
         tilesetRef.current = tileset;
         viewer.scene.primitives.add(tileset);
         setStatus({ loading: false, ready: true, error: null });

@@ -54,6 +54,11 @@ export function GoogleEarthLayer() {
           tileset.destroy();
           return;
         }
+        // Bound GPU memory (default is ~1GB) so close-up screensaver orbits
+        // can't exhaust the context. Google tiles are textured, so allow a
+        // little more headroom than OSM buildings.
+        tileset.cacheBytes = 256 * 1024 * 1024;
+        tileset.maximumCacheOverflowBytes = 128 * 1024 * 1024;
         tilesetRef.current = tileset;
         viewer.scene.primitives.add(tileset);
         setStatus({ loading: false, error: null, ready: true });
