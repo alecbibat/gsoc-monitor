@@ -2,7 +2,8 @@ import * as Cesium from 'cesium';
 import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
-import { attachPanelData } from '../../cesium/entityPanelLink';
+import { attachPanelData, getPanelData } from '../../cesium/entityPanelLink';
+import { usePanelStore } from '../../panels/panelStore';
 import { useAlertsStatus } from './alertsStore';
 import { useScreensaverStore } from '../../screensaver/screensaverStore';
 import {
@@ -14,12 +15,53 @@ import {
   type RawAlert,
 } from './alertsData';
 
+// Each alert ring entity stashes its un-highlighted base colour so the highlight
+// effect can toggle between resting and lit-up styling without re-deriving it.
+interface AlertEntity extends Cesium.Entity {
+  gsocAlertColor?: Cesium.Color;
+}
+
+// Resting vs. highlighted fill opacity. Highlighted fills are translucent on
+// purpose: where two highlighted alerts overlap, their fills stack and the
+// shared area reads as a more intense colour — the "addition" of both areas.
+const FILL_REST = 0.28;
+const FILL_LIT = 0.5;
+
+// Re-style every alert polygon: alerts whose info panel is open get a brighter
+// fill and a white-tinged outline; the rest return to resting styling.
+function applyAlertHighlights(ds: Cesium.CustomDataSource, openIds: Set<string>) {
+  for (const entity of ds.entities.values) {
+    const link = getPanelData(entity);
+    const base = (entity as AlertEntity).gsocAlertColor;
+    if (!link || link.kind !== 'alerts' || !base || !entity.polygon) continue;
+    const lit = openIds.has(link.id);
+    entity.polygon.material = new Cesium.ColorMaterialProperty(
+      base.withAlpha(lit ? FILL_LIT : FILL_REST)
+    );
+    entity.polygon.outlineColor = new Cesium.ConstantProperty(
+      lit
+        ? Cesium.Color.lerp(base, Cesium.Color.WHITE, 0.55, new Cesium.Color()).withAlpha(1)
+        : base.withAlpha(0.9)
+    );
+    entity.polygon.outlineWidth = new Cesium.ConstantProperty(lit ? 3 : 2);
+  }
+}
+
 export function AlertsLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.alerts);
   const screensaverMode = useScreensaverStore((s) => s.mode);
   const screensaverPhase = useScreensaverStore((s) => s.phase);
   const screensaverActive = useScreensaverStore((s) => s.active);
+  // Stable signature of the open alert panel ids — only changes when an alert
+  // panel is opened or closed (not on drag/dock/z-order churn).
+  const openAlertSig = usePanelStore((s) =>
+    s.panels
+      .filter((p) => p.kind === 'alerts')
+      .map((p) => p.id)
+      .sort()
+      .join('|')
+  );
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
   const lastSigRef = useRef<string>('');
 
@@ -43,6 +85,16 @@ export function AlertsLayer() {
       dsRef.current = null;
     };
   }, [viewer]);
+
+  // Light up the alert(s) whose info panel is open; un-light the rest. Runs
+  // whenever an alert panel opens or closes.
+  useEffect(() => {
+    const ds = dsRef.current;
+    if (!viewer || !ds) return;
+    const openIds = new Set(openAlertSig ? openAlertSig.split('|') : []);
+    applyAlertHighlights(ds, openIds);
+    viewer.scene.requestRender();
+  }, [viewer, openAlertSig]);
 
   useEffect(() => {
     const ds = dsRef.current;
@@ -110,12 +162,13 @@ export function AlertsLayer() {
               id: `alert-${id}-${idx}`,
               polygon: {
                 hierarchy: new Cesium.PolygonHierarchy(positions),
-                material: color.withAlpha(0.28),
+                material: color.withAlpha(FILL_REST),
                 outline: true,
                 outlineColor: color.withAlpha(0.9),
                 outlineWidth: 2,
               },
             });
+            (entity as AlertEntity).gsocAlertColor = color;
             attachPanelData(entity, {
               id: `alert-${id}`,
               kind: 'alerts',
@@ -138,6 +191,13 @@ export function AlertsLayer() {
           });
           drawn++;
         }
+
+        // Re-apply highlights to the freshly drawn entities so any alert whose
+        // panel is currently open stays lit through the periodic refresh.
+        const openIds = new Set(
+          usePanelStore.getState().panels.filter((p) => p.kind === 'alerts').map((p) => p.id)
+        );
+        applyAlertHighlights(ds, openIds);
 
         useAlertsStatus.getState().setStatus({ count: drawn, error: null });
         viewer.scene.requestRender();
