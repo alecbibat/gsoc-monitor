@@ -115,6 +115,7 @@ export const DEFAULT_ROLES: IcsRole[] = [
   { id: 'ic',             title: 'Incident Commander',              abbrev: 'IC',   parentId: null,        color: IC_COLOR,   isCommandStaff: false, isSupport: false, order: 0, builtin: true },
   { id: 'safety',         title: 'Safety Officer',                  abbrev: 'SO',   parentId: 'ic',        color: CMD_COLOR,  isCommandStaff: true,  isSupport: false, order: 0, builtin: true },
   { id: 'pio',            title: 'Public Information Officer',      abbrev: 'PIO',  parentId: 'ic',        color: CMD_COLOR,  isCommandStaff: true,  isSupport: false, order: 1, builtin: true },
+  { id: 'gsoc-support',  title: 'GSOC Support',                    abbrev: 'GSOC', parentId: 'pio',       color: CMD_COLOR,  isCommandStaff: false, isSupport: true,  order: 0, builtin: true },
   { id: 'liaison',        title: 'Liaison Officer',                 abbrev: 'LO',   parentId: 'ic',        color: CMD_COLOR,  isCommandStaff: true,  isSupport: false, order: 2, builtin: true },
   { id: 'ops',            title: 'Operations Section Chief',        abbrev: 'OSC',  parentId: 'ic',        color: OPS_COLOR,  isCommandStaff: false, isSupport: false, order: 3, builtin: true },
   { id: 'planning',       title: 'Planning Section Chief',          abbrev: 'PSC',  parentId: 'ic',        color: PLAN_COLOR, isCommandStaff: false, isSupport: false, order: 4, builtin: true },
@@ -203,6 +204,7 @@ interface CrisisState {
   addRole: (role: Omit<IcsRole, 'id' | 'builtin'>) => void;
   updateRole: (id: string, patch: Partial<Omit<IcsRole, 'id' | 'builtin'>>) => void;
   removeRole: (id: string) => void;
+  restoreBuiltinRole: (roleId: string) => void;
   resetRoles: () => void;
 
   // Personnel pool
@@ -314,6 +316,24 @@ export const useCrisisStore = create<CrisisState>()(
             roles: inc.roles.filter((r) => !toRemove.has(r.id)),
             assignments: inc.assignments.filter((a) => !toRemove.has(a.roleId)),
           };
+        })),
+
+      restoreBuiltinRole: (roleId) =>
+        set((s) => patchActive(s, (inc) => {
+          const target = DEFAULT_ROLES.find((r) => r.id === roleId);
+          if (!target || inc.roles.find((r) => r.id === roleId)) return inc;
+          // Also restore any missing ancestors so the role is properly connected.
+          const toAdd: IcsRole[] = [];
+          const addWithAncestors = (role: IcsRole) => {
+            if (inc.roles.find((r) => r.id === role.id) || toAdd.find((r) => r.id === role.id)) return;
+            if (role.parentId !== null) {
+              const parent = DEFAULT_ROLES.find((r) => r.id === role.parentId);
+              if (parent) addWithAncestors(parent);
+            }
+            toAdd.push(role);
+          };
+          addWithAncestors(target);
+          return { ...inc, roles: [...inc.roles, ...toAdd] };
         })),
 
       resetRoles: () => set((s) => patchActive(s, (inc) => ({ ...inc, roles: DEFAULT_ROLES }))),

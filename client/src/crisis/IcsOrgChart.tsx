@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   useCrisisStore, selectActive,
+  DEFAULT_ROLES,
   type IcsRole,
   IC_COLOR, CMD_COLOR, OPS_COLOR, PLAN_COLOR, LOG_COLOR, FIN_COLOR,
 } from './crisisStore';
@@ -13,6 +14,76 @@ const PRESET_COLORS = [
   IC_COLOR, CMD_COLOR, OPS_COLOR, PLAN_COLOR, LOG_COLOR, FIN_COLOR,
   '#8b5cf6', '#ec4899', '#06b6d4', '#6b7280',
 ];
+
+// ── Quick-add form ────────────────────────────────────────────────────────────
+
+function QuickAddForm({
+  parentId,
+  parentColor,
+  onDone,
+}: {
+  parentId: string | null;
+  parentColor: string;
+  onDone: () => void;
+}) {
+  const [title, setTitle] = useState('');
+  const [abbrev, setAbbrev] = useState('');
+  const [color, setColor] = useState(parentColor);
+  const [isSupport, setIsSupport] = useState(false);
+  const addRole = useCrisisStore((s) => s.addRole);
+  const roles = useCrisisStore((s) => selectActive(s)?.roles ?? []);
+  const titleRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { titleRef.current?.focus(); }, []);
+
+  const handleAdd = () => {
+    const t = title.trim();
+    if (!t) return;
+    const siblingCount = roles.filter((r) => r.parentId === parentId).length;
+    addRole({ title: t, abbrev: abbrev.trim() || undefined, parentId, color, isCommandStaff: false, isSupport, order: siblingCount });
+    onDone();
+  };
+
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      className="mt-2 w-40 space-y-1.5 rounded border border-white/12 bg-white/4 p-2"
+    >
+      <input
+        ref={titleRef}
+        className="w-full rounded border border-white/8 bg-white/8 px-2 py-1 text-[10px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
+        placeholder="Role title"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); if (e.key === 'Escape') onDone(); }}
+      />
+      <input
+        className="w-full rounded border border-white/8 bg-white/8 px-2 py-1 text-[10px] text-white/50 outline-none placeholder-white/20 focus:border-white/20"
+        placeholder="Abbrev (opt.)"
+        value={abbrev}
+        onChange={(e) => setAbbrev(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); if (e.key === 'Escape') onDone(); }}
+      />
+      <div className="flex flex-wrap gap-1">
+        {PRESET_COLORS.map((c) => (
+          <button key={c} onClick={() => setColor(c)} className="h-3.5 w-3.5 rounded-full border-2 transition" style={{ background: c, borderColor: color === c ? 'white' : 'transparent' }} />
+        ))}
+      </div>
+      <label className="flex cursor-pointer items-center gap-1 text-[9px] text-white/35 hover:text-white/55">
+        <input type="checkbox" checked={isSupport} onChange={(e) => setIsSupport(e.target.checked)} className="accent-accent" />
+        Support (multi-person)
+      </label>
+      <div className="flex gap-1">
+        <button onClick={handleAdd} disabled={!title.trim()} className="flex-1 rounded bg-accent/15 py-0.5 text-[9px] text-accent hover:bg-accent/25 disabled:opacity-30">
+          Add
+        </button>
+        <button onClick={onDone} className="flex-1 rounded border border-white/8 py-0.5 text-[9px] text-white/30 hover:text-white/55">
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ── Primitives ────────────────────────────────────────────────────────────────
 
@@ -184,6 +255,7 @@ function RoleSubtree({
   depth?: number;
 }) {
   const [kidsCollapsed, setKidsCollapsed] = useState(depth >= 1);
+  const [addingChild, setAddingChild] = useState(false);
   const role = useCrisisStore((s) => selectActive(s)?.roles.find((r) => r.id === roleId));
   const allChildren = useCrisisStore((s) =>
     (selectActive(s)?.roles ?? []).filter((r) => r.parentId === roleId).sort((a, b) => a.order - b.order)
@@ -256,6 +328,20 @@ function RoleSubtree({
             ))}
           </ConnectorRow>
         </>
+      )}
+
+      {/* Inline add-child */}
+      {(depth === 0 || showKids) && (
+        addingChild ? (
+          <QuickAddForm parentId={roleId} parentColor={role.color} onDone={() => setAddingChild(false)} />
+        ) : (
+          <button
+            onClick={(e) => { e.stopPropagation(); setAddingChild(true); }}
+            className="mt-2 flex items-center gap-0.5 rounded border border-white/8 px-2 py-0.5 text-[8px] text-white/22 transition hover:border-white/16 hover:text-white/50"
+          >
+            <span style={{ color: role.color }}>+</span> sub-role
+          </button>
+        )
       )}
     </div>
   );
@@ -655,8 +741,46 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
+function RestoreSection() {
+  const currentRoles = useCrisisStore((s) => selectActive(s)?.roles ?? []);
+  const restoreBuiltinRole = useCrisisStore((s) => s.restoreBuiltinRole);
+  const [open, setOpen] = useState(false);
+
+  const currentIds = new Set(currentRoles.map((r) => r.id));
+  const deleted = DEFAULT_ROLES.filter((r) => !currentIds.has(r.id));
+
+  if (deleted.length === 0) return null;
+
+  return (
+    <div className="mt-3 border-t border-white/6 pt-3">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 text-[9px] text-white/25 transition hover:text-white/50"
+      >
+        <span>{open ? '▲' : '▼'}</span>
+        Restore removed roles ({deleted.length})
+      </button>
+      {open && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {deleted.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => restoreBuiltinRole(r.id)}
+              className="flex items-center gap-1 rounded border border-white/10 bg-white/4 px-2 py-1 text-[9px] text-white/40 transition hover:border-white/20 hover:text-white/70"
+            >
+              <span className="h-1.5 w-1.5 rounded-full" style={{ background: r.color }} />
+              {r.title}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function IcsOrgChart() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [addingRoot, setAddingRoot] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const rootRoles = useCrisisStore((s) =>
     (selectActive(s)?.roles ?? []).filter((r) => r.parentId === null).sort((a, b) => a.order - b.order)
@@ -689,6 +813,22 @@ export function IcsOrgChart() {
                 onRemoved={() => { if (selectedId === r.id) setSelectedId(null); }}
               />
             ))}
+
+            {/* Root-level add */}
+            <div className="mt-3 flex flex-col items-center">
+              {addingRoot ? (
+                <QuickAddForm parentId={null} parentColor={IC_COLOR} onDone={() => setAddingRoot(false)} />
+              ) : (
+                <button
+                  onClick={() => setAddingRoot(true)}
+                  className="flex items-center gap-1 rounded border border-white/8 px-3 py-1 text-[9px] text-white/25 transition hover:border-white/18 hover:text-white/55"
+                >
+                  + Add top-level role
+                </button>
+              )}
+            </div>
+
+            <RestoreSection />
           </div>
         </div>
 
