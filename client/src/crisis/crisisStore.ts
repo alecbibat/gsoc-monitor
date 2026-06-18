@@ -18,8 +18,15 @@ export interface IcsRole {
   parentId: string | null;
   color: string;
   isCommandStaff: boolean;
+  isSupport: boolean;
   order: number;
   builtin: boolean;
+}
+
+export interface PersonnelMember {
+  id: string;
+  name: string;
+  organization?: string;
 }
 
 export interface PersonnelAssignment {
@@ -73,6 +80,7 @@ export interface Incident {
   executiveSummary: string;
   roles: IcsRole[];
   assignments: PersonnelAssignment[];
+  personnel: PersonnelMember[];
   actionLog: ActionLogEntry[];
   drawLayers: DrawLayer[];
   shareToken: string | null;
@@ -104,26 +112,26 @@ export const LOG_COLOR  = '#eab308';
 export const FIN_COLOR  = '#22c55e';
 
 export const DEFAULT_ROLES: IcsRole[] = [
-  { id: 'ic',             title: 'Incident Commander',              abbrev: 'IC',   parentId: null,        color: IC_COLOR,   isCommandStaff: false, order: 0, builtin: true },
-  { id: 'safety',         title: 'Safety Officer',                  abbrev: 'SO',   parentId: 'ic',        color: CMD_COLOR,  isCommandStaff: true,  order: 0, builtin: true },
-  { id: 'pio',            title: 'Public Information Officer',      abbrev: 'PIO',  parentId: 'ic',        color: CMD_COLOR,  isCommandStaff: true,  order: 1, builtin: true },
-  { id: 'liaison',        title: 'Liaison Officer',                 abbrev: 'LO',   parentId: 'ic',        color: CMD_COLOR,  isCommandStaff: true,  order: 2, builtin: true },
-  { id: 'ops',            title: 'Operations Section Chief',        abbrev: 'OSC',  parentId: 'ic',        color: OPS_COLOR,  isCommandStaff: false, order: 3, builtin: true },
-  { id: 'planning',       title: 'Planning Section Chief',          abbrev: 'PSC',  parentId: 'ic',        color: PLAN_COLOR, isCommandStaff: false, order: 4, builtin: true },
-  { id: 'logistics',      title: 'Logistics Section Chief',         abbrev: 'LSC',  parentId: 'ic',        color: LOG_COLOR,  isCommandStaff: false, order: 5, builtin: true },
-  { id: 'finance',        title: 'Finance/Admin Section Chief',     abbrev: 'FSC',  parentId: 'ic',        color: FIN_COLOR,  isCommandStaff: false, order: 6, builtin: true },
-  { id: 'ops-branch',     title: 'Branch Director',                 abbrev: 'BD',   parentId: 'ops',       color: OPS_COLOR,  isCommandStaff: false, order: 0, builtin: true },
-  { id: 'ops-division',   title: 'Division/Group Supervisor',       abbrev: 'DIVS', parentId: 'ops',       color: OPS_COLOR,  isCommandStaff: false, order: 1, builtin: true },
-  { id: 'plan-resources', title: 'Resources Unit Leader',           abbrev: 'RESL', parentId: 'planning',  color: PLAN_COLOR, isCommandStaff: false, order: 0, builtin: true },
-  { id: 'plan-situation', title: 'Situation Unit Leader',           abbrev: 'SITL', parentId: 'planning',  color: PLAN_COLOR, isCommandStaff: false, order: 1, builtin: true },
-  { id: 'plan-docs',      title: 'Documentation Unit Leader',       abbrev: 'DOCL', parentId: 'planning',  color: PLAN_COLOR, isCommandStaff: false, order: 2, builtin: true },
-  { id: 'plan-demob',     title: 'Demob. Unit Leader',              abbrev: 'DMBL', parentId: 'planning',  color: PLAN_COLOR, isCommandStaff: false, order: 3, builtin: true },
-  { id: 'log-support',    title: 'Support Branch Director',         abbrev: 'SUBD', parentId: 'logistics', color: LOG_COLOR,  isCommandStaff: false, order: 0, builtin: true },
-  { id: 'log-service',    title: 'Service Branch Director',         abbrev: 'SEBD', parentId: 'logistics', color: LOG_COLOR,  isCommandStaff: false, order: 1, builtin: true },
-  { id: 'fin-time',       title: 'Time Unit Leader',                abbrev: 'TIME', parentId: 'finance',   color: FIN_COLOR,  isCommandStaff: false, order: 0, builtin: true },
-  { id: 'fin-proc',       title: 'Procurement Unit Leader',         abbrev: 'PROC', parentId: 'finance',   color: FIN_COLOR,  isCommandStaff: false, order: 1, builtin: true },
-  { id: 'fin-comp',       title: 'Compensation/Claims Unit Leader', abbrev: 'COMP', parentId: 'finance',   color: FIN_COLOR,  isCommandStaff: false, order: 2, builtin: true },
-  { id: 'fin-cost',       title: 'Cost Unit Leader',                abbrev: 'COST', parentId: 'finance',   color: FIN_COLOR,  isCommandStaff: false, order: 3, builtin: true },
+  { id: 'ic',             title: 'Incident Commander',              abbrev: 'IC',   parentId: null,        color: IC_COLOR,   isCommandStaff: false, isSupport: false, order: 0, builtin: true },
+  { id: 'safety',         title: 'Safety Officer',                  abbrev: 'SO',   parentId: 'ic',        color: CMD_COLOR,  isCommandStaff: true,  isSupport: false, order: 0, builtin: true },
+  { id: 'pio',            title: 'Public Information Officer',      abbrev: 'PIO',  parentId: 'ic',        color: CMD_COLOR,  isCommandStaff: true,  isSupport: false, order: 1, builtin: true },
+  { id: 'liaison',        title: 'Liaison Officer',                 abbrev: 'LO',   parentId: 'ic',        color: CMD_COLOR,  isCommandStaff: true,  isSupport: false, order: 2, builtin: true },
+  { id: 'ops',            title: 'Operations Section Chief',        abbrev: 'OSC',  parentId: 'ic',        color: OPS_COLOR,  isCommandStaff: false, isSupport: false, order: 3, builtin: true },
+  { id: 'planning',       title: 'Planning Section Chief',          abbrev: 'PSC',  parentId: 'ic',        color: PLAN_COLOR, isCommandStaff: false, isSupport: false, order: 4, builtin: true },
+  { id: 'logistics',      title: 'Logistics Section Chief',         abbrev: 'LSC',  parentId: 'ic',        color: LOG_COLOR,  isCommandStaff: false, isSupport: false, order: 5, builtin: true },
+  { id: 'finance',        title: 'Finance/Admin Section Chief',     abbrev: 'FSC',  parentId: 'ic',        color: FIN_COLOR,  isCommandStaff: false, isSupport: false, order: 6, builtin: true },
+  { id: 'ops-branch',     title: 'Branch Director',                 abbrev: 'BD',   parentId: 'ops',       color: OPS_COLOR,  isCommandStaff: false, isSupport: false, order: 0, builtin: true },
+  { id: 'ops-division',   title: 'Division/Group Supervisor',       abbrev: 'DIVS', parentId: 'ops',       color: OPS_COLOR,  isCommandStaff: false, isSupport: false, order: 1, builtin: true },
+  { id: 'plan-resources', title: 'Resources Unit Leader',           abbrev: 'RESL', parentId: 'planning',  color: PLAN_COLOR, isCommandStaff: false, isSupport: false, order: 0, builtin: true },
+  { id: 'plan-situation', title: 'Situation Unit Leader',           abbrev: 'SITL', parentId: 'planning',  color: PLAN_COLOR, isCommandStaff: false, isSupport: false, order: 1, builtin: true },
+  { id: 'plan-docs',      title: 'Documentation Unit Leader',       abbrev: 'DOCL', parentId: 'planning',  color: PLAN_COLOR, isCommandStaff: false, isSupport: false, order: 2, builtin: true },
+  { id: 'plan-demob',     title: 'Demob. Unit Leader',              abbrev: 'DMBL', parentId: 'planning',  color: PLAN_COLOR, isCommandStaff: false, isSupport: false, order: 3, builtin: true },
+  { id: 'log-support',    title: 'Support Branch Director',         abbrev: 'SUBD', parentId: 'logistics', color: LOG_COLOR,  isCommandStaff: false, isSupport: false, order: 0, builtin: true },
+  { id: 'log-service',    title: 'Service Branch Director',         abbrev: 'SEBD', parentId: 'logistics', color: LOG_COLOR,  isCommandStaff: false, isSupport: false, order: 1, builtin: true },
+  { id: 'fin-time',       title: 'Time Unit Leader',                abbrev: 'TIME', parentId: 'finance',   color: FIN_COLOR,  isCommandStaff: false, isSupport: false, order: 0, builtin: true },
+  { id: 'fin-proc',       title: 'Procurement Unit Leader',         abbrev: 'PROC', parentId: 'finance',   color: FIN_COLOR,  isCommandStaff: false, isSupport: false, order: 1, builtin: true },
+  { id: 'fin-comp',       title: 'Compensation/Claims Unit Leader', abbrev: 'COMP', parentId: 'finance',   color: FIN_COLOR,  isCommandStaff: false, isSupport: false, order: 2, builtin: true },
+  { id: 'fin-cost',       title: 'Cost Unit Leader',                abbrev: 'COST', parentId: 'finance',   color: FIN_COLOR,  isCommandStaff: false, isSupport: false, order: 3, builtin: true },
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -143,6 +151,7 @@ function newIncident(): Incident {
     executiveSummary: '',
     roles: DEFAULT_ROLES,
     assignments: [],
+    personnel: [],
     actionLog: [],
     drawLayers: [],
     shareToken: null,
@@ -195,6 +204,10 @@ interface CrisisState {
   updateRole: (id: string, patch: Partial<Omit<IcsRole, 'id' | 'builtin'>>) => void;
   removeRole: (id: string) => void;
   resetRoles: () => void;
+
+  // Personnel pool
+  addPersonnelMember: (name: string, org?: string) => void;
+  removePersonnelMember: (id: string) => void;
 
   // Assignments
   assignRole: (roleId: string, name: string, org?: string) => void;
@@ -270,6 +283,18 @@ export const useCrisisStore = create<CrisisState>()(
       update: (patch) => set((s) => patchActive(s, (inc) => ({ ...inc, ...patch }))),
       setShareToken: (token) => set((s) => patchActive(s, (inc) => ({ ...inc, shareToken: token }))),
 
+      addPersonnelMember: (name, org) =>
+        set((s) => patchActive(s, (inc) => ({
+          ...inc,
+          personnel: [...(inc.personnel ?? []), { id: uid(), name, organization: org || undefined }],
+        }))),
+
+      removePersonnelMember: (id) =>
+        set((s) => patchActive(s, (inc) => ({
+          ...inc,
+          personnel: (inc.personnel ?? []).filter((p) => p.id !== id),
+        }))),
+
       addRole: (role) =>
         set((s) => patchActive(s, (inc) => ({ ...inc, roles: [...inc.roles, { ...role, id: uid(), builtin: false }] }))),
 
@@ -296,10 +321,14 @@ export const useCrisisStore = create<CrisisState>()(
       assignRole: (roleId, name, org) =>
         set((s) => patchActive(s, (inc) => {
           const now = new Date().toISOString();
+          const role = inc.roles.find((r) => r.id === roleId);
+          const endPrevious = !role?.isSupport;
           return {
             ...inc,
             assignments: [
-              ...inc.assignments.map((a) => (a.roleId === roleId && !a.endedAt ? { ...a, endedAt: now } : a)),
+              ...(endPrevious
+                ? inc.assignments.map((a) => (a.roleId === roleId && !a.endedAt ? { ...a, endedAt: now } : a))
+                : inc.assignments),
               { id: uid(), roleId, name, organization: org || undefined, startedAt: now },
             ],
           };
