@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useAuthStore } from './authStore';
 import { GlobeAnimation } from './GlobeAnimation';
+import { SpaceLayer } from './SpaceLayer';
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const setUser = useAuthStore((s) => s.setUser);
@@ -65,37 +66,41 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const inputCls = 'w-full rounded-lg border border-white/10 bg-white/4 px-3 py-2.5 text-[13px] text-white/90 placeholder-white/25 outline-none transition focus:border-accent/40 focus:bg-white/6';
 
   return (
-    <div className="relative flex h-screen flex-col overflow-hidden bg-ink-950 md:items-center md:justify-center">
+    <div className="relative flex h-screen flex-col overflow-hidden bg-ink-950 md:flex-row">
+
+      {/* Twinkling starfield (z-0) + arrow-key ship (z-5, desktop) */}
+      <SpaceLayer />
+
+      {/* Soft radial depth glow behind the globe pane (desktop) */}
+      <div
+        className="pointer-events-none absolute inset-0 z-0 hidden md:block"
+        style={{
+          background:
+            'radial-gradient(ellipse 60% 80% at 33% 50%, rgba(61,220,255,0.06), rgba(5,7,10,0) 60%)',
+        }}
+      />
 
       {/* Globe
-          Mobile  — in-flow block at the top; height is capped so the form stays visible below.
-          Desktop — absolute, centred behind everything, same as before. */}
+          Mobile  — in-flow band at the top; height capped so the form stays visible below.
+          Desktop — its own flex pane on the left; sized by viewport height AND width
+                    so the WHOLE sphere is always visible and never overlaps the form. */}
       <div className="pointer-events-none
-        relative flex flex-shrink-0 items-center justify-center overflow-hidden
+        relative z-[1] flex flex-shrink-0 items-center justify-center overflow-hidden
         h-[54vw] max-h-[280px] min-h-[180px]
-        md:absolute md:inset-0 md:h-auto md:max-h-none md:min-h-0 md:overflow-visible">
+        md:h-full md:max-h-none md:min-h-0 md:flex-1 md:overflow-visible">
         <div className="aspect-square w-[82vw] max-w-[280px] opacity-95
-          md:w-[clamp(520px,92vw,860px)] md:max-w-none">
+          md:w-[min(80vh,48vw,760px)] md:max-w-none">
           <GlobeAnimation />
         </div>
         {/* Mobile only: fade the bottom of the globe band into the page bg */}
         <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-b from-transparent to-ink-950 md:hidden" />
       </div>
 
-      {/* Desktop-only radial vignette (keeps form text crisp over the full-screen globe) */}
-      <div
-        className="pointer-events-none absolute inset-0 hidden md:block"
-        style={{
-          background:
-            'radial-gradient(ellipse at center, rgba(5,7,10,0) 18%, rgba(5,7,10,0.55) 52%, rgba(5,7,10,0.92) 100%)',
-        }}
-      />
-
       {/* Form
-          Mobile  — flex-1 so it fills what's left below the globe; overflow-y-auto
-                    so the keyboard can't push fields off-screen.
-          Desktop — flex-none, centred by the parent justify-center / items-center. */}
-      <div className="relative z-10 flex w-full flex-1 items-start justify-center overflow-y-auto px-4 pb-8 pt-2 md:flex-none md:overflow-visible md:p-0">
+          Mobile  — flex-1 fills what's left below the globe; scrollable so the keyboard
+                    can't push fields off-screen.
+          Desktop — fixed-width column on the right, vertically centred. */}
+      <div className="relative z-10 flex w-full flex-1 items-start justify-center overflow-y-auto px-4 pb-8 pt-2 md:h-full md:w-[460px] md:flex-none md:flex-shrink-0 md:items-center md:overflow-visible md:px-8 md:py-0">
         <div className="w-full max-w-sm space-y-6 rounded-2xl border border-accent/12 bg-ink-950/72 px-6 py-8 shadow-[0_0_0_1px_rgba(61,220,255,0.06),0_24px_80px_rgba(0,0,0,0.7)] backdrop-blur-2xl">
           <div className="text-center">
             <p className="font-mono text-[20px] font-bold tracking-[0.22em] text-white/90 [text-shadow:0_0_24px_rgba(61,220,255,0.25)]">
@@ -149,6 +154,13 @@ export function AuthGate({ children }: { children: ReactNode }) {
             </button>
           </form>
         </div>
+      </div>
+
+      {/* Easter-egg controls hint (desktop only — needs a keyboard) */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 hidden justify-center md:flex">
+        <span className="rounded-full border border-white/8 bg-ink-950/50 px-3 py-1 font-mono text-[10px] tracking-wide text-white/25 backdrop-blur-sm">
+          ↑ ← ↓ → &nbsp;fly the ship
+        </span>
       </div>
     </div>
   );
