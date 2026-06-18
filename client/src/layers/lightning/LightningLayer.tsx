@@ -396,6 +396,7 @@ export function LightningLayer() {
         const now = Date.now();
         strikes.set(id, { lat: strike.lat, lon: strike.lon, t: now });
         recent.push(now);
+        useLightningStatus.getState().addStrike({ lat: strike.lat, lon: strike.lon, t: now });
 
         ds.entities.add({
           id: `bolt-${id}`,
