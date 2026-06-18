@@ -49,15 +49,29 @@ export async function migrate() {
       );
     `);
 
-    // Seed the signup code once; admins can rotate it via /api/admin/signup-code/refresh.
-    const { rows } = await client.query("SELECT value FROM settings WHERE key = 'signup_code'");
-    if (rows.length === 0) {
-      const code = process.env.SIGNUP_CODE ?? randomCode();
+    // Signup code. If SIGNUP_CODE is set in the environment it is authoritative
+    // and re-applied on every boot — this guarantees the operator always knows
+    // the code, even on hosts where reading startup logs is awkward. (Remove the
+    // env var later if you'd rather the admin panel's "refresh" persist across
+    // deploys.) If SIGNUP_CODE is unset, seed a random code once and log it.
+    const envCode = process.env.SIGNUP_CODE?.trim().toUpperCase();
+    if (envCode) {
       await client.query(
-        "INSERT INTO settings (key, value) VALUES ('signup_code', $1) ON CONFLICT DO NOTHING",
-        [code]
+        `INSERT INTO settings (key, value) VALUES ('signup_code', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [envCode]
       );
-      console.log(`[migrate] initial signup code: ${code}`);
+      console.log('[migrate] signup code applied from SIGNUP_CODE env var');
+    } else {
+      const { rows } = await client.query("SELECT value FROM settings WHERE key = 'signup_code'");
+      if (rows.length === 0) {
+        const code = randomCode();
+        await client.query(
+          "INSERT INTO settings (key, value) VALUES ('signup_code', $1) ON CONFLICT DO NOTHING",
+          [code]
+        );
+        console.log(`[migrate] initial signup code: ${code}`);
+      }
     }
 
     await client.query('COMMIT');
