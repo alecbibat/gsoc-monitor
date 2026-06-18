@@ -230,7 +230,18 @@ export function CrisisShareView({ token }: { token: string }) {
                     </span>
                     <span className="w-36 shrink-0 text-[10px] text-white/30">{fmtTs(entry.timestamp)}</span>
                     <p className="flex-1 text-[12px] leading-snug text-white/70">{entry.description || <span className="text-white/25 italic">No description</span>}</p>
-                    {entry.attachmentName && <span className="shrink-0 text-[9px] text-accent/70">📎 {entry.attachmentName}</span>}
+                    <div className="shrink-0 flex flex-col items-end gap-1">
+                      {(entry as { attachmentData?: string }).attachmentData && (
+                        <img
+                          src={(entry as { attachmentData?: string }).attachmentData}
+                          alt={entry.attachmentName}
+                          className="max-h-48 max-w-[220px] rounded border border-white/12 object-cover shadow-lg"
+                        />
+                      )}
+                      {entry.attachmentName && !(entry as { attachmentData?: string }).attachmentData && (
+                        <span className="text-[9px] text-accent/70">📎 {entry.attachmentName}</span>
+                      )}
+                    </div>
                   </div>
                 ))}
             </div>
@@ -241,13 +252,22 @@ export function CrisisShareView({ token }: { token: string }) {
         {data.drawLayers && data.drawLayers.length > 0 && (
           <div>
             <h2 className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-white/30">Map Layers</h2>
-            <div className="space-y-1.5 rounded-lg border border-white/8 bg-ink-950/60 p-3">
+            <div className="space-y-3">
               {data.drawLayers.map((layer) => (
-                <div key={layer.id} className="flex items-center gap-2 rounded border border-white/6 bg-white/3 px-3 py-2">
-                  <div className="h-3 w-3 shrink-0 rounded-full" style={{ background: layer.color }} />
-                  <span className="text-[11px] text-white/70">{layer.name}</span>
-                  <span className="text-[9px] text-white/30">{layer.type} · {layer.geometry}</span>
-                  <span className="ml-auto text-[9px] text-white/25">{layer.positions.length} points</span>
+                <div key={layer.id} className="overflow-hidden rounded-lg border border-white/8 bg-ink-950/60">
+                  {(layer as { thumbnail?: string }).thumbnail && (
+                    <img
+                      src={(layer as { thumbnail?: string }).thumbnail}
+                      alt={`${layer.name} map view`}
+                      className="h-40 w-full object-cover"
+                    />
+                  )}
+                  <div className="flex items-center gap-2 px-3 py-2">
+                    <div className="h-3 w-3 shrink-0 rounded-full" style={{ background: layer.color }} />
+                    <span className="text-[11px] text-white/70">{layer.name}</span>
+                    <span className="text-[9px] text-white/30">{layer.type} · {layer.geometry}</span>
+                    <span className="ml-auto text-[9px] text-white/25">{layer.positions.length} points</span>
+                  </div>
                 </div>
               ))}
             </div>

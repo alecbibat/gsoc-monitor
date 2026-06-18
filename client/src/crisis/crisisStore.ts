@@ -43,6 +43,7 @@ export interface ActionLogEntry {
   timestamp: string;
   description: string;
   attachmentName?: string;
+  attachmentData?: string;  // base64 data URL for images; stored compressed (≤1200px JPEG)
   entryType: ActionEntryType;
 }
 
@@ -65,6 +66,7 @@ export interface DrawLayer {
   color: string;
   visible: boolean;
   positions: DrawLayerPoint[];
+  thumbnail?: string;  // compressed JPEG data URL captured when drawing finishes
   createdAt: string;
 }
 
@@ -228,7 +230,7 @@ interface CrisisState {
 
   // Action log
   addActionEntry: (type?: ActionEntryType) => void;
-  updateActionEntry: (id: string, patch: Partial<Pick<ActionLogEntry, 'description' | 'attachmentName' | 'entryType'>>) => void;
+  updateActionEntry: (id: string, patch: Partial<Pick<ActionLogEntry, 'description' | 'attachmentName' | 'attachmentData' | 'entryType'>>) => void;
   removeActionEntry: (id: string) => void;
 
   // Draw layers

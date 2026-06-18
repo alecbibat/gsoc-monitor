@@ -53,7 +53,23 @@ export function CrisisDrawController() {
   const commit = (pts: DrawLayerPoint[]) => {
     if (!idRef.current) return;
     if (pts.length < minPoints(geomRef.current)) return;
-    updateDrawLayer(idRef.current, { positions: pts });
+    // Capture a thumbnail of the current Cesium frame while the preview is still drawn.
+    let thumbnail: string | undefined;
+    if (viewer) {
+      try {
+        viewer.render();
+        const src = viewer.canvas;
+        const maxW = 640, maxH = 360;
+        const scale = Math.min(maxW / src.width, maxH / src.height, 1);
+        const w = Math.round(src.width * scale);
+        const h = Math.round(src.height * scale);
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d')!.drawImage(src, 0, 0, w, h);
+        thumbnail = c.toDataURL('image/jpeg', 0.75);
+      } catch { /* preserveDrawingBuffer may not be enabled */ }
+    }
+    updateDrawLayer(idRef.current, { positions: pts, thumbnail });
     endDrawing();
   };
 

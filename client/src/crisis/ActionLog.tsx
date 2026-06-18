@@ -1,6 +1,34 @@
 import { useState, useRef } from 'react';
 import { useCrisisStore, selectActive, type ActionLogEntry } from './crisisStore';
 
+// Resize an image File to at most maxDim on the longest edge, return a JPEG data URL.
+function compressImage(file: File, maxDim = 1200, quality = 0.82): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale);
+        const h = Math.round(img.height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = reject;
+      img.src = ev.target?.result as string;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function isImageFile(name?: string) {
+  return /\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(name ?? '');
+}
+
 const TYPE_STYLES = {
   action: 'text-blue-300 bg-blue-400/15 border-blue-400/30',
   event:  'text-amber-300 bg-amber-400/15 border-amber-400/30',
@@ -60,28 +88,49 @@ function LogRow({ entry }: { entry: ActionLogEntry }) {
         <input
           ref={fileRef}
           type="file"
+          accept="image/*,*"
           className="hidden"
-          onChange={(e) => {
+          onChange={async (e) => {
             const file = e.target.files?.[0];
-            if (file) updateActionEntry(entry.id, { attachmentName: file.name });
+            if (!file) return;
+            if (isImageFile(file.name)) {
+              try {
+                const data = await compressImage(file);
+                updateActionEntry(entry.id, { attachmentName: file.name, attachmentData: data });
+              } catch {
+                updateActionEntry(entry.id, { attachmentName: file.name });
+              }
+            } else {
+              updateActionEntry(entry.id, { attachmentName: file.name });
+            }
+            e.target.value = '';
           }}
         />
         {entry.attachmentName ? (
-          <div className="flex items-center gap-1">
-            <span className="truncate text-[9px] text-accent/80">{entry.attachmentName}</span>
-            <button
-              onClick={() => updateActionEntry(entry.id, { attachmentName: undefined })}
-              className="shrink-0 text-[9px] text-white/25 hover:text-white/50"
-            >
-              ✕
-            </button>
+          <div className="space-y-1">
+            {entry.attachmentData && (
+              <img
+                src={entry.attachmentData}
+                alt={entry.attachmentName}
+                className="max-h-20 rounded border border-white/10 object-cover"
+              />
+            )}
+            <div className="flex items-center gap-1">
+              <span className="truncate text-[9px] text-accent/80">{entry.attachmentName}</span>
+              <button
+                onClick={() => updateActionEntry(entry.id, { attachmentName: undefined, attachmentData: undefined })}
+                className="shrink-0 text-[9px] text-white/25 hover:text-white/50"
+              >
+                ✕
+              </button>
+            </div>
           </div>
         ) : (
           <button
             onClick={() => fileRef.current?.click()}
             className="text-[9px] text-white/25 transition hover:text-white/50"
           >
-            Attach file…
+            Attach image…
           </button>
         )}
       </td>
@@ -149,7 +198,10 @@ function TimelineView({ entries }: { entries: ActionLogEntry[] }) {
               ) : (
                 <p className="mt-1 text-[11px] text-white/25 italic">No description</p>
               )}
-              {entry.attachmentName && (
+              {entry.attachmentData && (
+                <img src={entry.attachmentData} alt={entry.attachmentName} className="mt-1.5 max-h-40 max-w-xs rounded border border-white/10 object-cover" />
+              )}
+              {entry.attachmentName && !entry.attachmentData && (
                 <p className="mt-0.5 text-[9px] text-accent/70">📎 {entry.attachmentName}</p>
               )}
             </div>

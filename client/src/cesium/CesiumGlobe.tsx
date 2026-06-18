@@ -76,7 +76,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
       shadows: false,
       // alpha:true lets the WebGL canvas be transparent so our CSS star
       // field shows through wherever there's no globe or UI.
-      contextOptions: { webgl: { alpha: true } },
+      contextOptions: { webgl: { alpha: true, preserveDrawingBuffer: true } },
     });
 
     v.scene.requestRenderMode = true;
