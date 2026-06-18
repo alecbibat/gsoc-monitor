@@ -70,7 +70,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
           <p className="font-mono text-[20px] font-bold tracking-[0.22em] text-white/90">
             GSOC<span className="text-accent">MONITOR</span>
           </p>
-          <p className="mt-1 text-[11px] text-white/30">Global Situation Operations Centre</p>
+          <p className="mt-1 text-[11px] text-white/30">Global Security Operations Center</p>
         </div>
 
         <div className="flex rounded-lg border border-white/10 p-1">
