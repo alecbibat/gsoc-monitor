@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useAuthStore } from './authStore';
 import { GlobeAnimation } from './GlobeAnimation';
 import { SpaceLayer } from './SpaceLayer';
+import { StatusPanel } from './StatusPanel';
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const setUser = useAuthStore((s) => s.setUser);
@@ -103,6 +104,14 @@ export function AuthGate({ children }: { children: ReactNode }) {
       <div className="relative z-10 flex w-full flex-1 items-start justify-center overflow-y-auto px-4 pb-8 pt-2 md:h-full md:w-[460px] md:flex-none md:flex-shrink-0 md:items-center md:overflow-visible md:px-8 md:py-0">
         <div className="w-full max-w-sm space-y-6 rounded-2xl border border-accent/12 bg-ink-950/72 px-6 py-8 shadow-[0_0_0_1px_rgba(61,220,255,0.06),0_24px_80px_rgba(0,0,0,0.7)] backdrop-blur-2xl">
           <div className="text-center">
+            {/* War Room badge */}
+            <div className="mb-3 flex items-center justify-center gap-2">
+              <div className="flex-1 border-t border-accent/12" />
+              <span className="font-mono text-[8px] uppercase tracking-[0.28em] text-accent/50">
+                Virtual War Room
+              </span>
+              <div className="flex-1 border-t border-accent/12" />
+            </div>
             <p className="font-mono text-[20px] font-bold tracking-[0.22em] text-white/90 [text-shadow:0_0_24px_rgba(61,220,255,0.25)]">
               GSOC<span className="text-accent">MONITOR</span>
             </p>
@@ -155,6 +164,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
           </form>
         </div>
       </div>
+
+      {/* Ops-console status panel — bottom-left, over the globe pane */}
+      <StatusPanel />
 
       {/* Easter-egg controls hint (desktop only — needs a keyboard) */}
       <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 hidden justify-center md:flex">
