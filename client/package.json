@@ -12,6 +12,7 @@
   "dependencies": {
     "@types/three": "^0.160.0",
     "cesium": "^1.121.1",
+    "leaflet": "^1.9.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-rnd": "^10.4.13",
@@ -21,6 +22,7 @@
   },
   "devDependencies": {
     "@types/geojson": "^7946.0.14",
+    "@types/leaflet": "^1.9.21",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",

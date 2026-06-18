@@ -25,6 +25,7 @@ function ShareLinksPanel() {
   const [open, setOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const shareLinks = inc?.shareLinks ?? [];
   const activeLinks = shareLinks.filter((l) => l.active);
@@ -32,19 +33,22 @@ function ShareLinksPanel() {
   const handleCreate = async () => {
     if (!inc) return;
     setPublishing(true);
+    setError(null);
     try {
       const res = await fetch('/api/crisis/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(extractPublicState(inc)),
       });
-      if (!res.ok) throw new Error('Failed');
+      if (res.status === 413) throw new Error('Incident is too large to share (too many images/attachments).');
+      if (!res.ok) throw new Error('Could not create link — please try again.');
       const { token, url } = await res.json() as { token: string; url: string };
       const fullUrl = `${window.location.origin}${url}`;
       addShareLink(token, fullUrl);
       setOpen(true);
     } catch (err) {
       console.error('[crisis] publish failed', err);
+      setError(err instanceof Error ? err.message : 'Could not create link.');
     } finally {
       setPublishing(false);
     }
@@ -141,9 +145,13 @@ function ShareLinksPanel() {
             >
               {publishing ? 'Creating…' : '+ Create new link'}
             </button>
-            <p className="mt-1.5 text-center text-[8px] text-white/20">
-              Links stay active until you revoke them
-            </p>
+            {error ? (
+              <p className="mt-1.5 text-center text-[8px] text-red-400/80">{error}</p>
+            ) : (
+              <p className="mt-1.5 text-center text-[8px] text-white/20">
+                Links stay active until you revoke them
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -174,7 +182,11 @@ function useAutoPublish() {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body,
-        }).catch(console.error);
+        })
+          .then((res) => {
+            if (!res.ok) console.warn(`[crisis] live update failed (${res.status}) for share ${token}`);
+          })
+          .catch(console.error);
       }
     }, 1_500);
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };

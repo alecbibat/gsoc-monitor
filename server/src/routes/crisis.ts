@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 
 const router = Router();
@@ -38,7 +38,12 @@ function savePersistedShares() {
     if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
     const records: Record<string, unknown> = {};
     shares.forEach((record, token) => { records[token] = record.state; });
-    writeFileSync(PERSIST_FILE, JSON.stringify(records, null, 2), 'utf-8');
+    // Write atomically: a partial/interrupted write must never leave a corrupt
+    // file behind, because a failed JSON.parse on reload would wipe every share
+    // (and turn all existing links into "share link not found").
+    const tmp = `${PERSIST_FILE}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(records), 'utf-8');
+    renameSync(tmp, PERSIST_FILE);
   } catch (err) {
     console.warn('[crisis] could not persist shares:', err);
   }

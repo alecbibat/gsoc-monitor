@@ -24,7 +24,11 @@ dotenv.config();
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: '2mb' }));
+// Crisis share state embeds base64 images (layer map thumbnails + action-log
+// photo attachments), so a published incident can be several MB. Keep a
+// generous limit — a too-small one returns 413 and silently drops the update,
+// which surfaces to viewers as "share link not found" when a fresh publish fails.
+app.use(express.json({ limit: '50mb' }));
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.use('/api/earthquakes', earthquakesRouter);

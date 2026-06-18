@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { CrisisPublicState, IcsRole, PersonnelAssignment } from './crisisStore';
+import { CrisisShareMap } from './CrisisShareMap';
 
 const STATUS_BADGE: Record<string, { dot: string; badge: string }> = {
   active:    { dot: '#ef4444', badge: 'text-red-400 bg-red-500/15 border-red-500/40' },
@@ -245,6 +246,15 @@ export function CrisisShareView({ token }: { token: string }) {
                   </div>
                 ))}
             </div>
+          </div>
+        )}
+
+        {/* Interactive incident map — only the layers on this incident,
+            opened centred on their combined extent. */}
+        {data.drawLayers && data.drawLayers.some((l) => l.positions.length > 0) && (
+          <div>
+            <h2 className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-white/30">Incident Map</h2>
+            <CrisisShareMap layers={data.drawLayers.filter((l) => l.positions.length > 0)} />
           </div>
         )}
 

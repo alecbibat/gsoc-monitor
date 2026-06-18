@@ -101,3 +101,41 @@ body {
 .animate-marquee-vertical {
   animation: marquee-vertical linear infinite;
 }
+
+/* ── Leaflet dark theme (crisis share-view incident map) ─────────────────────
+   Leaflet ships light-themed chrome; restyle it to match the dark report. */
+.leaflet-container {
+  background: #05070a;
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+}
+.leaflet-bar a,
+.leaflet-control-zoom a {
+  background: rgba(13, 18, 24, 0.92);
+  color: rgba(230, 241, 245, 0.75);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+.leaflet-bar a:hover,
+.leaflet-control-zoom a:hover {
+  background: rgba(30, 38, 48, 0.95);
+  color: #fff;
+}
+.leaflet-control-attribution {
+  background: rgba(5, 7, 10, 0.7) !important;
+  color: rgba(230, 241, 245, 0.35) !important;
+}
+.leaflet-control-attribution a {
+  color: rgba(61, 220, 255, 0.55) !important;
+}
+.leaflet-tooltip.crisis-map-tip {
+  background: rgba(13, 18, 24, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 7px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+.leaflet-tooltip.crisis-map-tip::before {
+  display: none;
+}
