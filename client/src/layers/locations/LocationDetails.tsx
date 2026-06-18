@@ -2,7 +2,7 @@ import * as Cesium from 'cesium';
 import { useEffect, useState } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { flyToLonLat } from '../../cesium/flyTo';
-import { api } from '../../api/client';
+import { fetchDirections, fetchDriveRoute } from './directionsClient';
 import { PulseLineMaterialProperty } from './pulseLineMaterial';
 import { LOCATION_GROUPS } from './locations';
 import type { DirectionsResponse, DirectionsLeg, DriveResult } from '../../types';
@@ -453,14 +453,14 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
     flyToLonLat(viewer, payload.lon, payload.lat, payload.altitudeM);
   }, [viewer, payload.lat, payload.lon, payload.altitudeM]);
 
-  // Fetch emergency services + hotel/hospital directions.
+  // Fetch emergency services + hotel/hospital directions directly from the
+  // browser (Overpass + OSRM) so server-side network restrictions don't apply.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     setData(null);
-    api
-      .directions(payload.lat, payload.lon)
+    fetchDirections(payload.lat, payload.lon)
       .then((d) => {
         if (!cancelled) {
           setData(d);
@@ -485,8 +485,7 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
     const near = computeNearestPins(payload.lat, payload.lon, payload.name, 3);
     Promise.all(
       near.map((pin) =>
-        api
-          .drive(payload.lat, payload.lon, pin.lat, pin.lon)
+        fetchDriveRoute(payload.lat, payload.lon, pin.lat, pin.lon)
           .then((route) => ({ ...pin, route }))
           .catch(() => ({ ...pin, route: null }))
       )
