@@ -35,8 +35,8 @@ export function UserMenu() {
 
         {open && (
           <>
-            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-            <div className="absolute left-0 top-full z-50 mt-1.5 w-48 rounded-lg border border-white/12 bg-ink-900/98 shadow-2xl backdrop-blur-sm">
+            <div className="pointer-events-auto fixed inset-0 z-40" onClick={() => setOpen(false)} />
+            <div className="pointer-events-auto absolute left-0 top-full z-50 mt-1.5 w-48 rounded-lg border border-white/12 bg-ink-900/98 shadow-2xl backdrop-blur-sm">
               <div className="border-b border-white/8 px-3 py-2.5">
                 <p className="text-[12px] font-semibold text-white/80">{user.name}</p>
                 <p className="text-[10px] text-white/35">{user.email}</p>

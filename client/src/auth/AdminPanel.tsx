@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuthStore } from './authStore';
 
 interface User {
@@ -57,8 +58,8 @@ export function AdminPanel({ onClose }: { onClose: () => void }) {
     });
   };
 
-  return (
-    <div className="fixed inset-0 z-[4000] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+  return createPortal(
+    <div className="pointer-events-auto fixed inset-0 z-[4000] flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div className="w-full max-w-lg rounded-xl border border-white/12 bg-ink-900/98 shadow-2xl">
         <div className="flex items-center justify-between border-b border-white/8 px-5 py-3.5">
           <span className="text-[12px] font-bold uppercase tracking-[0.15em] text-white/50">Admin</span>
@@ -131,6 +132,7 @@ export function AdminPanel({ onClose }: { onClose: () => void }) {
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
