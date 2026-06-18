@@ -3,14 +3,28 @@ import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useScreensaverStore } from './screensaverStore';
 
-const BEAM_H = 5000;   // metres — towers up out of frame, loot-beam style
-const R_CORE = 38;     // bright inner column radius
-const R_OUTER = 110;   // soft outer glow radius
-const R_GLOW = 300;    // ground glow / ripple radius
+const BEAM_H = 2600; // metres the shaft rises before the glow tapers out
 
-// Animated glowing "loot beam" rendered through the focused property pin during
-// the pins screensaver, replacing the floating pin icon. A bright pulsing core,
-// a soft outer halo, a steady base disc, and an expanding ground ripple.
+// Soft radial glow sprite (white; tinted per-pin via billboard color), built once.
+function radialGlowUrl(): string {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d')!;
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.35, 'rgba(255,255,255,0.5)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  return c.toDataURL();
+}
+const GLOW_URL = radialGlowUrl();
+
+// A sleek glowing "loot beam" through the focused property pin during the pins
+// screensaver — a soft outer halo + bright inner core rendered as screen-space
+// PolylineGlow shafts (crisp at any zoom, no chunky tube), anchored to a
+// ground-clamped radial glow. The base tracks terrain height so the beam
+// terminates at the surface instead of punching through it.
 export function PinsLootBeam() {
   const viewer = useCesiumViewer();
   const active = useScreensaverStore((s) => s.active);
@@ -31,57 +45,57 @@ export function PinsLootBeam() {
     v.dataSources.add(ds);
     dsRef.current = ds;
 
-    const color = Cesium.Color.fromCssColorString(colorHex);
+    const base = Cesium.Color.fromCssColorString(colorHex);
+    const core = Cesium.Color.lerp(base, Cesium.Color.WHITE, 0.55, new Cesium.Color());
+    const carto = Cesium.Cartographic.fromDegrees(lon, lat);
+
     const t0 = performance.now();
     const sec = () => (performance.now() - t0) / 1000;
 
-    const pulse = (base: number, amp: number, speed: number, phase = 0) =>
-      new Cesium.ColorMaterialProperty(
-        new Cesium.CallbackProperty(
-          () => color.withAlpha(Math.max(0, base + amp * Math.sin(sec() * speed + phase))),
-          false
-        )
-      );
+    // Terrain-aware base height — refreshed each frame so the beam settles onto
+    // the ground as detailed tiles stream in.
+    let groundH = v.scene.globe.getHeight(carto) ?? 0;
+    const beamPositions = () => {
+      const h = v.scene.globe.getHeight(carto);
+      if (typeof h === 'number') groundH = h;
+      return [
+        Cesium.Cartesian3.fromDegrees(lon, lat, groundH),
+        Cesium.Cartesian3.fromDegrees(lon, lat, groundH + BEAM_H),
+      ];
+    };
 
-    const beam = (length: number, radius: number, taper: number, material: Cesium.ColorMaterialProperty) =>
+    const shaft = (color: Cesium.Color, baseA: number, amp: number, speed: number, width: number, glowPower: number) =>
       ds.entities.add({
-        position: Cesium.Cartesian3.fromDegrees(lon, lat, length / 2),
-        cylinder: {
-          length,
-          topRadius: radius,
-          bottomRadius: radius * taper,
-          material,
-          numberOfVerticalLines: 0,
-          outline: false,
+        polyline: {
+          positions: new Cesium.CallbackProperty(beamPositions, false),
+          width,
+          material: new Cesium.PolylineGlowMaterialProperty({
+            color: new Cesium.CallbackProperty(
+              () => color.withAlpha(Math.max(0, baseA + amp * Math.sin(sec() * speed))),
+              false
+            ),
+            glowPower,
+            taperPower: 0.72,
+          }),
         },
       });
 
-    // Soft outer halo + bright inner core
-    beam(BEAM_H, R_OUTER, 0.55, pulse(0.12, 0.06, 1.7, 1.0));
-    beam(BEAM_H, R_CORE, 1.0, pulse(0.5, 0.2, 3.0));
+    shaft(base, 0.34, 0.10, 1.8, 42, 0.42); // soft outer halo
+    shaft(core, 0.85, 0.12, 3.0, 13, 0.16); // bright inner core
 
-    // Steady base glow disc
+    // Ground-clamped radial glow at the foot of the beam.
     ds.entities.add({
-      position: Cesium.Cartesian3.fromDegrees(lon, lat, 1),
-      ellipse: {
-        semiMajorAxis: R_GLOW * 0.5,
-        semiMinorAxis: R_GLOW * 0.5,
-        material: pulse(0.2, 0.07, 3.0),
-        height: 1,
-      },
-    });
-
-    // Expanding ground ripple
-    const phase = () => (sec() / 1.5) % 1;
-    ds.entities.add({
-      position: Cesium.Cartesian3.fromDegrees(lon, lat, 2),
-      ellipse: {
-        semiMajorAxis: new Cesium.CallbackProperty(() => R_GLOW * (0.25 + 0.75 * phase()), false),
-        semiMinorAxis: new Cesium.CallbackProperty(() => R_GLOW * (0.25 + 0.75 * phase()), false),
-        material: new Cesium.ColorMaterialProperty(
-          new Cesium.CallbackProperty(() => color.withAlpha(0.4 * (1 - phase())), false)
+      position: Cesium.Cartesian3.fromDegrees(lon, lat),
+      billboard: {
+        image: GLOW_URL,
+        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+        width: 150,
+        height: 150,
+        color: new Cesium.CallbackProperty(
+          () => base.withAlpha(Math.max(0, 0.55 + 0.14 * Math.sin(sec() * 2.4))),
+          false
         ),
-        height: 2,
+        scaleByDistance: new Cesium.NearFarScalar(800, 1.3, 40_000, 0.5),
       },
     });
 
