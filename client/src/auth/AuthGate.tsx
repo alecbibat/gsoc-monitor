@@ -75,7 +75,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
         h-[54vw] max-h-[280px] min-h-[180px]
         md:absolute md:inset-0 md:h-auto md:max-h-none md:min-h-0 md:overflow-visible">
         <div className="aspect-square w-[82vw] max-w-[280px] opacity-95
-          md:w-[clamp(340px,78vw,620px)] md:max-w-none">
+          md:w-[clamp(520px,92vw,860px)] md:max-w-none">
           <GlobeAnimation />
         </div>
         {/* Mobile only: fade the bottom of the globe band into the page bg */}
@@ -87,7 +87,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
         className="pointer-events-none absolute inset-0 hidden md:block"
         style={{
           background:
-            'radial-gradient(ellipse at center, rgba(5,7,10,0) 30%, rgba(5,7,10,0.72) 66%, rgba(5,7,10,0.96) 100%)',
+            'radial-gradient(ellipse at center, rgba(5,7,10,0) 18%, rgba(5,7,10,0.55) 52%, rgba(5,7,10,0.92) 100%)',
         }}
       />
 
