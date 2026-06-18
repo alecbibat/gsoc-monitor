@@ -1,13 +1,31 @@
-import * as Cesium from 'cesium';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useScreensaverStore } from './screensaverStore';
-import { BASEMAPS } from '../cesium/basemaps';
-import { useLayersStore } from '../store/layersStore';
 
 const MAP_W = 240;
 const MAP_H = 130;
-// Regional altitude — shows ~1 300 km radius around the POI at 60° FoV.
-const MINIMAP_ALT = 2_500_000;
+const TILE_SIZE = 256;
+const ZOOM = 5;
+
+function latLonToTile(lat: number, lon: number, zoom: number) {
+  const n = 1 << zoom;
+  const x = Math.floor(((lon + 180) / 360) * n);
+  const latRad = (lat * Math.PI) / 180;
+  const y = Math.floor(
+    ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n,
+  );
+  return { x: Math.max(0, Math.min(n - 1, x)), y: Math.max(0, Math.min(n - 1, y)) };
+}
+
+function poiPixelOffset(lat: number, lon: number, zoom: number) {
+  const n = 1 << zoom;
+  const xFrac = ((lon + 180) / 360) * n;
+  const latRad = (lat * Math.PI) / 180;
+  const yFrac = ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n;
+  return {
+    px: (xFrac - Math.floor(xFrac)) * TILE_SIZE,
+    py: (yFrac - Math.floor(yFrac)) * TILE_SIZE,
+  };
+}
 
 // Reverse geocode a lat/lon via BigDataCloud (free, no key required).
 // Returns a short label like "Portland, OR", "Caribbean Sea", etc.
@@ -15,13 +33,12 @@ async function reverseGeocode(lat: number, lon: number, signal: AbortSignal): Pr
   try {
     const r = await fetch(
       `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`,
-      { signal }
+      { signal },
     );
     if (!r.ok || signal.aborted) return null;
-    const d = await r.json() as {
+    const d = (await r.json()) as {
       city?: string;
       locality?: string;
-      principalSubdivision?: string;
       principalSubdivisionCode?: string;
       countryCode?: string;
       countryName?: string;
@@ -41,12 +58,8 @@ async function reverseGeocode(lat: number, lon: number, signal: AbortSignal): Pr
 }
 
 export function PinsContextBox() {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [miniViewer, setMiniViewer] = useState<Cesium.Viewer | null>(null);
-  const baseLayerRef = useRef<Cesium.ImageryLayer | null>(null);
   const [geoLabel, setGeoLabel] = useState<string | null>(null);
 
-  const basemap = useLayersStore((s) => s.basemap);
   const active = useScreensaverStore((s) => s.active);
   const mode = useScreensaverStore((s) => s.mode);
   const poi = useScreensaverStore((s) => s.currentPoi);
@@ -54,108 +67,77 @@ export function PinsContextBox() {
   const isPins = active && mode === 'pins';
   const visible = isPins && poi !== null;
 
-  // Create/destroy the minimap Cesium viewer with pins mode.
-  useEffect(() => {
-    if (!isPins || !containerRef.current) return;
-
-    const v = new Cesium.Viewer(containerRef.current, {
-      baseLayer: false,
-      animation: false,
-      timeline: false,
-      baseLayerPicker: false,
-      geocoder: false,
-      homeButton: false,
-      sceneModePicker: false,
-      navigationHelpButton: false,
-      fullscreenButton: false,
-      infoBox: false,
-      selectionIndicator: false,
-      shadows: false,
-      contextOptions: { webgl: { alpha: true } },
-    });
-
-    if (v.scene.skyBox) v.scene.skyBox.show = false;
-    if (v.scene.skyAtmosphere) v.scene.skyAtmosphere.show = false;
-    v.scene.fog.enabled = false;
-    v.scene.backgroundColor = new Cesium.Color(0, 0, 0, 0);
-    v.scene.globe.baseColor = Cesium.Color.fromCssColorString('#05070a');
-    v.scene.globe.enableLighting = false;
-    v.scene.globe.showGroundAtmosphere = false;
-
-    // Lock the minimap — no user camera interaction.
-    const ctrl = v.scene.screenSpaceCameraController;
-    ctrl.enableRotate = false;
-    ctrl.enableZoom = false;
-    ctrl.enableTilt = false;
-    ctrl.enableLook = false;
-    ctrl.enableTranslate = false;
-
-    // Start centred on the Americas as a placeholder until the first POI arrives.
-    v.camera.setView({
-      destination: Cesium.Cartesian3.fromDegrees(-96, 38, MINIMAP_ALT),
-      orientation: { heading: 0, pitch: -Cesium.Math.PI_OVER_TWO, roll: 0 },
-    });
-
-    setMiniViewer(v);
-
-    return () => {
-      v.destroy();
-      setMiniViewer(null);
-      baseLayerRef.current = null;
-    };
-  }, [isPins]);
-
-  // Keep minimap basemap in sync with the main viewer.
-  useEffect(() => {
-    if (!miniViewer) return;
-    const def = BASEMAPS[basemap];
-    const newLayer = miniViewer.imageryLayers.addImageryProvider(def.build());
-    if (def.adjust) {
-      if (def.adjust.brightness != null) newLayer.brightness = def.adjust.brightness;
-      if (def.adjust.contrast != null) newLayer.contrast = def.adjust.contrast;
-      if (def.adjust.saturation != null) newLayer.saturation = def.adjust.saturation;
-      if (def.adjust.gamma != null) newLayer.gamma = def.adjust.gamma;
-    }
-    miniViewer.imageryLayers.lowerToBottom(newLayer);
-    if (baseLayerRef.current) miniViewer.imageryLayers.remove(baseLayerRef.current, true);
-    baseLayerRef.current = newLayer;
-  }, [miniViewer, basemap]);
-
-  // Pan the minimap to the current POI. The crosshair SVG overlay is always
-  // centred, so this is all we need to keep it aligned with the POI.
-  useEffect(() => {
-    if (!miniViewer || !poi) return;
-    miniViewer.camera.setView({
-      destination: Cesium.Cartesian3.fromDegrees(poi.lon, poi.lat, MINIMAP_ALT),
-      orientation: { heading: 0, pitch: -Cesium.Math.PI_OVER_TWO, roll: 0 },
-    });
-  }, [miniViewer, poi]);
-
-  // Reverse-geocode the POI to display a human-readable location name.
   useEffect(() => {
     if (!poi) { setGeoLabel(null); return; }
     const ctrl = new AbortController();
     reverseGeocode(poi.lat, poi.lon, ctrl.signal).then((label) => {
       if (!ctrl.signal.aborted) {
-        // Ships over open ocean may return nothing — show "International Waters".
         setGeoLabel(label ?? (poi.category === 'ship' ? 'International Waters' : null));
       }
     });
     return () => ctrl.abort();
   }, [poi?.lat, poi?.lon, poi?.category]);
 
+  // Build 3×3 OSM tile grid so the POI lands exactly at the container centre.
+  // The grid div is positioned so: gridLeft + TILE_SIZE + px = MAP_W/2, same for y.
+  const tileGrid = poi
+    ? (() => {
+        const { x: cx, y: cy } = latLonToTile(poi.lat, poi.lon, ZOOM);
+        const { px, py } = poiPixelOffset(poi.lat, poi.lon, ZOOM);
+        const maxN = (1 << ZOOM) - 1;
+        const tiles: { key: string; dx: number; dy: number; tx: number; ty: number }[] = [];
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const tx = ((cx + dx) % (1 << ZOOM) + (1 << ZOOM)) % (1 << ZOOM);
+            const ty = Math.max(0, Math.min(maxN, cy + dy));
+            tiles.push({ key: `${dx},${dy}`, dx, dy, tx, ty });
+          }
+        }
+        return { tiles, gridLeft: MAP_W / 2 - px - TILE_SIZE, gridTop: MAP_H / 2 - py - TILE_SIZE };
+      })()
+    : null;
+
   return (
     <div
       className={`pointer-events-none absolute bottom-12 right-6 z-30 transition-all duration-500 ${
-        visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'
+        visible ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
       }`}
     >
       <div
         className="relative overflow-hidden rounded-xl border border-white/15 shadow-2xl"
-        style={{ width: MAP_W, height: MAP_H }}
+        style={{ width: MAP_W, height: MAP_H, background: '#05070a' }}
       >
-        {/* Cesium minimap canvas */}
-        <div ref={containerRef} className="absolute inset-0" />
+        {/* OSM tile minimap — no WebGL context, zero GPU cost */}
+        {tileGrid && (
+          <div
+            style={{
+              position: 'absolute',
+              left: tileGrid.gridLeft,
+              top: tileGrid.gridTop,
+              width: TILE_SIZE * 3,
+              height: TILE_SIZE * 3,
+              filter: 'brightness(0.45) saturate(0.6)',
+              pointerEvents: 'none',
+            }}
+          >
+            {tileGrid.tiles.map(({ key, dx, dy, tx, ty }) => (
+              <img
+                key={key}
+                src={`https://tile.openstreetmap.org/${ZOOM}/${tx}/${ty}.png`}
+                draggable={false}
+                style={{
+                  position: 'absolute',
+                  left: (dx + 1) * TILE_SIZE,
+                  top: (dy + 1) * TILE_SIZE,
+                  width: TILE_SIZE,
+                  height: TILE_SIZE,
+                  display: 'block',
+                }}
+                alt=""
+              />
+            ))}
+          </div>
+        )}
 
         {/* Crosshair — always at canvas centre, which is always the POI. */}
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
@@ -183,12 +165,8 @@ export function PinsContextBox() {
               <div className="truncate text-[9px] text-white/55">{geoLabel}</div>
             )}
             <div className="text-[9px] font-mono text-white/35">
-              {poi.lat >= 0
-                ? `${poi.lat.toFixed(2)}°N`
-                : `${Math.abs(poi.lat).toFixed(2)}°S`}{' '}
-              {poi.lon >= 0
-                ? `${poi.lon.toFixed(2)}°E`
-                : `${Math.abs(poi.lon).toFixed(2)}°W`}
+              {poi.lat >= 0 ? `${poi.lat.toFixed(2)}°N` : `${Math.abs(poi.lat).toFixed(2)}°S`}{' '}
+              {poi.lon >= 0 ? `${poi.lon.toFixed(2)}°E` : `${Math.abs(poi.lon).toFixed(2)}°W`}
             </div>
           </div>
         )}
