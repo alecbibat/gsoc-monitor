@@ -65,6 +65,7 @@ interface ShipEntry {
   color: string;
   speedKt: number | null;
   heading: number | null;
+  lastSeenSec: number;
 }
 
 type VisitEntry = PinEntry | ShipEntry;
@@ -98,6 +99,7 @@ function buildShipEntries(): ShipEntry[] {
       color: fleetColor(fleet.cls),
       speedKt: ship.speedKt,
       heading: ship.heading ?? ship.course ?? null,
+      lastSeenSec: ship.lastSeenSec,
     }];
   });
 }
@@ -220,6 +222,8 @@ export function PinsController() {
             cls: entry.cls,
             speedKt: entry.speedKt,
             heading: entry.heading,
+            // Absolute Unix-ms of the last AIS fix so the card can tick forward.
+            aisTimestamp: Date.now() - entry.lastSeenSec * 1000,
           },
         };
         setPhase('flying-to');

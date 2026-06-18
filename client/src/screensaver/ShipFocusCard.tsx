@@ -23,10 +23,27 @@ export function ShipFocusCard() {
   if (!isPins || !shown || shown.category !== 'ship') return null;
   const visible = poi?.category === 'ship';
 
-  const mmsi    = shown.meta?.mmsi as string | undefined;
-  const speedKt = shown.meta?.speedKt as number | null | undefined;
-  const heading = shown.meta?.heading as number | null | undefined;
-  const cls     = shown.meta?.cls as 'STAR' | 'WIND' | undefined;
+  const mmsi         = shown.meta?.mmsi as string | undefined;
+  const speedKt      = shown.meta?.speedKt as number | null | undefined;
+  const heading      = shown.meta?.heading as number | null | undefined;
+  const cls          = shown.meta?.cls as 'STAR' | 'WIND' | undefined;
+  const aisTimestamp = shown.meta?.aisTimestamp as number | undefined;
+
+  // Tick every 20 s so the "X ago" label stays current during the dwell.
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 20_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const fmtAge = (ms: number) => {
+    const sec = ms / 1000;
+    if (sec < 90)    return `${Math.round(sec)}s ago`;
+    if (sec < 5400)  return `${Math.round(sec / 60)}m ago`;
+    if (sec < 172800) return `${Math.round(sec / 3600)}h ago`;
+    return `${Math.round(sec / 86400)}d ago`;
+  };
+  const aisAge = aisTimestamp != null ? fmtAge(now - aisTimestamp) : null;
 
   const fleet = mmsi ? FLEET_ROSTER.find((f) => f.mmsi === mmsi) : undefined;
   const resolvedCls = cls ?? fleet?.cls;
@@ -71,7 +88,7 @@ export function ShipFocusCard() {
           )}
         </div>
 
-        {/* Speed / heading row */}
+        {/* Speed / heading / AIS age row */}
         <div className="flex items-center gap-3 px-3.5 pb-2.5 text-[11px] text-white/50">
           {speedKt != null && speedKt > 0.5 ? (
             <span className="font-mono text-white/80">{speedKt.toFixed(1)} kt</span>
@@ -80,6 +97,9 @@ export function ShipFocusCard() {
           )}
           {heading != null && (
             <span className="font-mono">{Math.round(heading)}°</span>
+          )}
+          {aisAge && (
+            <span className="ml-auto font-mono text-white/30">AIS {aisAge}</span>
           )}
         </div>
       </div>

@@ -236,9 +236,13 @@ export function ShipModel3D({ variant, color, masts = 4, width = 190, height = 1
     else buildWind(ship, mat, masts);
     scene.add(ship);
 
-    // Frame the camera to the model's bounds so nothing clips the canvas edge
-    // at any rotation (the ship spins about its vertical axis, so the limiting
-    // horizontal reach is the max radius from that axis).
+    // Perspective-accurate framing for a model that spins about its Y axis.
+    // A point at radius r from the axis reaches its widest screen position at
+    // θ = arcsin(r/dist), where it projects to r/sqrt(dist²-r²) in view space.
+    // Setting that equal to the frustum half-width gives:
+    //   dist ≥ r · sqrt(1 + 1/(vtan·aspect)²)
+    // The camera sits at the vertical centre of the bounding box so top/bottom
+    // are symmetric and neither clips.
     ship.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(ship);
     const horizR = Math.hypot(
@@ -247,13 +251,13 @@ export function ShipModel3D({ variant, color, masts = 4, width = 190, height = 1
     );
     const centerY = (box.min.y + box.max.y) / 2;
     const vertHalf = (box.max.y - box.min.y) / 2;
+    const aspect = width / height;
     const vtan = Math.tan(((camera.fov * Math.PI) / 180) / 2);
-    const margin = 1.2;
-    const dist = Math.max(
-      (horizR * margin) / (vtan * (width / height)), // fit length within the wide canvas
-      (vertHalf * margin) / vtan                     // fit masts within the height
-    );
-    camera.position.set(0, centerY + vertHalf * 0.22, dist);
+    const margin = 1.15;
+    const distH = horizR * margin * Math.sqrt(1 + 1 / (vtan * aspect) ** 2);
+    const distV = (vertHalf * margin) / vtan;
+    const dist = Math.max(distH, distV);
+    camera.position.set(0, centerY, dist);
     camera.lookAt(0, centerY, 0);
 
     let raf = 0;

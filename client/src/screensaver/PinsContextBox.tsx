@@ -9,10 +9,42 @@ const MAP_H = 130;
 // Regional altitude — shows ~1 300 km radius around the POI at 60° FoV.
 const MINIMAP_ALT = 2_500_000;
 
+// Reverse geocode a lat/lon via BigDataCloud (free, no key required).
+// Returns a short label like "Portland, OR", "Caribbean Sea", etc.
+async function reverseGeocode(lat: number, lon: number, signal: AbortSignal): Promise<string | null> {
+  try {
+    const r = await fetch(
+      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`,
+      { signal }
+    );
+    if (!r.ok || signal.aborted) return null;
+    const d = await r.json() as {
+      city?: string;
+      locality?: string;
+      principalSubdivision?: string;
+      principalSubdivisionCode?: string;
+      countryCode?: string;
+      countryName?: string;
+    };
+    const parts: string[] = [];
+    if (d.city) parts.push(d.city);
+    else if (d.locality) parts.push(d.locality);
+    if (d.countryCode === 'US' || d.countryCode === 'CA') {
+      if (d.principalSubdivisionCode) parts.push(d.principalSubdivisionCode);
+    } else if (d.countryName) {
+      parts.push(d.countryName);
+    }
+    return parts.length ? parts.join(', ') : null;
+  } catch {
+    return null;
+  }
+}
+
 export function PinsContextBox() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [miniViewer, setMiniViewer] = useState<Cesium.Viewer | null>(null);
   const baseLayerRef = useRef<Cesium.ImageryLayer | null>(null);
+  const [geoLabel, setGeoLabel] = useState<string | null>(null);
 
   const basemap = useLayersStore((s) => s.basemap);
   const active = useScreensaverStore((s) => s.active);
@@ -99,6 +131,19 @@ export function PinsContextBox() {
     });
   }, [miniViewer, poi]);
 
+  // Reverse-geocode the POI to display a human-readable location name.
+  useEffect(() => {
+    if (!poi) { setGeoLabel(null); return; }
+    const ctrl = new AbortController();
+    reverseGeocode(poi.lat, poi.lon, ctrl.signal).then((label) => {
+      if (!ctrl.signal.aborted) {
+        // Ships over open ocean may return nothing — show "International Waters".
+        setGeoLabel(label ?? (poi.category === 'ship' ? 'International Waters' : null));
+      }
+    });
+    return () => ctrl.abort();
+  }, [poi?.lat, poi?.lon, poi?.category]);
+
   return (
     <div
       className={`pointer-events-none absolute bottom-12 right-6 z-30 transition-all duration-500 ${
@@ -130,11 +175,14 @@ export function PinsContextBox() {
           </span>
         </div>
 
-        {/* Bottom gradient overlay with POI name + coordinates */}
+        {/* Bottom gradient overlay with POI name + location + coordinates */}
         {poi && (
           <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 pb-1.5 pt-4">
             <div className="truncate text-[10px] font-medium text-white/80">{poi.title}</div>
-            <div className="text-[9px] font-mono text-white/40">
+            {geoLabel && (
+              <div className="truncate text-[9px] text-white/55">{geoLabel}</div>
+            )}
+            <div className="text-[9px] font-mono text-white/35">
               {poi.lat >= 0
                 ? `${poi.lat.toFixed(2)}°N`
                 : `${Math.abs(poi.lat).toFixed(2)}°S`}{' '}
