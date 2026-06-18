@@ -53,7 +53,13 @@ export function CrisisDrawController() {
   const commit = (pts: DrawLayerPoint[]) => {
     if (!idRef.current) return;
     if (pts.length < minPoints(geomRef.current)) return;
-    // Capture a thumbnail of the current Cesium frame while the preview is still drawn.
+    // Capture a thumbnail of the current Cesium frame while the preview is still
+    // drawn. This MUST stay fully synchronous: force a render, then read the
+    // canvas in the same task with no await in between. That lets it work
+    // WITHOUT preserveDrawingBuffer on the WebGL context — which we keep off
+    // because the extra per-frame memory cost was crashing the globe (lost GPU
+    // context) during the pins screensaver. If capture fails for any reason the
+    // thumbnail is simply omitted.
     let thumbnail: string | undefined;
     if (viewer) {
       try {
@@ -67,7 +73,7 @@ export function CrisisDrawController() {
         c.width = w; c.height = h;
         c.getContext('2d')!.drawImage(src, 0, 0, w, h);
         thumbnail = c.toDataURL('image/jpeg', 0.75);
-      } catch { /* preserveDrawingBuffer may not be enabled */ }
+      } catch { /* capture unavailable — omit the thumbnail */ }
     }
     updateDrawLayer(idRef.current, { positions: pts, thumbnail });
     endDrawing();

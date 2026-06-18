@@ -58,6 +58,15 @@ export function CesiumGlobe({ children, onReady }: Props) {
   const basemap = useLayersStore((s) => s.basemap);
   const qualityLevel = usePerfStore((s) => s.qualityLevel);
 
+  // WebGL context-loss recovery. Bumping recreateKey tears down and rebuilds
+  // the viewer on a fresh GPU context; contextLost drives the overlay shown
+  // while that happens; recoverAttemptsRef bounds retries so a permanently dead
+  // GPU can't loop forever.
+  const [recreateKey, setRecreateKey] = useState(0);
+  const [contextLost, setContextLost] = useState(false);
+  const recoverAttemptsRef = useRef(0);
+  const recoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -76,7 +85,14 @@ export function CesiumGlobe({ children, onReady }: Props) {
       shadows: false,
       // alpha:true lets the WebGL canvas be transparent so our CSS star
       // field shows through wherever there's no globe or UI.
-      contextOptions: { webgl: { alpha: true, preserveDrawingBuffer: true } },
+      //
+      // NB: preserveDrawingBuffer is deliberately OFF. Turning it on forces the
+      // browser to keep the full back buffer every frame, and the extra GPU
+      // memory pressure caused the context to be lost (permanent black screen)
+      // during the pins screensaver's continuous full-rate zooms. Screenshots
+      // (crisis layer thumbnails) instead capture synchronously right after a
+      // forced render, which works without it — see CrisisDrawController.
+      contextOptions: { webgl: { alpha: true } },
     });
 
     v.scene.requestRenderMode = true;
@@ -136,15 +152,55 @@ export function CesiumGlobe({ children, onReady }: Props) {
       Cesium.ScreenSpaceEventType.LEFT_CLICK
     );
 
+    // ── WebGL context-loss recovery ──────────────────────────────────────────
+    // A lost GPU context otherwise leaves Cesium showing a permanent black
+    // screen: the browser only ever fires `webglcontextrestored` if the lost
+    // event was defaultPrevented, and even then Cesium can't rebuild its GPU
+    // resources on the old context. So we preventDefault (to stop the console
+    // error storm and signal intent to recover), shed the screensaver's heavy
+    // render load, and rebuild the whole viewer on a brand-new context by
+    // bumping recreateKey.
+    const canvas = v.canvas;
+    const onContextLost = (e: Event) => {
+      e.preventDefault();
+      console.warn('[cesium] WebGL context lost — rebuilding viewer');
+      useScreensaverStore.getState().stop();
+      setContextLost(true);
+      if (recoverAttemptsRef.current < 4) {
+        recoverAttemptsRef.current += 1;
+        if (recoverTimerRef.current) clearTimeout(recoverTimerRef.current);
+        // Small beat so the GPU can settle before we ask it for a fresh context.
+        recoverTimerRef.current = setTimeout(() => setRecreateKey((k) => k + 1), 600);
+      }
+    };
+    const onContextRestored = () => {
+      console.info('[cesium] WebGL context restored');
+    };
+    canvas.addEventListener('webglcontextlost', onContextLost, false);
+    canvas.addEventListener('webglcontextrestored', onContextRestored, false);
+
     setViewer(v);
     onReady?.(v);
+    // A fresh viewer is live — drop the recovery overlay. Let the attempt
+    // counter decay after a stable spell so an unrelated future loss still
+    // gets the full set of retries.
+    setContextLost(false);
+    const decay = setTimeout(() => { recoverAttemptsRef.current = 0; }, 30_000);
 
     return () => {
+      clearTimeout(decay);
+      if (recoverTimerRef.current) clearTimeout(recoverTimerRef.current);
+      canvas.removeEventListener('webglcontextlost', onContextLost);
+      canvas.removeEventListener('webglcontextrestored', onContextRestored);
       onReady?.(null);
-      v.destroy();
+      // Drop layer refs so the rebuilt viewer starts from a clean slate rather
+      // than trying to remove imagery layers that belonged to the dead viewer.
+      baseLayerRef.current = null;
+      overlayLayerRef.current = null;
+      try { v.destroy(); } catch { /* context may already be gone */ }
       setViewer(null);
     };
-  }, [onReady]);
+  }, [onReady, recreateKey]);
 
   useEffect(() => {
     if (!viewer) return;
@@ -253,6 +309,22 @@ export function CesiumGlobe({ children, onReady }: Props) {
   return (
     <div ref={containerRef} className="absolute inset-0">
       {children}
+      {contextLost && (
+        <div className="pointer-events-auto absolute inset-0 z-[5000] flex flex-col items-center justify-center gap-3 bg-ink-950/90 backdrop-blur-sm">
+          <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-white/70" />
+          <div className="text-[13px] font-medium text-white/80">Restarting graphics…</div>
+          <div className="max-w-xs text-center text-[11px] leading-snug text-white/40">
+            The 3D view lost its GPU context and is rebuilding. If it doesn&apos;t
+            come back, reload the page.
+          </div>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-1 rounded border border-white/15 px-3 py-1.5 text-[11px] text-white/55 transition hover:border-white/30 hover:text-white"
+          >
+            Reload now
+          </button>
+        </div>
+      )}
     </div>
   );
 }

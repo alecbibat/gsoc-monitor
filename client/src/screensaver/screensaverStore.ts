@@ -23,6 +23,7 @@ interface ScreensaverState {
   currentPoi: Poi | null;
   newsPoiQueue: Poi[];
   toggle: (mode: ScreensaverMode) => void;
+  stop: () => void;
   setPhase: (p: Phase) => void;
   setCurrentPoi: (poi: Poi | null) => void;
   enqueueNewsPoi: (poi: Poi) => void;
@@ -44,6 +45,7 @@ export const useScreensaverStore = create<ScreensaverState>((set, get) => ({
       // Switch to (or start) the requested mode.
       return { active: true, mode, phase: 'rotating', currentPoi: null, newsPoiQueue: [] };
     }),
+  stop: () => set({ active: false, phase: 'rotating', currentPoi: null, newsPoiQueue: [] }),
   setPhase: (phase) => set({ phase }),
   setCurrentPoi: (currentPoi) => set({ currentPoi }),
   enqueueNewsPoi: (poi) => set((s) => ({ newsPoiQueue: [...s.newsPoiQueue, poi] })),
