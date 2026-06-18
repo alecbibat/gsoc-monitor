@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useAuthStore } from './authStore';
+import { GlobeAnimation } from './GlobeAnimation';
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const setUser = useAuthStore((s) => s.setUser);
@@ -64,16 +65,31 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const inputCls = 'w-full rounded-lg border border-white/10 bg-white/4 px-3 py-2.5 text-[13px] text-white/90 placeholder-white/25 outline-none transition focus:border-accent/40 focus:bg-white/6';
 
   return (
-    <div className="flex h-screen items-center justify-center bg-ink-950">
-      <div className="w-full max-w-sm space-y-6 px-6">
+    <div className="relative flex h-screen items-center justify-center overflow-hidden bg-ink-950">
+      {/* Cinematic globe backdrop — sized to halo out beyond the form panel */}
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <div className="aspect-square w-[clamp(340px,78vw,620px)] opacity-95">
+          <GlobeAnimation />
+        </div>
+      </div>
+      {/* Vignette to focus the center and keep form text crisp over the globe */}
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            'radial-gradient(ellipse at center, rgba(5,7,10,0) 30%, rgba(5,7,10,0.72) 66%, rgba(5,7,10,0.96) 100%)',
+        }}
+      />
+
+      <div className="relative z-10 w-full max-w-sm space-y-6 rounded-2xl border border-accent/12 bg-ink-950/72 px-6 py-8 shadow-[0_0_0_1px_rgba(61,220,255,0.06),0_24px_80px_rgba(0,0,0,0.7)] backdrop-blur-2xl">
         <div className="text-center">
-          <p className="font-mono text-[20px] font-bold tracking-[0.22em] text-white/90">
+          <p className="font-mono text-[20px] font-bold tracking-[0.22em] text-white/90 [text-shadow:0_0_24px_rgba(61,220,255,0.25)]">
             GSOC<span className="text-accent">MONITOR</span>
           </p>
-          <p className="mt-1 text-[11px] text-white/30">Global Security Operations Center</p>
+          <p className="mt-1 text-[11px] tracking-wide text-white/35">Global Security Operations Center</p>
         </div>
 
-        <div className="flex rounded-lg border border-white/10 p-1">
+        <div className="flex rounded-lg border border-white/10 bg-ink-950/40 p-1">
           {(['login', 'signup'] as const).map((t) => (
             <button
               key={t}

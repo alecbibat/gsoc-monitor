@@ -11,3 +11,4 @@ build/
 .cache/
 server/ships-snapshot.json
 server/data/
+globe-preview.html
