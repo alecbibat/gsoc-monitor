@@ -127,6 +127,7 @@ export function CrisisShareView({ token }: { token: string }) {
     const es = new EventSource(`/api/crisis/share/${token}/events`);
     es.addEventListener('connected', (e) => setData(JSON.parse((e as MessageEvent).data) as CrisisPublicState));
     es.addEventListener('update',    (e) => setData(JSON.parse((e as MessageEvent).data) as CrisisPublicState));
+    es.addEventListener('revoked',   () => { es.close(); setError('This link has been revoked by the incident owner.'); });
     es.onerror = () => { /* reconnects automatically */ };
     return () => es.close();
   }, [token]);

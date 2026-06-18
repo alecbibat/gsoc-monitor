@@ -68,6 +68,13 @@ export interface DrawLayer {
   createdAt: string;
 }
 
+export interface ShareLink {
+  token: string;
+  url: string;
+  createdAt: string;
+  active: boolean;
+}
+
 // One incident — a fully self-contained situation report.
 export interface Incident {
   id: string;
@@ -83,7 +90,8 @@ export interface Incident {
   personnel: PersonnelMember[];
   actionLog: ActionLogEntry[];
   drawLayers: DrawLayer[];
-  shareToken: string | null;
+  shareToken: string | null;  // legacy — kept for backwards compat with persisted data
+  shareLinks: ShareLink[];    // all share links ever created for this incident
 }
 
 // Public shape sent to / received from the share endpoint
@@ -156,6 +164,7 @@ function newIncident(): Incident {
     actionLog: [],
     drawLayers: [],
     shareToken: null,
+    shareLinks: [],
   };
 }
 
@@ -199,6 +208,8 @@ interface CrisisState {
   // Active-incident field updates
   update: (patch: Partial<CrisisFields>) => void;
   setShareToken: (token: string | null) => void;
+  addShareLink: (token: string, url: string) => void;
+  deactivateShareLink: (token: string) => void;
 
   // Roles
   addRole: (role: Omit<IcsRole, 'id' | 'builtin'>) => void;
@@ -285,6 +296,25 @@ export const useCrisisStore = create<CrisisState>()(
       update: (patch) => set((s) => patchActive(s, (inc) => ({ ...inc, ...patch }))),
       setShareToken: (token) => set((s) => patchActive(s, (inc) => ({ ...inc, shareToken: token }))),
 
+      addShareLink: (token, url) =>
+        set((s) => patchActive(s, (inc) => ({
+          ...inc,
+          shareToken: token,
+          shareLinks: [
+            ...(inc.shareLinks ?? []),
+            { token, url, createdAt: new Date().toISOString(), active: true },
+          ],
+        }))),
+
+      deactivateShareLink: (token) =>
+        set((s) => patchActive(s, (inc) => {
+          const updated = (inc.shareLinks ?? []).map((l) =>
+            l.token === token ? { ...l, active: false } : l
+          );
+          const anyActive = updated.find((l) => l.active);
+          return { ...inc, shareToken: anyActive?.token ?? null, shareLinks: updated };
+        })),
+
       addPersonnelMember: (name, org) =>
         set((s) => patchActive(s, (inc) => ({
           ...inc,
@@ -343,12 +373,22 @@ export const useCrisisStore = create<CrisisState>()(
           const now = new Date().toISOString();
           const role = inc.roles.find((r) => r.id === roleId);
           const endPrevious = !role?.isSupport;
+          // End any other active assignment for this person across all roles
+          // (one person cannot hold more than one role at a time).
+          const assignments = inc.assignments.map((a) => {
+            if (a.endedAt) return a;
+            if (a.name.toLowerCase() === name.toLowerCase() && a.roleId !== roleId) {
+              return { ...a, endedAt: now };
+            }
+            if (endPrevious && a.roleId === roleId) {
+              return { ...a, endedAt: now };
+            }
+            return a;
+          });
           return {
             ...inc,
             assignments: [
-              ...(endPrevious
-                ? inc.assignments.map((a) => (a.roleId === roleId && !a.endedAt ? { ...a, endedAt: now } : a))
-                : inc.assignments),
+              ...assignments,
               { id: uid(), roleId, name, organization: org || undefined, startedAt: now },
             ],
           };

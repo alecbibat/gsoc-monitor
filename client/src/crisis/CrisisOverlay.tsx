@@ -16,18 +16,20 @@ const STATUS_BADGE: Record<string, { dot: string; badge: string }> = {
   resolved:  { dot: '#22c55e', badge: 'text-green-400 bg-green-500/15 border-green-500/40' },
 };
 
-// ── Share button ──────────────────────────────────────────────────────────────
+// ── Share links panel ─────────────────────────────────────────────────────────
 
-function ShareButton() {
+function ShareLinksPanel() {
   const inc = useActiveIncident();
-  const setShareToken = useCrisisStore((s) => s.setShareToken);
+  const addShareLink = useCrisisStore((s) => s.addShareLink);
+  const deactivateShareLink = useCrisisStore((s) => s.deactivateShareLink);
+  const [open, setOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copiedToken, setCopiedToken] = useState<string | null>(null);
 
-  const shareToken = inc?.shareToken ?? null;
-  const shareUrl = shareToken ? `${window.location.origin}/?share=${shareToken}` : null;
+  const shareLinks = inc?.shareLinks ?? [];
+  const activeLinks = shareLinks.filter((l) => l.active);
 
-  const handlePublish = async () => {
+  const handleCreate = async () => {
     if (!inc) return;
     setPublishing(true);
     try {
@@ -37,8 +39,10 @@ function ShareButton() {
         body: JSON.stringify(extractPublicState(inc)),
       });
       if (!res.ok) throw new Error('Failed');
-      const { token } = await res.json() as { token: string };
-      setShareToken(token);
+      const { token, url } = await res.json() as { token: string; url: string };
+      const fullUrl = `${window.location.origin}${url}`;
+      addShareLink(token, fullUrl);
+      setOpen(true);
     } catch (err) {
       console.error('[crisis] publish failed', err);
     } finally {
@@ -46,58 +50,135 @@ function ShareButton() {
     }
   };
 
-  const handleCopy = () => {
-    if (!shareUrl) return;
-    navigator.clipboard.writeText(shareUrl).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+  const handleDeactivate = async (token: string) => {
+    deactivateShareLink(token);
+    try {
+      await fetch(`/api/crisis/share/${token}`, { method: 'DELETE' });
+    } catch { /* server already gone */ }
+  };
+
+  const handleCopy = (url: string, token: string) => {
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedToken(token);
+      setTimeout(() => setCopiedToken(null), 2000);
     });
   };
 
-  if (shareToken && shareUrl) {
-    return (
-      <div className="flex items-center gap-1.5">
-        <span className="max-w-[160px] truncate rounded bg-green-500/10 px-2 py-1 text-[10px] text-green-400/80">
-          {shareUrl}
-        </span>
-        <button onClick={handleCopy} className="rounded border border-white/10 px-2.5 py-1 text-[10px] text-white/50 transition hover:border-white/20 hover:text-white">
-          {copied ? 'Copied!' : 'Copy'}
-        </button>
-        <button onClick={() => setShareToken(null)} className="text-[10px] text-white/20 transition hover:text-white/50" title="Stop sharing">✕</button>
-      </div>
-    );
-  }
-
   return (
-    <button
-      onClick={handlePublish}
-      disabled={publishing}
-      className="rounded border border-white/12 px-3 py-1.5 text-[11px] text-white/50 transition hover:border-white/22 hover:text-white disabled:opacity-40"
-    >
-      {publishing ? 'Publishing…' : 'Share Link'}
-    </button>
+    <div className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-1.5 rounded border px-3 py-1.5 text-[11px] transition ${
+          activeLinks.length > 0
+            ? 'border-green-500/30 bg-green-500/8 text-green-400/80 hover:border-green-500/50 hover:text-green-400'
+            : 'border-white/12 text-white/50 hover:border-white/22 hover:text-white'
+        }`}
+      >
+        {activeLinks.length > 0 && (
+          <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
+        )}
+        Share Links
+        {activeLinks.length > 0 && (
+          <span className="rounded bg-green-500/20 px-1 text-[9px] text-green-400">{activeLinks.length}</span>
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-1.5 w-80 rounded-lg border border-white/12 bg-ink-900/98 shadow-2xl backdrop-blur-sm">
+          <div className="border-b border-white/8 px-3 py-2.5 flex items-center justify-between">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-white/40">Share Links</span>
+            <button onClick={() => setOpen(false)} className="text-white/25 hover:text-white/55 text-[11px]">✕</button>
+          </div>
+
+          <div className="max-h-64 overflow-y-auto">
+            {shareLinks.length === 0 ? (
+              <p className="px-3 py-4 text-center text-[10px] text-white/30">
+                No links created yet — create one below
+              </p>
+            ) : (
+              <div className="divide-y divide-white/6">
+                {[...shareLinks].reverse().map((link) => (
+                  <div key={link.token} className={`px-3 py-2.5 ${link.active ? '' : 'opacity-40'}`}>
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${link.active ? 'bg-green-500' : 'bg-white/20'}`} />
+                      <span className="text-[9px] text-white/35">
+                        {link.active ? 'Active' : 'Revoked'} · {new Date(link.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <code className="min-w-0 flex-1 truncate rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-white/50">
+                        {link.url}
+                      </code>
+                      {link.active && (
+                        <>
+                          <button
+                            onClick={() => handleCopy(link.url, link.token)}
+                            className="shrink-0 rounded border border-white/10 px-2 py-0.5 text-[9px] text-white/45 transition hover:border-white/20 hover:text-white"
+                          >
+                            {copiedToken === link.token ? '✓' : 'Copy'}
+                          </button>
+                          <button
+                            onClick={() => handleDeactivate(link.token)}
+                            className="shrink-0 text-[9px] text-white/20 transition hover:text-red-400/70"
+                            title="Revoke this link"
+                          >
+                            Revoke
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="border-t border-white/8 px-3 py-2.5">
+            <button
+              onClick={handleCreate}
+              disabled={publishing}
+              className="w-full rounded bg-accent/15 py-1.5 text-[10px] text-accent transition hover:bg-accent/25 disabled:opacity-40"
+            >
+              {publishing ? 'Creating…' : '+ Create new link'}
+            </button>
+            <p className="mt-1.5 text-center text-[8px] text-white/20">
+              Links stay active until you revoke them
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
-// ── Auto-push the active incident to its share endpoint on every change ────────
+// ── Auto-push the active incident to all active share links on every change ────
 
 function useAutoPublish() {
   const inc = useActiveIncident();
-  const token = inc?.shareToken ?? null;
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!inc || !token) return;
+    if (!inc) return;
+    const activeTokens = (inc.shareLinks ?? [])
+      .filter((l) => l.active)
+      .map((l) => l.token);
+    // Legacy fallback: if shareToken set but shareLinks not yet populated
+    if (activeTokens.length === 0 && inc.shareToken) activeTokens.push(inc.shareToken);
+    if (activeTokens.length === 0) return;
+
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
-      fetch(`/api/crisis/share/${token}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(extractPublicState(inc)),
-      }).catch(console.error);
+      const body = JSON.stringify(extractPublicState(inc));
+      for (const token of activeTokens) {
+        fetch(`/api/crisis/share/${token}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        }).catch(console.error);
+      }
     }, 1_500);
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [inc, token]);
+  }, [inc]);
 }
 
 // ── Incident detail (right-side panel, leaves the globe visible on the left) ───
@@ -156,7 +237,7 @@ function IncidentDetail() {
           </div>
 
           <div className="ml-auto flex items-center gap-2">
-            <ShareButton />
+            <ShareLinksPanel />
             <button
               onClick={() => {
                 if (confirm(`Delete incident "${inc.incidentName || 'Untitled'}"?`)) {
