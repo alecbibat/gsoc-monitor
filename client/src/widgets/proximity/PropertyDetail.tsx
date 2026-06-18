@@ -1,10 +1,11 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useCallback, type ReactNode } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { flyToLonLat } from '../../cesium/flyTo';
 import { MILES_TO_M } from '../../lib/geo';
 import { useProximityStore } from './proximityStore';
 import { HazardRows } from './HazardRows';
 import { expiresText, fmtMiles, quakeColor, timeAgo } from './format';
+import { downloadPropertyReport } from './reportCanvas';
 
 const REFRESH_MS = 5 * 60_000;
 
@@ -50,6 +51,10 @@ export function PropertyDetail({ payload }: { payload: PropertyDetailPayload }) 
     flyToLonLat(viewer, payload.lon, payload.lat, Math.max(220_000, radiusMi * MILES_TO_M * 2.2));
   };
 
+  const handleDownload = useCallback(() => {
+    downloadPropertyReport(payload, hazards, radiusMi, result?.updated ?? null);
+  }, [payload, hazards, radiusMi, result?.updated]);
+
   const lat =
     payload.lat >= 0 ? `${payload.lat.toFixed(3)}°N` : `${Math.abs(payload.lat).toFixed(3)}°S`;
   const lon =
@@ -69,13 +74,22 @@ export function PropertyDetail({ payload }: { payload: PropertyDetailPayload }) 
             {lat} {lon}
           </div>
         </div>
-        <button
-          onClick={fly}
-          className="shrink-0 rounded-md border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] font-semibold text-accent transition hover:bg-accent/20"
-          title="Fly to property"
-        >
-          Fly to
-        </button>
+        <div className="flex shrink-0 gap-1.5">
+          <button
+            onClick={fly}
+            className="rounded-md border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] font-semibold text-accent transition hover:bg-accent/20"
+            title="Fly to property"
+          >
+            Fly to
+          </button>
+          <button
+            onClick={handleDownload}
+            className="rounded-md border border-white/15 bg-white/5 px-2 py-1 text-[11px] text-white/50 transition hover:border-white/25 hover:bg-white/10 hover:text-white/80"
+            title="Download report as image"
+          >
+            ↓ Export
+          </button>
+        </div>
       </div>
 
       {/* Status */}
