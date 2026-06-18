@@ -85,6 +85,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
     v.scene.globe.enableLighting = true;
     v.scene.globe.baseColor = Cesium.Color.fromCssColorString('#05070a');
     v.scene.globe.depthTestAgainstTerrain = false;
+    v.scene.globe.preloadAncestors = true;
     v.scene.fog.enabled = true;
     v.scene.skyAtmosphere!.hueShift = -0.05;
 
@@ -202,6 +203,29 @@ export function CesiumGlobe({ children, onReady }: Props) {
     const off = scene.preRender.addEventListener(sync);
     sync();
     return () => off();
+  }, [viewer]);
+
+  // During a close ship orbit the camera descends to ~850 m above open ocean.
+  // High-zoom ocean tiles are often unavailable, so Cesium shows a gray "no
+  // data" placeholder. Switching baseColor to a dark ocean blue makes those
+  // gaps invisible — they blend with the surrounding water rather than
+  // flashing an ugly gray rectangle.
+  useEffect(() => {
+    if (!viewer) return;
+    const OCEAN   = Cesium.Color.fromCssColorString('#04111f');
+    const DEFAULT = Cesium.Color.fromCssColorString('#05070a');
+    const update = () => {
+      const ss = useScreensaverStore.getState();
+      const shipFocus = ss.active && ss.mode === 'pins' && ss.currentPoi?.category === 'ship';
+      viewer.scene.globe.baseColor = shipFocus ? OCEAN : DEFAULT;
+      viewer.scene.requestRender();
+    };
+    update();
+    const unsub = useScreensaverStore.subscribe(update);
+    return () => {
+      unsub();
+      viewer.scene.globe.baseColor = DEFAULT;
+    };
   }, [viewer]);
 
   // Render quality: graduated trade of resolution, anti-aliasing, terrain detail

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   useCrisisStore, selectActive,
   type IcsRole,
@@ -452,9 +452,19 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
 
 export function IcsOrgChart() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const rootRoles = useCrisisStore((s) =>
     (selectActive(s)?.roles ?? []).filter((r) => r.parentId === null).sort((a, b) => a.order - b.order)
   );
+
+  // Auto-scroll to keep the tree horizontally centred after the DOM settles.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      el.scrollLeft = Math.max(0, (el.scrollWidth - el.clientWidth) / 2);
+    });
+  }, [rootRoles.length]);
 
   const handleSelect = (id: string) => {
     setSelectedId((prev) => (prev === id ? null : id));
@@ -463,8 +473,8 @@ export function IcsOrgChart() {
   return (
     <div className="flex gap-4">
       {/* Scrollable chart */}
-      <div className="min-w-0 flex-1 overflow-x-auto">
-        <div className="flex min-w-[820px] flex-col items-center py-2">
+      <div ref={scrollRef} className="min-w-0 flex-1 overflow-x-auto">
+        <div className="flex w-max min-w-full flex-col items-center py-4">
           {rootRoles.map((r) => (
             <RoleSubtree key={r.id} roleId={r.id} selectedId={selectedId} onSelect={handleSelect} />
           ))}
