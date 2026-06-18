@@ -45,6 +45,8 @@ import { CrisisMapLayer } from './crisis/CrisisMapLayer';
 import { CrisisDrawController } from './crisis/CrisisDrawController';
 import { CrisisLayerPopup } from './crisis/CrisisLayerPopup';
 import { CrisisShareView } from './crisis/CrisisShareView';
+import { IncidentSync } from './crisis/IncidentSync';
+import { AuthGate } from './auth/AuthGate';
 
 // Detect share link — renders a completely separate read-only view
 const shareToken = new URLSearchParams(window.location.search).get('share');
@@ -57,6 +59,7 @@ export default function App() {
   }
 
   return (
+    <AuthGate>
     <CesiumContext.Provider value={viewer}>
       {/* bg-black is the fallback; StarField canvas renders on top of it,
           and the transparent Cesium canvas sits above that. */}
@@ -105,7 +108,9 @@ export default function App() {
         <CrisisOverlay />
         <CrisisDrawController />
         <CrisisLayerPopup />
+        <IncidentSync />
       </div>
     </CesiumContext.Provider>
+    </AuthGate>
   );
 }

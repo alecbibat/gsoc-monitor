@@ -1,114 +1,90 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
-import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'fs';
-import { join } from 'path';
+import { pool } from '../db';
 
 const router = Router();
 
-interface ShareRecord {
-  state: unknown;
-  clients: Set<Response>;
-}
-
-const shares = new Map<string, ShareRecord>();
-
-// ── Persistence ───────────────────────────────────────────────────────────────
-// Shares survive server restarts by persisting to a local JSON file.
-// Only the state is persisted; SSE client connections are transient.
-
-const DATA_DIR = join(__dirname, '..', '..', 'data');
-const PERSIST_FILE = join(DATA_DIR, 'crisis-shares.json');
-
-function loadPersistedShares() {
-  try {
-    if (!existsSync(PERSIST_FILE)) return;
-    const raw = readFileSync(PERSIST_FILE, 'utf-8');
-    const records = JSON.parse(raw) as Record<string, unknown>;
-    for (const [token, state] of Object.entries(records)) {
-      shares.set(token, { state, clients: new Set() });
-    }
-    console.log(`[crisis] loaded ${shares.size} persisted share(s)`);
-  } catch (err) {
-    console.warn('[crisis] could not load persisted shares:', err);
-  }
-}
-
-function savePersistedShares() {
-  try {
-    if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-    const records: Record<string, unknown> = {};
-    shares.forEach((record, token) => { records[token] = record.state; });
-    // Write atomically: a partial/interrupted write must never leave a corrupt
-    // file behind, because a failed JSON.parse on reload would wipe every share
-    // (and turn all existing links into "share link not found").
-    const tmp = `${PERSIST_FILE}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(records), 'utf-8');
-    renameSync(tmp, PERSIST_FILE);
-  } catch (err) {
-    console.warn('[crisis] could not persist shares:', err);
-  }
-}
-
-loadPersistedShares();
+// SSE client connections are transient (per-process); share state lives in DB.
+const sseClients = new Map<string, Set<Response>>();
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 // POST /api/crisis/publish — create a new share link, returns token + url
-router.post('/publish', (req: Request, res: Response) => {
-  const state = req.body;
-  if (!state || typeof state !== 'object') {
-    res.status(400).json({ error: 'Body must be a JSON object' });
-    return;
+router.post('/publish', async (req: Request, res: Response) => {
+  const snapshot = req.body;
+  if (!snapshot || typeof snapshot !== 'object') {
+    res.status(400).json({ error: 'Body must be a JSON object' }); return;
   }
   const token = randomUUID();
-  shares.set(token, { state, clients: new Set() });
-  savePersistedShares();
+  const incidentId: string | undefined = (snapshot as { incidentId?: string }).incidentId;
+  await pool.query(
+    `INSERT INTO share_links (token, incident_id, snapshot)
+     VALUES ($1, $2, $3)`,
+    [token, incidentId ?? null, JSON.stringify(snapshot)]
+  );
   res.json({ token, url: `/?share=${token}` });
 });
 
-// PATCH /api/crisis/share/:token — push updated state, notify SSE clients
-router.patch('/share/:token', (req: Request, res: Response) => {
-  const record = shares.get(req.params.token);
-  if (!record) { res.status(404).json({ error: 'Not found' }); return; }
+// PATCH /api/crisis/share/:token — push updated snapshot, notify SSE clients
+router.patch('/share/:token', async (req: Request, res: Response) => {
+  const { token } = req.params;
+  const { rows: [row] } = await pool.query(
+    'SELECT snapshot FROM share_links WHERE token = $1 AND active = TRUE',
+    [token]
+  );
+  if (!row) { res.status(404).json({ error: 'Not found' }); return; }
 
-  record.state = { ...(record.state as object), ...req.body, lastUpdated: new Date().toISOString() };
-  savePersistedShares();
+  const merged = { ...(row.snapshot as object), ...req.body, lastUpdated: new Date().toISOString() };
+  await pool.query(
+    'UPDATE share_links SET snapshot = $1 WHERE token = $2',
+    [JSON.stringify(merged), token]
+  );
 
-  const payload = `event: update\ndata: ${JSON.stringify(record.state)}\n\n`;
-  record.clients.forEach((client) => {
-    try { client.write(payload); } catch { /* client disconnected */ }
+  const payload = `event: update\ndata: ${JSON.stringify(merged)}\n\n`;
+  sseClients.get(token)?.forEach((client) => {
+    try { client.write(payload); } catch { /* disconnected */ }
   });
 
   res.json({ ok: true });
 });
 
-// GET /api/crisis/share/:token — return current state snapshot
-router.get('/share/:token', (req: Request, res: Response) => {
-  const record = shares.get(req.params.token);
-  if (!record) { res.status(404).json({ error: 'Not found' }); return; }
-  res.json(record.state);
+// GET /api/crisis/share/:token — return current state snapshot (no auth required)
+router.get('/share/:token', async (req: Request, res: Response) => {
+  const { rows: [row] } = await pool.query(
+    'SELECT snapshot FROM share_links WHERE token = $1 AND active = TRUE',
+    [req.params.token]
+  );
+  if (!row) { res.status(404).json({ error: 'Not found' }); return; }
+  res.json(row.snapshot);
 });
 
-// DELETE /api/crisis/share/:token — deactivate a share link permanently
-router.delete('/share/:token', (req: Request, res: Response) => {
-  const record = shares.get(req.params.token);
-  if (!record) { res.status(404).json({ error: 'Not found' }); return; }
+// DELETE /api/crisis/share/:token — revoke a share link
+router.delete('/share/:token', async (req: Request, res: Response) => {
+  const { rows: [row] } = await pool.query(
+    'SELECT 1 FROM share_links WHERE token = $1',
+    [req.params.token]
+  );
+  if (!row) { res.status(404).json({ error: 'Not found' }); return; }
 
-  // Notify connected viewers that the share has been revoked
+  await pool.query('UPDATE share_links SET active = FALSE WHERE token = $1', [req.params.token]);
+
   const payload = `event: revoked\ndata: {}\n\n`;
-  record.clients.forEach((client) => {
-    try { client.write(payload); client.end(); } catch { /* already gone */ }
+  sseClients.get(req.params.token)?.forEach((client) => {
+    try { client.write(payload); client.end(); } catch { /* gone */ }
   });
+  sseClients.delete(req.params.token);
 
-  shares.delete(req.params.token);
-  savePersistedShares();
   res.json({ ok: true });
 });
 
-// GET /api/crisis/share/:token/events — SSE stream for live updates
-router.get('/share/:token/events', (req: Request, res: Response) => {
-  const record = shares.get(req.params.token);
-  if (!record) { res.status(404).end(); return; }
+// GET /api/crisis/share/:token/events — SSE stream for live updates (no auth required)
+router.get('/share/:token/events', async (req: Request, res: Response) => {
+  const { token } = req.params;
+  const { rows: [row] } = await pool.query(
+    'SELECT snapshot FROM share_links WHERE token = $1 AND active = TRUE',
+    [token]
+  );
+  if (!row) { res.status(404).end(); return; }
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -116,17 +92,19 @@ router.get('/share/:token/events', (req: Request, res: Response) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.flushHeaders();
 
-  res.write(`event: connected\ndata: ${JSON.stringify(record.state)}\n\n`);
+  res.write(`event: connected\ndata: ${JSON.stringify(row.snapshot)}\n\n`);
 
   const ping = setInterval(() => {
     try { res.write(': ping\n\n'); } catch { clearInterval(ping); }
   }, 25_000);
 
-  record.clients.add(res);
+  if (!sseClients.has(token)) sseClients.set(token, new Set());
+  sseClients.get(token)!.add(res);
 
   req.on('close', () => {
     clearInterval(ping);
-    record.clients.delete(res);
+    sseClients.get(token)?.delete(res);
+    if (sseClients.get(token)?.size === 0) sseClients.delete(token);
   });
 });
 

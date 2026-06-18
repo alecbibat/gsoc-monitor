@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import { useCrisisStore, selectActive, type ActionLogEntry } from './crisisStore';
+import { uploadImage } from '../lib/cloudinary';
 
 // Resize an image File to at most maxDim on the longest edge, return a JPEG data URL.
 function compressImage(file: File, maxDim = 1200, quality = 0.82): Promise<string> {
@@ -94,10 +95,14 @@ function LogRow({ entry }: { entry: ActionLogEntry }) {
             const file = e.target.files?.[0];
             if (!file) return;
             if (isImageFile(file.name)) {
+              // Show the filename immediately so the user knows the upload started.
+              updateActionEntry(entry.id, { attachmentName: file.name, attachmentData: undefined });
               try {
-                const data = await compressImage(file);
-                updateActionEntry(entry.id, { attachmentName: file.name, attachmentData: data });
+                const dataUrl = await compressImage(file);
+                const url = await uploadImage(dataUrl);
+                updateActionEntry(entry.id, { attachmentName: file.name, attachmentData: url });
               } catch {
+                // Upload failed — keep the name but leave attachmentData empty.
                 updateActionEntry(entry.id, { attachmentName: file.name });
               }
             } else {

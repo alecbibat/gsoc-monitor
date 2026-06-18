@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useCrisisStore, type DrawLayerPoint, type DrawGeometry } from './crisisStore';
+import { uploadImage } from '../lib/cloudinary';
 
 const PREVIEW = Cesium.Color.fromCssColorString('#3ddcff');
 
@@ -53,14 +54,11 @@ export function CrisisDrawController() {
   const commit = (pts: DrawLayerPoint[]) => {
     if (!idRef.current) return;
     if (pts.length < minPoints(geomRef.current)) return;
-    // Capture a thumbnail of the current Cesium frame while the preview is still
-    // drawn. This MUST stay fully synchronous: force a render, then read the
-    // canvas in the same task with no await in between. That lets it work
-    // WITHOUT preserveDrawingBuffer on the WebGL context — which we keep off
-    // because the extra per-frame memory cost was crashing the globe (lost GPU
-    // context) during the pins screensaver. If capture fails for any reason the
-    // thumbnail is simply omitted.
-    let thumbnail: string | undefined;
+    // Capture the thumbnail synchronously (canvas read must happen in the same
+    // task as viewer.render() — no await). Then upload to Cloudinary async so
+    // the layer appears immediately and the thumbnail populates after upload.
+    // preserveDrawingBuffer is deliberately OFF (see note at top of file).
+    let dataUrl: string | undefined;
     if (viewer) {
       try {
         viewer.render();
@@ -72,11 +70,17 @@ export function CrisisDrawController() {
         const c = document.createElement('canvas');
         c.width = w; c.height = h;
         c.getContext('2d')!.drawImage(src, 0, 0, w, h);
-        thumbnail = c.toDataURL('image/jpeg', 0.75);
-      } catch { /* capture unavailable — omit the thumbnail */ }
+        dataUrl = c.toDataURL('image/jpeg', 0.75);
+      } catch { /* capture unavailable — thumbnail is optional */ }
     }
-    updateDrawLayer(idRef.current, { positions: pts, thumbnail });
+    const layerId = idRef.current;
+    updateDrawLayer(layerId, { positions: pts });
     endDrawing();
+    if (dataUrl) {
+      uploadImage(dataUrl)
+        .then((url) => updateDrawLayer(layerId, { thumbnail: url }))
+        .catch(() => { /* thumbnail is optional — omit on failure */ });
+    }
   };
 
   // Install Cesium handlers while a layer is being drawn

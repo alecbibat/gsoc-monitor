@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 
 // ── Domain types ─────────────────────────────────────────────────────────────
 
@@ -239,6 +238,9 @@ interface CrisisState {
   removeDrawLayer: (id: string) => void;
   setActiveDrawLayer: (id: string | null) => void;
   setPickedLayer: (p: PickedLayer | null) => void;
+
+  // Server sync
+  setIncidents: (incidents: Incident[]) => void;
 }
 
 // Select the currently-open incident (or null in list view).
@@ -267,9 +269,7 @@ function patchLayerOwner(s: CrisisState, layerId: string, fn: (inc: Incident) =>
   };
 }
 
-export const useCrisisStore = create<CrisisState>()(
-  persist(
-    (set) => ({
+export const useCrisisStore = create<CrisisState>()((set) => ({
       open: false,
       activeIncidentId: null,
       activeTab: 'situation-report',
@@ -443,13 +443,9 @@ export const useCrisisStore = create<CrisisState>()(
 
       setActiveDrawLayer: (id) => set({ activeDrawLayerId: id }),
       setPickedLayer: (pickedLayer) => set({ pickedLayer }),
-    }),
-    {
-      name: 'gsoc-crisis-v3',
-      partialize: (s) => ({ incidents: s.incidents }),
-    }
-  )
-);
+
+      setIncidents: (incidents) => set({ incidents }),
+}));
 
 // ── Share helper ──────────────────────────────────────────────────────────────
 

@@ -9,6 +9,7 @@ import { useTrackedHistory } from './useTrackedHistory';
 import { useUiStore } from './uiStore';
 import { useMeasureStore } from '../measure/measureStore';
 import { useCrisisStore } from '../crisis/crisisStore';
+import { UserMenu } from '../auth/UserMenu';
 import {
   fullscreenElement,
   fullscreenSupported,
@@ -404,6 +405,7 @@ export function TopBar() {
         <FullscreenButton />
         <MeasureButton />
         <CrisisButton />
+        <UserMenu />
         {/* Screensaver modes — desktop only; mobile gets them in the drawer. */}
         <ScreensaverControls className="hidden md:flex" />
       </div>
