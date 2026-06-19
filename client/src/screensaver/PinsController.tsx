@@ -5,17 +5,19 @@ import { useScreensaverStore, type Poi } from './screensaverStore';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REBUILD — Stage 3: step the orbit down to 2.5 km.
+// REBUILD — Stage 4: add terrain elevation back.
 //
-// Stage 2 (4 km orbit) was stable. Step down to 2.5 km — close to the original
-// 1.6 km cinematic range, where buildings genuinely read. This is the critical
-// test: if 2.5 km holds, the safe floor is near the original design target. If
-// it crashes, the floor is between 2.5 km and 4 km and we hold at 4 km (or
-// throttle the orbit to earn a lower altitude).
+// The orbit is stable down to a 2.5 km range (Stages 0-3). Until now the orbit
+// target was hardcoded to sea level, so at elevated sites (Grand Canyon rim
+// ~2.1 km, Yellowstone ~2.4 km) the camera sat at the wrong height relative to
+// the 3D terrain. Stage 4's single new variable: sample the ground elevation at
+// the pin and lift both the orbit target and the camera by it.
 //
-// Terrain elevation still ignored (orbit target = sea level) — elevated sites
-// like Grand Canyon will look wrong. Fixed in a later stage once the safe
-// altitude floor is confirmed. One variable at a time.
+// This is ONE sampleTerrainMostDetailed point — not the heavy 25-point ring the
+// pre-rebuild version used. (We proved camera-logic complexity wasn't the crash
+// cause, but keeping it minimal stays honest to the staged approach.) Ridges
+// around the orbit can still clip on the most rugged park sites; a ring sample
+// can be added later if that matters. Loot beam and ships are still out.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const OVERVIEW_ALT = 9_000_000;
@@ -70,6 +72,22 @@ function shuffledPins(): PinEntry[] {
   return a;
 }
 
+// Ground elevation at a single point, so the orbit sits on real terrain instead
+// of sea level. Returns 0 for the flat ellipsoid (no world terrain loaded) or on
+// any failure, which just reproduces the prior sea-level behaviour.
+async function sampleGroundHeight(v: Cesium.Viewer, lon: number, lat: number): Promise<number> {
+  try {
+    if (v.terrainProvider instanceof Cesium.EllipsoidTerrainProvider) return 0;
+    const [r] = await Cesium.sampleTerrainMostDetailed(v.terrainProvider, [
+      Cesium.Cartographic.fromDegrees(lon, lat),
+    ]);
+    const h = r?.height;
+    return typeof h === 'number' && Number.isFinite(h) ? h : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export function PinsController() {
   const viewer = useCesiumViewer();
   const active = useScreensaverStore((s) => s.active);
@@ -108,7 +126,7 @@ export function PinsController() {
       poiTimerRef.current = setTimeout(visitNext, rand(POI_INTERVAL_MIN_MS, POI_INTERVAL_MAX_MS));
     }
 
-    function visitNext() {
+    async function visitNext() {
       if (cancelledRef.current) return;
       if (queueRef.current.length === 0) queueRef.current = shuffledPins();
       const pin = queueRef.current.shift()!;
@@ -126,11 +144,15 @@ export function PinsController() {
       setPhase('flying-to');
       setCurrentPoi(poi);
 
-      const target = Cesium.Cartesian3.fromDegrees(pin.lon, pin.lat, 0);
+      // Lift the orbit onto real terrain so elevated sites read correctly.
+      const baseH = await sampleGroundHeight(v, pin.lon, pin.lat);
+      if (cancelledRef.current) return;
+
+      const target = Cesium.Cartesian3.fromDegrees(pin.lon, pin.lat, baseH);
       // Fly straight to the heading=0 orbit-start position (south of and above
       // the pin) so the orbit begins seamlessly with no camera snap.
       const back = ORBIT_RANGE_M * Math.cos(-ORBIT_PITCH_RAD);
-      const up = ORBIT_RANGE_M * Math.sin(-ORBIT_PITCH_RAD);
+      const up = baseH + ORBIT_RANGE_M * Math.sin(-ORBIT_PITCH_RAD);
       const startLat = pin.lat - back / METERS_PER_DEG_LAT;
 
       v.camera.flyTo({
@@ -141,7 +163,7 @@ export function PinsController() {
           if (cancelledRef.current) return;
           setPhase('at-poi');
 
-          // Stage 2: orbit the pin during dwell at ORBIT_RANGE_M.
+          // Orbit the pin during dwell at ORBIT_RANGE_M, around the elevated target.
           const orbitStart = performance.now();
           const tick = () => {
             if (cancelledRef.current) return;
