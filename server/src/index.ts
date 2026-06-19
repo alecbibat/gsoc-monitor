@@ -26,9 +26,37 @@ import incidentsRouter from './routes/incidents';
 
 dotenv.config();
 
-async function main() {
-  await migrate();
+// Bring the database schema up to date, retrying with backoff. Crucially this
+// is NOT allowed to take the process down: a database outage must degrade only
+// the DB-backed routes (auth, incidents, crisis), not black out the entire
+// dashboard. The server previously `await migrate()`d before listening and
+// exited(1) on any connection error — so a Postgres hiccup H10-crashed the dyno
+// and 503'd every route, including the static client and the non-DB APIs.
+async function migrateWithRetry(maxAttempts = 6): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await migrate();
+      return;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (attempt >= maxAttempts) {
+        console.error(
+          `[migrate] failed after ${attempt} attempts (${msg}). DB-backed routes ` +
+            '(auth, incidents, crisis) will error until the database is reachable; ' +
+            'the globe, static client and non-DB APIs remain available.'
+        );
+        return;
+      }
+      const waitMs = Math.min(30_000, 1000 * 2 ** attempt);
+      console.error(
+        `[migrate] attempt ${attempt}/${maxAttempts} failed (${msg}); retrying in ${waitMs / 1000}s`
+      );
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+}
 
+function main() {
   const app = express();
 
   app.use(cors());
@@ -73,12 +101,26 @@ async function main() {
     res.sendFile(path.join(clientDist, 'index.html'));
   });
 
+  // Bind the port immediately so the dyno boots even while the database is
+  // unreachable (and well within Heroku's 60s boot window). Migrations run in
+  // the background and the app self-heals when Postgres comes back.
   app.listen(config.port, () => {
     console.log(`gsoc-monitor server listening on port ${config.port}`);
   });
+
+  void migrateWithRetry();
 }
 
-main().catch((err) => {
+// A rejected background promise (an external-API poller, the AIS stream, a
+// retried migration) must not crash a long-running monitoring server — log it
+// and stay up. Genuine startup faults still throw synchronously out of main().
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+
+try {
+  main();
+} catch (err) {
   console.error('Server failed to start:', err);
   process.exit(1);
-});
+}
