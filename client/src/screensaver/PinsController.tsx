@@ -19,14 +19,22 @@ const INTERVAL_MAX_MS = 10_000;
 // Camera orbits slowly around each pin while dwelling.
 const ORBIT_PERIOD_MS = 32_000;
 
-// Close cinematic orbit — used when a 3D source (OSM buildings + terrain, or
-// Google 3D tiles) is loaded so real geometry is visible from a low, tilted
-// angle.
-const CLOSE_RANGE_M = 1_600;
-const CLOSE_PITCH_RAD = Cesium.Math.toRadians(-28);
-// Safe high fallback orbit — used when 3D tiles aren't available (no API key)
-// or terrain height can't be sampled. Stays well above any terrain.
-const FAR_RANGE_M = 18_000;
+// ── ALTITUDE TEST (Option A) ────────────────────────────────────────────────
+// Reducing the OSM building tile load (SSE 16→48 + skipLevelOfDetail) did not
+// stop the black-screen, so raw building geometry is exonerated. The remaining
+// thing pins does that neither working config does is orbit at LOW altitude:
+// the parks screensaver never drops below ~60 km and never crashes. So push the
+// pins orbit up into that same proven-safe band (camera ≈ 62 km up at -38°).
+// The camera now flies straight to the high orbit and never descends through
+// street level, so it also avoids the zoom-in tile burst entirely.
+//   • If this stops the crash → low-altitude close-up is the trigger; we then
+//     binary-search downward for the lowest altitude that stays stable.
+//   • If it STILL crashes → altitude is exonerated too, and the cause is
+//     something pins loads regardless of altitude (ships, per-visit churn, …).
+// Once we know the safe floor these collapse back into a real close/far split.
+const CLOSE_RANGE_M = 100_000;
+const CLOSE_PITCH_RAD = Cesium.Math.toRadians(-38);
+const FAR_RANGE_M = 100_000;
 const FAR_PITCH_RAD = Cesium.Math.toRadians(-38);
 
 const METERS_PER_DEG_LAT = 110_574;
