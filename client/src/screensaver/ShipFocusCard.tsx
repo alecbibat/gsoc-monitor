@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useScreensaverStore, type Poi } from './screensaverStore';
 import { FLEET_ROSTER, fleetColor } from '../layers/ships/fleet';
-import { ShipModel3D, mastCountForShip } from '../layers/ships/ShipModel3D';
+import { mastCountForShip } from '../layers/ships/ShipModel3D';
+import { ShipWireframe2D } from '../layers/ships/ShipWireframe2D';
 
 // Bottom-centre card shown while orbiting a Windstar ship in the pins
 // screensaver. Displays a live-rotating 3D wireframe, class badge, and
@@ -78,7 +79,7 @@ export function ShipFocusCard() {
         {/* Rotating 3D wireframe */}
         <div className="flex justify-center px-3.5">
           {resolvedCls && (
-            <ShipModel3D
+            <ShipWireframe2D
               variant={resolvedCls === 'STAR' ? 'star' : 'wind'}
               color={color}
               masts={mastCountForShip(fleet?.name ?? shown.title)}
