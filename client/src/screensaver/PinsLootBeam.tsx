@@ -33,7 +33,14 @@ export function PinsLootBeam() {
 
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
 
-  const isPinFocus = active && mode === 'pins' && poi?.category === 'pin';
+  // Staged pins rebuild: the loot beam is a per-frame cost (globe.getHeight +
+  // glow shaders every frame for the whole session), so it's held out of the
+  // Stage 0 soak-test baseline and re-added as its own stage once the bare
+  // parks-shaped lifecycle is proven stable.
+  const STAGE_LOOT_BEAM_ENABLED = false;
+
+  const isPinFocus =
+    STAGE_LOOT_BEAM_ENABLED && active && mode === 'pins' && poi?.category === 'pin';
   const lon = poi?.lon;
   const lat = poi?.lat;
   const colorHex = (poi?.meta?.color as string | undefined) ?? '#a78bfa';
