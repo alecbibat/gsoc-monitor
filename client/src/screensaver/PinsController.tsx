@@ -5,18 +5,17 @@ import { useScreensaverStore, type Poi } from './screensaverStore';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REBUILD — Stage 2: descend the orbit toward the buildings.
+// REBUILD — Stage 3: step the orbit down to 2.5 km.
 //
-// Established so far: static dwell at 12 km is stable (Stage 0), and orbiting at
-// 12 km is also stable (Stage 1) — so camera motion alone is fine. The original
-// crash was orbiting at ~1.6 km, where the moving camera continuously streams
-// dense OSM building tiles. The safe floor is therefore between 1.6 km and 12 km.
+// Stage 2 (4 km orbit) was stable. Step down to 2.5 km — close to the original
+// 1.6 km cinematic range, where buildings genuinely read. This is the critical
+// test: if 2.5 km holds, the safe floor is near the original design target. If
+// it crashes, the floor is between 2.5 km and 4 km and we hold at 4 km (or
+// throttle the orbit to earn a lower altitude).
 //
-// Stage 2 steps the orbit down to a 4 km range (camera ≈ 2.8 km up at -45°) —
-// conservatively, so a crash doesn't cost a full soak. Buildings start to read
-// here. If stable, the next stage steps lower (≈2.5 km); if it crashes, the
-// floor is just above 4 km and we either hold here or slow/throttle the orbit so
-// the tile churn stays low enough to survive lower altitudes.
+// Terrain elevation still ignored (orbit target = sea level) — elevated sites
+// like Grand Canyon will look wrong. Fixed in a later stage once the safe
+// altitude floor is confirmed. One variable at a time.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const OVERVIEW_ALT = 9_000_000;
@@ -30,7 +29,7 @@ const POI_DWELL_MAX_MS = 18_000;
 
 // Orbit range (camera-to-target distance). Stage 2 steps this down from 12 km
 // toward the buildings; this is the one variable changing this stage.
-const ORBIT_RANGE_M = 4_000;
+const ORBIT_RANGE_M = 2_500;
 // Slow orbit during dwell. Matches the original 32 s period.
 const ORBIT_PERIOD_MS = 32_000;
 // Steeper tilt keeps the camera looking down at the pin rather than off toward
