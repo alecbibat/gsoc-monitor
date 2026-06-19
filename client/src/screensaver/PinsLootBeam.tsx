@@ -37,7 +37,7 @@ export function PinsLootBeam() {
   // glow shaders every frame for the whole session), so it's held out of the
   // Stage 0 soak-test baseline and re-added as its own stage once the bare
   // parks-shaped lifecycle is proven stable.
-  const STAGE_LOOT_BEAM_ENABLED = false;
+  const STAGE_LOOT_BEAM_ENABLED = true;
 
   const isPinFocus =
     STAGE_LOOT_BEAM_ENABLED && active && mode === 'pins' && poi?.category === 'pin';
