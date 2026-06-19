@@ -208,6 +208,8 @@ export function PinsController() {
           meta: {
             mmsi: entry.mmsi,
             cls: entry.cls,
+            // Fleet color so the loot beam over the ship matches its class.
+            color: entry.color,
             speedKt: entry.speedKt,
             heading: entry.heading,
             // Absolute Unix-ms of the last AIS fix so the card can tick forward.
