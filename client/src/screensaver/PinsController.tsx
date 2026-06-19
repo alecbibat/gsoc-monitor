@@ -5,19 +5,18 @@ import { useScreensaverStore, type Poi } from './screensaverStore';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REBUILD — Stage 1: orbit added back at the SAME safe altitude.
+// REBUILD — Stage 2: descend the orbit toward the buildings.
 //
-// Stage 0 (static dwell, 12 km, no orbit, no loot beam, no ships) soak-tested
-// stable. Stage 1 adds back the camera orbit RAF loop — at the same 12 km
-// altitude — to isolate camera motion from altitude as the crash trigger.
+// Established so far: static dwell at 12 km is stable (Stage 0), and orbiting at
+// 12 km is also stable (Stage 1) — so camera motion alone is fine. The original
+// crash was orbiting at ~1.6 km, where the moving camera continuously streams
+// dense OSM building tiles. The safe floor is therefore between 1.6 km and 12 km.
 //
-// If this stage crashes: the orbit itself (continuous camera.lookAt calls) is
-//   the culprit — it forces per-frame tile re-cull + re-stream even at a safe
-//   altitude. Fix: keep the orbit but throttle it (request render every N ms
-//   instead of every frame), or keep the static dwell and skip the orbit.
-// If this stage stays stable: camera motion at 12 km is fine, and the crash
-//   was about orbit at LOW altitude streaming dense building tiles. Next step:
-//   descend in altitude increments to find the safe floor.
+// Stage 2 steps the orbit down to a 4 km range (camera ≈ 2.8 km up at -45°) —
+// conservatively, so a crash doesn't cost a full soak. Buildings start to read
+// here. If stable, the next stage steps lower (≈2.5 km); if it crashes, the
+// floor is just above 4 km and we either hold here or slow/throttle the orbit so
+// the tile churn stays low enough to survive lower altitudes.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const OVERVIEW_ALT = 9_000_000;
@@ -29,12 +28,15 @@ const POI_INTERVAL_MAX_MS = 20_000;
 const POI_DWELL_MIN_MS = 12_000;
 const POI_DWELL_MAX_MS = 18_000;
 
-// Dwell altitude — unchanged from Stage 0 so the only new variable is the orbit.
-const VIEW_ALT_M = 12_000;
+// Orbit range (camera-to-target distance). Stage 2 steps this down from 12 km
+// toward the buildings; this is the one variable changing this stage.
+const ORBIT_RANGE_M = 4_000;
 // Slow orbit during dwell. Matches the original 32 s period.
 const ORBIT_PERIOD_MS = 32_000;
-// Tilt angle during orbit — shallow enough to see the ground clearly at 12 km.
+// Steeper tilt keeps the camera looking down at the pin rather than off toward
+// the horizon, so fewer distant tiles stream as it orbits.
 const ORBIT_PITCH_RAD = Cesium.Math.toRadians(-45);
+const METERS_PER_DEG_LAT = 110_574;
 
 interface PinEntry {
   name: string;
@@ -117,7 +119,7 @@ export function PinsController() {
         description: `${pin.groupIcon} ${pin.groupName}`,
         lat: pin.lat,
         lon: pin.lon,
-        altitudeM: VIEW_ALT_M,
+        altitudeM: ORBIT_RANGE_M,
         category: 'pin',
         meta: { color: pin.color },
       };
@@ -126,22 +128,28 @@ export function PinsController() {
       setCurrentPoi(poi);
 
       const target = Cesium.Cartesian3.fromDegrees(pin.lon, pin.lat, 0);
+      // Fly straight to the heading=0 orbit-start position (south of and above
+      // the pin) so the orbit begins seamlessly with no camera snap.
+      const back = ORBIT_RANGE_M * Math.cos(-ORBIT_PITCH_RAD);
+      const up = ORBIT_RANGE_M * Math.sin(-ORBIT_PITCH_RAD);
+      const startLat = pin.lat - back / METERS_PER_DEG_LAT;
 
       v.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(pin.lon, pin.lat, VIEW_ALT_M),
+        destination: Cesium.Cartesian3.fromDegrees(pin.lon, startLat, up),
+        orientation: { heading: 0, pitch: ORBIT_PITCH_RAD, roll: 0 },
         duration: 5.0,
         complete: () => {
           if (cancelledRef.current) return;
           setPhase('at-poi');
 
-          // Stage 1: orbit the pin during dwell, at the same 12 km altitude.
+          // Stage 2: orbit the pin during dwell at ORBIT_RANGE_M.
           const orbitStart = performance.now();
           const tick = () => {
             if (cancelledRef.current) return;
             const heading =
               (((performance.now() - orbitStart) % ORBIT_PERIOD_MS) * Cesium.Math.TWO_PI) /
               ORBIT_PERIOD_MS;
-            v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, ORBIT_PITCH_RAD, VIEW_ALT_M));
+            v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, ORBIT_PITCH_RAD, ORBIT_RANGE_M));
             rafRef.current = requestAnimationFrame(tick);
           };
           rafRef.current = requestAnimationFrame(tick);
