@@ -4,15 +4,21 @@ import { AdminPanel } from './AdminPanel';
 
 export function UserMenu() {
   const user = useAuthStore((s) => s.user);
-  const setUser = useAuthStore((s) => s.setUser);
   const [open, setOpen] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
 
   if (!user) return null;
 
   const handleSignOut = async () => {
-    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
-    setUser(null);
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+    } catch {
+      /* ignore network errors — end the session client-side regardless */
+    }
+    // Full reload to '/' rather than an in-place unmount: tearing down the whole
+    // Cesium viewer and every layer in one render pass can throw mid-teardown
+    // and blank the screen. A fresh load lands cleanly on the login screen.
+    window.location.assign('/');
   };
 
   const initials = user.name
