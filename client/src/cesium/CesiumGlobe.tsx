@@ -99,14 +99,6 @@ export function CesiumGlobe({ children, onReady }: Props) {
   const recoverAttemptsRef = useRef(0);
   const recoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Pick a render-quality tier from the detected GPU on first load (unless the
-  // user has already chosen one). This is the main defence against the
-  // black-screen-on-a-thin-client case: a software / virtualized GPU starts on
-  // the light renderer instead of overrunning the driver on the heavy one.
-  useEffect(() => {
-    usePerfStore.getState().autoTune();
-  }, []);
-
   useEffect(() => {
     if (!containerRef.current) return;
     const mountTime = performance.now();
@@ -356,10 +348,11 @@ export function CesiumGlobe({ children, onReady }: Props) {
     };
   }, [viewer]);
 
-  // Render quality: graduated trade of anti-aliasing, terrain detail and
-  // atmosphere/lighting for frame rate, driven by the quality slider.
-  // (resolutionScale is handled separately below so it can also react to the
-  // screensaver, which is the heaviest render load.)
+  // Render quality: graduated trade of anti-aliasing, terrain detail,
+  // resolution and atmosphere/lighting for frame rate, driven by the quality
+  // slider. The slider is the single, explicit control over render load — there
+  // is no automatic GPU-based capping; pick a lighter tier if a weak client
+  // struggles.
   useEffect(() => {
     if (!viewer) return;
     const scene = viewer.scene;
@@ -376,53 +369,8 @@ export function CesiumGlobe({ children, onReady }: Props) {
     globe.showGroundAtmosphere = s.atmosphere;
     scene.fog.enabled = s.fog;
     if (scene.skyAtmosphere) scene.skyAtmosphere.show = s.atmosphere;
+    viewer.resolutionScale = s.resolutionScale;
     scene.requestRender();
-  }, [viewer, qualityLevel]);
-
-  // Effective render resolution + frame-rate cap.
-  //
-  // Base resolution comes from the quality tier. But a weak/software GPU running
-  // a continuous-render screensaver is the worst case we have: the pins tour
-  // flips the scene to render *every* frame, and in fullscreen that's at full
-  // display resolution. Sustained, that can crash the browser's GPU process to
-  // a black screen the page can't recover from (the whole compositor dies, so
-  // not even our context-loss overlay can paint). While that combination holds,
-  // force a hard resolution floor and an FPS cap; restore afterward.
-  useEffect(() => {
-    if (!viewer) return;
-    const gpu = getGpuInfo();
-    const weak = gpu.software || gpu.majorPerformanceCaveat || gpu.tier === 'low';
-    const base = QUALITY_SETTINGS[qualityLevel].resolutionScale;
-
-    const baseMSSE = QUALITY_SETTINGS[qualityLevel].maximumScreenSpaceError;
-
-    const apply = () => {
-      const ssActive = useScreensaverStore.getState().active;
-      if (weak && ssActive) {
-        viewer.resolutionScale = Math.min(base, gpu.software ? 0.4 : 0.5);
-        viewer.targetFrameRate = gpu.software ? 20 : 30;
-        // Load far fewer terrain/imagery/building tiles while the screensaver
-        // drives continuous rendering. Tile memory — not pixel count — is what
-        // spikes VRAM on a shared-memory iGPU and tips it into a driver reset
-        // (TDR) / GPU-process crash. Coarser tiles is the biggest reliability
-        // lever we have short of dropping out of 3D entirely.
-        viewer.scene.globe.maximumScreenSpaceError = Math.max(baseMSSE, gpu.software ? 16 : 8);
-      } else {
-        viewer.resolutionScale = base;
-        viewer.targetFrameRate = undefined as unknown as number;
-        viewer.scene.globe.maximumScreenSpaceError = baseMSSE;
-      }
-      viewer.scene.requestRender();
-    };
-
-    apply();
-    const unsub = useScreensaverStore.subscribe(apply);
-    return () => {
-      unsub();
-      viewer.targetFrameRate = undefined as unknown as number;
-      viewer.resolutionScale = base;
-      viewer.scene.globe.maximumScreenSpaceError = baseMSSE;
-    };
   }, [viewer, qualityLevel]);
 
   // Automatic recovery backstop for unattended clients (kiosks / thin clients).

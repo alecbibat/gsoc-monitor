@@ -202,9 +202,9 @@ export function Sidebar() {
             <div className="mt-1 text-[11px] leading-snug text-white/40">
               {QUALITY_META[qualityLevel].desc}
             </div>
-            {/* GPU diagnostics: what the 3D view is actually running on.
-                Software / virtual / integrated GPUs trigger screensaver caps
-                automatically (tier: 'low') and show an advisory here. */}
+            {/* GPU diagnostics: what the 3D view is actually running on. Purely
+                advisory — render load is controlled only by the quality slider
+                above, not auto-capped from this detection. */}
             {(() => {
               const gpu = getGpuInfo();
               const warn =
@@ -224,8 +224,8 @@ export function Sidebar() {
                   {warn && (
                     <div className="mt-0.5 opacity-80">
                       {gpu.software || gpu.virtualized
-                        ? 'No GPU acceleration — keep quality low for reliability.'
-                        : 'Integrated/shared GPU — screensaver resolution is capped automatically.'}
+                        ? 'No GPU acceleration — lower the quality if the globe stutters or blacks out.'
+                        : 'Integrated/shared GPU — lower the quality if the globe stutters or blacks out.'}
                     </div>
                   )}
                 </div>
