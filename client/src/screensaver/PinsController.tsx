@@ -7,6 +7,7 @@ import { useOsmStatus } from '../layers/osmBuildings/osmStore';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
 import { useShipsStatus } from '../layers/ships/shipsStore';
 import { FLEET_ROSTER, fleetColor } from '../layers/ships/fleet';
+import { getGpuInfo } from '../perf/gpuInfo';
 
 const OVERVIEW_ALT = 9_000_000;
 const OVERVIEW_LAT = 38;
@@ -282,7 +283,17 @@ export function PinsController() {
       // If a 3D source (OSM buildings + terrain, or Google tiles) is loaded,
       // sample the real ground/building heights so we can orbit close to the
       // terrain. Otherwise stay high and safe over the flat globe.
-      const tilesReady = useOsmStatus.getState().ready || useEarthStatus.getState().ready;
+      //
+      // On a weak/integrated GPU, skip the close descent entirely: orbiting real
+      // OSM building geometry at ~2 km is the single heaviest render load in the
+      // app and the most likely trigger for a GPU reset / black screen on a
+      // shared-memory iGPU. Force the high, light far-orbit there instead.
+      const weakGpu = (() => {
+        const g = getGpuInfo();
+        return g.software || g.majorPerformanceCaveat || g.tier === 'low';
+      })();
+      const tilesReady =
+        !weakGpu && (useOsmStatus.getState().ready || useEarthStatus.getState().ready);
       const ringRadius0 = CLOSE_RANGE_M * Math.cos(-CLOSE_PITCH_RAD);
       const sample = tilesReady
         ? await sampleArea(v, pin.lon, pin.lat, ringRadius0)

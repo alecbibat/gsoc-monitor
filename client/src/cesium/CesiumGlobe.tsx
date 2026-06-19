@@ -51,6 +51,37 @@ function currentLabelBand(): { near: number; far: number } {
   return ss.active && ss.mode === 'pins' ? PINS_FADE : LABELS_FADE;
 }
 
+// Automatic GPU recovery reloads the page to get a fresh graphics process. On a
+// transiently-crashing GPU that self-heals; on permanently-broken hardware it
+// would reload-loop forever. Bound it: at most 3 reloads in a 2-minute window,
+// after which we stop and fall back to the manual recovery overlay. The counter
+// lives in sessionStorage so it survives the reload, and is cleared once a
+// viewer has run stably (see the decay timer), so normal long-running sessions
+// always get a fresh budget.
+const RELOAD_KEY = 'cesium-gpu-reloads';
+function mayAutoReload(): boolean {
+  try {
+    const now = Date.now();
+    const raw = sessionStorage.getItem(RELOAD_KEY);
+    const recent: number[] = (raw ? (JSON.parse(raw) as number[]) : []).filter(
+      (t) => now - t < 120_000
+    );
+    if (recent.length >= 3) return false; // 3 strikes in 2 min — stop the loop
+    recent.push(now);
+    sessionStorage.setItem(RELOAD_KEY, JSON.stringify(recent));
+    return true;
+  } catch {
+    return true; // no sessionStorage — don't block recovery
+  }
+}
+function clearReloadBudget() {
+  try {
+    sessionStorage.removeItem(RELOAD_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function CesiumGlobe({ children, onReady }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
@@ -80,30 +111,42 @@ export function CesiumGlobe({ children, onReady }: Props) {
     if (!containerRef.current) return;
     const mountTime = performance.now();
 
-    const v = new Cesium.Viewer(containerRef.current, {
-      baseLayer: false,
-      animation: false,
-      timeline: false,
-      baseLayerPicker: false,
-      geocoder: false,
-      homeButton: false,
-      sceneModePicker: false,
-      navigationHelpButton: false,
-      fullscreenButton: false,
-      infoBox: false,
-      selectionIndicator: false,
-      shadows: false,
-      // alpha:true lets the WebGL canvas be transparent so our CSS star
-      // field shows through wherever there's no globe or UI.
-      //
-      // NB: preserveDrawingBuffer is deliberately OFF. Turning it on forces the
-      // browser to keep the full back buffer every frame, and the extra GPU
-      // memory pressure caused the context to be lost (permanent black screen)
-      // during the pins screensaver's continuous full-rate zooms. Screenshots
-      // (crisis layer thumbnails) instead capture synchronously right after a
-      // forced render, which works without it — see CrisisDrawController.
-      contextOptions: { webgl: { alpha: true } },
-    });
+    let v: Cesium.Viewer;
+    try {
+      v = new Cesium.Viewer(containerRef.current, {
+        baseLayer: false,
+        animation: false,
+        timeline: false,
+        baseLayerPicker: false,
+        geocoder: false,
+        homeButton: false,
+        sceneModePicker: false,
+        navigationHelpButton: false,
+        fullscreenButton: false,
+        infoBox: false,
+        selectionIndicator: false,
+        shadows: false,
+        // alpha:true lets the WebGL canvas be transparent so our CSS star
+        // field shows through wherever there's no globe or UI.
+        //
+        // NB: preserveDrawingBuffer is deliberately OFF. Turning it on forces the
+        // browser to keep the full back buffer every frame, and the extra GPU
+        // memory pressure caused the context to be lost (permanent black screen)
+        // during the pins screensaver's continuous full-rate zooms. Screenshots
+        // (crisis layer thumbnails) instead capture synchronously right after a
+        // forced render, which works without it — see CrisisDrawController.
+        contextOptions: { webgl: { alpha: true } },
+      });
+    } catch (err) {
+      // Constructing the viewer needs a live WebGL context. Right after a GPU-
+      // process crash the context is briefly unavailable and this throws — which
+      // would otherwise leave the effect half-run and the view permanently black.
+      // Mark the context lost so the auto-reload backstop below takes over (a
+      // full page reload always comes up with a fresh GPU process).
+      console.error('[cesium] could not create WebGL viewer — scheduling reload', err);
+      setContextLost(true);
+      return;
+    }
 
     v.scene.requestRenderMode = true;
     v.scene.maximumRenderTimeChange = 1;
@@ -208,9 +251,13 @@ export function CesiumGlobe({ children, onReady }: Props) {
     onReady?.(v);
     // A fresh viewer is live — drop the recovery overlay. Let the attempt
     // counter decay after a stable spell so an unrelated future loss still
-    // gets the full set of retries.
+    // gets the full set of retries, and clear the auto-reload budget so a
+    // long-running session that crashes much later isn't denied a reload.
     setContextLost(false);
-    const decay = setTimeout(() => { recoverAttemptsRef.current = 0; }, 30_000);
+    const decay = setTimeout(() => {
+      recoverAttemptsRef.current = 0;
+      clearReloadBudget();
+    }, 30_000);
 
     return () => {
       clearTimeout(decay);
@@ -347,14 +394,23 @@ export function CesiumGlobe({ children, onReady }: Props) {
     const weak = gpu.software || gpu.majorPerformanceCaveat || gpu.tier === 'low';
     const base = QUALITY_SETTINGS[qualityLevel].resolutionScale;
 
+    const baseMSSE = QUALITY_SETTINGS[qualityLevel].maximumScreenSpaceError;
+
     const apply = () => {
       const ssActive = useScreensaverStore.getState().active;
       if (weak && ssActive) {
-        viewer.resolutionScale = Math.min(base, gpu.software ? 0.4 : 0.55);
+        viewer.resolutionScale = Math.min(base, gpu.software ? 0.4 : 0.5);
         viewer.targetFrameRate = gpu.software ? 20 : 30;
+        // Load far fewer terrain/imagery/building tiles while the screensaver
+        // drives continuous rendering. Tile memory — not pixel count — is what
+        // spikes VRAM on a shared-memory iGPU and tips it into a driver reset
+        // (TDR) / GPU-process crash. Coarser tiles is the biggest reliability
+        // lever we have short of dropping out of 3D entirely.
+        viewer.scene.globe.maximumScreenSpaceError = Math.max(baseMSSE, gpu.software ? 16 : 8);
       } else {
         viewer.resolutionScale = base;
         viewer.targetFrameRate = undefined as unknown as number;
+        viewer.scene.globe.maximumScreenSpaceError = baseMSSE;
       }
       viewer.scene.requestRender();
     };
@@ -365,35 +421,99 @@ export function CesiumGlobe({ children, onReady }: Props) {
       unsub();
       viewer.targetFrameRate = undefined as unknown as number;
       viewer.resolutionScale = base;
+      viewer.scene.globe.maximumScreenSpaceError = baseMSSE;
     };
   }, [viewer, qualityLevel]);
 
-  // GPU-stall watchdog (last-resort recovery).
+  // Automatic recovery backstop for unattended clients (kiosks / thin clients).
+  // The in-place rebuild tries to restore the 3D view on a fresh context, but if
+  // the GPU process is still down the rebuild throws or yields another dead
+  // context — and we'd otherwise sit on a black screen behind a manual "Reload"
+  // button no one is there to press. If `contextLost` hasn't cleared (i.e. a
+  // working viewer hasn't taken over) within a few seconds, force a full page
+  // reload: that always comes up with a brand-new GPU process and, because the
+  // screensaver state isn't persisted, with the screensaver off.
+  useEffect(() => {
+    if (!contextLost) return;
+    const t = window.setTimeout(() => {
+      if (mayAutoReload()) {
+        console.error('[cesium] graphics did not recover in time — reloading page');
+        window.location.reload();
+      } else {
+        // Out of reload budget — the GPU looks permanently broken. Stop looping
+        // and leave the manual recovery overlay up for a human to deal with.
+        console.error('[cesium] graphics unrecoverable after repeated reloads — manual reload required');
+      }
+    }, 7_000);
+    return () => window.clearTimeout(t);
+  }, [contextLost]);
+
+  // GPU-stall / context-loss watchdog (last-resort recovery).
   //
-  // A GPU-process crash on a thin client can black out the whole page without
-  // firing `webglcontextlost` on our canvas, so the in-place recovery above
-  // never runs and the screen stays black until a manual reload. The main JS
-  // thread survives the crash, though — so if the render loop stops completing
-  // frames for several seconds while a screensaver is actively driving it (and
-  // the tab is visible), assume the GPU died and reload to get a fresh context.
+  // A GPU-process crash on a thin client blacks out the whole page. Sometimes it
+  // fires `webglcontextlost` (handled above); sometimes it just stops completing
+  // frames while the JS thread keeps running. There's no way to repaint once the
+  // compositor is gone, so either signal triggers a full reload to get a fresh
+  // GPU context. Two independent detectors, because each covers a gap the other
+  // misses:
+  //   1. The GL context itself reporting `isContextLost()` — authoritative, and
+  //      fires even if the `webglcontextlost` event was missed.
+  //   2. The render loop going silent for >8s while a screensaver was driving it
+  //      — catches a GPU crash that never reports a lost context.
   useEffect(() => {
     if (!viewer) return;
+    const canvas = viewer.canvas;
     let lastFrame = performance.now();
+    let lastScreensaver = 0;
+    let reloaded = false;
     const off = viewer.scene.postRender.addEventListener(() => {
       lastFrame = performance.now();
     });
+    const reload = (why: string) => {
+      if (reloaded) return; // navigation is in flight — don't fire twice
+      if (!mayAutoReload()) {
+        reloaded = true; // budget spent — stop polling, surface the manual overlay
+        console.error(`[cesium] ${why}, but out of reload budget — manual reload required`);
+        setContextLost(true);
+        return;
+      }
+      reloaded = true;
+      console.error(`[cesium] ${why} — reloading`);
+      window.location.reload();
+    };
+    const contextIsLost = (): boolean => {
+      try {
+        const gl = (canvas.getContext('webgl2') || canvas.getContext('webgl')) as
+          | WebGLRenderingContext
+          | WebGL2RenderingContext
+          | null;
+        return gl ? gl.isContextLost() : false;
+      } catch {
+        return false;
+      }
+    };
     const id = window.setInterval(() => {
-      const ssActive = useScreensaverStore.getState().active;
-      // Only watch an actively-rendering, foreground tab: outside the
-      // continuous-render screensaver the scene renders on demand, so a stale
-      // timestamp is normal and must not trigger a reload.
-      if (document.visibilityState !== 'visible' || !ssActive) {
+      // (1) Authoritative: a lost context never repaints on its own. Reload
+      // regardless of screensaver/visibility.
+      if (contextIsLost()) {
+        reload('WebGL context reported lost');
+        return;
+      }
+      // (2) Frame-stall during continuous rendering. Track when a screensaver
+      // last drove the loop and keep watching for a short window afterward —
+      // a context loss STOPS the screensaver (see onContextLost), so gating
+      // purely on "screensaver active right now" would disarm the watchdog at
+      // exactly the moment it's needed. Outside that window, or on a hidden
+      // tab, on-demand rendering makes a stale timestamp normal.
+      const ss = useScreensaverStore.getState();
+      if (ss.active) lastScreensaver = performance.now();
+      const recentlyDriven = performance.now() - lastScreensaver < 12_000;
+      if (document.visibilityState !== 'visible' || !recentlyDriven) {
         lastFrame = performance.now();
         return;
       }
       if (performance.now() - lastFrame > 8_000) {
-        console.error('[cesium] render loop stalled >8s during screensaver — GPU likely lost; reloading');
-        window.location.reload();
+        reload('render loop stalled >8s during screensaver — GPU likely lost');
       }
     }, 2_000);
     return () => {
@@ -410,8 +530,8 @@ export function CesiumGlobe({ children, onReady }: Props) {
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-white/70" />
           <div className="text-[13px] font-medium text-white/80">Restarting graphics…</div>
           <div className="max-w-xs text-center text-[11px] leading-snug text-white/40">
-            The 3D view lost its GPU context and is rebuilding. If it doesn&apos;t
-            come back, reload the page.
+            The 3D view lost its GPU context and is rebuilding. If it can&apos;t
+            recover in a few seconds it reloads the page automatically.
           </div>
           <div className="max-w-xs text-center text-[10px] leading-snug text-white/25">
             {describeGpu(getGpuInfo())}
