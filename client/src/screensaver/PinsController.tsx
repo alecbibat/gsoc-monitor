@@ -17,30 +17,19 @@ const DWELL_MAX_MS = 17_000;
 const INTERVAL_MIN_MS = 6_000;
 const INTERVAL_MAX_MS = 10_000;
 // Camera orbits slowly around each pin while dwelling.
-const ORBIT_PERIOD_MS = 45_000;
+const ORBIT_PERIOD_MS = 32_000;
 
-// Close cinematic orbit — used when OSM buildings + terrain (or Google 3D
-// tiles) are loaded so real geometry is visible from a low, tilted angle.
-// Range and pitch are chosen so the camera stays ≥ 1 km above sampled
-// terrain even at grand-canyon/yellowstone elevations.
-const CLOSE_RANGE_M = 2_200;
-const CLOSE_PITCH_RAD = Cesium.Math.toRadians(-35);
+// Close cinematic orbit — used when a 3D source (OSM buildings + terrain, or
+// Google 3D tiles) is loaded so real geometry is visible from a low, tilted
+// angle.
+const CLOSE_RANGE_M = 1_600;
+const CLOSE_PITCH_RAD = Cesium.Math.toRadians(-28);
 // Safe high fallback orbit — used when 3D tiles aren't available (no API key)
 // or terrain height can't be sampled. Stays well above any terrain.
 const FAR_RANGE_M = 18_000;
 const FAR_PITCH_RAD = Cesium.Math.toRadians(-38);
 
 const METERS_PER_DEG_LAT = 110_574;
-const METERS_PER_DEG_LON_EQ = 111_320;
-
-// How much vertical clearance to keep between the camera and the highest
-// terrain/building it passes over during the orbit.
-const CLEARANCE_M = 500;
-// Points sampled around each orbit ring to find the tallest obstruction.
-const RING_SAMPLES = 12;
-// If clearing the terrain would require pulling back further than this, the
-// site is too extreme for a close orbit — use the far safe orbit instead.
-const MAX_CLOSE_RANGE_M = 28_000;
 
 // Static pin list built from all location groups.
 interface PinEntry {
@@ -121,45 +110,23 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-// Sample terrain heights at the pin and around two rings encircling the orbit
-// path. Uses sampleTerrainMostDetailed (terrain-provider query) rather than
-// scene.sampleHeightMostDetailed so it works before flying to the location —
-// scene.sampleHeightMostDetailed requires the destination tiles to already be
-// in the camera frustum, which they aren't until after flyTo completes.
-async function sampleArea(
+// Sample the height of the topmost loaded surface (OSM buildings / terrain or
+// Google 3D tiles) at a point, forcing the most-detailed tiles there to stream
+// in first. Returns null when sampling is unsupported or fails so callers can
+// fall back safely to the high orbit.
+async function sampleGroundHeight(
   v: Cesium.Viewer,
   lon: number,
-  lat: number,
-  ringRadiusM: number
-): Promise<{ base: number | null; max: number | null }> {
+  lat: number
+): Promise<number | null> {
   try {
-    // EllipsoidTerrainProvider returns height=0 everywhere — not useful.
-    if (v.terrainProvider instanceof Cesium.EllipsoidTerrainProvider) {
-      return { base: null, max: null };
-    }
-    const mPerDegLon = METERS_PER_DEG_LON_EQ * Math.cos(Cesium.Math.toRadians(lat));
-    const cartos: Cesium.Cartographic[] = [Cesium.Cartographic.fromDegrees(lon, lat)];
-    // Two concentric rings (the orbit radius and double it) catch terrain that
-    // rises beyond the immediate orbit if the camera has to pull back.
-    for (const radius of [ringRadiusM, ringRadiusM * 2]) {
-      for (let i = 0; i < RING_SAMPLES; i++) {
-        const a = (i / RING_SAMPLES) * Cesium.Math.TWO_PI;
-        const dLat = (radius * Math.cos(a)) / METERS_PER_DEG_LAT;
-        const dLon = (radius * Math.sin(a)) / mPerDegLon;
-        cartos.push(Cesium.Cartographic.fromDegrees(lon + dLon, lat + dLat));
-      }
-    }
-    const results = await Cesium.sampleTerrainMostDetailed(v.terrainProvider, cartos);
-    const heights = results
-      .map((r) => r?.height)
-      .filter((h): h is number => typeof h === 'number' && Number.isFinite(h));
-    if (heights.length === 0) return { base: null, max: null };
-    const baseRaw = results[0]?.height;
-    const base =
-      typeof baseRaw === 'number' && Number.isFinite(baseRaw) ? baseRaw : Math.min(...heights);
-    return { base, max: Math.max(...heights) };
+    if (!v.scene.sampleHeightSupported) return null;
+    const carto = Cesium.Cartographic.fromDegrees(lon, lat);
+    const [result] = await v.scene.sampleHeightMostDetailed([carto]);
+    const h = result?.height;
+    return typeof h === 'number' && Number.isFinite(h) ? h : null;
   } catch {
-    return { base: null, max: null };
+    return null;
   }
 }
 
@@ -283,38 +250,22 @@ export function PinsController() {
       setCurrentPoi(poi);
 
       // If a 3D source (OSM buildings + terrain, or Google tiles) is loaded,
-      // sample the real ground/building heights so we can orbit close to the
+      // sample the real ground/building height so we can orbit close to the
       // terrain. Otherwise stay high and safe over the flat globe.
       const tilesReady = useOsmStatus.getState().ready || useEarthStatus.getState().ready;
-      const ringRadius0 = CLOSE_RANGE_M * Math.cos(-CLOSE_PITCH_RAD);
-      const sample = tilesReady
-        ? await sampleArea(v, pin.lon, pin.lat, ringRadius0)
-        : { base: null, max: null };
+      const groundH = tilesReady ? await sampleGroundHeight(v, pin.lon, pin.lat) : null;
       if (cancelledRef.current) return;
 
-      let pitch = FAR_PITCH_RAD;
-      let range = FAR_RANGE_M;
-      let baseH = 0;
-
-      if (sample.base !== null) {
-        baseH = sample.base;
-        pitch = CLOSE_PITCH_RAD;
-        const upFactor = Math.sin(-pitch);
-        const requiredCamH = (sample.max ?? baseH) + CLEARANCE_M;
-        const neededRange = (requiredCamH - baseH) / upFactor;
-        range = Math.max(CLOSE_RANGE_M, neededRange);
-        if (range > MAX_CLOSE_RANGE_M) {
-          pitch = FAR_PITCH_RAD;
-          range = FAR_RANGE_M;
-        }
-      }
-
-      const upFactor  = Math.sin(-pitch);
-      const outFactor = Math.cos(-pitch);
+      const close = groundH !== null;
+      const range = close ? CLOSE_RANGE_M : FAR_RANGE_M;
+      const pitch = close ? CLOSE_PITCH_RAD : FAR_PITCH_RAD;
+      const baseH = close ? (groundH as number) : 0;
       const target = Cesium.Cartesian3.fromDegrees(pin.lon, pin.lat, baseH);
 
-      const back     = range * outFactor;
-      const up       = baseH + range * upFactor;
+      // Fly straight to the heading=0 orbit position (south of and above the
+      // target) so the subsequent orbit begins seamlessly with no camera snap.
+      const back = range * Math.cos(-pitch); // metres south of target
+      const up = baseH + range * Math.sin(-pitch); // metres above ellipsoid
       const startLat = pin.lat - back / METERS_PER_DEG_LAT;
 
       v.camera.flyTo({
@@ -325,7 +276,7 @@ export function PinsController() {
           if (cancelledRef.current) return;
           setPhase('at-poi');
 
-          // Continuous orbit around the pin during the dwell.
+          // Cinematic orbit around the pin while dwelling.
           const orbitStart = performance.now();
           const tick = () => {
             if (cancelledRef.current) return;
