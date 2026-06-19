@@ -23,7 +23,12 @@ export function ShipModelLayer() {
   const collRef = useRef<Cesium.PolylineCollection | null>(null);
   const restoreRef = useRef<(() => void) | null>(null);
 
-  const isShipFocus = active && mode === 'pins' && poi?.category === 'ship';
+  // Disabled: the PolylineCollection (~100 lines) is rendered every frame during
+  // the dwell (requestRenderMode=false) and is the last ship-unique GPU overhead
+  // that was causing black-screen crashes on weak integrated GPUs. The
+  // ShipWireframe2D in ShipFocusCard already provides the spinning wireframe;
+  // the in-world model can be re-enabled once the stable floor is confirmed.
+  const isShipFocus = false as boolean;
   const mmsi    = poi?.meta?.mmsi as string | undefined;
   const cls     = poi?.meta?.cls as 'STAR' | 'WIND' | undefined;
   const heading = (poi?.meta?.heading as number | null | undefined) ?? 0;
