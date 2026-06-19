@@ -71,6 +71,25 @@ export function OsmBuildingsLayer() {
         // Coarsen tiles near the horizon during the screensaver's oblique
         // ground-level orbits — far fewer tiles loaded, less memory churn.
         tileset.dynamicScreenSpaceError = true;
+        // Streaming OSM building tiles during the pins screensaver's low
+        // close-range orbit is the one thing neither working config does: the
+        // parks screensaver never drops below ~60 km, and the original pins
+        // build orbited over Google's photorealistic mesh (which manages its
+        // own GPU memory aggressively). On a weak/integrated GPU that building
+        // upload is what loses the WebGL context and black-screens the globe.
+        // Cut the load two ways without hiding the buildings:
+        //  • a coarser screen-space-error target keeps far fewer / smaller
+        //    building tiles resident at close range (16 → 48 is roughly a third
+        //    of the geometry), and
+        //  • skipLevelOfDetail = false streams parent → child level by level
+        //    instead of jumping straight to the finest tiles, spreading the GPU
+        //    upload across the 4.5 s descent instead of spiking it all at the
+        //    zoom-in moment.
+        // Both are deliberately aggressive for this test; once we confirm the
+        // buildings are the trigger we can dial the SSE back toward the sweet
+        // spot.
+        tileset.maximumScreenSpaceError = 48;
+        tileset.skipLevelOfDetail = false;
         tilesetRef.current = tileset;
         viewer.scene.primitives.add(tileset);
         setStatus({ loading: false, ready: true, error: null });
