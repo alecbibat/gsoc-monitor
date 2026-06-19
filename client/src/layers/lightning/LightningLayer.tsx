@@ -16,7 +16,7 @@ const RELAYS = [
 
 const STRIKE_LIFETIME_MS = 600_000; // how long a flash lingers before fading out (10 min)
 const MAX_STRIKES = 2_500; // hard cap so a busy storm can't flood the scene
-const TICK_MS = 250; // fade/cleanup cadence (smooth enough for the strike flash)
+const TICK_MS = 1_000; // stage-step / cleanup cadence (colours change over seconds, not frames)
 
 // LZW-style decompressor matching Blitzortung's wire format. Frames are JSON
 // objects compressed with this scheme; decode then JSON.parse to get a strike.
@@ -49,57 +49,48 @@ interface Strike {
   lat: number;
   lon: number;
   t: number; // local receive time (ms)
+  stage: number; // index into X_STAGES; only repainted when this changes
 }
 
-const FLASH_MS = 850; // how long the bright "pop" lasts before settling
 const hex = (s: string) => Cesium.Color.fromCssColorString(s);
-const FRESH = hex('#ffffff'); // new-strike flash
 
-// Recency heat ramp for the settled crosshair — a strike "cools" from a hot
-// white flash through gold/yellow/orange to a dying red over its lifetime, so
-// the age of every strike is readable at a glance.
-const AGE_RAMP: Array<{ at: number; c: Cesium.Color }> = [
-  { at: 0.0, c: hex('#ffffff') },
-  { at: 0.1, c: hex('#fff7b0') },
-  { at: 0.28, c: hex('#ffe14d') },
-  { at: 0.55, c: hex('#ff9d2e') },
-  { at: 1.0, c: hex('#ff3b30') },
+// Settled-strike age stages. The crosshair steps through these distinct colours
+// at fixed age thresholds instead of continuously lerping on every tick. The
+// payoff is load: a strike only needs a billboard update (and a re-render) at
+// the moment it crosses a boundary, so a field of thousands of settled strikes
+// costs essentially nothing to maintain and the scene is free to idle — which
+// matters a lot on a weak GPU. A fresh strike is a big white X, then it steps
+// down white → yellow → orange → red as it ages out over its lifetime.
+interface XStage {
+  untilMs: number; // strike shows this stage while age < untilMs
+  color: Cesium.Color;
+  scale: number;
+}
+const X_STAGES: XStage[] = [
+  { untilMs: 5_000, color: hex('#ffffff'), scale: 1.6 }, // 0–5s   fresh: big & white
+  { untilMs: 60_000, color: hex('#ffe14d'), scale: 1.0 }, // 5s–1m  yellow
+  { untilMs: 180_000, color: hex('#ff9d2e'), scale: 1.0 }, // 1m–3m  orange
+  { untilMs: STRIKE_LIFETIME_MS, color: hex('#ff3b30'), scale: 1.0 }, // 3m–10m red
 ];
-
-function colorForAge(frac: number): Cesium.Color {
-  const f = Math.max(0, Math.min(1, frac));
-  for (let i = 1; i < AGE_RAMP.length; i++) {
-    if (f <= AGE_RAMP[i].at) {
-      const a = AGE_RAMP[i - 1];
-      const b = AGE_RAMP[i];
-      const t = (f - a.at) / (b.at - a.at || 1);
-      return Cesium.Color.lerp(a.c, b.c, t, new Cesium.Color());
-    }
-  }
-  return AGE_RAMP[AGE_RAMP.length - 1].c.clone();
+function stageForAge(age: number): number {
+  for (let i = 0; i < X_STAGES.length; i++) if (age < X_STAGES[i].untilMs) return i;
+  return X_STAGES.length - 1;
 }
 
 // --- Strike-down animation tuning --------------------------------------------
 const BOLT_TOP_M = 120_000; // altitude the leader descends from
 const BOLT_DESCEND_MS = 150; // time for the leader to reach the ground
 const BOLT_LIFE_MS = 480; // total bolt life (descend + flash-out)
-const RING_LIFE_MS = 700; // ground shockwave bloom duration
-const RING_MAX_M = 38_000; // shockwave outer radius
+// Impact flash: a fixed-size red circle that pops on the strike point and fades.
+// Replaces the old expanding shockwave, whose ring was re-tessellated (49 pts)
+// and re-clamped to terrain every frame for every concurrent strike — by far
+// the heaviest per-frame cost in a storm. This circle's geometry is built once
+// at spawn; only its alpha animates.
+const RING_FLASH_MS = 550; // flash duration
+const RING_FIXED_M = 12_000; // flash circle radius (constant — no expansion)
 const MAX_ANIMS = 80; // concurrent bolt animations (storm safety valve)
 const BOLT_COLOR = hex('#f2f9ff'); // blue-white bolt
-const RING_COLOR = hex('#bfe9ff'); // pale shockwave
-
-// --- Detector lines ----------------------------------------------------------
-// Blitzortung strike frames carry a `sig` array of the ground sensors that
-// detected the flash. Drawing a faint line from each sensor to the strike
-// point reproduces the classic lightningmaps.org "detector" view. Optional —
-// off by default, since a busy storm multiplies the line count.
-const DETECTOR_LIFE_MS = 850; // fade fast, but linger long enough to register
-const DETECTOR_COLOR = hex('#9fefff'); // pale cyan signal line
-const MAX_DETECTORS_PER_STRIKE = 8; // nearest N stations only — fewer, cleaner lines
-// Each strike draws its own short-lived lines; many can overlap during a storm,
-// so keep a generous cap. The quick fade keeps them from piling up.
-const MAX_DETECTOR_GROUPS = 60;
+const RING_COLOR = hex('#ff2a1f'); // red impact flash
 
 // A jagged vertical path from high altitude straight down onto the strike point.
 // Top and bottom are anchored on the point; the horizontal wander peaks in the
@@ -115,6 +106,23 @@ function makeBoltPath(lon: number, lat: number): Cesium.Cartesian3[] {
     const jx = i === 0 || i === SEGMENTS ? 0 : (Math.random() - 0.5) * amp;
     const jy = i === 0 || i === SEGMENTS ? 0 : (Math.random() - 0.5) * amp;
     pts.push(Cesium.Cartesian3.fromDegrees(lon + jx, lat + jy, alt));
+  }
+  return pts;
+}
+
+// A ground circle of `radiusM` around (lon, lat), built once per strike (not
+// per frame) — the impact flash holds a constant radius, so its positions never
+// need recomputing.
+function circlePositions(lon: number, lat: number, radiusM: number): Cesium.Cartesian3[] {
+  const N = 48;
+  const dLatM = radiusM / 111_320;
+  const dLonM = radiusM / (111_320 * Math.cos((lat * Math.PI) / 180));
+  const pts: Cesium.Cartesian3[] = [];
+  for (let i = 0; i <= N; i++) {
+    const ang = (i / N) * 2 * Math.PI;
+    pts.push(
+      Cesium.Cartesian3.fromDegrees(lon + dLonM * Math.sin(ang), lat + dLatM * Math.cos(ang))
+    );
   }
   return pts;
 }
@@ -180,12 +188,6 @@ export function LightningLayer() {
       ring: Cesium.Entity;
     }
     const anims: BoltAnim[] = [];
-    // Detector lines are grouped per strike so they fade and retire together.
-    interface DetectorAnim {
-      start: number;
-      lines: Cesium.Entity[];
-    }
-    const detectors: DetectorAnim[] = [];
     let rafId: number | null = null;
 
     const boltPositions = (a: BoltAnim): Cesium.Cartesian3[] => {
@@ -211,48 +213,15 @@ export function LightningLayer() {
       return BOLT_COLOR.withAlpha(Math.max(0, 1 - k));
     };
 
-    const ringRadius = (a: BoltAnim): number => {
-      const p = Math.min(1, (performance.now() - a.start) / RING_LIFE_MS);
-      const eased = 1 - (1 - p) * (1 - p); // ease-out
-      return 1_500 + eased * RING_MAX_M;
-    };
-
-    const ringPositions = (a: BoltAnim): Cesium.Cartesian3[] => {
-      const r = ringRadius(a);
-      const N = 48;
-      const dLatM = r / 111_320;
-      const dLonM = r / (111_320 * Math.cos((a.lat * Math.PI) / 180));
-      const pts: Cesium.Cartesian3[] = [];
-      for (let i = 0; i <= N; i++) {
-        const ang = (i / N) * 2 * Math.PI;
-        pts.push(
-          Cesium.Cartesian3.fromDegrees(
-            a.lon + dLonM * Math.sin(ang),
-            a.lat + dLatM * Math.cos(ang)
-          )
-        );
-      }
-      return pts;
-    };
-
-    const ringColor = (a: BoltAnim): Cesium.Color => {
-      const p = Math.min(1, (performance.now() - a.start) / RING_LIFE_MS);
-      return RING_COLOR.withAlpha(Math.max(0, 0.45 * (1 - p)));
-    };
-
-    // Quick fade-in then a smooth fade-out so each line reads cleanly instead of
-    // snapping on and abruptly vanishing.
-    const detectorAlpha = (start: number): number => {
-      const p = Math.min(1, (performance.now() - start) / DETECTOR_LIFE_MS);
-      const PEAK = 0.75;
-      const RISE = 0.15;
-      const env = p < RISE ? p / RISE : 1 - (p - RISE) / (1 - RISE);
-      return Math.max(0, PEAK * env);
+    const ringFlashColor = (a: BoltAnim): Cesium.Color => {
+      const p = Math.min(1, (performance.now() - a.start) / RING_FLASH_MS);
+      const alpha = 0.85 * (1 - p) * (1 - p); // bright pop, then ease-out fade
+      return RING_COLOR.withAlpha(Math.max(0, alpha));
     };
 
     const animate = () => {
       const now = performance.now();
-      const ttl = Math.max(BOLT_LIFE_MS, RING_LIFE_MS);
+      const ttl = Math.max(BOLT_LIFE_MS, RING_FLASH_MS);
       for (let i = anims.length - 1; i >= 0; i--) {
         if (now - anims[i].start >= ttl) {
           ds.entities.remove(anims[i].bolt);
@@ -260,62 +229,12 @@ export function LightningLayer() {
           anims.splice(i, 1);
         }
       }
-      for (let i = detectors.length - 1; i >= 0; i--) {
-        if (now - detectors[i].start >= DETECTOR_LIFE_MS) {
-          for (const line of detectors[i].lines) ds.entities.remove(line);
-          detectors.splice(i, 1);
-        }
-      }
-      if (anims.length || detectors.length) {
+      if (anims.length) {
         viewer.scene.requestRender();
         rafId = requestAnimationFrame(animate);
       } else {
         rafId = null;
       }
-    };
-
-    const spawnDetectors = (
-      lon: number,
-      lat: number,
-      sig: Array<{ lat?: number; lon?: number }>
-    ) => {
-      // Draw lines only to the nearest contributing stations — fewer, more
-      // relevant lines read far cleaner than the full sensor list crisscrossing
-      // the globe.
-      const stations = sig
-        .filter((s): s is { lat: number; lon: number } => {
-          return typeof s.lat === 'number' && typeof s.lon === 'number';
-        })
-        .map((s) => ({ s, d: (s.lat - lat) ** 2 + (s.lon - lon) ** 2 }))
-        .sort((a, b) => a.d - b.d)
-        .slice(0, MAX_DETECTORS_PER_STRIKE)
-        .map((x) => x.s);
-      if (stations.length === 0) return;
-
-      // Evict the oldest group only if we're at the concurrency cap.
-      if (detectors.length >= MAX_DETECTOR_GROUPS) {
-        const old = detectors.shift();
-        if (old) for (const line of old.lines) ds.entities.remove(line);
-      }
-
-      const start = performance.now();
-      const strikePos = Cesium.Cartesian3.fromDegrees(lon, lat);
-      const group: DetectorAnim = { start, lines: [] };
-      for (const st of stations) {
-        const line = ds.entities.add({
-          polyline: {
-            positions: [Cesium.Cartesian3.fromDegrees(st.lon, st.lat), strikePos],
-            width: 1.5,
-            arcType: Cesium.ArcType.GEODESIC, // follow the curve over long baselines
-            material: new Cesium.ColorMaterialProperty(
-              new Cesium.CallbackProperty(() => DETECTOR_COLOR.withAlpha(detectorAlpha(start)), false)
-            ),
-          },
-        });
-        group.lines.push(line);
-      }
-      detectors.push(group);
-      if (rafId == null) rafId = requestAnimationFrame(animate);
     };
 
     const spawnBolt = (lon: number, lat: number) => {
@@ -340,11 +259,12 @@ export function LightningLayer() {
 
       anim.ring = ds.entities.add({
         polyline: {
-          positions: new Cesium.CallbackProperty(() => ringPositions(anim), false),
+          // Geometry built once (constant radius); only the colour alpha animates.
+          positions: circlePositions(lon, lat, RING_FIXED_M),
           width: 2,
           clampToGround: true,
           material: new Cesium.ColorMaterialProperty(
-            new Cesium.CallbackProperty(() => ringColor(anim), false)
+            new Cesium.CallbackProperty(() => ringFlashColor(anim), false)
           ),
         },
       });
@@ -379,7 +299,6 @@ export function LightningLayer() {
           lat?: number;
           lon?: number;
           time?: number;
-          sig?: Array<{ lat?: number; lon?: number }>;
         } | null = null;
         try {
           strike = JSON.parse(inflate(event.data));
@@ -394,7 +313,7 @@ export function LightningLayer() {
 
         const id = seq++;
         const now = Date.now();
-        strikes.set(id, { lat: strike.lat, lon: strike.lon, t: now });
+        strikes.set(id, { lat: strike.lat, lon: strike.lon, t: now, stage: 0 });
         recent.push(now);
         useLightningStatus.getState().addStrike({ lat: strike.lat, lon: strike.lon, t: now });
 
@@ -405,21 +324,15 @@ export function LightningLayer() {
             image: BOLT_ICON,
             width: 22,
             height: 22,
-            color: FRESH,
-            scale: 2.4, // born big & bright; the ticker settles it
+            color: X_STAGES[0].color, // fresh: white
+            scale: X_STAGES[0].scale, // fresh: large; settles a stage later
             // Default depth test (disableDepthTestDistance = 0) so strikes on the
             // far side of the planet are correctly hidden behind the globe.
           },
         });
 
-        // Fire the dramatic descending bolt + ground shockwave.
+        // Fire the dramatic descending bolt + red impact flash.
         spawnBolt(strike.lon, strike.lat);
-
-        // Optional detector lines from each contributing sensor to the strike.
-        // Read the toggle live so flipping it doesn't reconnect the socket.
-        if (useLayersStore.getState().lightningDetectorLines && Array.isArray(strike.sig)) {
-          spawnDetectors(strike.lon, strike.lat, strike.sig);
-        }
 
         // Enforce the cap by evicting the oldest strikes.
         if (strikes.size > MAX_STRIKES) {
@@ -452,36 +365,29 @@ export function LightningLayer() {
       }, 3000);
     };
 
-    // Fade aging strikes through the heat ramp and retire the expired ones.
+    // Step strikes through their discrete colour stages and retire expired ones.
+    // The hot path is the early-out: a strike whose stage hasn't changed since
+    // last tick is skipped entirely — no allocation, no entity touch — so a sky
+    // full of settled crosshairs costs almost nothing and never forces a render.
     const tick = () => {
       const now = Date.now();
       let changed = false;
       for (const [id, s] of strikes) {
         const age = now - s.t;
-        const entity = ds.entities.getById(`bolt-${id}`);
-        if (!entity?.billboard) continue;
         if (age >= STRIKE_LIFETIME_MS) {
           strikes.delete(id);
           ds.entities.removeById(`bolt-${id}`);
           changed = true;
           continue;
         }
-        let scale: number;
-        let color: Cesium.Color;
-        if (age < FLASH_MS) {
-          // Initial pop: shrink 2.4 -> 1.0 while bright white.
-          scale = 2.4 - 1.4 * (age / FLASH_MS);
-          color = FRESH;
-        } else {
-          // Settled crosshair that cools white -> yellow -> orange -> red, only
-          // fading to transparent in the final stretch of its life.
-          scale = 1;
-          const lifeFrac = (age - FLASH_MS) / (STRIKE_LIFETIME_MS - FLASH_MS);
-          const alpha = lifeFrac < 0.75 ? 1 : Math.max(0.1, 1 - (lifeFrac - 0.75) / 0.25);
-          color = colorForAge(lifeFrac).withAlpha(alpha);
-        }
-        entity.billboard.scale = new Cesium.ConstantProperty(scale);
-        entity.billboard.color = new Cesium.ConstantProperty(color);
+        const stage = stageForAge(age);
+        if (stage === s.stage) continue; // unchanged — leave the billboard alone
+        s.stage = stage;
+        const entity = ds.entities.getById(`bolt-${id}`);
+        if (!entity?.billboard) continue;
+        const st = X_STAGES[stage];
+        entity.billboard.color = new Cesium.ConstantProperty(st.color);
+        entity.billboard.scale = new Cesium.ConstantProperty(st.scale);
         changed = true;
       }
 

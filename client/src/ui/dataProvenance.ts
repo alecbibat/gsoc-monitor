@@ -81,7 +81,7 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
       icon: '🌩',
       source: 'Blitzortung.org',
       method:
-        'A volunteer network of ground sensors times each strike’s radio signal (time-of-arrival) to triangulate its location, streamed live. Optional detector lines show the contributing sensors.',
+        'A volunteer network of ground sensors times each strike’s radio signal (time-of-arrival) to triangulate its location, streamed live.',
       trust: 'The same community network behind lightningmaps.org, widely used for real-time strike data.',
       url: 'https://www.blitzortung.org',
     },
