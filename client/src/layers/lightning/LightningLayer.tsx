@@ -59,18 +59,24 @@ const hex = (s: string) => Cesium.Color.fromCssColorString(s);
 // payoff is load: a strike only needs a billboard update (and a re-render) at
 // the moment it crosses a boundary, so a field of thousands of settled strikes
 // costs essentially nothing to maintain and the scene is free to idle — which
-// matters a lot on a weak GPU. A fresh strike is a big white X, then it steps
-// down white → yellow → orange → red as it ages out over its lifetime.
+// matters a lot on a weak GPU. Every strike is the same size; only its colour
+// encodes age, stepping white → yellow → orange → red at 3 / 6 / 9 minutes over
+// the 10-minute lifetime.
+//
+// altM is a tiny per-stage altitude lift (metres) so newer strikes draw over
+// older ones: a fresh strike sits a few metres higher than an aged one, so when
+// two land on the same spot the newer (higher) X wins the depth test. The lift
+// is sub-pixel at any real viewing distance — it only breaks the depth tie.
 interface XStage {
   untilMs: number; // strike shows this stage while age < untilMs
   color: Cesium.Color;
-  scale: number;
+  altM: number; // altitude lift — higher = drawn on top
 }
 const X_STAGES: XStage[] = [
-  { untilMs: 5_000, color: hex('#ffffff'), scale: 1.6 }, // 0–5s   fresh: big & white
-  { untilMs: 60_000, color: hex('#ffe14d'), scale: 1.0 }, // 5s–1m  yellow
-  { untilMs: 180_000, color: hex('#ff9d2e'), scale: 1.0 }, // 1m–3m  orange
-  { untilMs: STRIKE_LIFETIME_MS, color: hex('#ff3b30'), scale: 1.0 }, // 3m–10m red
+  { untilMs: 180_000, color: hex('#ffffff'), altM: 6 }, // 0–3m  fresh: white, on top
+  { untilMs: 360_000, color: hex('#ffe14d'), altM: 4 }, // 3–6m  yellow
+  { untilMs: 540_000, color: hex('#ff9d2e'), altM: 2 }, // 6–9m  orange
+  { untilMs: STRIKE_LIFETIME_MS, color: hex('#ff3b30'), altM: 0 }, // 9–10m red, on bottom
 ];
 function stageForAge(age: number): number {
   for (let i = 0; i < X_STAGES.length; i++) if (age < X_STAGES[i].untilMs) return i;
@@ -319,13 +325,14 @@ export function LightningLayer() {
 
         ds.entities.add({
           id: `bolt-${id}`,
-          position: Cesium.Cartesian3.fromDegrees(strike.lon, strike.lat),
+          // Fresh strike sits at the stage-0 altitude lift so it draws over older
+          // ones at the same spot (see X_STAGES).
+          position: Cesium.Cartesian3.fromDegrees(strike.lon, strike.lat, X_STAGES[0].altM),
           billboard: {
             image: BOLT_ICON,
             width: 22,
             height: 22,
             color: X_STAGES[0].color, // fresh: white
-            scale: X_STAGES[0].scale, // fresh: large; settles a stage later
             // Default depth test (disableDepthTestDistance = 0) so strikes on the
             // far side of the planet are correctly hidden behind the globe.
           },
@@ -387,7 +394,10 @@ export function LightningLayer() {
         if (!entity?.billboard) continue;
         const st = X_STAGES[stage];
         entity.billboard.color = new Cesium.ConstantProperty(st.color);
-        entity.billboard.scale = new Cesium.ConstantProperty(st.scale);
+        // Drop to this stage's altitude so it sinks beneath newer strikes.
+        entity.position = new Cesium.ConstantPositionProperty(
+          Cesium.Cartesian3.fromDegrees(s.lon, s.lat, st.altM)
+        );
         changed = true;
       }
 

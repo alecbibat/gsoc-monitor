@@ -4,7 +4,7 @@
 // stops (not a smooth gradient) reflect that the change is now stepped, and the
 // band widths match the real age thresholds over the 10-minute lifetime.
 const RAMP_CSS =
-  'linear-gradient(to right, #ffffff 0% 1%, #ffe14d 1% 10%, #ff9d2e 10% 30%, #ff3b30 30% 100%)';
+  'linear-gradient(to right, #ffffff 0% 30%, #ffe14d 30% 60%, #ff9d2e 60% 90%, #ff3b30 90% 100%)';
 
 export function LightningControls() {
   return (
