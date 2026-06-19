@@ -7,20 +7,16 @@ import { useShipsStatus } from '../layers/ships/shipsStore';
 import { FLEET_ROSTER, fleetColor } from '../layers/ships/fleet';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REBUILD — Stage 6: interleave the live ships back into the tour.
+// REBUILD — altitude raise: 2.5 km crashed cumulatively on weak integrated
+// GPUs (AMD Radeon Graphics / 0x0000150E). The crash is not ship-specific —
+// a ship visit is now lighter than a pin visit — it is cumulative tile
+// streaming: at 2.5 km range the frustum fills with high-LOD terrain and OSM
+// building tiles every dwell, and after enough visits the GPU exhausts its
+// context budget. Raising to 15 km means the scene requests coarser, fewer
+// tiles per orbit, giving the GPU a chance to settle between visits.
 //
-// Stages 0-5 proved the pin orbit (down to a 2.5 km range, lifted onto real
-// terrain) and the loot beam are stable through long soaks. The last feature
-// held out of the rebuild is the Windstar fleet: live AIS positions interleaved
-// with the property pins, each orbited close (850 m range) so the 3D wireframe
-// card reads clearly.
-//
-// Ships orbit LOWER than the 2.5 km pin floor — but always over open ocean,
-// where there are no building tiles and no detailed terrain to stream, so the
-// per-visit GPU load is far lighter than a low city orbit. That's the bet this
-// stage tests: if the low ship orbit black-screens, raise SHIP_RANGE_M; if it
-// soaks clean, the rebuild is complete and the diagnostic OSM SSE can be dialed
-// back toward production values.
+// 15 km is a meaningful step above the 12 km Stage-1 floor (which soaked
+// short-term) toward the parks screensaver's 60 km+ proven-safe band.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const OVERVIEW_ALT = 9_000_000;
@@ -32,21 +28,17 @@ const POI_INTERVAL_MAX_MS = 20_000;
 const POI_DWELL_MIN_MS = 12_000;
 const POI_DWELL_MAX_MS = 18_000;
 
-// Orbit range (camera-to-target distance) for property pins. Stable at 2.5 km
-// through Stages 2-5.
-const ORBIT_RANGE_M = 2_500;
+// Orbit range (camera-to-target distance) — shared by pins and ships.
+// -45° pitch minimises horizon tiles in the frustum. At 15 km range the
+// camera sits ~10.6 km above the target in absolute altitude, which keeps
+// terrain and building tiles at a coarser, lighter LOD than the 2.5 km orbit.
+const ORBIT_RANGE_M = 15_000;
 // Slow orbit during dwell. Matches the original 32 s period.
 const ORBIT_PERIOD_MS = 32_000;
-// Steeper tilt keeps the camera looking down at the pin rather than off toward
-// the horizon, so fewer distant tiles stream as it orbits.
+// Steeper tilt keeps the camera looking down rather than off toward the
+// horizon, so fewer distant tiles stream as it orbits.
 const ORBIT_PITCH_RAD = Cesium.Math.toRadians(-45);
 const METERS_PER_DEG_LAT = 110_574;
-
-// Ship orbit (over open ocean — height 0, no terrain sampling). Raised to
-// match the proven-safe pin floor: 850 m crashed, confirming terrain tiles
-// stream aggressively even over water at close range.
-const SHIP_RANGE_M = 2_500;
-const SHIP_PITCH_RAD = Cesium.Math.toRadians(-28);
 
 interface PinEntry {
   kind: 'pin';
@@ -211,7 +203,7 @@ export function PinsController() {
           description: '🚢 Windstar Fleet',
           lat: entry.lat,
           lon: entry.lon,
-          altitudeM: SHIP_RANGE_M,
+          altitudeM: ORBIT_RANGE_M,
           category: 'ship',
           meta: {
             mmsi: entry.mmsi,
@@ -226,17 +218,17 @@ export function PinsController() {
         setCurrentPoi(poi);
 
         const target = Cesium.Cartesian3.fromDegrees(entry.lon, entry.lat, 0);
-        const back = SHIP_RANGE_M * Math.cos(-SHIP_PITCH_RAD);
-        const up = SHIP_RANGE_M * Math.sin(-SHIP_PITCH_RAD);
+        const back = ORBIT_RANGE_M * Math.cos(-ORBIT_PITCH_RAD);
+        const up = ORBIT_RANGE_M * Math.sin(-ORBIT_PITCH_RAD);
         const startLat = entry.lat - back / METERS_PER_DEG_LAT;
 
         v.camera.flyTo({
           destination: Cesium.Cartesian3.fromDegrees(entry.lon, startLat, up),
-          orientation: { heading: 0, pitch: SHIP_PITCH_RAD, roll: 0 },
+          orientation: { heading: 0, pitch: ORBIT_PITCH_RAD, roll: 0 },
           duration: 5.0,
           complete: () => {
             if (cancelledRef.current) return;
-            orbitDwell(target, SHIP_PITCH_RAD, SHIP_RANGE_M);
+            orbitDwell(target, ORBIT_PITCH_RAD, ORBIT_RANGE_M);
           },
         });
         return;
