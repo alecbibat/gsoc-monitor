@@ -186,10 +186,24 @@ export function PinsController() {
     cancelledRef.current = false;
     queueRef.current = shuffle([...ALL_PINS, ...buildShipEntries()]);
 
+    // Detect GPU capability once for the entire screensaver session. On a
+    // weak/integrated GPU we keep the scene in on-demand rendering mode so
+    // the GPU only runs during the ~4.5s flyTo animations, NOT during dwell
+    // (11-17s) or between-pin pauses (6-10s). requestRenderMode = false runs
+    // the GPU at full rate for the entire session, which trips the AMD/Intel
+    // TDR watchdog on shared-memory iGPUs and causes the black screen.
+    const weakGpu = (() => {
+      const g = getGpuInfo();
+      return g.software || g.majorPerformanceCaveat || g.tier === 'low';
+    })();
+
     const prevRenderMode = v.scene.requestRenderMode;
     const prevMaxChange = v.scene.maximumRenderTimeChange;
-    v.scene.requestRenderMode = false;
-    v.scene.maximumRenderTimeChange = 0;
+    if (!weakGpu) {
+      // Strong GPU: continuous rendering gives a smooth orbit during dwell.
+      v.scene.requestRenderMode = false;
+      v.scene.maximumRenderTimeChange = 0;
+    }
 
     v.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(OVERVIEW_LON, OVERVIEW_LAT, OVERVIEW_ALT),
@@ -244,16 +258,21 @@ export function PinsController() {
             if (cancelledRef.current) return;
             setPhase('at-poi');
             const target = Cesium.Cartesian3.fromDegrees(entry.lon, entry.lat, 0);
-            const orbitStart = performance.now();
-            const tick = () => {
-              if (cancelledRef.current) return;
-              const heading =
-                (((performance.now() - orbitStart) % ORBIT_PERIOD_MS) * Cesium.Math.TWO_PI) /
-                ORBIT_PERIOD_MS;
-              v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, pitch, range));
+            if (!weakGpu) {
+              // On strong GPUs: orbit continuously around the ship.
+              const orbitStart = performance.now();
+              const tick = () => {
+                if (cancelledRef.current) return;
+                const heading =
+                  (((performance.now() - orbitStart) % ORBIT_PERIOD_MS) * Cesium.Math.TWO_PI) /
+                  ORBIT_PERIOD_MS;
+                v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, pitch, range));
+                rafRef.current = requestAnimationFrame(tick);
+              };
               rafRef.current = requestAnimationFrame(tick);
-            };
-            rafRef.current = requestAnimationFrame(tick);
+            }
+            // On weak GPU: camera holds at landing position; scene is idle (no
+            // continuous render), GPU load drops to near zero during dwell.
             dwellTimerRef.current = setTimeout(() => {
               cancelAnimationFrame(rafRef.current);
               v.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
@@ -280,18 +299,10 @@ export function PinsController() {
       setPhase('flying-to');
       setCurrentPoi(poi);
 
-      // If a 3D source (OSM buildings + terrain, or Google tiles) is loaded,
-      // sample the real ground/building heights so we can orbit close to the
-      // terrain. Otherwise stay high and safe over the flat globe.
-      //
-      // On a weak/integrated GPU, skip the close descent entirely: orbiting real
-      // OSM building geometry at ~2 km is the single heaviest render load in the
-      // app and the most likely trigger for a GPU reset / black screen on a
-      // shared-memory iGPU. Force the high, light far-orbit there instead.
-      const weakGpu = (() => {
-        const g = getGpuInfo();
-        return g.software || g.majorPerformanceCaveat || g.tier === 'low';
-      })();
+      // If a 3D source (OSM buildings + terrain, or Google tiles) is loaded AND
+      // the GPU can handle continuous 3D tile rendering, sample real ground/
+      // building heights for a close cinematic orbit. On weak GPUs skip both
+      // (already in on-demand mode, and close 3D geometry is the heaviest path).
       const tilesReady =
         !weakGpu && (useOsmStatus.getState().ready || useEarthStatus.getState().ready);
       const ringRadius0 = CLOSE_RANGE_M * Math.cos(-CLOSE_PITCH_RAD);
@@ -333,16 +344,21 @@ export function PinsController() {
           if (cancelledRef.current) return;
           setPhase('at-poi');
 
-          const orbitStart = performance.now();
-          const tick = () => {
-            if (cancelledRef.current) return;
-            const heading =
-              (((performance.now() - orbitStart) % ORBIT_PERIOD_MS) * Cesium.Math.TWO_PI) /
-              ORBIT_PERIOD_MS;
-            v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, pitch, range));
+          if (!weakGpu) {
+            // On strong GPUs: continuous orbit around the pin.
+            const orbitStart = performance.now();
+            const tick = () => {
+              if (cancelledRef.current) return;
+              const heading =
+                (((performance.now() - orbitStart) % ORBIT_PERIOD_MS) * Cesium.Math.TWO_PI) /
+                ORBIT_PERIOD_MS;
+              v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, pitch, range));
+              rafRef.current = requestAnimationFrame(tick);
+            };
             rafRef.current = requestAnimationFrame(tick);
-          };
-          rafRef.current = requestAnimationFrame(tick);
+          }
+          // On weak GPU: camera holds static at the landing view. Scene is in
+          // on-demand mode so no GPU work happens until the next flyTo starts.
 
           dwellTimerRef.current = setTimeout(() => {
             cancelAnimationFrame(rafRef.current);

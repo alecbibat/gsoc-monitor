@@ -499,21 +499,24 @@ export function CesiumGlobe({ children, onReady }: Props) {
         reload('WebGL context reported lost');
         return;
       }
-      // (2) Frame-stall during continuous rendering. Track when a screensaver
-      // last drove the loop and keep watching for a short window afterward —
-      // a context loss STOPS the screensaver (see onContextLost), so gating
-      // purely on "screensaver active right now" would disarm the watchdog at
-      // exactly the moment it's needed. Outside that window, or on a hidden
-      // tab, on-demand rendering makes a stale timestamp normal.
+      // (2) Frame-stall during *continuous* rendering only. On weak GPUs the
+      // screensaver keeps requestRenderMode = true, so dwell periods produce
+      // no frames even with a healthy GPU — gating on recentlyDriven alone
+      // would produce false positives during every dwell. Only watch when
+      // requestRenderMode = false (the scene is actively rendering every frame).
+      // Track when a screensaver last drove continuous mode and keep a brief
+      // window afterward — a crash stops the screensaver before we can catch it
+      // if we gate purely on "active right now".
       const ss = useScreensaverStore.getState();
-      if (ss.active) lastScreensaver = performance.now();
+      const continuousRender = !viewer.scene.requestRenderMode;
+      if (ss.active && continuousRender) lastScreensaver = performance.now();
       const recentlyDriven = performance.now() - lastScreensaver < 12_000;
-      if (document.visibilityState !== 'visible' || !recentlyDriven) {
+      if (document.visibilityState !== 'visible' || !recentlyDriven || !continuousRender) {
         lastFrame = performance.now();
         return;
       }
       if (performance.now() - lastFrame > 8_000) {
-        reload('render loop stalled >8s during screensaver — GPU likely lost');
+        reload('render loop stalled >8s during continuous screensaver rendering — GPU likely lost');
       }
     }, 2_000);
     return () => {
