@@ -146,7 +146,14 @@ export function CesiumGlobe({ children, onReady }: Props) {
     v.scene.globe.enableLighting = true;
     v.scene.globe.baseColor = Cesium.Color.fromCssColorString('#05070a');
     v.scene.globe.depthTestAgainstTerrain = false;
-    v.scene.globe.preloadAncestors = true;
+    // preloadAncestors keeps a tile's whole ancestor chain resident as fallback.
+    // It was switched on with the gray-ocean fix, but it's the ship orbit's worst
+    // enemy: diving from the overview onto a never-loaded patch of open ocean
+    // forces Cesium to load that fresh tile column at *every* zoom level at once —
+    // a burst of GPU tile uploads the instant the orbit arrives, which is exactly
+    // the kind of spike that black-screens weak integrated GPUs. The dark-ocean
+    // baseColor blend (below) hides the gray placeholder without it, so keep it off.
+    v.scene.globe.preloadAncestors = false;
     v.scene.fog.enabled = true;
     v.scene.skyAtmosphere!.hueShift = -0.05;
 
@@ -325,11 +332,12 @@ export function CesiumGlobe({ children, onReady }: Props) {
     return () => off();
   }, [viewer]);
 
-  // During a close ship orbit the camera descends to ~850 m above open ocean.
-  // High-zoom ocean tiles are often unavailable, so Cesium shows a gray "no
-  // data" placeholder. Switching baseColor to a dark ocean blue makes those
-  // gaps invisible — they blend with the surrounding water rather than
-  // flashing an ugly gray rectangle.
+  // While the pins screensaver orbits a ship, the camera looks down on open
+  // ocean whose high-zoom tiles are often unavailable, so Cesium would show a
+  // gray "no data" placeholder. Switching baseColor to a dark ocean blue makes
+  // those gaps invisible — they blend with the surrounding water instead of
+  // flashing an ugly gray rectangle. This blend (not preloadAncestors, which we
+  // keep off above) is the whole gray-tile fix, so the GPU is spared the burst.
   useEffect(() => {
     if (!viewer) return;
     const OCEAN   = Cesium.Color.fromCssColorString('#04111f');
