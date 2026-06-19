@@ -309,14 +309,15 @@ export function CesiumGlobe({ children, onReady }: Props) {
     };
   }, [viewer]);
 
-  // Render quality: graduated trade of resolution, anti-aliasing, terrain detail
-  // and atmosphere/lighting for frame rate, driven by the quality slider.
+  // Render quality: graduated trade of anti-aliasing, terrain detail and
+  // atmosphere/lighting for frame rate, driven by the quality slider.
+  // (resolutionScale is handled separately below so it can also react to the
+  // screensaver, which is the heaviest render load.)
   useEffect(() => {
     if (!viewer) return;
     const scene = viewer.scene;
     const globe = scene.globe;
     const s = QUALITY_SETTINGS[qualityLevel];
-    viewer.resolutionScale = s.resolutionScale;
     scene.postProcessStages.fxaa.enabled = s.fxaa;
     try {
       scene.msaaSamples = s.msaa;
@@ -330,6 +331,76 @@ export function CesiumGlobe({ children, onReady }: Props) {
     if (scene.skyAtmosphere) scene.skyAtmosphere.show = s.atmosphere;
     scene.requestRender();
   }, [viewer, qualityLevel]);
+
+  // Effective render resolution + frame-rate cap.
+  //
+  // Base resolution comes from the quality tier. But a weak/software GPU running
+  // a continuous-render screensaver is the worst case we have: the pins tour
+  // flips the scene to render *every* frame, and in fullscreen that's at full
+  // display resolution. Sustained, that can crash the browser's GPU process to
+  // a black screen the page can't recover from (the whole compositor dies, so
+  // not even our context-loss overlay can paint). While that combination holds,
+  // force a hard resolution floor and an FPS cap; restore afterward.
+  useEffect(() => {
+    if (!viewer) return;
+    const gpu = getGpuInfo();
+    const weak = gpu.software || gpu.majorPerformanceCaveat || gpu.tier === 'low';
+    const base = QUALITY_SETTINGS[qualityLevel].resolutionScale;
+
+    const apply = () => {
+      const ssActive = useScreensaverStore.getState().active;
+      if (weak && ssActive) {
+        viewer.resolutionScale = Math.min(base, gpu.software ? 0.4 : 0.55);
+        viewer.targetFrameRate = gpu.software ? 20 : 30;
+      } else {
+        viewer.resolutionScale = base;
+        viewer.targetFrameRate = undefined as unknown as number;
+      }
+      viewer.scene.requestRender();
+    };
+
+    apply();
+    const unsub = useScreensaverStore.subscribe(apply);
+    return () => {
+      unsub();
+      viewer.targetFrameRate = undefined as unknown as number;
+      viewer.resolutionScale = base;
+    };
+  }, [viewer, qualityLevel]);
+
+  // GPU-stall watchdog (last-resort recovery).
+  //
+  // A GPU-process crash on a thin client can black out the whole page without
+  // firing `webglcontextlost` on our canvas, so the in-place recovery above
+  // never runs and the screen stays black until a manual reload. The main JS
+  // thread survives the crash, though — so if the render loop stops completing
+  // frames for several seconds while a screensaver is actively driving it (and
+  // the tab is visible), assume the GPU died and reload to get a fresh context.
+  useEffect(() => {
+    if (!viewer) return;
+    let lastFrame = performance.now();
+    const off = viewer.scene.postRender.addEventListener(() => {
+      lastFrame = performance.now();
+    });
+    const id = window.setInterval(() => {
+      const ssActive = useScreensaverStore.getState().active;
+      // Only watch an actively-rendering, foreground tab: outside the
+      // continuous-render screensaver the scene renders on demand, so a stale
+      // timestamp is normal and must not trigger a reload.
+      if (document.visibilityState !== 'visible' || !ssActive) {
+        lastFrame = performance.now();
+        return;
+      }
+      if (performance.now() - lastFrame > 8_000) {
+        console.error('[cesium] render loop stalled >8s during screensaver — GPU likely lost; reloading');
+        window.location.reload();
+      }
+    }, 2_000);
+    return () => {
+      off();
+      window.clearInterval(id);
+    };
+  }, [viewer]);
 
   return (
     <div ref={containerRef} className="absolute inset-0">
