@@ -93,6 +93,7 @@ export interface Incident {
   drawLayers: DrawLayer[];
   shareToken: string | null;  // legacy — kept for backwards compat with persisted data
   shareLinks: ShareLink[];    // all share links ever created for this incident
+  archivedAt?: string | null; // set when the incident is stood down; null/absent = active
 }
 
 // Public shape sent to / received from the share endpoint
@@ -205,6 +206,8 @@ interface CrisisState {
   openIncident: (id: string) => void;
   backToList: () => void;
   removeIncident: (id: string) => void;
+  standDownIncident: (id: string) => void;
+  reopenIncident: (id: string) => void;
 
   // Active-incident field updates
   update: (patch: Partial<CrisisFields>) => void;
@@ -293,6 +296,22 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
         set((s) => ({
           incidents: s.incidents.filter((i) => i.id !== id),
           activeIncidentId: s.activeIncidentId === id ? null : s.activeIncidentId,
+        })),
+
+      standDownIncident: (id) =>
+        set((s) => ({
+          incidents: s.incidents.map((inc) =>
+            inc.id === id ? { ...inc, archivedAt: new Date().toISOString() } : inc
+          ),
+          // Navigate back to the list so the archive section is immediately visible.
+          activeIncidentId: s.activeIncidentId === id ? null : s.activeIncidentId,
+        })),
+
+      reopenIncident: (id) =>
+        set((s) => ({
+          incidents: s.incidents.map((inc) =>
+            inc.id === id ? { ...inc, archivedAt: null } : inc
+          ),
         })),
 
       update: (patch) => set((s) => patchActive(s, (inc) => ({ ...inc, ...patch }))),

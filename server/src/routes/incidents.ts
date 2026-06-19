@@ -38,6 +38,18 @@ router.put('/:id', async (req: Request, res: Response) => {
 });
 
 router.delete('/:id', async (req: Request, res: Response) => {
+  // Archived incidents can only be deleted by admins.
+  const { rows: [row] } = await pool.query<{ archived_at: string | null }>(
+    `SELECT data->>'archivedAt' AS archived_at FROM incidents WHERE id = $1`,
+    [req.params.id]
+  );
+  if (row?.archived_at) {
+    const user = (req as Request & { user?: { role: string } }).user;
+    if (user?.role !== 'admin') {
+      res.status(403).json({ error: 'Only admins can delete archived incidents' });
+      return;
+    }
+  }
   await pool.query('DELETE FROM incidents WHERE id = $1', [req.params.id]);
   // Leave share_links rows in place — active ones stay accessible to current viewers
   // until they expire or are explicitly revoked.

@@ -1,7 +1,10 @@
+import { useState } from 'react';
 import { useCrisisStore, type Incident, type IncidentStatus, type IncidentType } from './crisisStore';
+import { useAuthStore } from '../auth/authStore';
+import { CrisisReportModal } from './CrisisReportModal';
 
 const STATUS_BADGE: Record<IncidentStatus, { dot: string; badge: string; label: string }> = {
-  active:    { dot: '#ef4444', badge: 'text-red-400 bg-red-500/15 border-red-500/40',     label: 'Active' },
+  active:    { dot: '#ef4444', badge: 'text-red-400 bg-red-500/15 border-red-500/40',       label: 'Active' },
   contained: { dot: '#f59e0b', badge: 'text-amber-300 bg-amber-400/15 border-amber-400/40', label: 'Contained' },
   resolved:  { dot: '#22c55e', badge: 'text-green-400 bg-green-500/15 border-green-500/40', label: 'Resolved' },
 };
@@ -36,8 +39,10 @@ function Stat({ value, label }: { value: number; label: string }) {
   );
 }
 
+// ── Active incident card ───────────────────────────────────────────────────────
+
 function IncidentCard({ incident }: { incident: Incident }) {
-  const openIncident  = useCrisisStore((s) => s.openIncident);
+  const openIncident   = useCrisisStore((s) => s.openIncident);
   const removeIncident = useCrisisStore((s) => s.removeIncident);
 
   const sb = STATUS_BADGE[incident.incidentStatus];
@@ -50,7 +55,6 @@ function IncidentCard({ incident }: { incident: Incident }) {
       onClick={() => openIncident(incident.id)}
       className="group flex flex-col rounded-xl border border-white/10 bg-ink-900/80 p-4 text-left transition hover:border-white/25 hover:bg-ink-900"
     >
-      {/* Header */}
       <div className="flex items-start gap-2.5">
         <div className="relative mt-1 flex h-2.5 w-2.5 shrink-0">
           {incident.incidentStatus === 'active' && (
@@ -77,12 +81,10 @@ function IncidentCard({ incident }: { incident: Incident }) {
         </span>
       </div>
 
-      {/* Summary snippet */}
       <p className="mt-3 line-clamp-2 min-h-[2.4em] text-[11px] leading-snug text-white/45">
         {incident.executiveSummary || <span className="text-white/25 italic">No executive summary yet</span>}
       </p>
 
-      {/* Stats */}
       <div className="mt-3 grid grid-cols-4 gap-1 rounded-lg border border-white/6 bg-white/4 py-2">
         <Stat value={assigned} label="Staff" />
         <Stat value={actions}  label="Actions" />
@@ -90,7 +92,6 @@ function IncidentCard({ incident }: { incident: Incident }) {
         <Stat value={incident.drawLayers.length} label="Layers" />
       </div>
 
-      {/* Footer */}
       <div className="mt-3 flex items-center gap-2 text-[9px] text-white/30">
         <span>Created {fmtWhen(incident.createdAt)}</span>
         {incident.shareToken && (
@@ -117,28 +118,158 @@ function IncidentCard({ incident }: { incident: Incident }) {
   );
 }
 
+// ── Archived incident card ─────────────────────────────────────────────────────
+
+function ArchivedCard({
+  incident,
+  isAdmin,
+  onReport,
+}: {
+  incident: Incident;
+  isAdmin: boolean;
+  onReport: (inc: Incident) => void;
+}) {
+  const openIncident   = useCrisisStore((s) => s.openIncident);
+  const reopenIncident = useCrisisStore((s) => s.reopenIncident);
+  const removeIncident = useCrisisStore((s) => s.removeIncident);
+
+  const assigned = incident.assignments.filter((a) => !a.endedAt).length;
+  const actions  = incident.actionLog.filter((e) => e.entryType === 'action').length;
+  const events   = incident.actionLog.filter((e) => e.entryType === 'event').length;
+
+  return (
+    <div className="flex flex-col rounded-xl border border-white/8 bg-ink-900/50 p-4">
+      {/* Header */}
+      <div className="flex items-start gap-2.5">
+        <div className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-white/20" />
+        <div className="min-w-0 flex-1">
+          <h3 className="truncate text-[15px] font-semibold text-white/65">
+            {incident.incidentName || <span className="text-white/30">Untitled Incident</span>}
+          </h3>
+          <div className="mt-0.5 flex items-center gap-2 text-[10px] text-white/30">
+            <span>{TYPE_LABEL[incident.incidentType]}</span>
+            {incident.incidentLocation && (
+              <>
+                <span className="text-white/15">·</span>
+                <span className="truncate">{incident.incidentLocation}</span>
+              </>
+            )}
+          </div>
+        </div>
+        <span className="shrink-0 rounded-full border border-white/15 bg-white/6 px-2 py-0.5 text-[8px] font-bold uppercase tracking-widest text-white/40">
+          Archived
+        </span>
+      </div>
+
+      {/* Summary */}
+      <p className="mt-3 line-clamp-2 min-h-[2.4em] text-[11px] leading-snug text-white/35">
+        {incident.executiveSummary || <span className="italic text-white/20">No executive summary</span>}
+      </p>
+
+      {/* Stats */}
+      <div className="mt-3 grid grid-cols-4 gap-1 rounded-lg border border-white/5 bg-white/3 py-2">
+        <Stat value={assigned} label="Staff" />
+        <Stat value={actions}  label="Actions" />
+        <Stat value={events}   label="Events" />
+        <Stat value={incident.drawLayers.length} label="Layers" />
+      </div>
+
+      {/* Timestamps + actions */}
+      <div className="mt-3 space-y-2.5">
+        <div className="flex items-center gap-2 text-[9px] text-white/25">
+          <span>Created {fmtWhen(incident.createdAt)}</span>
+          {incident.archivedAt && (
+            <>
+              <span className="text-white/15">·</span>
+              <span>Stood down {fmtWhen(incident.archivedAt)}</span>
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {/* View: open in detail */}
+          <button
+            onClick={() => openIncident(incident.id)}
+            className="rounded border border-white/10 px-3 py-1.5 text-[11px] text-white/40 transition hover:border-white/22 hover:text-white/70"
+          >
+            View
+          </button>
+          {/* Reopen: clear archivedAt, makes it active again */}
+          <button
+            onClick={() => {
+              if (confirm(`Reopen "${incident.incidentName || 'Untitled'}"? It will return to the active incident list.`)) {
+                reopenIncident(incident.id);
+              }
+            }}
+            className="rounded border border-accent/25 bg-accent/8 px-3 py-1.5 text-[11px] text-accent/70 transition hover:border-accent/45 hover:text-accent"
+          >
+            Reopen
+          </button>
+          {/* PDF Report */}
+          <button
+            onClick={() => onReport(incident)}
+            className="flex items-center gap-1.5 rounded border border-white/10 px-3 py-1.5 text-[11px] text-white/40 transition hover:border-white/22 hover:text-white/70"
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="6 9 6 2 18 2 18 9" />
+              <path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2" />
+              <rect x="6" y="14" width="12" height="8" />
+            </svg>
+            PDF Report
+          </button>
+          {/* Delete — admin only */}
+          {isAdmin && (
+            <button
+              onClick={() => {
+                if (confirm(`Permanently delete archived incident "${incident.incidentName || 'Untitled'}"? This cannot be undone.`)) {
+                  removeIncident(incident.id);
+                }
+              }}
+              className="ml-auto rounded px-2 py-1.5 text-[11px] text-white/20 transition hover:bg-red-500/10 hover:text-red-400"
+            >
+              Delete
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Root list ─────────────────────────────────────────────────────────────────
+
 export function IncidentList() {
-  const incidents     = useCrisisStore((s) => s.incidents);
+  const incidents      = useCrisisStore((s) => s.incidents);
   const createIncident = useCrisisStore((s) => s.createIncident);
+  const user           = useAuthStore((s) => s.user);
+  const isAdmin        = user?.role === 'admin';
 
-  const sorted = [...incidents].sort((a, b) => {
-    const order = { active: 0, contained: 1, resolved: 2 };
-    const d = order[a.incidentStatus] - order[b.incidentStatus];
-    return d !== 0 ? d : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-  });
+  const [archiveOpen, setArchiveOpen] = useState(true);
+  const [reportIncident, setReportIncident] = useState<Incident | null>(null);
 
-  const activeCount = incidents.filter((i) => i.incidentStatus === 'active').length;
+  const active   = [...incidents]
+    .filter((i) => !i.archivedAt)
+    .sort((a, b) => {
+      const order: Record<string, number> = { active: 0, contained: 1, resolved: 2 };
+      const d = (order[a.incidentStatus] ?? 3) - (order[b.incidentStatus] ?? 3);
+      return d !== 0 ? d : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
+  const archived = [...incidents]
+    .filter((i) => !!i.archivedAt)
+    .sort((a, b) => new Date(b.archivedAt!).getTime() - new Date(a.archivedAt!).getTime());
+
+  const activeCount = active.filter((i) => i.incidentStatus === 'active').length;
 
   return (
     <div className="mx-auto max-w-5xl">
-      {/* Intro row */}
+      {/* Active section header */}
       <div className="mb-5 flex items-center justify-between">
         <div>
           <h2 className="text-[16px] font-semibold text-white/90">Incidents</h2>
           <p className="mt-0.5 text-[11px] text-white/40">
-            {incidents.length === 0
-              ? 'No incidents yet'
-              : `${incidents.length} total · ${activeCount} active`}
+            {active.length === 0
+              ? 'No active incidents'
+              : `${active.length} total · ${activeCount} active`}
           </p>
         </div>
         <button
@@ -153,8 +284,8 @@ export function IncidentList() {
         </button>
       </div>
 
-      {/* Grid */}
-      {incidents.length === 0 ? (
+      {/* Active grid */}
+      {active.length === 0 ? (
         <button
           onClick={() => createIncident()}
           className="flex w-full flex-col items-center justify-center rounded-xl border border-dashed border-white/15 bg-white/3 py-16 text-center transition hover:border-white/30 hover:bg-white/5"
@@ -171,10 +302,59 @@ export function IncidentList() {
         </button>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {sorted.map((inc) => (
+          {active.map((inc) => (
             <IncidentCard key={inc.id} incident={inc} />
           ))}
         </div>
+      )}
+
+      {/* Archive section */}
+      {archived.length > 0 && (
+        <div className="mt-10">
+          <button
+            onClick={() => setArchiveOpen((v) => !v)}
+            className="mb-4 flex w-full items-center gap-3 text-left"
+          >
+            <div className="flex items-center gap-2">
+              <svg
+                width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                className={`text-white/30 transition-transform ${archiveOpen ? 'rotate-90' : ''}`}
+              >
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+              <h2 className="text-[13px] font-semibold text-white/50">Archive</h2>
+              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[9px] font-semibold text-white/30">
+                {archived.length}
+              </span>
+            </div>
+            <div className="h-px flex-1 bg-white/8" />
+            {!isAdmin && (
+              <span className="text-[9px] text-white/20">Admin required to delete</span>
+            )}
+          </button>
+
+          {archiveOpen && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {archived.map((inc) => (
+                <ArchivedCard
+                  key={inc.id}
+                  incident={inc}
+                  isAdmin={isAdmin}
+                  onReport={setReportIncident}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* PDF report modal */}
+      {reportIncident && (
+        <CrisisReportModal
+          incident={reportIncident}
+          onClose={() => setReportIncident(null)}
+        />
       )}
     </div>
   );

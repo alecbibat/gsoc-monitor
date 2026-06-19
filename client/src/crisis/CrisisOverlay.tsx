@@ -3,8 +3,10 @@ import { createPortal } from 'react-dom';
 import {
   useCrisisStore, useActiveIncident, extractPublicState, type CrisisTab,
 } from './crisisStore';
+import { useAuthStore } from '../auth/authStore';
 import { SituationReport } from './tabs/SituationReport';
 import { IncidentList } from './IncidentList';
+import { CrisisReportModal } from './CrisisReportModal';
 
 const TABS: { id: CrisisTab; label: string }[] = [
   { id: 'situation-report', label: 'Situation Report' },
@@ -196,17 +198,24 @@ function useAutoPublish() {
 // ── Incident detail (right-side panel, leaves the globe visible on the left) ───
 
 function IncidentDetail() {
-  const close      = useCrisisStore((s) => s.close);
-  const backToList = useCrisisStore((s) => s.backToList);
-  const removeIncident = useCrisisStore((s) => s.removeIncident);
-  const activeTab  = useCrisisStore((s) => s.activeTab);
-  const setTab     = useCrisisStore((s) => s.setTab);
-  const inc        = useActiveIncident();
+  const close            = useCrisisStore((s) => s.close);
+  const backToList       = useCrisisStore((s) => s.backToList);
+  const removeIncident   = useCrisisStore((s) => s.removeIncident);
+  const standDown        = useCrisisStore((s) => s.standDownIncident);
+  const reopen           = useCrisisStore((s) => s.reopenIncident);
+  const activeTab        = useCrisisStore((s) => s.activeTab);
+  const setTab           = useCrisisStore((s) => s.setTab);
+  const inc              = useActiveIncident();
+  const user             = useAuthStore((s) => s.user);
+  const [showReport, setShowReport] = useState(false);
 
   if (!inc) return null;
+  const isArchived = !!inc.archivedAt;
+  const canDelete  = !isArchived || user?.role === 'admin';
   const { dot, badge } = STATUS_BADGE[inc.incidentStatus] ?? STATUS_BADGE.active;
 
   return (
+    <>
     <div className="pointer-events-none fixed inset-0 z-[2000] flex">
       {/* Left: transparent — the live globe shows through and stays interactive */}
       <div className="pointer-events-none relative flex-1">
@@ -234,10 +243,10 @@ function IncidentDetail() {
 
           <div className="flex min-w-0 items-center gap-2.5">
             <div className="relative flex h-2.5 w-2.5 shrink-0">
-              {inc.incidentStatus === 'active' && (
+              {inc.incidentStatus === 'active' && !isArchived && (
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-70" style={{ background: dot }} />
               )}
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full" style={{ background: dot }} />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full" style={{ background: isArchived ? '#4b5563' : dot }} />
             </div>
             <div className="min-w-0">
               <div className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/35">Situation Report</div>
@@ -246,20 +255,67 @@ function IncidentDetail() {
             <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest ${badge}`}>
               {inc.incidentStatus}
             </span>
+            {isArchived && (
+              <span className="shrink-0 rounded-full border border-white/15 bg-white/6 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-white/40">
+                Archived
+              </span>
+            )}
           </div>
 
           <div className="ml-auto flex items-center gap-2">
-            <ShareLinksPanel />
-            <button
-              onClick={() => {
-                if (confirm(`Delete incident "${inc.incidentName || 'Untitled'}"?`)) {
-                  removeIncident(inc.id);
-                }
-              }}
-              className="rounded border border-white/8 px-3 py-1.5 text-[11px] text-white/30 transition hover:border-red-500/30 hover:text-red-400/70"
-            >
-              Delete
-            </button>
+            {!isArchived && <ShareLinksPanel />}
+
+            {/* Stand-down or reopen depending on archive state */}
+            {isArchived ? (
+              <>
+                <button
+                  onClick={() => setShowReport(true)}
+                  className="flex items-center gap-1.5 rounded border border-white/10 px-3 py-1.5 text-[11px] text-white/40 transition hover:border-white/22 hover:text-white/70"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="6 9 6 2 18 2 18 9" />
+                    <path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2" />
+                    <rect x="6" y="14" width="12" height="8" />
+                  </svg>
+                  PDF Report
+                </button>
+                <button
+                  onClick={() => {
+                    if (confirm(`Reopen "${inc.incidentName || 'Untitled'}"? It will return to the active incident list.`)) {
+                      reopen(inc.id);
+                    }
+                  }}
+                  className="rounded border border-accent/25 bg-accent/8 px-3 py-1.5 text-[11px] text-accent/70 transition hover:border-accent/45 hover:text-accent"
+                >
+                  Reopen Incident
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => {
+                  if (confirm(`Stand down incident "${inc.incidentName || 'Untitled'}"?\n\nIt will be moved to the archive. You can reopen or generate a PDF report from the archive.`)) {
+                    standDown(inc.id);
+                  }
+                }}
+                className="rounded border border-amber-500/25 bg-amber-500/8 px-3 py-1.5 text-[11px] text-amber-300/60 transition hover:border-amber-500/40 hover:text-amber-300/90"
+              >
+                Stand Down
+              </button>
+            )}
+
+            {canDelete && (
+              <button
+                onClick={() => {
+                  if (confirm(`Delete incident "${inc.incidentName || 'Untitled'}"?`)) {
+                    removeIncident(inc.id);
+                  }
+                }}
+                className="rounded border border-white/8 px-3 py-1.5 text-[11px] text-white/30 transition hover:border-red-500/30 hover:text-red-400/70"
+              >
+                Delete
+              </button>
+            )}
+
             <button
               onClick={close}
               className="flex items-center gap-1.5 rounded border border-white/12 px-3 py-1.5 text-[11px] text-white/50 transition hover:border-white/22 hover:text-white"
@@ -299,6 +355,11 @@ function IncidentDetail() {
         </main>
       </div>
     </div>
+
+    {showReport && (
+      <CrisisReportModal incident={inc} onClose={() => setShowReport(false)} />
+    )}
+    </>
   );
 }
 
