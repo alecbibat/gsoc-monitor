@@ -5,22 +5,19 @@ import { useScreensaverStore, type Poi } from './screensaverStore';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REBUILD — Stage 0: parks-shaped foundation.
+// REBUILD — Stage 1: orbit added back at the SAME safe altitude.
 //
-// The pins screensaver black-screens weak GPUs *cumulatively* (fine for a while,
-// then dies), which rules out every instantaneous peak-load cause we tested
-// (building volume, altitude, the zoom-in burst). The remaining differences from
-// the parks screensaver — which never crashes — are all pins-only per-frame
-// work: a continuous camera orbit during dwell (re-culls + re-streams tiles
-// every frame), the loot beam, and ship 3D models. Parks holds the camera dead
-// still during dwell, so its continuous render is nearly free.
+// Stage 0 (static dwell, 12 km, no orbit, no loot beam, no ships) soak-tested
+// stable. Stage 1 adds back the camera orbit RAF loop — at the same 12 km
+// altitude — to isolate camera motion from altitude as the crash trigger.
 //
-// So this is a ground-up rebuild modelled directly on NationalParksController:
-// fly in, hold a STATIC dwell, fly back — clean lifecycle, no orbit RAF, no
-// terrain sampling, no ships. Once this soak-tests stable we re-add the flashy
-// pieces one stage at a time (gentle high orbit → lower altitude for buildings →
-// loot beam → ships), each behind its own test, so whichever one reintroduces
-// the crash is unambiguous.
+// If this stage crashes: the orbit itself (continuous camera.lookAt calls) is
+//   the culprit — it forces per-frame tile re-cull + re-stream even at a safe
+//   altitude. Fix: keep the orbit but throttle it (request render every N ms
+//   instead of every frame), or keep the static dwell and skip the orbit.
+// If this stage stays stable: camera motion at 12 km is fine, and the crash
+//   was about orbit at LOW altitude streaming dense building tiles. Next step:
+//   descend in altitude increments to find the safe floor.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const OVERVIEW_ALT = 9_000_000;
@@ -32,9 +29,12 @@ const POI_INTERVAL_MAX_MS = 20_000;
 const POI_DWELL_MIN_MS = 12_000;
 const POI_DWELL_MAX_MS = 18_000;
 
-// Static top-down dwell altitude. Deliberately high enough to be unambiguously
-// safe for the soak test — later stages descend toward the buildings.
+// Dwell altitude — unchanged from Stage 0 so the only new variable is the orbit.
 const VIEW_ALT_M = 12_000;
+// Slow orbit during dwell. Matches the original 32 s period.
+const ORBIT_PERIOD_MS = 32_000;
+// Tilt angle during orbit — shallow enough to see the ground clearly at 12 km.
+const ORBIT_PITCH_RAD = Cesium.Math.toRadians(-45);
 
 interface PinEntry {
   name: string;
@@ -80,6 +80,7 @@ export function PinsController() {
   const queueRef = useRef<PinEntry[]>([]);
   const poiTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rafRef = useRef(0);
 
   const isPins = active && mode === 'pins';
 
@@ -124,14 +125,32 @@ export function PinsController() {
       setPhase('flying-to');
       setCurrentPoi(poi);
 
-      // Static top-down approach — no orbit. Exactly the parks motion profile.
+      const target = Cesium.Cartesian3.fromDegrees(pin.lon, pin.lat, 0);
+
       v.camera.flyTo({
         destination: Cesium.Cartesian3.fromDegrees(pin.lon, pin.lat, VIEW_ALT_M),
         duration: 5.0,
         complete: () => {
           if (cancelledRef.current) return;
           setPhase('at-poi');
-          dwellTimerRef.current = setTimeout(leaveAndReturn, rand(POI_DWELL_MIN_MS, POI_DWELL_MAX_MS));
+
+          // Stage 1: orbit the pin during dwell, at the same 12 km altitude.
+          const orbitStart = performance.now();
+          const tick = () => {
+            if (cancelledRef.current) return;
+            const heading =
+              (((performance.now() - orbitStart) % ORBIT_PERIOD_MS) * Cesium.Math.TWO_PI) /
+              ORBIT_PERIOD_MS;
+            v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, ORBIT_PITCH_RAD, VIEW_ALT_M));
+            rafRef.current = requestAnimationFrame(tick);
+          };
+          rafRef.current = requestAnimationFrame(tick);
+
+          dwellTimerRef.current = setTimeout(() => {
+            cancelAnimationFrame(rafRef.current);
+            v.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+            leaveAndReturn();
+          }, rand(POI_DWELL_MIN_MS, POI_DWELL_MAX_MS));
         },
       });
     }
@@ -157,6 +176,8 @@ export function PinsController() {
       cancelledRef.current = true;
       if (poiTimerRef.current) clearTimeout(poiTimerRef.current);
       if (dwellTimerRef.current) clearTimeout(dwellTimerRef.current);
+      cancelAnimationFrame(rafRef.current);
+      v.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
       v.scene.requestRenderMode = prevRequestRender;
       v.scene.maximumRenderTimeChange = prevMaxRenderTime;
       v.scene.requestRender();
