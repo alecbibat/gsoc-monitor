@@ -42,9 +42,10 @@ const ORBIT_PERIOD_MS = 32_000;
 const ORBIT_PITCH_RAD = Cesium.Math.toRadians(-45);
 const METERS_PER_DEG_LAT = 110_574;
 
-// Ship orbit (over open ocean — height 0, no terrain sampling). Closer and
-// shallower than a pin orbit so the 3D wireframe model reads clearly.
-const SHIP_RANGE_M = 850;
+// Ship orbit (over open ocean — height 0, no terrain sampling). Raised to
+// match the proven-safe pin floor: 850 m crashed, confirming terrain tiles
+// stream aggressively even over water at close range.
+const SHIP_RANGE_M = 2_500;
 const SHIP_PITCH_RAD = Cesium.Math.toRadians(-28);
 
 interface PinEntry {
