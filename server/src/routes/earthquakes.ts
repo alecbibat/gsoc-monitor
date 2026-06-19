@@ -21,11 +21,12 @@ router.get('/', async (req, res) => {
   try {
     const data = await cache.getOrFetch(cacheKey, 60_000, async () => {
       const upstream = await fetch(
-        `https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/${feed}.geojson`
+        `https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/${feed}.geojson`,
+        { signal: AbortSignal.timeout(10_000) }
       );
       if (!upstream.ok) throw new Error(`USGS feed error: ${upstream.status}`);
       return upstream.json();
-    });
+    }, { staleOnError: true });
     res.json(data);
   } catch (err) {
     res.status(502).json({ error: 'Failed to fetch earthquake data', detail: String(err) });

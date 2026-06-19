@@ -111,9 +111,16 @@ async function nearestPois(
   limit: number
 ): Promise<Poi[]> {
   let bestSoFar: Poi[] = [];
+  // Overall wall-clock budget across all radius attempts. Each Overpass call had
+  // its own 28s timeout, but this function loops over several radii — so a couple
+  // of slow calls could stack past Heroku's 30s request wall and trip an H12.
+  // Bound the whole loop instead, and size each call's timeout to the time left.
+  const deadline = Date.now() + 24_000;
   for (const radius of RADII[kind]) {
+    const remaining = deadline - Date.now();
+    if (remaining < 3_000) break; // not enough time left for a meaningful attempt
     const q =
-      `[out:json][timeout:25];(${overpassFilter(kind)}(around:${radius},${lat},${lon}););out center 200;`;
+      `[out:json][timeout:20];(${overpassFilter(kind)}(around:${radius},${lat},${lon}););out center 200;`;
     let data: { elements?: Array<{ lat?: number; lon?: number; center?: { lat: number; lon: number }; tags?: Record<string, string> }> };
     try {
       const r = await fetch(OVERPASS, {
@@ -123,7 +130,7 @@ async function nearestPois(
           'Content-Type': 'application/x-www-form-urlencoded',
           'User-Agent': UA,
         },
-        signal: AbortSignal.timeout(28_000),
+        signal: AbortSignal.timeout(Math.min(14_000, remaining)),
       });
       if (!r.ok) throw new Error(`Overpass HTTP ${r.status}`);
       data = (await r.json()) as typeof data;

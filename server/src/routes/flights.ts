@@ -88,6 +88,7 @@ async function refresh(): Promise<void> {
       const url = `https://opendata.adsb.fi/api/v2/registration/${reg}`;
       const r = await fetch(url, {
         headers: { 'User-Agent': config.nwsUserAgent, Accept: 'application/json' },
+        signal: AbortSignal.timeout(10_000),
       });
       if (!r.ok) return;
       const json = (await r.json()) as { ac?: AdsbAircraft[] };

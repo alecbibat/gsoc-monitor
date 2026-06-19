@@ -21,10 +21,11 @@ router.get('/', async (req, res) => {
           // Nominatim's usage policy requires an identifying User-Agent.
           'User-Agent': config.nwsUserAgent,
         },
+        signal: AbortSignal.timeout(10_000),
       });
       if (!upstream.ok) throw new Error(`Nominatim error: ${upstream.status}`);
       return upstream.json();
-    });
+    }, { staleOnError: true });
     res.json(data);
   } catch (err) {
     res.status(502).json({ error: 'Failed to geocode', detail: String(err) });

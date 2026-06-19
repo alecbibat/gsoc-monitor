@@ -53,7 +53,7 @@ async function fetchLive(venue: Venue): Promise<PlaceBusyness> {
     url.searchParams.set('venue_name', venue.name);
     url.searchParams.set('venue_address', venue.address);
 
-    const r = await fetch(url, { method: 'POST' });
+    const r = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(10_000) });
     if (!r.ok) return fallback;
     const j = (await r.json()) as BestTimeLiveResponse;
     const a = j.analysis;

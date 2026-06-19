@@ -9,10 +9,12 @@ const router = Router();
 router.get('/', async (_req, res) => {
   try {
     const data = await cache.getOrFetch('radar:manifest', 2 * 60_000, async () => {
-      const upstream = await fetch('https://api.rainviewer.com/public/weather-maps.json');
+      const upstream = await fetch('https://api.rainviewer.com/public/weather-maps.json', {
+        signal: AbortSignal.timeout(10_000),
+      });
       if (!upstream.ok) throw new Error(`RainViewer error: ${upstream.status}`);
       return upstream.json();
-    });
+    }, { staleOnError: true });
     res.json(data);
   } catch (err) {
     res.status(502).json({ error: 'Failed to fetch radar manifest', detail: String(err) });

@@ -68,6 +68,7 @@ router.get('/', async (req, res) => {
       const url = `https://celestrak.org/NORAD/elements/gp.php?GROUP=${celestrakGroup}&FORMAT=tle`;
       const upstream = await fetch(url, {
         headers: { 'User-Agent': config.nwsUserAgent, Accept: 'text/plain' },
+        signal: AbortSignal.timeout(12_000),
       });
       if (!upstream.ok) throw new Error(`CelesTrak error: ${upstream.status}`);
       const text = await upstream.text();
@@ -79,7 +80,7 @@ router.get('/', async (req, res) => {
       const satellites = parseTle(text);
       if (satellites.length === 0) throw new Error('No satellites parsed');
       return { group, satellites, updated: Date.now() };
-    });
+    }, { staleOnError: true });
     res.json(data);
   } catch (err) {
     res.status(502).json({ error: 'Failed to fetch satellite data', detail: String(err) });
