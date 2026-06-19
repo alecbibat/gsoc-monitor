@@ -9,6 +9,7 @@ import { useMeasureStore } from '../measure/measureStore';
 import { useHoverStore } from '../screensaver/hoverStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { usePerfStore, QUALITY_SETTINGS } from '../perf/perfStore';
+import { getGpuInfo, describeGpu } from '../perf/gpuInfo';
 import { HOME_VIEW } from './flyTo';
 
 interface Props {
@@ -67,8 +68,17 @@ export function CesiumGlobe({ children, onReady }: Props) {
   const recoverAttemptsRef = useRef(0);
   const recoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Pick a render-quality tier from the detected GPU on first load (unless the
+  // user has already chosen one). This is the main defence against the
+  // black-screen-on-a-thin-client case: a software / virtualized GPU starts on
+  // the light renderer instead of overrunning the driver on the heavy one.
+  useEffect(() => {
+    usePerfStore.getState().autoTune();
+  }, []);
+
   useEffect(() => {
     if (!containerRef.current) return;
+    const mountTime = performance.now();
 
     const v = new Cesium.Viewer(containerRef.current, {
       baseLayer: false,
@@ -163,7 +173,22 @@ export function CesiumGlobe({ children, onReady }: Props) {
     const canvas = v.canvas;
     const onContextLost = (e: Event) => {
       e.preventDefault();
-      console.warn('[cesium] WebGL context lost — rebuilding viewer');
+      // Leave a breadcrumb so a recurring black-screen is diagnosable: which GPU,
+      // how long it survived, what was being asked of it. A short uptime on a
+      // software/virtual GPU points at the renderer being too heavy; a loss only
+      // while 3D buildings are on points at tile-memory exhaustion.
+      const gpu = getGpuInfo();
+      console.warn('[cesium] WebGL context lost — rebuilding viewer', {
+        gpu: describeGpu(gpu),
+        vendor: gpu.vendor,
+        maxTextureSize: gpu.maxTextureSize,
+        quality: usePerfStore.getState().qualityLevel,
+        uptimeSec: Math.round((performance.now() - mountTime) / 1000),
+        osm3D: useLayersStore.getState().active.osmBuildings,
+        google3D: useLayersStore.getState().active.earth3d,
+        screensaver: useScreensaverStore.getState().active,
+        statusMessage: (e as WebGLContextEvent).statusMessage || '(none)',
+      });
       useScreensaverStore.getState().stop();
       setContextLost(true);
       if (recoverAttemptsRef.current < 4) {
@@ -316,6 +341,10 @@ export function CesiumGlobe({ children, onReady }: Props) {
           <div className="max-w-xs text-center text-[11px] leading-snug text-white/40">
             The 3D view lost its GPU context and is rebuilding. If it doesn&apos;t
             come back, reload the page.
+          </div>
+          <div className="max-w-xs text-center text-[10px] leading-snug text-white/25">
+            {describeGpu(getGpuInfo())}
+            {getGpuInfo().software && ' — hardware acceleration appears to be off'}
           </div>
           <button
             onClick={() => window.location.reload()}

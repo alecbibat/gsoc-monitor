@@ -12,6 +12,7 @@ import { useOsmStatus } from '../layers/osmBuildings/osmStore';
 import { useTrafficStatus } from '../layers/traffic/trafficStore';
 import { useTimeZonesStatus } from '../layers/timezones/timezonesStore';
 import { usePerfStore, QUALITY_LEVELS, QUALITY_META } from '../perf/perfStore';
+import { getGpuInfo, describeGpu } from '../perf/gpuInfo';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { flyToLonLat } from '../cesium/flyTo';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
@@ -201,6 +202,32 @@ export function Sidebar() {
             <div className="mt-1 text-[11px] leading-snug text-white/40">
               {QUALITY_META[qualityLevel].desc}
             </div>
+            {/* GPU diagnostics: what the 3D view is actually running on. A
+                software / virtual GPU is the usual cause of black-screens and
+                tells you to keep the slider toward Performance. */}
+            {(() => {
+              const gpu = getGpuInfo();
+              const warn = gpu.software || gpu.majorPerformanceCaveat || gpu.virtualized;
+              return (
+                <div
+                  className={`mt-2 rounded border px-2 py-1.5 text-[10px] leading-snug ${
+                    warn
+                      ? 'border-amber-400/30 bg-amber-400/5 text-amber-200/70'
+                      : 'border-white/8 bg-white/[0.02] text-white/35'
+                  }`}
+                >
+                  <div className="font-semibold uppercase tracking-wider text-[9px] opacity-70">
+                    Graphics
+                  </div>
+                  <div className="mt-0.5 break-words">{describeGpu(gpu)}</div>
+                  {warn && (
+                    <div className="mt-0.5 opacity-80">
+                      No/limited GPU acceleration — keep quality low for reliability.
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
           <LayerToggle
             label="3D Buildings & Terrain"

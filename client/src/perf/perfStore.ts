@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { getGpuInfo, type GpuInfo } from './gpuInfo';
 
 // Render quality scale: trades visual fidelity (resolution, anti-aliasing,
 // terrain detail, atmosphere/lighting) for frame rate. Ordered best → fastest;
@@ -75,27 +76,58 @@ export const QUALITY_META: Record<QualityLevel, { label: string; desc: string }>
   },
 };
 
+// Map a detected GPU to a sensible starting tier. Software / "slow-context"
+// clients get the lightest renderer (they're the ones that black-screen);
+// low/virtual GPUs drop lighting and resolution; mid keeps full resolution with
+// lighter AA; only genuinely capable GPUs start at full Quality.
+export function recommendQuality(info: GpuInfo): QualityLevel {
+  if (info.software || info.majorPerformanceCaveat) return 'max-performance';
+  if (info.tier === 'low') return 'performance';
+  if (info.tier === 'medium') return 'balanced';
+  return 'quality';
+}
+
 interface PerfState {
   qualityLevel: QualityLevel;
+  // True once the user has moved the slider themselves. Until then we're free to
+  // auto-pick a tier from the detected GPU on each load.
+  userSelected: boolean;
   setQualityLevel: (v: QualityLevel) => void;
+  // Apply the GPU-recommended tier unless the user has made an explicit choice.
+  // Safe to call repeatedly; it's a no-op once userSelected is true.
+  autoTune: () => void;
 }
 
 export const usePerfStore = create<PerfState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       qualityLevel: 'quality',
-      setQualityLevel: (qualityLevel) => set({ qualityLevel }),
+      userSelected: false,
+      setQualityLevel: (qualityLevel) => set({ qualityLevel, userSelected: true }),
+      autoTune: () => {
+        if (get().userSelected) return;
+        const rec = recommendQuality(getGpuInfo());
+        if (rec !== get().qualityLevel) set({ qualityLevel: rec });
+      },
     }),
     {
       name: 'gsoc-perf',
-      version: 1,
-      // v0 stored { performanceMode: boolean }; map it onto the new scale.
+      version: 2,
+      // v0 stored { performanceMode: boolean }; v1 stored { qualityLevel } with
+      // no userSelected flag. In both cases, treat a non-default tier as a
+      // deliberate choice (lock it) and the default 'quality' as untouched (so
+      // auto-tuning can still rescue a weak client that never moved the slider).
       migrate: (persisted, version) => {
-        if (version < 1 && persisted && typeof persisted === 'object') {
-          const old = persisted as { performanceMode?: boolean };
-          return { qualityLevel: old.performanceMode ? 'max-performance' : 'quality' };
+        const p = (persisted ?? {}) as Record<string, unknown>;
+        if (version < 1) {
+          const q: QualityLevel = p.performanceMode ? 'max-performance' : 'quality';
+          return { qualityLevel: q, userSelected: q !== 'quality' } as PerfState;
         }
-        return persisted as PerfState;
+        if (version < 2) {
+          const q = (p.qualityLevel as QualityLevel) ?? 'quality';
+          return { qualityLevel: q, userSelected: q !== 'quality' } as PerfState;
+        }
+        return p as unknown as PerfState;
       },
     }
   )
