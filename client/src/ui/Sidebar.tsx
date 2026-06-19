@@ -202,12 +202,13 @@ export function Sidebar() {
             <div className="mt-1 text-[11px] leading-snug text-white/40">
               {QUALITY_META[qualityLevel].desc}
             </div>
-            {/* GPU diagnostics: what the 3D view is actually running on. A
-                software / virtual GPU is the usual cause of black-screens and
-                tells you to keep the slider toward Performance. */}
+            {/* GPU diagnostics: what the 3D view is actually running on.
+                Software / virtual / integrated GPUs trigger screensaver caps
+                automatically (tier: 'low') and show an advisory here. */}
             {(() => {
               const gpu = getGpuInfo();
-              const warn = gpu.software || gpu.majorPerformanceCaveat || gpu.virtualized;
+              const warn =
+                gpu.software || gpu.majorPerformanceCaveat || gpu.virtualized || gpu.integrated;
               return (
                 <div
                   className={`mt-2 rounded border px-2 py-1.5 text-[10px] leading-snug ${
@@ -222,7 +223,9 @@ export function Sidebar() {
                   <div className="mt-0.5 break-words">{describeGpu(gpu)}</div>
                   {warn && (
                     <div className="mt-0.5 opacity-80">
-                      No/limited GPU acceleration — keep quality low for reliability.
+                      {gpu.software || gpu.virtualized
+                        ? 'No GPU acceleration — keep quality low for reliability.'
+                        : 'Integrated/shared GPU — screensaver resolution is capped automatically.'}
                     </div>
                   )}
                 </div>

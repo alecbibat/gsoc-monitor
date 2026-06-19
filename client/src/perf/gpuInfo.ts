@@ -17,6 +17,7 @@ export interface GpuInfo {
   vendor: string; // UNMASKED_VENDOR_WEBGL, best-effort
   software: boolean; // CPU rasterizer — no real GPU acceleration
   virtualized: boolean; // remote / virtual GPU (Citrix, VMware, RDP, virgl)
+  integrated: boolean; // integrated / shared-VRAM GPU (AMD iGPU, Intel HD/UHD/Iris, Adreno, Mali)
   majorPerformanceCaveat: boolean; // browser itself flags this context as slow
   maxTextureSize: number; // rough capability signal
   webgl2: boolean;
@@ -32,6 +33,12 @@ const SOFTWARE_RE = /swiftshader|llvmpipe|softpipe|software|basic render|microso
 const VIRTUAL_RE = /vmware|virtualbox|virgl|paravirtual|gdi generic|citrix|microsoft remote/i;
 // Reasonably capable discrete / Apple-silicon GPUs.
 const STRONG_RE = /nvidia|geforce|quadro|rtx|radeon (rx|pro)|apple m\d|apple gpu|arc a\d/i;
+// Integrated / shared-VRAM GPUs that are real hardware but sustained-render weak.
+// "Radeon(TM) Graphics" (AMD iGPU, e.g. 0x150E Vega 3) has no RX/Pro suffix;
+// Intel HD/UHD/Iris/Xe are CPU-package graphics; Adreno/Mali are mobile SoC GPUs.
+// Checked AFTER STRONG_RE so discrete "Radeon RX" cards are never mis-flagged.
+const INTEGRATED_RE =
+  /radeon(\(tm\))?\s+graphics|intel\s+(hd|uhd|iris|xe)(\s+plus)?\s+graphics|adreno\s+\d{3}|mali-[a-z]\d/i;
 
 export function getGpuInfo(): GpuInfo {
   if (!cached) cached = probe();
@@ -43,6 +50,7 @@ export function describeGpu(info: GpuInfo): string {
   const bits: string[] = [];
   if (info.software) bits.push('software rendering');
   else if (info.virtualized) bits.push('virtual GPU');
+  else if (info.integrated) bits.push('integrated GPU');
   if (info.majorPerformanceCaveat && !info.software) bits.push('slow-context');
   const tag = bits.length ? ` (${bits.join(', ')})` : '';
   return `${info.renderer || 'unknown GPU'}${tag}`;
@@ -54,6 +62,7 @@ function probe(): GpuInfo {
     vendor: 'unknown',
     software: false,
     virtualized: false,
+    integrated: false,
     majorPerformanceCaveat: false,
     maxTextureSize: 0,
     webgl2: false,
@@ -95,14 +104,22 @@ function probe(): GpuInfo {
 
     const software = SOFTWARE_RE.test(renderer) || SOFTWARE_RE.test(vendor);
     const virtualized = VIRTUAL_RE.test(renderer) || VIRTUAL_RE.test(vendor);
+    // Integrated only applies to real (non-software) GPUs that aren't discrete-strong.
+    // STRONG_RE is checked first so "Radeon RX 580 Graphics" is never mis-flagged.
+    const strong = STRONG_RE.test(renderer) || STRONG_RE.test(vendor);
+    const integrated =
+      !software && !strong && (INTEGRATED_RE.test(renderer) || INTEGRATED_RE.test(vendor));
 
     let tier: GpuTier;
     if (software || majorPerformanceCaveat || maxTextureSize <= 4096) {
       tier = 'low';
-    } else if (STRONG_RE.test(renderer) && maxTextureSize >= 16384 && !virtualized) {
+    } else if (strong && maxTextureSize >= 16384 && !virtualized) {
       tier = 'high';
     } else {
-      tier = virtualized ? 'low' : 'medium';
+      // Integrated and virtual GPUs have shared / limited VRAM and limited sustained
+      // throughput — treat them the same as 'low' for render-quality and screensaver
+      // protection purposes.
+      tier = virtualized || integrated ? 'low' : 'medium';
     }
 
     loseCtx(gl);
@@ -111,6 +128,7 @@ function probe(): GpuInfo {
       vendor: vendor || (dbg ? 'unknown' : 'hidden'),
       software,
       virtualized,
+      integrated,
       majorPerformanceCaveat,
       maxTextureSize,
       webgl2,
