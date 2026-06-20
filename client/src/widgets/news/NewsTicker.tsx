@@ -103,7 +103,7 @@ export function NewsTicker() {
         screensaverActive ? '' : 'md:left-72'
       }`}
     >
-      <div className="flex h-9 items-center border-t border-white/10 bg-ink-900/85 backdrop-blur-sm">
+      <div className="flex min-h-[2.25rem] items-center border-t border-white/10 bg-ink-900/85 pb-safe backdrop-blur-sm">
         {/* Label — click to open the news panel. */}
         <button
           onClick={() =>

@@ -76,7 +76,7 @@ export function MobilePanelDeck() {
 
   return (
     <div
-      className={`fixed inset-x-0 bottom-0 z-40 flex h-[74vh] flex-col overflow-hidden rounded-t-2xl border-t-2 ${panelAccent(
+      className={`fixed inset-x-0 bottom-0 z-40 flex h-[74vh] flex-col overflow-hidden rounded-t-2xl border-t-2 pb-safe ${panelAccent(
         active.kind
       )} bg-ink-900/95 shadow-2xl backdrop-blur-md`}
     >

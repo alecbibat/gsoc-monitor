@@ -388,7 +388,7 @@ export function TopBar() {
   }, [setTopRightBottom]);
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col gap-2 p-3 md:flex-row md:items-start md:justify-between md:gap-4 md:p-4">
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col gap-2 pb-3 pl-safe pr-safe pt-safe md:flex-row md:items-start md:justify-between md:gap-4 md:pb-4">
       {/* Left: identity + camera controls + screensaver modes */}
       <div className="flex flex-wrap items-center gap-2 md:gap-3">
         <HamburgerButton />

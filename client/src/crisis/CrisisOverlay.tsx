@@ -227,7 +227,7 @@ function IncidentDetail() {
 
       {/* Right: opaque editing panel — kept under half-width so the globe's
           centre stays visible in the reserved segment on the left */}
-      <div className="pointer-events-auto flex h-full w-[46vw] min-w-[460px] max-w-[720px] flex-col border-l border-white/10 bg-ink-950/98 shadow-2xl backdrop-blur-sm">
+      <div className="pointer-events-auto flex h-full w-full flex-col border-l border-white/10 bg-ink-950/98 pb-safe shadow-2xl backdrop-blur-sm md:w-[46vw] md:min-w-[460px] md:max-w-[720px]">
         {/* Header */}
         <header className="flex shrink-0 items-center gap-3 border-b border-white/10 bg-ink-900/70 px-5 py-3">
           <button

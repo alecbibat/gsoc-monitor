@@ -2,6 +2,27 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Safe-area-aware padding ────────────────────────────────────────────────
+   The HUD draws edge-to-edge (viewport-fit=cover in index.html), so persistent
+   chrome has to keep clear of the notch / Dynamic Island and the home
+   indicator. The base term in each calc()/max() preserves the normal gap where
+   the inset resolves to 0 (desktop, no-notch devices). Each utility owns a
+   single side, so it never collides with a Tailwind padding class on the same
+   element. */
+@layer utilities {
+  .pt-safe { padding-top: calc(0.75rem + env(safe-area-inset-top)); }
+  .pl-safe { padding-left: calc(0.75rem + env(safe-area-inset-left)); }
+  .pr-safe { padding-right: calc(0.75rem + env(safe-area-inset-right)); }
+  .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+
+  /* Off-canvas drawer: top padding clears the fixed top chrome, and grows to
+     clear the notch when the inset is taller than that base gap. */
+  .pt-drawer    { padding-top: max(4rem, calc(env(safe-area-inset-top) + 2.75rem)); }
+  .pt-drawer-md { padding-top: max(5rem, calc(env(safe-area-inset-top) + 3.5rem)); }
+  /* Drawer close button drops below the notch in portrait. */
+  .top-safe     { top: max(0.75rem, env(safe-area-inset-top)); }
+}
+
 :root {
   color-scheme: dark;
 }

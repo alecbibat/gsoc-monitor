@@ -141,12 +141,12 @@ export function Sidebar() {
         />
       )}
       <div
-        className={`pointer-events-auto absolute left-0 top-0 z-50 flex h-full w-72 max-w-[85vw] flex-col border-r border-white/10 bg-ink-900/95 pt-16 shadow-panel backdrop-blur-sm transition-transform duration-500 ease-in-out md:z-10 md:max-w-none md:bg-ink-900/85 md:pt-20 ${translate}`}
+        className={`pointer-events-auto absolute left-0 top-0 z-50 flex h-full w-72 max-w-[85vw] flex-col border-r border-white/10 bg-ink-900/95 pt-drawer shadow-panel backdrop-blur-sm transition-transform duration-500 ease-in-out md:z-10 md:max-w-none md:bg-ink-900/85 md:pt-drawer-md ${translate}`}
       >
         {/* Mobile-only close button. */}
         <button
           onClick={() => setSidebarOpen(false)}
-          className="absolute right-2 top-3 rounded-md p-1.5 text-white/50 transition hover:bg-white/10 hover:text-white md:hidden"
+          className="absolute right-2 top-safe rounded-md p-1.5 text-white/50 transition hover:bg-white/10 hover:text-white md:hidden"
           aria-label="Close menu"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
