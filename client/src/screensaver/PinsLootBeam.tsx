@@ -20,16 +20,18 @@ function radialGlowUrl(): string {
 }
 const GLOW_URL = radialGlowUrl();
 
-// A sleek glowing "loot beam" through the focused property pin during the pins
+// A sleek glowing "loot beam" through the focused pin or ship during the pins
 // screensaver — a soft outer halo + bright inner core rendered as screen-space
-// PolylineGlow shafts (crisp at any zoom, no chunky tube), anchored to a
-// ground-clamped radial glow. The base tracks terrain height so the beam
-// terminates at the surface instead of punching through it.
+// PolylineGlow shafts (crisp at any zoom, no chunky tube), anchored to a radial
+// glow at the foot.
 //
-// Ships are deliberately excluded: HeightReference.CLAMP_TO_GROUND over open
-// ocean creates a degenerate GPU state (no terrain to clamp to at the ship's
-// zoom level) that causes an immediate WebGL context loss on the first ship
-// orbit, crashing the screensaver on any GPU.
+// Pins sit on terrain: the base tracks globe.getHeight() each frame and the
+// foot glow clamps to ground. Ships sit at sea level, so they anchor at
+// absolute height 0 with HeightReference.NONE and never sample or clamp
+// terrain. That detour is deliberate: HeightReference.CLAMP_TO_GROUND over open
+// ocean (no terrain to clamp to at the ship's zoom level) created a degenerate
+// GPU state that caused an immediate WebGL context loss on the first ship orbit
+// — which is why ships were previously excluded entirely.
 export function PinsLootBeam() {
   const viewer = useCesiumViewer();
   const active = useScreensaverStore((s) => s.active);
@@ -44,16 +46,23 @@ export function PinsLootBeam() {
   // parks-shaped lifecycle is proven stable.
   const STAGE_LOOT_BEAM_ENABLED = true;
 
+  const isShip = poi?.category === 'ship';
   const isFocus =
-    STAGE_LOOT_BEAM_ENABLED && active && mode === 'pins' && poi?.category === 'pin';
+    STAGE_LOOT_BEAM_ENABLED &&
+    active &&
+    mode === 'pins' &&
+    (poi?.category === 'pin' || isShip);
   const lon = poi?.lon;
   const lat = poi?.lat;
-  const colorHex = (poi?.meta?.color as string | undefined) ?? '#a78bfa';
+  // Ships carry no per-pin color, so they default to a warm "treasure" gold to
+  // set them apart from the violet property pins.
+  const colorHex =
+    (poi?.meta?.color as string | undefined) ?? (isShip ? '#fbbf24' : '#a78bfa');
 
   useEffect(() => {
     if (!viewer || !isFocus || lon == null || lat == null) return;
     const v = viewer;
-    const ds = new Cesium.CustomDataSource('pin-loot-beam');
+    const ds = new Cesium.CustomDataSource('loot-beam');
     v.dataSources.add(ds);
     dsRef.current = ds;
 
@@ -64,12 +73,16 @@ export function PinsLootBeam() {
     const t0 = performance.now();
     const sec = () => (performance.now() - t0) / 1000;
 
-    // Terrain-aware base height — refreshed each frame so the beam settles onto
-    // the ground as detailed tiles stream in.
-    let groundH = v.scene.globe.getHeight(carto) ?? 0;
+    // Base height: pins track terrain (sampled each frame so the beam settles
+    // onto the ground as detailed tiles stream in); ships anchor at sea level
+    // and never call getHeight — sampling/clamping over open ocean was the
+    // source of the earlier WebGL context-loss crash.
+    let groundH = isShip ? 0 : (v.scene.globe.getHeight(carto) ?? 0);
     const beamPositions = () => {
-      const h = v.scene.globe.getHeight(carto);
-      if (typeof h === 'number') groundH = h;
+      if (!isShip) {
+        const h = v.scene.globe.getHeight(carto);
+        if (typeof h === 'number') groundH = h;
+      }
       return [
         Cesium.Cartesian3.fromDegrees(lon, lat, groundH),
         Cesium.Cartesian3.fromDegrees(lon, lat, groundH + BEAM_H),
@@ -95,12 +108,16 @@ export function PinsLootBeam() {
     shaft(base, 0.34, 0.10, 1.8, 42, 0.42); // soft outer halo
     shaft(core, 0.85, 0.12, 3.0, 13, 0.16); // bright inner core
 
-    // Ground-clamped radial glow at the foot of the beam.
+    // Radial glow at the foot of the beam. Pins clamp to terrain; ships anchor
+    // at sea level with HeightReference.NONE — CLAMP_TO_GROUND over open ocean
+    // triggers a degenerate GPU state (no terrain to clamp to) → context loss.
     ds.entities.add({
       position: Cesium.Cartesian3.fromDegrees(lon, lat),
       billboard: {
         image: GLOW_URL,
-        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+        heightReference: isShip
+          ? Cesium.HeightReference.NONE
+          : Cesium.HeightReference.CLAMP_TO_GROUND,
         width: 150,
         height: 150,
         color: new Cesium.CallbackProperty(
@@ -117,7 +134,7 @@ export function PinsLootBeam() {
       dsRef.current = null;
       v.scene.requestRender();
     };
-  }, [viewer, isFocus, lon, lat, colorHex]);
+  }, [viewer, isFocus, isShip, lon, lat, colorHex]);
 
 
   return null;
