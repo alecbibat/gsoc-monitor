@@ -3,6 +3,8 @@ import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useScreensaverStore, type Poi } from './screensaverStore';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
+import { useShipsStatus } from '../layers/ships/shipsStore';
+import { FLEET_ROSTER } from '../layers/ships/fleet';
 
 const OVERVIEW_ALT = 9_000_000;
 const OVERVIEW_LAT = 38;
@@ -19,6 +21,7 @@ const ORBIT_PITCH_RAD = Cesium.Math.toRadians(-45);
 const METERS_PER_DEG_LAT = 110_574;
 
 interface PinEntry {
+  kind: 'pin';
   name: string;
   groupName: string;
   groupIcon: string;
@@ -27,8 +30,19 @@ interface PinEntry {
   lon: number;
 }
 
+interface ShipEntry {
+  kind: 'ship';
+  name: string;
+  lat: number;
+  lon: number;
+  mmsi: string;
+}
+
+type VisitEntry = PinEntry | ShipEntry;
+
 const ALL_PINS: PinEntry[] = LOCATION_GROUPS.flatMap((g) =>
   g.locations.map((loc) => ({
+    kind: 'pin' as const,
     name: loc.name,
     groupName: g.name,
     groupIcon: g.icon,
@@ -38,17 +52,42 @@ const ALL_PINS: PinEntry[] = LOCATION_GROUPS.flatMap((g) =>
   }))
 );
 
+function buildShipEntries(): ShipEntry[] {
+  return useShipsStatus.getState().ships.flatMap((ship) => {
+    const fleet = FLEET_ROSTER.find((f) => f.mmsi === ship.mmsi);
+    if (!fleet) return [];
+    const lat = ship.latitude;
+    const lon = ship.longitude;
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lon) ||
+      Math.abs(lat) > 90 ||
+      Math.abs(lon) > 180
+    )
+      return [];
+    return [
+      {
+        kind: 'ship' as const,
+        name: ship.name?.trim() || fleet.name,
+        lat,
+        lon,
+        mmsi: ship.mmsi,
+      },
+    ];
+  });
+}
+
 function rand(min: number, max: number) {
   return min + Math.random() * (max - min);
 }
 
-function buildQueue(): PinEntry[] {
-  const a = [...ALL_PINS];
-  for (let i = a.length - 1; i > 0; i--) {
+function buildQueue(): VisitEntry[] {
+  const combined: VisitEntry[] = [...ALL_PINS, ...buildShipEntries()];
+  for (let i = combined.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
+    [combined[i], combined[j]] = [combined[j], combined[i]];
   }
-  return a;
+  return combined;
 }
 
 async function sampleGroundHeight(v: Cesium.Viewer, lon: number, lat: number): Promise<number> {
@@ -72,7 +111,7 @@ export function PinsController() {
   const setCurrentPoi = useScreensaverStore((s) => s.setCurrentPoi);
 
   const cancelledRef = useRef(false);
-  const queueRef = useRef<PinEntry[]>([]);
+  const queueRef = useRef<VisitEntry[]>([]);
   const poiTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rafRef = useRef(0);
@@ -123,31 +162,61 @@ export function PinsController() {
     async function visitNext() {
       if (cancelledRef.current) return;
       if (queueRef.current.length === 0) queueRef.current = buildQueue();
-      const pin = queueRef.current.shift()!;
-
-      const poi: Poi = {
-        title: pin.name,
-        description: `${pin.groupIcon} ${pin.groupName}`,
-        lat: pin.lat,
-        lon: pin.lon,
-        altitudeM: ORBIT_RANGE_M,
-        category: 'pin',
-        meta: { color: pin.color },
-      };
+      const entry = queueRef.current.shift()!;
 
       setPhase('flying-to');
+
+      if (entry.kind === 'ship') {
+        const poi: Poi = {
+          title: entry.name,
+          description: '🚢 Windstar Cruises',
+          lat: entry.lat,
+          lon: entry.lon,
+          altitudeM: ORBIT_RANGE_M,
+          category: 'ship',
+        };
+        setCurrentPoi(poi);
+
+        // Ships sit at sea level; skip terrain sampling.
+        const target = Cesium.Cartesian3.fromDegrees(entry.lon, entry.lat, 0);
+        const back = ORBIT_RANGE_M * Math.cos(-ORBIT_PITCH_RAD);
+        const up = ORBIT_RANGE_M * Math.sin(-ORBIT_PITCH_RAD);
+        const startLat = entry.lat - back / METERS_PER_DEG_LAT;
+
+        v.camera.flyTo({
+          destination: Cesium.Cartesian3.fromDegrees(entry.lon, startLat, up),
+          orientation: { heading: 0, pitch: ORBIT_PITCH_RAD, roll: 0 },
+          duration: 5.0,
+          complete: () => {
+            if (cancelledRef.current) return;
+            orbitDwell(target);
+          },
+        });
+        return;
+      }
+
+      const poi: Poi = {
+        title: entry.name,
+        description: `${entry.groupIcon} ${entry.groupName}`,
+        lat: entry.lat,
+        lon: entry.lon,
+        altitudeM: ORBIT_RANGE_M,
+        category: 'pin',
+        meta: { color: entry.color },
+      };
+
       setCurrentPoi(poi);
 
-      const baseH = await sampleGroundHeight(v, pin.lon, pin.lat);
+      const baseH = await sampleGroundHeight(v, entry.lon, entry.lat);
       if (cancelledRef.current) return;
 
-      const target = Cesium.Cartesian3.fromDegrees(pin.lon, pin.lat, baseH);
+      const target = Cesium.Cartesian3.fromDegrees(entry.lon, entry.lat, baseH);
       const back = ORBIT_RANGE_M * Math.cos(-ORBIT_PITCH_RAD);
       const up = baseH + ORBIT_RANGE_M * Math.sin(-ORBIT_PITCH_RAD);
-      const startLat = pin.lat - back / METERS_PER_DEG_LAT;
+      const startLat = entry.lat - back / METERS_PER_DEG_LAT;
 
       v.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(pin.lon, startLat, up),
+        destination: Cesium.Cartesian3.fromDegrees(entry.lon, startLat, up),
         orientation: { heading: 0, pitch: ORBIT_PITCH_RAD, roll: 0 },
         duration: 5.0,
         complete: () => {
