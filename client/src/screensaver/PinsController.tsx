@@ -36,6 +36,10 @@ interface ShipEntry {
   lat: number;
   lon: number;
   mmsi: string;
+  cls: 'STAR' | 'WIND';
+  speedKt: number | null;
+  heading: number | null;
+  aisTimestamp: number | null;
 }
 
 type VisitEntry = PinEntry | ShipEntry;
@@ -72,6 +76,10 @@ function buildShipEntries(): ShipEntry[] {
         lat,
         lon,
         mmsi: ship.mmsi,
+        cls: fleet.cls,
+        speedKt: ship.speedKt,
+        heading: ship.heading ?? ship.course ?? null,
+        aisTimestamp: ship.lastSeenSec > 0 ? ship.lastSeenSec * 1000 : null,
       },
     ];
   });
@@ -174,6 +182,13 @@ export function PinsController() {
           lon: entry.lon,
           altitudeM: ORBIT_RANGE_M,
           category: 'ship',
+          meta: {
+            mmsi: entry.mmsi,
+            cls: entry.cls,
+            speedKt: entry.speedKt,
+            heading: entry.heading,
+            aisTimestamp: entry.aisTimestamp,
+          },
         };
         setCurrentPoi(poi);
 

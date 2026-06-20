@@ -27,6 +27,7 @@ import { HoverController } from './screensaver/HoverController';
 import { HoverOverlay } from './screensaver/HoverOverlay';
 import { PinsContextBox } from './screensaver/PinsContextBox';
 import { PinsFocusCard } from './screensaver/PinsFocusCard';
+import { ShipFocusCard } from './screensaver/ShipFocusCard';
 import { PinsLootBeam } from './screensaver/PinsLootBeam';
 import { ScreensaverWatchCards } from './screensaver/ScreensaverWatchCards';
 import { WebcamScreensaverCallouts } from './screensaver/WebcamScreensaverCallouts';
@@ -93,6 +94,7 @@ export default function App() {
         <HoverController />
         <PinsContextBox />
         <PinsFocusCard />
+        <ShipFocusCard />
         <PinsLootBeam />
         <ScreensaverWatchCards />
         <WebcamScreensaverCallouts />
