@@ -332,29 +332,6 @@ export function CesiumGlobe({ children, onReady }: Props) {
     return () => off();
   }, [viewer]);
 
-  // While the pins screensaver orbits a ship, the camera looks down on open
-  // ocean whose high-zoom tiles are often unavailable, so Cesium would show a
-  // gray "no data" placeholder. Switching baseColor to a dark ocean blue makes
-  // those gaps invisible — they blend with the surrounding water instead of
-  // flashing an ugly gray rectangle. This blend (not preloadAncestors, which we
-  // keep off above) is the whole gray-tile fix, so the GPU is spared the burst.
-  useEffect(() => {
-    if (!viewer) return;
-    const OCEAN   = Cesium.Color.fromCssColorString('#04111f');
-    const DEFAULT = Cesium.Color.fromCssColorString('#05070a');
-    const update = () => {
-      const ss = useScreensaverStore.getState();
-      const shipFocus = ss.active && ss.mode === 'pins' && ss.currentPoi?.category === 'ship';
-      viewer.scene.globe.baseColor = shipFocus ? OCEAN : DEFAULT;
-      viewer.scene.requestRender();
-    };
-    update();
-    const unsub = useScreensaverStore.subscribe(update);
-    return () => {
-      unsub();
-      viewer.scene.globe.baseColor = DEFAULT;
-    };
-  }, [viewer]);
 
   // Render quality: graduated trade of anti-aliasing, terrain detail,
   // resolution and atmosphere/lighting for frame rate, driven by the quality

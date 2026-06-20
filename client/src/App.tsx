@@ -10,7 +10,6 @@ import { HurricaneLayer } from './layers/hurricanes/HurricaneLayer';
 import { LightningLayer } from './layers/lightning/LightningLayer';
 import { FireLayer } from './layers/fires/FireLayer';
 import { ShipLayer } from './layers/ships/ShipLayer';
-import { ShipModelLayer } from './layers/ships/ShipModelLayer';
 import { SatelliteLayer } from './layers/satellites/SatelliteLayer';
 import { LocationsLayer } from './layers/locations/LocationsLayer';
 import { WebcamsLayer } from './layers/webcams/WebcamsLayer';
@@ -28,7 +27,6 @@ import { HoverController } from './screensaver/HoverController';
 import { HoverOverlay } from './screensaver/HoverOverlay';
 import { PinsContextBox } from './screensaver/PinsContextBox';
 import { PinsFocusCard } from './screensaver/PinsFocusCard';
-import { ShipFocusCard } from './screensaver/ShipFocusCard';
 import { PinsLootBeam } from './screensaver/PinsLootBeam';
 import { ScreensaverWatchCards } from './screensaver/ScreensaverWatchCards';
 import { WebcamScreensaverCallouts } from './screensaver/WebcamScreensaverCallouts';
@@ -74,7 +72,6 @@ export default function App() {
           <LightningLayer />
           <FlightLayer />
           <ShipLayer />
-          <ShipModelLayer />
           <SatelliteLayer />
           <LocationsLayer />
           <WebcamsLayer />
@@ -96,7 +93,6 @@ export default function App() {
         <HoverController />
         <PinsContextBox />
         <PinsFocusCard />
-        <ShipFocusCard />
         <PinsLootBeam />
         <ScreensaverWatchCards />
         <WebcamScreensaverCallouts />
