@@ -56,38 +56,53 @@ export function PinsFocusCard() {
 
   return (
     <div
-      className={`pointer-events-none absolute bottom-36 left-1/2 z-30 w-[min(360px,calc(100vw-2rem))] -translate-x-1/2 transition-all duration-500 ${
+      className={`pointer-events-none absolute bottom-10 left-1/2 z-30 w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 transition-all duration-500 ${
         visible ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
       }`}
     >
       <div
-        className="overflow-hidden rounded-xl border bg-ink-900/90 px-3.5 py-2.5 shadow-2xl backdrop-blur-md"
+        className="overflow-hidden rounded-xl border bg-ink-900/90 shadow-2xl backdrop-blur-md"
         style={{ borderColor: `${color}55` }}
       >
-        <div className="flex items-center gap-2">
-          <span aria-hidden className="text-[15px]">
-            {info?.group.icon ?? '📍'}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-white/90">
-            {shown.title}
-          </span>
-          <span className="shrink-0 text-[9px] font-medium uppercase tracking-wider text-white/35">
-            {info?.group.name ?? ''}
-          </span>
+        {/* Title section — absorbs what ScreensaverToast showed for pins mode */}
+        <div className="px-5 pt-4 pb-3">
+          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/30">
+            {info?.group.name ?? 'Property'}
+          </div>
+          <div className="flex items-start gap-3">
+            <span aria-hidden className="mt-0.5 text-xl leading-none">
+              {info?.group.icon ?? '📍'}
+            </span>
+            <div className="min-w-0">
+              <div
+                className="text-[15px] font-bold leading-tight truncate"
+                style={{ color }}
+              >
+                {shown.title}
+              </div>
+              {shown.description && (
+                <div className="mt-0.5 text-[11px] text-white/50">{shown.description}</div>
+              )}
+            </div>
+          </div>
         </div>
 
-        {match ? (
-          <HazardRows hazards={match} radiusMi={radiusMi} />
-        ) : scanned ? (
-          <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-accent-ok/90">
-            <span aria-hidden>✓</span>
-            <span>
-              All clear — nothing within {radiusMi} mi
-            </span>
-          </div>
-        ) : (
-          <div className="mt-1.5 text-[11px] text-white/40">Scanning nearby hazards…</div>
-        )}
+        {/* Hazard section */}
+        <div
+          className="border-t px-5 py-2.5"
+          style={{ borderColor: `${color}25` }}
+        >
+          {match ? (
+            <HazardRows hazards={match} radiusMi={radiusMi} />
+          ) : scanned ? (
+            <div className="flex items-center gap-1.5 text-[11px] text-accent-ok/90">
+              <span aria-hidden>✓</span>
+              <span>All clear — nothing within {radiusMi} mi</span>
+            </div>
+          ) : (
+            <div className="text-[11px] text-white/40">Scanning nearby hazards…</div>
+          )}
+        </div>
       </div>
     </div>
   );

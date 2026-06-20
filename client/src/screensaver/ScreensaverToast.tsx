@@ -37,8 +37,12 @@ export function ScreensaverToast() {
   const active = useScreensaverStore((s) => s.active);
   const phase = useScreensaverStore((s) => s.phase);
   const poi = useScreensaverStore((s) => s.currentPoi);
+  const mode = useScreensaverStore((s) => s.mode);
 
-  const visible = active && phase === 'at-poi' && poi !== null;
+  // Pins mode has its own merged focus card (PinsFocusCard / ShipFocusCard)
+  // that already contains the title/description. Show this toast only for the
+  // other screensaver modes (earthquake, ISS, parks, etc.).
+  const visible = active && phase === 'at-poi' && poi !== null && mode !== 'pins';
 
   return (
     <div

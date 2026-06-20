@@ -57,7 +57,7 @@ export function ShipFocusCard() {
 
   return (
     <div
-      className={`pointer-events-none absolute bottom-36 left-1/2 z-30 w-[min(400px,calc(100vw-2rem))] -translate-x-1/2 transition-all duration-500 ${
+      className={`pointer-events-none absolute bottom-10 left-1/2 z-30 w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 transition-all duration-500 ${
         visible ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
       }`}
     >
@@ -65,15 +65,23 @@ export function ShipFocusCard() {
         className="overflow-hidden rounded-xl border bg-ink-900/90 shadow-2xl backdrop-blur-md"
         style={{ borderColor: `${color}55` }}
       >
-        {/* Header row */}
-        <div className="flex items-center gap-2 px-3.5 pt-2.5 pb-1">
-          <span aria-hidden className="text-[15px]">🚢</span>
-          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-white/90">
-            {shown.title}
-          </span>
+        {/* Title section — absorbs what ScreensaverToast showed for ships */}
+        <div className="flex items-start gap-3 px-5 pt-4 pb-3">
+          <span aria-hidden className="mt-0.5 text-xl leading-none">🚢</span>
+          <div className="min-w-0 flex-1">
+            <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/30">
+              {shown.description ?? 'Windstar Cruises'}
+            </div>
+            <div
+              className="text-[15px] font-bold leading-tight truncate"
+              style={{ color }}
+            >
+              {shown.title}
+            </div>
+          </div>
           {resolvedCls && (
             <span
-              className="shrink-0 rounded px-2 py-0.5 text-[9px] font-bold tracking-[0.13em]"
+              className="mt-1 shrink-0 rounded px-2 py-0.5 text-[9px] font-bold tracking-[0.13em]"
               style={{ color, background: `${color}18`, border: `1px solid ${color}40` }}
             >
               {resolvedCls} CLASS
@@ -81,21 +89,22 @@ export function ShipFocusCard() {
           )}
         </div>
 
-        {/* Rotating 3D wireframe */}
-        <div className="flex justify-center px-3.5">
-          {resolvedCls && (
-            <ShipWireframe2D
-              variant={resolvedCls === 'STAR' ? 'star' : 'wind'}
-              color={color}
-              masts={mastCountForShip(fleet?.name ?? shown.title)}
-              width={310}
-              height={116}
-            />
-          )}
-        </div>
+        {/* Wireframe + stats */}
+        <div className="border-t" style={{ borderColor: `${color}25` }}>
+          <div className="flex justify-center px-3.5 pt-1">
+            {resolvedCls && (
+              <ShipWireframe2D
+                variant={resolvedCls === 'STAR' ? 'star' : 'wind'}
+                color={color}
+                masts={mastCountForShip(fleet?.name ?? shown.title)}
+                width={310}
+                height={116}
+              />
+            )}
+          </div>
 
-        {/* Speed / heading / AIS age row */}
-        <div className="flex items-center gap-3 px-3.5 pb-2.5 text-[11px] text-white/50">
+          {/* Speed / heading / AIS age row */}
+          <div className="flex items-center gap-3 px-5 pb-3 text-[11px] text-white/50">
           {speedKt != null && speedKt > 0.5 ? (
             <span className="font-mono text-white/80">{speedKt.toFixed(1)} kt</span>
           ) : (
@@ -107,6 +116,7 @@ export function ShipFocusCard() {
           {aisAge && (
             <span className="ml-auto font-mono text-white/30">AIS {aisAge}</span>
           )}
+          </div>
         </div>
       </div>
     </div>
