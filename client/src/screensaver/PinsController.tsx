@@ -15,7 +15,11 @@ const POI_INTERVAL_MAX_MS = 20_000;
 const POI_DWELL_MIN_MS = 12_000;
 const POI_DWELL_MAX_MS = 18_000;
 
+// Orbit standoff. Ships keep the wide 15 km framing that suits the ~490 m hero
+// wireframe; property pins pull in closer so the pin + 2.6 km loot beam read
+// clearly (but not as tight as the old ~850 m, which felt claustrophobic).
 const ORBIT_RANGE_M = 15_000;
+const PIN_ORBIT_RANGE_M = 8_000;
 const ORBIT_PERIOD_MS = 32_000;
 const ORBIT_PITCH_RAD = Cesium.Math.toRadians(-45);
 const METERS_PER_DEG_LAT = 110_574;
@@ -147,7 +151,7 @@ export function PinsController() {
       poiTimerRef.current = setTimeout(visitNext, rand(POI_INTERVAL_MIN_MS, POI_INTERVAL_MAX_MS));
     }
 
-    function orbitDwell(target: Cesium.Cartesian3) {
+    function orbitDwell(target: Cesium.Cartesian3, range: number) {
       setPhase('at-poi');
       const orbitStart = performance.now();
       const tick = () => {
@@ -155,7 +159,7 @@ export function PinsController() {
         const heading =
           (((performance.now() - orbitStart) % ORBIT_PERIOD_MS) * Cesium.Math.TWO_PI) /
           ORBIT_PERIOD_MS;
-        v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, ORBIT_PITCH_RAD, ORBIT_RANGE_M));
+        v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, ORBIT_PITCH_RAD, range));
         rafRef.current = requestAnimationFrame(tick);
       };
       rafRef.current = requestAnimationFrame(tick);
@@ -204,7 +208,7 @@ export function PinsController() {
           duration: 5.0,
           complete: () => {
             if (cancelledRef.current) return;
-            orbitDwell(target);
+            orbitDwell(target, ORBIT_RANGE_M);
           },
         });
         return;
@@ -215,7 +219,7 @@ export function PinsController() {
         description: `${entry.groupIcon} ${entry.groupName}`,
         lat: entry.lat,
         lon: entry.lon,
-        altitudeM: ORBIT_RANGE_M,
+        altitudeM: PIN_ORBIT_RANGE_M,
         category: 'pin',
         meta: { color: entry.color },
       };
@@ -226,8 +230,8 @@ export function PinsController() {
       if (cancelledRef.current) return;
 
       const target = Cesium.Cartesian3.fromDegrees(entry.lon, entry.lat, baseH);
-      const back = ORBIT_RANGE_M * Math.cos(-ORBIT_PITCH_RAD);
-      const up = baseH + ORBIT_RANGE_M * Math.sin(-ORBIT_PITCH_RAD);
+      const back = PIN_ORBIT_RANGE_M * Math.cos(-ORBIT_PITCH_RAD);
+      const up = baseH + PIN_ORBIT_RANGE_M * Math.sin(-ORBIT_PITCH_RAD);
       const startLat = entry.lat - back / METERS_PER_DEG_LAT;
 
       v.camera.flyTo({
@@ -236,7 +240,7 @@ export function PinsController() {
         duration: 5.0,
         complete: () => {
           if (cancelledRef.current) return;
-          orbitDwell(target);
+          orbitDwell(target, PIN_ORBIT_RANGE_M);
         },
       });
     }
