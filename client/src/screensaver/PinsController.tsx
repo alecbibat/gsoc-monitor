@@ -83,12 +83,17 @@ function rand(min: number, max: number) {
 }
 
 // Snap the current live ship positions from the store for interleaving into the
-// visit queue. Only includes allowlisted ships that have a known position; if
-// the AIS stream isn't connected this is empty and the tour is pins-only.
+// visit queue. Only includes allowlisted ships with valid, in-range coordinates;
+// AIS uses 91°/181° as "position not available" sentinels which would send the
+// camera to a NaN/degenerate Cartesian position and crash the screensaver.
 function buildShipEntries(): ShipEntry[] {
   return useShipsStatus.getState().ships.flatMap((ship) => {
     const fleet = FLEET_ROSTER.find((f) => f.mmsi === ship.mmsi);
     if (!fleet) return [];
+    if (
+      !Number.isFinite(ship.latitude) || !Number.isFinite(ship.longitude) ||
+      Math.abs(ship.latitude) > 90 || Math.abs(ship.longitude) > 180
+    ) return [];
     return [{
       kind: 'ship' as const,
       name: ship.name?.trim() || fleet.name,
@@ -208,8 +213,6 @@ export function PinsController() {
           meta: {
             mmsi: entry.mmsi,
             cls: entry.cls,
-            // Fleet color so the loot beam over the ship matches its class.
-            color: entry.color,
             speedKt: entry.speedKt,
             heading: entry.heading,
             // Absolute Unix-ms of the last AIS fix so the card can tick forward.

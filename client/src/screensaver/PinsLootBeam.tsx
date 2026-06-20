@@ -20,15 +20,16 @@ function radialGlowUrl(): string {
 }
 const GLOW_URL = radialGlowUrl();
 
-// A sleek glowing "loot beam" through the focused target during the pins
+// A sleek glowing "loot beam" through the focused property pin during the pins
 // screensaver — a soft outer halo + bright inner core rendered as screen-space
 // PolylineGlow shafts (crisp at any zoom, no chunky tube), anchored to a
 // ground-clamped radial glow. The base tracks terrain height so the beam
 // terminates at the surface instead of punching through it.
 //
-// Fires over both property pins and focused ships: a ship over open ocean is
-// otherwise just a near-invisible billboard at orbit altitude, so the beam
-// gives it the same clear "here" marker the pins get (tinted the fleet color).
+// Ships are deliberately excluded: HeightReference.CLAMP_TO_GROUND over open
+// ocean creates a degenerate GPU state (no terrain to clamp to at the ship's
+// zoom level) that causes an immediate WebGL context loss on the first ship
+// orbit, crashing the screensaver on any GPU.
 export function PinsLootBeam() {
   const viewer = useCesiumViewer();
   const active = useScreensaverStore((s) => s.active);
@@ -44,10 +45,7 @@ export function PinsLootBeam() {
   const STAGE_LOOT_BEAM_ENABLED = true;
 
   const isFocus =
-    STAGE_LOOT_BEAM_ENABLED &&
-    active &&
-    mode === 'pins' &&
-    (poi?.category === 'pin' || poi?.category === 'ship');
+    STAGE_LOOT_BEAM_ENABLED && active && mode === 'pins' && poi?.category === 'pin';
   const lon = poi?.lon;
   const lat = poi?.lat;
   const colorHex = (poi?.meta?.color as string | undefined) ?? '#a78bfa';
@@ -120,6 +118,7 @@ export function PinsLootBeam() {
       v.scene.requestRender();
     };
   }, [viewer, isFocus, lon, lat, colorHex]);
+
 
   return null;
 }
