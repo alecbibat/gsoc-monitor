@@ -9,7 +9,6 @@ import earthquakesRouter from './routes/earthquakes';
 import radarRouter from './routes/radar';
 import flightsRouter from './routes/flights';
 import geocodeRouter from './routes/geocode';
-import pizzaRouter from './routes/pizza';
 import shipsRouter, { initShipsStream } from './routes/ships';
 import newsRouter from './routes/news';
 import countyRouter from './routes/county';
@@ -82,7 +81,6 @@ function main() {
   app.use('/api/radar', radarRouter);
   app.use('/api/flights', flightsRouter);
   app.use('/api/geocode', geocodeRouter);
-  app.use('/api/pizza', pizzaRouter);
   app.use('/api/ships', shipsRouter);
   app.use('/api/news', newsRouter);
   app.use('/api/county', countyRouter);

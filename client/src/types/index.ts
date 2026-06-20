@@ -18,7 +18,7 @@ export type LayerId =
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
 // Standalone dockable widgets that aren't tied to a clicked map entity.
-export type WidgetId = 'pentagon-pizza' | 'news-feed' | 'fear-greed' | 'defcon' | 'proximity';
+export type WidgetId = 'news-feed' | 'proximity';
 
 // Anything that can occupy a dockable panel. 'property-watch' is a popped-out
 // single-property hazard window spawned from the Property Watch widget.
@@ -206,21 +206,6 @@ export interface DriveResult {
   geometry: Array<[number, number]>; // [lon, lat] pairs
   steps: RouteStep[];
   routed: boolean;
-}
-
-export interface PizzaPlaceBusyness {
-  name: string;
-  area: string;
-  live: number | null; // current busyness 0-100, null when unavailable
-  forecast: number | null; // typical busyness for this hour 0-100
-  delta: number | null; // live minus forecast (positive = busier than usual)
-}
-
-export interface PizzaBusyness {
-  // 'besttime' = live data; otherwise the widget uses its modeled signal.
-  source: 'besttime' | 'no-key' | 'error';
-  places: PizzaPlaceBusyness[];
-  updated: number;
 }
 
 export interface Webcam {

@@ -24,7 +24,6 @@ export const api = {
     getJson<Array<{ lat: string; lon: string; display_name: string; boundingbox: string[] }>>(
       `/api/geocode?q=${encodeURIComponent(q)}`
     ),
-  pizza: () => getJson<import('../types').PizzaBusyness>('/api/pizza'),
   ships: () => getJson<import('../types').ShipsResponse>('/api/ships'),
   satellites: (group: import('../types').SatelliteGroup) =>
     getJson<import('../types').SatellitesResponse>(`/api/satellites?group=${group}`),
