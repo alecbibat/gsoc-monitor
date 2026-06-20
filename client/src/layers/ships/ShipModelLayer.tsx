@@ -5,10 +5,11 @@ import { useScreensaverStore } from '../../screensaver/screensaverStore';
 import { shipWireframeSegments, mastCountForShip } from './ShipModel3D';
 import { fleetColor, FLEET_ROSTER } from './fleet';
 
-// Metres per model unit. The hull spans ~9 units bow-to-stern; SCALE=180 yields
-// a ~1.6 km hero wireframe — visible from the 15 km screensaver orbit without
-// requiring a closer flyby over open ocean.
-const SCALE = 180;
+// Metres per model unit. The hull spans ~9 units bow-to-stern; SCALE=54 yields
+// a ~490 m hull — 3x the real Windstar length, so it reads as a believable
+// (if heroic) vessel that stays legible from the 15 km screensaver orbit
+// without dominating the frame.
+const SCALE = 54;
 
 // Replaces the flat ship billboard with the true 3D wireframe model (the same
 // geometry shown in the ship card) while the pins screensaver orbits a ship.
