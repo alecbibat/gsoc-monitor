@@ -10,6 +10,7 @@ import { HurricaneLayer } from './layers/hurricanes/HurricaneLayer';
 import { LightningLayer } from './layers/lightning/LightningLayer';
 import { FireLayer } from './layers/fires/FireLayer';
 import { ShipLayer } from './layers/ships/ShipLayer';
+import { ShipModelLayer } from './layers/ships/ShipModelLayer';
 import { SatelliteLayer } from './layers/satellites/SatelliteLayer';
 import { LocationsLayer } from './layers/locations/LocationsLayer';
 import { WebcamsLayer } from './layers/webcams/WebcamsLayer';
@@ -82,6 +83,7 @@ export default function App() {
           <TrafficLayer />
           <MeasureController />
           <CrisisMapLayer />
+          <ShipModelLayer />
         </CesiumGlobe>
         <TopBar />
         <Sidebar />

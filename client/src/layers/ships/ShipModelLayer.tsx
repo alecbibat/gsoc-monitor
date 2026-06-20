@@ -5,10 +5,10 @@ import { useScreensaverStore } from '../../screensaver/screensaverStore';
 import { shipWireframeSegments, mastCountForShip } from './ShipModel3D';
 import { fleetColor, FLEET_ROSTER } from './fleet';
 
-// Metres per model unit. The hull spans ~9 units bow-to-stern, so this yields a
-// ~160 m vessel — close to the real Windstar ships and a good size for the
-// ~850 m screensaver orbit.
-const SCALE = 18;
+// Metres per model unit. The hull spans ~9 units bow-to-stern; SCALE=180 yields
+// a ~1.6 km hero wireframe — visible from the 15 km screensaver orbit without
+// requiring a closer flyby over open ocean.
+const SCALE = 180;
 
 // Replaces the flat ship billboard with the true 3D wireframe model (the same
 // geometry shown in the ship card) while the pins screensaver orbits a ship.
@@ -23,12 +23,7 @@ export function ShipModelLayer() {
   const collRef = useRef<Cesium.PolylineCollection | null>(null);
   const restoreRef = useRef<(() => void) | null>(null);
 
-  // Disabled: the PolylineCollection (~100 lines) is rendered every frame during
-  // the dwell (requestRenderMode=false) and is the last ship-unique GPU overhead
-  // that was causing black-screen crashes on weak integrated GPUs. The
-  // ShipWireframe2D in ShipFocusCard already provides the spinning wireframe;
-  // the in-world model can be re-enabled once the stable floor is confirmed.
-  const isShipFocus = false as boolean;
+  const isShipFocus = active && mode === 'pins' && poi?.category === 'ship';
   const mmsi    = poi?.meta?.mmsi as string | undefined;
   const cls     = poi?.meta?.cls as 'STAR' | 'WIND' | undefined;
   const heading = (poi?.meta?.heading as number | null | undefined) ?? 0;
