@@ -2,11 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useScreensaverStore } from './screensaverStore';
 import { useUiStore } from '../ui/uiStore';
 import { useProximityStore } from '../widgets/proximity/proximityStore';
-import { useLightningStatus } from '../layers/lightning/lightningStore';
 import { HazardRows } from '../widgets/proximity/HazardRows';
-import { LightningTicker } from '../widgets/proximity/LightningTicker';
-import { fmtMiles, timeAgo } from '../widgets/proximity/format';
-import { haversineMeters, metersToMiles } from '../lib/geo';
 
 // Credits-roll column shown in the right rail during the pins screensaver.
 // Lists each watched property and its hazards in a vertical marquee. When the
@@ -46,29 +42,6 @@ export function ScreensaverWatchCards() {
     const id = setInterval(() => scan(), 5 * 60_000);
     return () => clearInterval(id);
   }, [isPins, result, scan]);
-
-  // ── Nearest lightning strike to the current POI ───────────────────────────
-  // Subscribe into a ref so the high-frequency strike stream never re-renders
-  // the column; recompute the nearest strike on a slow interval instead.
-  const strikesRef = useRef(useLightningStatus.getState().strikes);
-  useEffect(() => useLightningStatus.subscribe((s) => { strikesRef.current = s.strikes; }), []);
-
-  const [nearestStrike, setNearestStrike] = useState<{ distMi: number; t: number } | null>(null);
-  useEffect(() => {
-    const compute = () => {
-      const strikes = strikesRef.current;
-      if (!poi || strikes.length === 0) { setNearestStrike(null); return; }
-      let bestDist = Infinity, bestT = 0;
-      for (const s of strikes) {
-        const d = metersToMiles(haversineMeters(poi.lat, poi.lon, s.lat, s.lon));
-        if (d < bestDist) { bestDist = d; bestT = s.t; }
-      }
-      setNearestStrike({ distMi: bestDist, t: bestT });
-    };
-    compute();
-    const id = setInterval(compute, 15_000);
-    return () => clearInterval(id);
-  }, [poi?.lat, poi?.lon]);
 
   // Enable auto-scroll only when the card list overflows the flex viewport.
   useLayoutEffect(() => {
@@ -119,8 +92,10 @@ export function ScreensaverWatchCards() {
     );
 
   return (
+    // Hidden on mobile — the column is 240 px wide and blocks most of a phone
+    // screen. The focused property's hazards are already in the bottom card.
     <div
-      className="pointer-events-none absolute right-6 z-30 flex flex-col gap-2"
+      className="pointer-events-none absolute right-6 z-30 hidden flex-col gap-2 md:flex"
       style={{ top, bottom, width: COL_W, transition: 'bottom 0.5s ease' }}
     >
       {/* Section label */}
@@ -135,25 +110,6 @@ export function ScreensaverWatchCards() {
           </span>
         )}
       </div>
-
-      {/* Lightning ticker — static at the top of the column */}
-      <div className="shrink-0">
-        <LightningTicker />
-      </div>
-
-      {/* Nearest lightning strike to the focused POI */}
-      {nearestStrike && poi && (
-        <div className="shrink-0 rounded-lg border border-white/8 bg-white/5 px-3 py-2 text-[11px] shadow-lg backdrop-blur-sm">
-          <div className="flex items-center gap-1.5">
-            <span aria-hidden style={{ color: '#ffd60a' }}>⚡</span>
-            <span className="text-white/60">Nearest strike</span>
-          </div>
-          <div className="mt-0.5 font-mono text-white/80">
-            {fmtMiles(nearestStrike.distMi)} mi
-            <span className="ml-2 text-white/35">{timeAgo(nearestStrike.t)}</span>
-          </div>
-        </div>
-      )}
 
       {/* Scrolling property cards — fills remaining height */}
       <div ref={viewportRef} className="relative min-h-0 flex-1 overflow-hidden">
