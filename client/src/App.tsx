@@ -11,6 +11,7 @@ import { LightningLayer } from './layers/lightning/LightningLayer';
 import { FireLayer } from './layers/fires/FireLayer';
 import { ShipLayer } from './layers/ships/ShipLayer';
 import { ShipModelLayer } from './layers/ships/ShipModelLayer';
+import { ShipShockwave } from './screensaver/ShipShockwave';
 import { SatelliteLayer } from './layers/satellites/SatelliteLayer';
 import { LocationsLayer } from './layers/locations/LocationsLayer';
 import { WebcamsLayer } from './layers/webcams/WebcamsLayer';
@@ -98,6 +99,7 @@ export default function App() {
         <PinsFocusCard />
         <ShipFocusCard />
         <PinsLootBeam />
+        <ShipShockwave />
         <ScreensaverWatchCards />
         <WebcamScreensaverCallouts />
         <ScreensaverToast />
