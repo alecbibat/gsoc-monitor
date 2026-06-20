@@ -21,6 +21,18 @@ export function ShipFocusCard() {
     if (poi?.category === 'ship') setShown(poi);
   }, [poi]);
 
+  // Tick every 20 s so the "X ago" label stays current during the dwell.
+  // MUST stay above the early return below: a hook placed after a conditional
+  // return runs on some renders but not others, which violates the Rules of
+  // Hooks and throws "rendered more hooks than during the previous render" —
+  // unmounting the whole React tree to a black screen the instant a ship POI
+  // flips `shown` non-null. That was the ship-screensaver "crash".
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 20_000);
+    return () => clearInterval(id);
+  }, []);
+
   if (!isPins || !shown || shown.category !== 'ship') return null;
   const visible = poi?.category === 'ship';
 
@@ -29,13 +41,6 @@ export function ShipFocusCard() {
   const heading      = shown.meta?.heading as number | null | undefined;
   const cls          = shown.meta?.cls as 'STAR' | 'WIND' | undefined;
   const aisTimestamp = shown.meta?.aisTimestamp as number | undefined;
-
-  // Tick every 20 s so the "X ago" label stays current during the dwell.
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 20_000);
-    return () => clearInterval(id);
-  }, []);
 
   const fmtAge = (ms: number) => {
     const sec = ms / 1000;
