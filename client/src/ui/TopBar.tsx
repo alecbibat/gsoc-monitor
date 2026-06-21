@@ -69,7 +69,7 @@ function LiveClock() {
 
   return (
     <div
-      className="pointer-events-auto hidden items-baseline gap-1.5 rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 shadow-panel backdrop-blur-sm sm:flex"
+      className="pointer-events-auto hidden items-baseline gap-1.5 rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 shadow-panel backdrop-blur-sm md:flex"
       title={fullDate}
     >
       <span className="font-mono text-[13px] font-semibold tabular-nums tracking-wider text-white/90">
@@ -121,7 +121,7 @@ function DeployStamp() {
 
   return (
     <div
-      className="pointer-events-auto hidden items-center gap-1.5 rounded-lg border border-white/10 bg-ink-900/80 px-2.5 py-2 shadow-panel backdrop-blur-sm sm:flex"
+      className="pointer-events-auto hidden items-center gap-1.5 rounded-lg border border-white/10 bg-ink-900/80 px-2.5 py-2 shadow-panel backdrop-blur-sm lg:flex"
       title={`Latest deploy: ${full} (${rel})`}
     >
       <span className="h-1.5 w-1.5 rounded-full bg-accent-ok/70" />
