@@ -22,17 +22,23 @@ export interface IcsRole {
   builtin: boolean;
 }
 
-export interface PersonnelMember {
-  id: string;
-  name: string;
-  organization?: string;
+// Contact details captured for a person — their professional title/rank and how
+// to reach them. Shared by the personnel pool and individual role assignments.
+export interface PersonnelDetails {
+  title?: string;
+  phone?: string;
+  email?: string;
 }
 
-export interface PersonnelAssignment {
+export interface PersonnelMember extends PersonnelDetails {
+  id: string;
+  name: string;
+}
+
+export interface PersonnelAssignment extends PersonnelDetails {
   id: string;
   roleId: string;
   name: string;
-  organization?: string;
   startedAt: string;
   endedAt?: string;
 }
@@ -223,11 +229,11 @@ interface CrisisState {
   resetRoles: () => void;
 
   // Personnel pool
-  addPersonnelMember: (name: string, org?: string) => void;
+  addPersonnelMember: (name: string, details?: PersonnelDetails) => void;
   removePersonnelMember: (id: string) => void;
 
   // Assignments
-  assignRole: (roleId: string, name: string, org?: string) => void;
+  assignRole: (roleId: string, name: string, details?: PersonnelDetails) => void;
   endAssignment: (id: string) => void;
 
   // Action log
@@ -336,10 +342,10 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
           return { ...inc, shareToken: anyActive?.token ?? null, shareLinks: updated };
         })),
 
-      addPersonnelMember: (name, org) =>
+      addPersonnelMember: (name, details) =>
         set((s) => patchActive(s, (inc) => ({
           ...inc,
-          personnel: [...(inc.personnel ?? []), { id: uid(), name, organization: org || undefined }],
+          personnel: [...(inc.personnel ?? []), { id: uid(), name, ...details }],
         }))),
 
       removePersonnelMember: (id) =>
@@ -389,7 +395,7 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
 
       resetRoles: () => set((s) => patchActive(s, (inc) => ({ ...inc, roles: DEFAULT_ROLES }))),
 
-      assignRole: (roleId, name, org) =>
+      assignRole: (roleId, name, details) =>
         set((s) => patchActive(s, (inc) => {
           const now = new Date().toISOString();
           const role = inc.roles.find((r) => r.id === roleId);
@@ -410,7 +416,7 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
             ...inc,
             assignments: [
               ...assignments,
-              { id: uid(), roleId, name, organization: org || undefined, startedAt: now },
+              { id: uid(), roleId, name, ...details, startedAt: now },
             ],
           };
         })),
@@ -477,7 +483,16 @@ export function extractPublicState(inc: Incident, publishedAt?: string): CrisisP
     incidentStatus: inc.incidentStatus,
     executiveSummary: inc.executiveSummary,
     roles: inc.roles,
-    assignments: inc.assignments,
+    // Strip personnel contact details (title/phone/email) from the public share
+    // payload — they're internal-only and must not leak through a share link.
+    // The public org chart renders names only, so nothing visible is lost.
+    assignments: inc.assignments.map((a) => ({
+      id: a.id,
+      roleId: a.roleId,
+      name: a.name,
+      startedAt: a.startedAt,
+      endedAt: a.endedAt,
+    })),
     actionLog: inc.actionLog,
     drawLayers: inc.drawLayers,
     publishedAt: publishedAt ?? new Date().toISOString(),

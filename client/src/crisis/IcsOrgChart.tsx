@@ -2,9 +2,38 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   useCrisisStore, selectActive,
   DEFAULT_ROLES,
-  type IcsRole,
+  type IcsRole, type PersonnelDetails,
   IC_COLOR, CMD_COLOR, OPS_COLOR, PLAN_COLOR, LOG_COLOR, FIN_COLOR,
 } from './crisisStore';
+
+// Renders a person's title + clickable phone/email beneath their name. Shared by
+// the personnel pool and the role edit panel so contact info displays uniformly.
+function ContactLines({ title, phone, email }: PersonnelDetails) {
+  if (!title && !phone && !email) return null;
+  return (
+    <div className="mt-0.5 space-y-0.5">
+      {title && <p className="text-[9px] text-white/45">{title}</p>}
+      {phone && (
+        <a
+          href={`tel:${phone.replace(/[^+\d]/g, '')}`}
+          onClick={(e) => e.stopPropagation()}
+          className="block text-[9px] text-white/40 transition hover:text-accent"
+        >
+          ☎ {phone}
+        </a>
+      )}
+      {email && (
+        <a
+          href={`mailto:${email}`}
+          onClick={(e) => e.stopPropagation()}
+          className="block truncate text-[9px] text-white/40 transition hover:text-accent"
+        >
+          ✉ {email}
+        </a>
+      )}
+    </div>
+  );
+}
 
 const WIRE = 'rgba(255,255,255,0.14)';
 const WIRE_DASH = `repeating-linear-gradient(to right,${WIRE} 0,${WIRE} 5px,transparent 5px,transparent 10px)`;
@@ -159,7 +188,7 @@ function NodeCard({
     setDragOver(false);
     const memberId = e.dataTransfer.getData('personnel-id');
     const member = personnel.find((p) => p.id === memberId);
-    if (member) assignRole(role.id, member.name, member.organization);
+    if (member) assignRole(role.id, member.name, { title: member.title, phone: member.phone, email: member.email });
   };
 
   const handleRemove = (e: React.MouseEvent) => {
@@ -356,7 +385,9 @@ function PersonnelPool() {
 
   const [adding, setAdding] = useState(false);
   const [nameInput, setNameInput] = useState('');
-  const [orgInput, setOrgInput] = useState('');
+  const [titleInput, setTitleInput] = useState('');
+  const [phoneInput, setPhoneInput] = useState('');
+  const [emailInput, setEmailInput] = useState('');
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -366,9 +397,15 @@ function PersonnelPool() {
   const handleAdd = () => {
     const n = nameInput.trim();
     if (!n) return;
-    addPersonnelMember(n, orgInput.trim() || undefined);
+    addPersonnelMember(n, {
+      title: titleInput.trim() || undefined,
+      phone: phoneInput.trim() || undefined,
+      email: emailInput.trim() || undefined,
+    });
     setNameInput('');
-    setOrgInput('');
+    setTitleInput('');
+    setPhoneInput('');
+    setEmailInput('');
   };
 
   const handleDragStart = (e: React.DragEvent, memberId: string) => {
@@ -394,28 +431,49 @@ function PersonnelPool() {
       </div>
 
       {adding && (
-        <div className="mb-3 flex gap-2">
-          <input
-            ref={nameRef}
-            className="flex-1 rounded border border-white/8 bg-white/8 px-2 py-1.5 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
-            placeholder="Full name"
-            value={nameInput}
-            onChange={(e) => setNameInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
-          />
-          <input
-            className="flex-1 rounded border border-white/8 bg-white/8 px-2 py-1.5 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
-            placeholder="Organization (optional)"
-            value={orgInput}
-            onChange={(e) => setOrgInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
-          />
+        <div className="mb-3 space-y-2 rounded-lg border border-white/8 bg-white/3 p-2.5">
+          <div className="flex flex-wrap gap-2">
+            <input
+              ref={nameRef}
+              className="min-w-[120px] flex-1 rounded border border-white/8 bg-white/8 px-2 py-1.5 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
+              placeholder="Full name"
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+            />
+            <input
+              className="min-w-[120px] flex-1 rounded border border-white/8 bg-white/8 px-2 py-1.5 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
+              placeholder="Title / rank (optional)"
+              value={titleInput}
+              onChange={(e) => setTitleInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="shrink-0 text-[8px] font-bold uppercase tracking-wider text-white/25">Contact</span>
+            <input
+              type="tel"
+              className="min-w-[110px] flex-1 rounded border border-white/8 bg-white/8 px-2 py-1.5 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
+              placeholder="Phone"
+              value={phoneInput}
+              onChange={(e) => setPhoneInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+            />
+            <input
+              type="email"
+              className="min-w-[110px] flex-1 rounded border border-white/8 bg-white/8 px-2 py-1.5 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
+              placeholder="Email"
+              value={emailInput}
+              onChange={(e) => setEmailInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+            />
+          </div>
           <button
             onClick={handleAdd}
             disabled={!nameInput.trim()}
-            className="rounded bg-accent/15 px-3 text-[10px] text-accent transition hover:bg-accent/25 disabled:opacity-30"
+            className="w-full rounded bg-accent/15 py-1 text-[10px] text-accent transition hover:bg-accent/25 disabled:opacity-30"
           >
-            Add
+            Add to pool
           </button>
         </div>
       )}
@@ -435,9 +493,11 @@ function PersonnelPool() {
             >
               <span className="text-white/25 select-none">⠿</span>
               <span>{member.name}</span>
-              {member.organization && (
-                <span className="text-white/30">· {member.organization}</span>
+              {member.title && (
+                <span className="text-white/30">· {member.title}</span>
               )}
+              {member.phone && <span className="text-white/25" title={member.phone}>☎</span>}
+              {member.email && <span className="text-white/25" title={member.email}>✉</span>}
               <button
                 onClick={() => removePersonnelMember(member.id)}
                 className="ml-0.5 text-white/15 opacity-0 transition hover:text-red-400/70 group-hover:opacity-100"
@@ -470,7 +530,9 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
   const addRole       = useCrisisStore((s) => s.addRole);
 
   const [nameInput, setNameInput] = useState('');
-  const [orgInput, setOrgInput] = useState('');
+  const [titleInput, setTitleInput] = useState('');
+  const [phoneInput, setPhoneInput] = useState('');
+  const [emailInput, setEmailInput] = useState('');
   const [addingChild, setAddingChild] = useState(false);
   const [childTitle, setChildTitle] = useState('');
   const [childAbbrev, setChildAbbrev] = useState('');
@@ -483,7 +545,9 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
 
   useEffect(() => {
     setNameInput(activeAssignment?.name ?? '');
-    setOrgInput(activeAssignment?.organization ?? '');
+    setTitleInput(activeAssignment?.title ?? '');
+    setPhoneInput(activeAssignment?.phone ?? '');
+    setEmailInput(activeAssignment?.email ?? '');
     setAddingChild(false);
   }, [roleId]);
 
@@ -497,9 +561,15 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
   const handleAssign = () => {
     const n = nameInput.trim();
     if (!n) return;
-    assignRole(roleId, n, orgInput.trim() || undefined);
+    assignRole(roleId, n, {
+      title: titleInput.trim() || undefined,
+      phone: phoneInput.trim() || undefined,
+      email: emailInput.trim() || undefined,
+    });
     setNameInput('');
-    setOrgInput('');
+    setTitleInput('');
+    setPhoneInput('');
+    setEmailInput('');
   };
 
   const handleAddChild = () => {
@@ -582,12 +652,12 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
           <p className="mb-1.5 text-[9px] uppercase tracking-wider text-white/35">Currently Assigned</p>
           <div className="space-y-1">
             {activeAssignments.map((a) => (
-              <div key={a.id} className="flex items-center justify-between rounded border border-white/8 bg-white/8 px-2 py-1.5">
-                <div>
+              <div key={a.id} className="flex items-start justify-between gap-2 rounded border border-white/8 bg-white/8 px-2 py-1.5">
+                <div className="min-w-0">
                   <p className="text-[11px] text-white/80">{a.name}</p>
-                  {a.organization && <p className="text-[9px] text-white/40">{a.organization}</p>}
+                  <ContactLines title={a.title} phone={a.phone} email={a.email} />
                 </div>
-                <button onClick={() => endAssignment(a.id)} className="text-[9px] text-red-400/60 hover:text-red-400">End</button>
+                <button onClick={() => endAssignment(a.id)} className="shrink-0 text-[9px] text-red-400/60 hover:text-red-400">End</button>
               </div>
             ))}
           </div>
@@ -600,14 +670,12 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
           {role.isSupport ? 'Add Personnel' : activeAssignment ? 'Reassign' : 'Assign Personnel'}
         </p>
         {!role.isSupport && activeAssignment && (
-          <div className="mb-2 flex items-center justify-between rounded border border-white/8 bg-white/10 px-2 py-1.5">
-            <div>
+          <div className="mb-2 flex items-start justify-between gap-2 rounded border border-white/8 bg-white/10 px-2 py-1.5">
+            <div className="min-w-0">
               <p className="text-[11px] text-white/80">{activeAssignment.name}</p>
-              {activeAssignment.organization && (
-                <p className="text-[9px] text-white/40">{activeAssignment.organization}</p>
-              )}
+              <ContactLines title={activeAssignment.title} phone={activeAssignment.phone} email={activeAssignment.email} />
             </div>
-            <button onClick={() => endAssignment(activeAssignment.id)} className="text-[9px] text-red-400/60 hover:text-red-400">End</button>
+            <button onClick={() => endAssignment(activeAssignment.id)} className="shrink-0 text-[9px] text-red-400/60 hover:text-red-400">End</button>
           </div>
         )}
         <input
@@ -618,10 +686,26 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
           onKeyDown={(e) => e.key === 'Enter' && handleAssign()}
         />
         <input
+          className="mb-1 w-full rounded border border-white/8 bg-white/10 px-2 py-1 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
+          placeholder="Title / rank (optional)"
+          value={titleInput}
+          onChange={(e) => setTitleInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && handleAssign()}
+        />
+        <input
+          type="tel"
+          className="mb-1 w-full rounded border border-white/8 bg-white/10 px-2 py-1 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
+          placeholder="Phone (optional)"
+          value={phoneInput}
+          onChange={(e) => setPhoneInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && handleAssign()}
+        />
+        <input
+          type="email"
           className="mb-2 w-full rounded border border-white/8 bg-white/10 px-2 py-1 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
-          placeholder="Organization (optional)"
-          value={orgInput}
-          onChange={(e) => setOrgInput(e.target.value)}
+          placeholder="Email (optional)"
+          value={emailInput}
+          onChange={(e) => setEmailInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleAssign()}
         />
         <button
