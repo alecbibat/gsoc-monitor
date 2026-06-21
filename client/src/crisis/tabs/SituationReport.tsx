@@ -383,12 +383,22 @@ export function SituationReport() {
               <TextInput value={inc.incidentName} onChange={(v) => update({ incidentName: v })} placeholder="e.g. Maui Wildfire Complex" />
             </FieldRow>
 
-            <FieldRow label="Date / Time">
+            <FieldRow label="Start">
               <input
                 type="datetime-local"
                 className="flex-1 rounded border border-white/10 bg-white/10 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25 focus:bg-white/15"
                 value={inc.incidentDatetime}
                 onChange={(e) => update({ incidentDatetime: e.target.value })}
+              />
+            </FieldRow>
+
+            <FieldRow label="End">
+              <input
+                type="datetime-local"
+                className="flex-1 rounded border border-white/10 bg-white/10 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25 focus:bg-white/15"
+                value={inc.incidentEndDatetime ?? ''}
+                min={inc.incidentDatetime || undefined}
+                onChange={(e) => update({ incidentEndDatetime: e.target.value })}
               />
             </FieldRow>
 

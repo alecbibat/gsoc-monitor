@@ -221,7 +221,8 @@ export function CrisisReportModal({ incident, onClose }: Props) {
             <div className="space-y-2 rounded-lg border border-white/8 bg-white/4 px-4 py-3">
               {([
                 ['Location', incident.incidentLocation],
-                ['Date / Time', incident.incidentDatetime ? new Date(incident.incidentDatetime).toLocaleString() : '—'],
+                ['Start', incident.incidentDatetime ? new Date(incident.incidentDatetime).toLocaleString() : '—'],
+                ['End', incident.incidentEndDatetime ? new Date(incident.incidentEndDatetime).toLocaleString() : '—'],
                 ['Type', incident.incidentType],
                 ['Created', fmtTs(incident.createdAt)],
                 ['Archived', incident.archivedAt ? fmtTs(incident.archivedAt) : '—'],

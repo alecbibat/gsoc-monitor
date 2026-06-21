@@ -88,6 +88,7 @@ export interface Incident {
   createdAt: string;
   incidentName: string;
   incidentDatetime: string;
+  incidentEndDatetime: string;
   incidentLocation: string;
   incidentType: IncidentType;
   incidentStatus: IncidentStatus;
@@ -106,6 +107,7 @@ export interface Incident {
 export interface CrisisPublicState {
   incidentName: string;
   incidentDatetime: string;
+  incidentEndDatetime: string;
   incidentLocation: string;
   incidentType: IncidentType;
   incidentStatus: IncidentStatus;
@@ -162,6 +164,7 @@ function newIncident(): Incident {
     createdAt: new Date().toISOString(),
     incidentName: '',
     incidentDatetime: '',
+    incidentEndDatetime: '',
     incidentLocation: '',
     incidentType: 'other',
     incidentStatus: 'active',
@@ -181,6 +184,7 @@ function newIncident(): Incident {
 interface CrisisFields {
   incidentName: string;
   incidentDatetime: string;
+  incidentEndDatetime: string;
   incidentLocation: string;
   incidentType: IncidentType;
   incidentStatus: IncidentStatus;
@@ -478,6 +482,7 @@ export function extractPublicState(inc: Incident, publishedAt?: string): CrisisP
   return {
     incidentName: inc.incidentName,
     incidentDatetime: inc.incidentDatetime,
+    incidentEndDatetime: inc.incidentEndDatetime,
     incidentLocation: inc.incidentLocation,
     incidentType: inc.incidentType,
     incidentStatus: inc.incidentStatus,

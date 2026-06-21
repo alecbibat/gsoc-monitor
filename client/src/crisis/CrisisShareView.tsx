@@ -191,7 +191,8 @@ export function CrisisShareView({ token }: { token: string }) {
             <div className="space-y-2 rounded-lg border border-white/8 bg-white/4 px-4 py-3">
               {[
                 ['Location', data.incidentLocation],
-                ['Date / Time', data.incidentDatetime ? new Date(data.incidentDatetime).toLocaleString() : '—'],
+                ['Start', data.incidentDatetime ? new Date(data.incidentDatetime).toLocaleString() : '—'],
+                ['End', data.incidentEndDatetime ? new Date(data.incidentEndDatetime).toLocaleString() : '—'],
                 ['Type', data.incidentType],
               ].map(([label, value]) => (
                 <div key={label} className="flex gap-3">
