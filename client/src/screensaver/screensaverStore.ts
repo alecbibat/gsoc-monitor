@@ -22,12 +22,18 @@ interface ScreensaverState {
   phase: Phase;
   currentPoi: Poi | null;
   newsPoiQueue: Poi[];
+  voiceEnabled: boolean;
   toggle: (mode: ScreensaverMode) => void;
   stop: () => void;
   setPhase: (p: Phase) => void;
   setCurrentPoi: (poi: Poi | null) => void;
   enqueueNewsPoi: (poi: Poi) => void;
   dequeueNewsPoi: () => Poi | undefined;
+  toggleVoice: () => void;
+}
+
+function loadVoicePref(): boolean {
+  try { return localStorage.getItem('ss-voice') === '1'; } catch { return false; }
 }
 
 export const useScreensaverStore = create<ScreensaverState>((set, get) => ({
@@ -36,6 +42,7 @@ export const useScreensaverStore = create<ScreensaverState>((set, get) => ({
   phase: 'rotating',
   currentPoi: null,
   newsPoiQueue: [],
+  voiceEnabled: loadVoicePref(),
   toggle: (mode) =>
     set((s) => {
       if (s.active && s.mode === mode) {
@@ -56,4 +63,11 @@ export const useScreensaverStore = create<ScreensaverState>((set, get) => ({
     set({ newsPoiQueue: rest });
     return next;
   },
+  toggleVoice: () =>
+    set((s) => {
+      const next = !s.voiceEnabled;
+      try { localStorage.setItem('ss-voice', next ? '1' : '0'); } catch {}
+      if (!next) { try { window.speechSynthesis?.cancel(); } catch {} }
+      return { voiceEnabled: next };
+    }),
 }));

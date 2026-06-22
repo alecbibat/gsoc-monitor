@@ -31,6 +31,7 @@ import { PinsContextBox } from './screensaver/PinsContextBox';
 import { PinsFocusCard } from './screensaver/PinsFocusCard';
 import { ShipFocusCard } from './screensaver/ShipFocusCard';
 import { PinsLootBeam } from './screensaver/PinsLootBeam';
+import { PinsVoice } from './screensaver/PinsVoice';
 import { ScreensaverWatchCards } from './screensaver/ScreensaverWatchCards';
 import { WebcamScreensaverCallouts } from './screensaver/WebcamScreensaverCallouts';
 import { GoogleEarthLayer } from './layers/earth3d/GoogleEarthLayer';
@@ -99,6 +100,7 @@ export default function App() {
         <PinsFocusCard />
         <ShipFocusCard />
         <PinsLootBeam />
+        <PinsVoice />
         <ShipShockwave />
         <ScreensaverWatchCards />
         <WebcamScreensaverCallouts />

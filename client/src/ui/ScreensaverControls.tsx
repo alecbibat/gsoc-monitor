@@ -3,6 +3,23 @@ import { useScreensaverStore } from '../screensaver/screensaverStore';
 import type { ScreensaverMode } from '../screensaver/screensaverStore';
 import { useHoverStore } from '../screensaver/hoverStore';
 
+function SpeakerIcon({ muted }: { muted: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+      {muted ? (
+        <line x1="23" y1="9" x2="17" y2="15" />
+      ) : (
+        <>
+          <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+        </>
+      )}
+      {muted && <line x1="17" y1="9" x2="23" y2="15" />}
+    </svg>
+  );
+}
+
 const MODES: { mode: ScreensaverMode; label: string; title: string }[] = [
   { mode: 'global',         label: 'Global',  title: 'Globe rotates and visits active alerts, earthquakes, and strategic POIs' },
   { mode: 'national-parks', label: 'Parks',   title: 'Tour national parks and office locations with county highlighting' },
@@ -13,9 +30,11 @@ const MODES: { mode: ScreensaverMode; label: string; title: string }[] = [
 // Dropdown selector for the screensaver tour modes plus Hover. Picking an entry
 // starts it; "None" turns everything off.
 export function ScreensaverControls({ className = '' }: { className?: string }) {
-  const active      = useScreensaverStore((s) => s.active);
-  const currentMode = useScreensaverStore((s) => s.mode);
-  const toggle      = useScreensaverStore((s) => s.toggle);
+  const active       = useScreensaverStore((s) => s.active);
+  const currentMode  = useScreensaverStore((s) => s.mode);
+  const toggle       = useScreensaverStore((s) => s.toggle);
+  const voiceEnabled = useScreensaverStore((s) => s.voiceEnabled);
+  const toggleVoice  = useScreensaverStore((s) => s.toggleVoice);
 
   const hoverActive  = useHoverStore((s) => s.active);
   const hoverPicking = useHoverStore((s) => s.picking);
@@ -81,6 +100,21 @@ export function ScreensaverControls({ className = '' }: { className?: string }) 
 
   return (
     <div className={`flex flex-wrap items-center gap-2 ${className}`}>
+      {/* Voice announce toggle — only shown while screensaver is running */}
+      {active && (
+        <button
+          onClick={toggleVoice}
+          title={voiceEnabled ? 'Mute location announcements' : 'Announce location names aloud'}
+          className={`pointer-events-auto flex items-center justify-center rounded-lg border p-2 shadow-panel backdrop-blur-sm transition-all ${
+            voiceEnabled
+              ? 'border-accent/40 bg-accent/10 text-accent'
+              : 'border-white/10 bg-ink-900/80 text-white/30 hover:text-white/60'
+          }`}
+          aria-label={voiceEnabled ? 'Mute announcements' : 'Enable announcements'}
+        >
+          <SpeakerIcon muted={!voiceEnabled} />
+        </button>
+      )}
       <div ref={ref} className="pointer-events-auto relative">
         <button
           onClick={() => setOpen((vv) => !vv)}
