@@ -117,6 +117,14 @@ export function CrisisShareView({ token }: { token: string }) {
   const [data, setData] = useState<CrisisPublicState | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Global CSS sets overflow:hidden for the globe app. Override it here so the
+  // read-only share page can scroll normally.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'auto';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
   useEffect(() => {
     fetch(`/api/crisis/share/${token}`)
       .then((r) => { if (!r.ok) throw new Error('Share link not found'); return r.json(); })
