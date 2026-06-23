@@ -44,6 +44,8 @@ interface ShipEntry {
   speedKt: number | null;
   heading: number | null;
   aisTimestamp: number | null;
+  destination: string | null;
+  navStatus: number | null;
 }
 
 type VisitEntry = PinEntry | ShipEntry;
@@ -84,6 +86,8 @@ function buildShipEntries(): ShipEntry[] {
         speedKt: ship.speedKt,
         heading: ship.heading ?? ship.course ?? null,
         aisTimestamp: ship.lastSeenSec > 0 ? ship.lastSeenSec * 1000 : null,
+        destination: ship.destination,
+        navStatus: ship.navStatus,
       },
     ];
   });
@@ -192,6 +196,8 @@ export function PinsController() {
             speedKt: entry.speedKt,
             heading: entry.heading,
             aisTimestamp: entry.aisTimestamp,
+            destination: entry.destination,
+            navStatus: entry.navStatus,
           },
         };
         setCurrentPoi(poi);
