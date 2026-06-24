@@ -107,6 +107,7 @@ export function AqiLayer() {
       let worstCategory = '';
 
       for (const s of data.stations) {
+        if (!Number.isFinite(s.lon) || !Number.isFinite(s.lat)) continue;
         const sz = iconSize(s.categoryNum);
         const entity = ds.entities.add({
           id: s.id,

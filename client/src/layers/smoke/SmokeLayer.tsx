@@ -23,6 +23,30 @@ const OUTLINE_COLOR: Record<string, Cesium.Color> = {
   Heavy:  Cesium.Color.fromBytes(140, 80,  25,  180),
 };
 
+// Drop consecutive duplicate vertices (including the closing point) and reject
+// rings with fewer than 3 distinct points. Degenerate rings make Cesium's
+// polygon triangulation produce invalid vertex/index counts, which surfaces as
+// a "RangeError: Invalid array length" crash deep in the render loop.
+function sanitizeRing(coords: number[][]): [number, number][] | null {
+  const out: [number, number][] = [];
+  for (const c of coords) {
+    const lon = c[0];
+    const lat = c[1];
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) continue;
+    const prev = out[out.length - 1];
+    if (prev && prev[0] === lon && prev[1] === lat) continue; // skip dup
+    out.push([lon, lat]);
+  }
+  // A closed ring repeats its first point at the end — drop it before counting.
+  if (out.length > 1) {
+    const first = out[0];
+    const last = out[out.length - 1];
+    if (first[0] === last[0] && first[1] === last[1]) out.pop();
+  }
+  return out.length >= 3 ? out : null;
+}
+
 export function SmokeLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.smoke);
@@ -77,13 +101,18 @@ export function SmokeLayer() {
       );
 
       ds.entities.removeAll();
+      let drawn = 0;
       for (const poly of sorted) {
+        const ring = sanitizeRing(poly.coords);
+        if (!ring) continue; // degenerate polygon — skip rather than crash
+
         const fill = FILL_COLOR[poly.density] ?? FILL_COLOR.Light;
         const outline = OUTLINE_COLOR[poly.density] ?? OUTLINE_COLOR.Light;
-        const positions = Cesium.Cartesian3.fromDegreesArray(
-          (poly.coords as [number, number][]).flat()
-        );
+        const positions = Cesium.Cartesian3.fromDegreesArray(ring.flat());
 
+        // Plain ellipsoid-draped polygon (same approach as the NWS Alerts
+        // layer). NOT terrain-classified: ground primitives built from these
+        // hand-drawn, concave smoke outlines were crashing Cesium's render loop.
         const entity = ds.entities.add({
           id: poly.id,
           polygon: {
@@ -92,9 +121,6 @@ export function SmokeLayer() {
             outline: true,
             outlineColor: new Cesium.ConstantProperty(outline),
             outlineWidth: 1,
-            // Clamp to globe surface so terrain doesn't occlude it.
-            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-            classificationType: Cesium.ClassificationType.TERRAIN,
           },
         });
 
@@ -105,10 +131,11 @@ export function SmokeLayer() {
           subtitle: poly.satellite ?? 'NOAA HMS',
           payload: { ...poly, date: data.date } as unknown as Record<string, unknown>,
         });
+        drawn++;
       }
 
       useSmokeStatus.getState().setStatus({
-        count: sorted.length,
+        count: drawn,
         date: data.date,
         error: data.error ?? null,
       });
