@@ -47,9 +47,11 @@ function aqiIcon(station: AqiStation): string {
   return iconCache.get(key)!;
 }
 
-// Billboard size: 24px for Good, scaling up to 36px for Hazardous.
+// Billboard size: 22px for Good, up to 34px for Hazardous.
+// Clamp the result so a bad categoryNum can never produce NaN/negative width.
 function iconSize(categoryNum: number): number {
-  return 22 + (categoryNum - 1) * 3;
+  const cat = Number.isFinite(categoryNum) ? Math.max(1, Math.min(6, categoryNum)) : 1;
+  return 22 + (cat - 1) * 3;
 }
 
 export function AqiLayer() {
@@ -108,6 +110,7 @@ export function AqiLayer() {
 
       for (const s of data.stations) {
         if (!Number.isFinite(s.lon) || !Number.isFinite(s.lat)) continue;
+        if (s.lat < -90 || s.lat > 90 || s.lon < -180 || s.lon > 180) continue;
         const sz = iconSize(s.categoryNum);
         const entity = ds.entities.add({
           id: s.id,
@@ -117,7 +120,6 @@ export function AqiLayer() {
             width: sz,
             height: sz,
             verticalOrigin: Cesium.VerticalOrigin.CENTER,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
             // Fade out at globe scale so the map isn't a wall of dots.
             scaleByDistance: new Cesium.NearFarScalar(1.0e5, 1.0, 6.0e6, 0.3),
           },
