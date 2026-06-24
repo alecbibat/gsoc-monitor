@@ -5,6 +5,7 @@ import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { useLightningStatus } from '../layers/lightning/lightningStore';
 import { useFiresStatus } from '../layers/fires/firesStore';
 import { useSmokeStatus } from '../layers/smoke/smokeStore';
+import { useAqiStatus } from '../layers/aqi/aqiStore';
 import { useShipsStatus } from '../layers/ships/shipsStore';
 import { useWebcamsStatus } from '../layers/webcams/webcamsStore';
 import { useNewsMapStore } from '../layers/newsMap/newsMapStore';
@@ -66,6 +67,7 @@ export function Sidebar() {
   const lightningStatus = useLightningStatus();
   const firesStatus = useFiresStatus();
   const smokeStatus = useSmokeStatus();
+  const aqiStatus = useAqiStatus();
   const shipsStatus = useShipsStatus();
   const webcamsStatus = useWebcamsStatus();
   const newsMapStatus = useNewsMapStore();
@@ -370,6 +372,19 @@ export function Sidebar() {
               (smokeStatus.count > 0
                 ? `${smokeStatus.count} polygons · ${smokeStatus.date ? smokeStatus.date.slice(0, 4) + '-' + smokeStatus.date.slice(4, 6) + '-' + smokeStatus.date.slice(6, 8) : ''}`
                 : 'Satellite-detected smoke plumes · daily')
+            }
+          />
+          <LayerToggle
+            label="Air Quality (AirNow)"
+            active={(active as Record<string, boolean>).aqi ?? false}
+            onToggle={() => toggleLayer('aqi')}
+            statusText={
+              aqiStatus.noKey
+                ? 'No AIRNOW_API_KEY set — free key at airnowapi.org'
+                : aqiStatus.error ??
+                  (aqiStatus.count > 0
+                    ? `${aqiStatus.count} stations · worst AQI ${aqiStatus.worstAqi} (${aqiStatus.worstCategory}) · hourly`
+                    : 'EPA monitoring stations · CONUS · hourly')
             }
           />
         </Section>

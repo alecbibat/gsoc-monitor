@@ -52,4 +52,5 @@ export const api = {
     return getJson<import('../types').NewsMapResponse>(`/api/news-map${s ? `?${s}` : ''}`);
   },
   smoke: () => getJson<import('../types').SmokeResponse>('/api/smoke'),
+  aqi: () => getJson<import('../types').AqiResponse>('/api/aqi'),
 };

@@ -7,6 +7,7 @@ export type LayerId =
   | 'lightning'
   | 'fires'
   | 'smoke'
+  | 'aqi'
   | 'ships'
   | 'satellites'
   | 'locations'
@@ -216,6 +217,28 @@ export interface SmokeResponse {
   date: string;
   updated: number;
   source: string;
+  error?: string;
+}
+
+export interface AqiStation {
+  id: string;
+  lat: number;
+  lon: number;
+  aqi: number;
+  categoryNum: number;  // 1=Good … 6=Hazardous
+  categoryName: string;
+  parameter: string;    // dominant pollutant name
+  reportingArea: string;
+  state: string;
+  hourObserved: number;
+  timezone: string;
+  all: Array<{ parameter: string; aqi: number; category: string }>;
+}
+
+export interface AqiResponse {
+  stations: AqiStation[];
+  updated: number;
+  noKey?: boolean;
   error?: string;
 }
 

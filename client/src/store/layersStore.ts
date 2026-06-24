@@ -46,6 +46,7 @@ export const useLayersStore = create<LayersState>()(
         lightning: false,
         fires: false,
         smoke: false,
+        aqi: false,
         ships: false,
         satellites: false,
         locations: true,

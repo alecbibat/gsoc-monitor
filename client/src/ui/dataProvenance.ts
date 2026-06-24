@@ -87,6 +87,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'aqi',
+    info: {
+      name: 'Air Quality Index',
+      icon: '🌫',
+      source: 'US EPA AirNow',
+      method:
+        'Real-time AQI readings from official EPA and state monitoring stations across the continental US, fetched hourly from the AirNow Data API (airnowapi.org). Each station reports the dominant pollutant (PM2.5, Ozone, PM10, CO, NO₂ or SO₂).',
+      trust:
+        'The definitive US government air-quality monitoring network — the same data that drives AirNow.gov, Airnow mobile apps, and public health advisories.',
+      url: 'https://www.airnow.gov',
+    },
+  },
+  {
     id: 'smoke',
     info: {
       name: 'Smoke',
