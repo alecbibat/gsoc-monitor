@@ -119,8 +119,8 @@ export function Sidebar() {
   function newsMapStatusText() {
     if (newsMapStatus.error) return newsMapStatus.error;
     const scope = newsNearMiles > 0 ? `within ${newsNearMiles} mi of pins` : 'worldwide';
-    if (newsMapStatus.total === 0) return 'Awaiting geocoded news · 24h';
-    return `${newsMapStatus.count} events ${scope} · 24h`;
+    if (newsMapStatus.total === 0) return 'Awaiting geocoded news · 6h';
+    return `${newsMapStatus.count} events ${scope} · 6h`;
   }
 
   function satellitesStatusText() {

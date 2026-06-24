@@ -190,6 +190,7 @@ export interface NewsMapEvent {
   lon: number;
   count: number;
   image: string | null;
+  tone: number | null; // avg GDELT tone; negative = more negative coverage
   articles: NewsMapArticle[];
 }
 

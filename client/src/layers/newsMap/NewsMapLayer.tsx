@@ -24,10 +24,9 @@ function nearestPinMeters(lat: number, lon: number): number {
   return best;
 }
 
-// A folded-newspaper glyph on a rounded indigo pin. Sized up a touch for
-// high-volume points so busy locations read at a glance.
-function newspaperIcon(): string {
-  const fill = '#818cf8';
+// A folded-newspaper glyph on a rounded pin. Tinted red when coverage skews
+// notably negative (tone) so trouble spots read at a glance, indigo otherwise.
+function newspaperIcon(fill: string): string {
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">` +
     `<circle cx="32" cy="32" r="22" fill="${fill}" stroke="#0a0e1a" stroke-width="3"/>` +
@@ -41,7 +40,13 @@ function newspaperIcon(): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-const ICON = newspaperIcon();
+const ICON_NEUTRAL = newspaperIcon('#818cf8'); // indigo
+const ICON_NEGATIVE = newspaperIcon('#f87171'); // red — markedly negative tone
+const NEGATIVE_TONE = -5; // GDELT tone runs ~-10..+10; news skews mildly negative
+
+function iconFor(tone: number | null): string {
+  return tone != null && tone <= NEGATIVE_TONE ? ICON_NEGATIVE : ICON_NEUTRAL;
+}
 
 function iconSize(count: number): number {
   if (count >= 25) return 30;
@@ -127,7 +132,7 @@ export function NewsMapLayer() {
         id: `news-${e.id}`,
         position: Cesium.Cartesian3.fromDegrees(e.lon, e.lat, 0),
         billboard: {
-          image: ICON,
+          image: iconFor(e.tone),
           width: sz,
           height: sz,
           verticalOrigin: Cesium.VerticalOrigin.BOTTOM,

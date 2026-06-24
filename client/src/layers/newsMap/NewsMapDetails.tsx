@@ -12,18 +12,33 @@ function hostOf(url: string): string | null {
   }
 }
 
+function toneLabel(tone: number | null): { text: string; cls: string } | null {
+  if (tone == null) return null;
+  if (tone <= -5) return { text: `negative (${tone.toFixed(1)})`, cls: 'text-red-300' };
+  if (tone >= 2) return { text: `positive (${tone.toFixed(1)})`, cls: 'text-emerald-300' };
+  return { text: `neutral (${tone.toFixed(1)})`, cls: 'text-white/55' };
+}
+
 export function NewsMapDetails({ payload }: Props) {
-  const { name, count, image, articles, lat, lon } = payload;
+  const { name, count, image, articles, lat, lon, tone } = payload;
+  const sentiment = toneLabel(tone);
+  const negative = tone != null && tone <= -5;
 
   return (
     <div className="space-y-3">
       <div>
         <div className="text-lg font-bold leading-tight tracking-wide">{name}</div>
         <div className="mt-0.5 flex items-center gap-2 text-[11px]">
-          <span className="inline-flex items-center gap-1 text-indigo-300">
-            <span className="h-1.5 w-1.5 rounded-full bg-indigo-400" />
-            {count} article{count === 1 ? '' : 's'} · last 24h
+          <span className={`inline-flex items-center gap-1 ${negative ? 'text-red-300' : 'text-indigo-300'}`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${negative ? 'bg-red-400' : 'bg-indigo-400'}`} />
+            {count} article{count === 1 ? '' : 's'} · recent
           </span>
+          {sentiment && (
+            <>
+              <span className="text-white/25">·</span>
+              <span className={sentiment.cls}>{sentiment.text}</span>
+            </>
+          )}
         </div>
       </div>
 
