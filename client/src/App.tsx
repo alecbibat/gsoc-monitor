@@ -9,6 +9,7 @@ import { FlightLayer } from './layers/flights/FlightLayer';
 import { HurricaneLayer } from './layers/hurricanes/HurricaneLayer';
 import { LightningLayer } from './layers/lightning/LightningLayer';
 import { FireLayer } from './layers/fires/FireLayer';
+import { SmokeLayer } from './layers/smoke/SmokeLayer';
 import { ShipLayer } from './layers/ships/ShipLayer';
 import { NewsMapLayer } from './layers/newsMap/NewsMapLayer';
 import { ShipModelLayer } from './layers/ships/ShipModelLayer';
@@ -74,6 +75,7 @@ export default function App() {
           <AlertsLayer />
           <HurricaneLayer />
           <FireLayer />
+          <SmokeLayer />
           <LightningLayer />
           <FlightLayer />
           <ShipLayer />

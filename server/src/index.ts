@@ -19,6 +19,7 @@ import parkNewsRouter from './routes/parkNews';
 import satellitesRouter from './routes/satellites';
 import webcamsRouter from './routes/webcams';
 import newsMapRouter from './routes/newsMap';
+import smokeRouter from './routes/smoke';
 import crisisRouter from './routes/crisis';
 import authRouter from './routes/auth';
 import adminRouter from './routes/admin';
@@ -92,6 +93,7 @@ function main() {
   app.use('/api/satellites', satellitesRouter);
   app.use('/api/webcams', webcamsRouter);
   app.use('/api/news-map', newsMapRouter);
+  app.use('/api/smoke', smokeRouter);
 
   initShipsStream();
 

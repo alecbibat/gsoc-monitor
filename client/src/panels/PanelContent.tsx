@@ -8,6 +8,7 @@ import { SatelliteDetails } from '../layers/satellites/SatelliteDetails';
 import { LocationDetails } from '../layers/locations/LocationDetails';
 import { WebcamDetails } from '../layers/webcams/WebcamDetails';
 import { NewsMapDetails } from '../layers/newsMap/NewsMapDetails';
+import { SmokeDetails } from '../layers/smoke/SmokeDetails';
 import { PropertyDetail } from '../widgets/proximity/PropertyDetail';
 import { TimezonePanel } from '../layers/timezones/TimezonePanel';
 import { WIDGET_BY_ID } from '../widgets/registry';
@@ -20,6 +21,7 @@ const ACCENT_BY_KIND: Record<string, string> = {
   radar: 'border-accent/40',
   hurricanes: 'border-accent-warn/40',
   fires: 'border-accent-warn/40',
+  smoke: 'border-amber-500/40',
   ships: 'border-accent/40',
   satellites: 'border-sky-400/40',
   locations: 'border-violet-500/40',
@@ -52,6 +54,7 @@ export function PanelContent({ panel }: { panel: PanelData }) {
       {panel.kind === 'locations' && <LocationDetails payload={panel.payload as never} />}
       {panel.kind === 'webcams' && <WebcamDetails payload={panel.payload as never} />}
       {panel.kind === 'newsMap' && <NewsMapDetails payload={panel.payload as never} />}
+      {panel.kind === 'smoke' && <SmokeDetails payload={panel.payload as never} />}
       {panel.kind === 'property-watch' && <PropertyDetail payload={panel.payload as never} />}
       {panel.kind === 'timezones' && <TimezonePanel payload={panel.payload} />}
     </>

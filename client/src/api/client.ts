@@ -51,4 +51,5 @@ export const api = {
     const s = qs.toString();
     return getJson<import('../types').NewsMapResponse>(`/api/news-map${s ? `?${s}` : ''}`);
   },
+  smoke: () => getJson<import('../types').SmokeResponse>('/api/smoke'),
 };

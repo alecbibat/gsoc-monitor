@@ -87,6 +87,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'smoke',
+    info: {
+      name: 'Smoke',
+      icon: '💨',
+      source: 'NOAA Hazard Mapping System (HMS)',
+      method:
+        'Smoke polygons manually delineated by NOAA analysts from GOES, MODIS, and VIIRS satellite imagery, published once or twice daily in KML format.',
+      trust:
+        'The official NOAA/NESDIS operational product for satellite-detected smoke plumes — the same dataset used by air-quality and fire-weather forecasters.',
+      url: 'https://www.ospo.noaa.gov/Products/land/hms.html',
+    },
+  },
+  {
     id: 'fires',
     info: {
       name: 'Wildfires',

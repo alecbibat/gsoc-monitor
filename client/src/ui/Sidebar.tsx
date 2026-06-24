@@ -4,6 +4,7 @@ import { useAlertsStatus } from '../layers/alerts/alertsStore';
 import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { useLightningStatus } from '../layers/lightning/lightningStore';
 import { useFiresStatus } from '../layers/fires/firesStore';
+import { useSmokeStatus } from '../layers/smoke/smokeStore';
 import { useShipsStatus } from '../layers/ships/shipsStore';
 import { useWebcamsStatus } from '../layers/webcams/webcamsStore';
 import { useNewsMapStore } from '../layers/newsMap/newsMapStore';
@@ -64,6 +65,7 @@ export function Sidebar() {
   const hurricanesStatus = useHurricanesStatus();
   const lightningStatus = useLightningStatus();
   const firesStatus = useFiresStatus();
+  const smokeStatus = useSmokeStatus();
   const shipsStatus = useShipsStatus();
   const webcamsStatus = useWebcamsStatus();
   const newsMapStatus = useNewsMapStore();
@@ -359,6 +361,17 @@ export function Sidebar() {
               </div>
             </div>
           </LayerToggle>
+          <LayerToggle
+            label="Smoke (NOAA HMS)"
+            active={(active as Record<string, boolean>).smoke ?? false}
+            onToggle={() => toggleLayer('smoke')}
+            statusText={
+              smokeStatus.error ??
+              (smokeStatus.count > 0
+                ? `${smokeStatus.count} polygons · ${smokeStatus.date ? smokeStatus.date.slice(0, 4) + '-' + smokeStatus.date.slice(4, 6) + '-' + smokeStatus.date.slice(6, 8) : ''}`
+                : 'Satellite-detected smoke plumes · daily')
+            }
+          />
         </Section>
 
         <Section title="Traffic">

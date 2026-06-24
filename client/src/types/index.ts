@@ -6,6 +6,7 @@ export type LayerId =
   | 'hurricanes'
   | 'lightning'
   | 'fires'
+  | 'smoke'
   | 'ships'
   | 'satellites'
   | 'locations'
@@ -198,6 +199,23 @@ export interface NewsMapResponse {
   events: NewsMapEvent[];
   updated: number;
   query: string;
+  error?: string;
+}
+
+export interface SmokePolygon {
+  id: string;
+  density: 'Light' | 'Medium' | 'Heavy';
+  coords: number[][]; // [lon, lat] pairs
+  satellite?: string;
+  startTime?: string;
+  endTime?: string;
+}
+
+export interface SmokeResponse {
+  polygons: SmokePolygon[];
+  date: string;
+  updated: number;
+  source: string;
   error?: string;
 }
 
