@@ -19,6 +19,9 @@ interface LayersState {
   setShipPaths: (v: boolean) => void;
   firesNearMiles: 0 | 5 | 50 | 100 | 200;
   setFiresNearMiles: (v: 0 | 5 | 50 | 100 | 200) => void;
+  // 0 = global (all geocoded events); >0 = only events within N miles of a pin.
+  newsNearMiles: 0 | 100 | 250 | 500;
+  setNewsNearMiles: (v: 0 | 100 | 250 | 500) => void;
   satelliteGroup: SatelliteGroup;
   setSatelliteGroup: (v: SatelliteGroup) => void;
   earthquakeMagnitude: 'significant' | '4.5' | '2.5' | '1.0' | 'all';
@@ -50,6 +53,7 @@ export const useLayersStore = create<LayersState>()(
         traffic: false,
         timezones: false,
         webcams: false,
+        newsMap: false,
       },
       basemap: 'dark',
       toggleLayer: (id) =>
@@ -81,6 +85,8 @@ export const useLayersStore = create<LayersState>()(
       setShipPaths: (v) => set({ shipPaths: v }),
       firesNearMiles: 0,
       setFiresNearMiles: (v) => set({ firesNearMiles: v }),
+      newsNearMiles: 0,
+      setNewsNearMiles: (v) => set({ newsNearMiles: v }),
       satelliteGroup: 'stations',
       setSatelliteGroup: (v) => set({ satelliteGroup: v }),
       earthquakeMagnitude: '2.5',
@@ -100,6 +106,7 @@ export const useLayersStore = create<LayersState>()(
         shipFavorites: state.shipFavorites,
         shipPaths: state.shipPaths,
         firesNearMiles: state.firesNearMiles,
+        newsNearMiles: state.newsNearMiles,
         satelliteGroup: state.satelliteGroup,
       }),
       // The Google photorealistic 3D layer (earth3d) hits a metered API and its

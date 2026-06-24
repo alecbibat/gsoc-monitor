@@ -13,7 +13,8 @@ export type LayerId =
   | 'earth3d'
   | 'traffic'
   | 'timezones'
-  | 'webcams';
+  | 'webcams'
+  | 'newsMap';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
@@ -173,6 +174,30 @@ export interface NewsItem {
 export interface NewsResponse {
   items: NewsItem[];
   updated: number;
+}
+
+// Geocoded news points for the on-map News (GDELT) layer. Distinct from the
+// NewsItem ticker feed above: each event is a place with one or more articles.
+export interface NewsMapArticle {
+  title: string;
+  url: string;
+}
+
+export interface NewsMapEvent {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  count: number;
+  image: string | null;
+  articles: NewsMapArticle[];
+}
+
+export interface NewsMapResponse {
+  events: NewsMapEvent[];
+  updated: number;
+  query: string;
+  error?: string;
 }
 
 export interface RouteStep {

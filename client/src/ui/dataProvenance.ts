@@ -183,6 +183,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
       url: 'https://cwwp2.dot.ca.gov',
     },
   },
+  {
+    id: 'newsMap',
+    info: {
+      name: 'News (GDELT)',
+      icon: '📰',
+      source: 'The GDELT Project',
+      method:
+        'GDELT continuously monitors world news and geocodes the places mentioned in coverage; the GEO API returns those locations with their article counts and headline links. Optionally scoped to within a set radius of the property pins.',
+      trust:
+        'GDELT is a long-running open research project (supported by Google Jigsaw) widely used in academia and journalism for global news analysis.',
+      url: 'https://www.gdeltproject.org',
+    },
+  },
 ];
 
 export const BASEMAP_PROVENANCE: Record<BasemapId, Provenance> = {

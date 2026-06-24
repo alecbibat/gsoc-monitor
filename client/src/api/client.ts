@@ -44,4 +44,11 @@ export const api = {
     ),
   parkNews: () => getJson<import('../types').NewsResponse>('/api/park-news'),
   webcams: () => getJson<import('../types').WebcamsResponse>('/api/webcams'),
+  newsMap: (query?: string, timespan?: string) => {
+    const qs = new URLSearchParams();
+    if (query) qs.set('query', query);
+    if (timespan) qs.set('timespan', timespan);
+    const s = qs.toString();
+    return getJson<import('../types').NewsMapResponse>(`/api/news-map${s ? `?${s}` : ''}`);
+  },
 };

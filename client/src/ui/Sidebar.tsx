@@ -6,6 +6,7 @@ import { useLightningStatus } from '../layers/lightning/lightningStore';
 import { useFiresStatus } from '../layers/fires/firesStore';
 import { useShipsStatus } from '../layers/ships/shipsStore';
 import { useWebcamsStatus } from '../layers/webcams/webcamsStore';
+import { useNewsMapStore } from '../layers/newsMap/newsMapStore';
 import { useSatellitesStatus } from '../layers/satellites/satellitesStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { useOsmStatus } from '../layers/osmBuildings/osmStore';
@@ -54,6 +55,8 @@ export function Sidebar() {
   const setShipPaths = useLayersStore((s) => s.setShipPaths);
   const firesNearMiles = useLayersStore((s) => s.firesNearMiles);
   const setFiresNearMiles = useLayersStore((s) => s.setFiresNearMiles);
+  const newsNearMiles = useLayersStore((s) => s.newsNearMiles);
+  const setNewsNearMiles = useLayersStore((s) => s.setNewsNearMiles);
   const satelliteGroup = useLayersStore((s) => s.satelliteGroup);
   const setSatelliteGroup = useLayersStore((s) => s.setSatelliteGroup);
   const flightsStatus = useFlightsStatus();
@@ -63,6 +66,7 @@ export function Sidebar() {
   const firesStatus = useFiresStatus();
   const shipsStatus = useShipsStatus();
   const webcamsStatus = useWebcamsStatus();
+  const newsMapStatus = useNewsMapStore();
   const satellitesStatus = useSatellitesStatus();
   const osmStatus = useOsmStatus();
   const trafficStatus = useTrafficStatus();
@@ -110,6 +114,13 @@ export function Sidebar() {
     if (webcamsStatus.error) return webcamsStatus.error;
     if (webcamsStatus.count === 0) return 'No DOT cams yet — add state 511 keys';
     return `${webcamsStatus.count} DOT cams · ${webcamsStatus.statesActive} states`;
+  }
+
+  function newsMapStatusText() {
+    if (newsMapStatus.error) return newsMapStatus.error;
+    const scope = newsNearMiles > 0 ? `within ${newsNearMiles} mi of pins` : 'worldwide';
+    if (newsMapStatus.total === 0) return 'Awaiting geocoded news · 24h';
+    return `${newsMapStatus.count} events ${scope} · 24h`;
   }
 
   function satellitesStatusText() {
@@ -366,6 +377,36 @@ export function Sidebar() {
                       : 'Road flow + incidents · continental US')
             }
           />
+        </Section>
+
+        <Section title="Open-Source Intel">
+          <LayerToggle
+            label="News (GDELT)"
+            active={(active as Record<string, boolean>).newsMap ?? false}
+            onToggle={() => toggleLayer('newsMap')}
+            statusText={newsMapStatusText()}
+          >
+            <div className="pt-1">
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-white/30">
+                Scope
+              </div>
+              <div className="flex gap-1">
+                {([0, 100, 250, 500] as const).map((mi) => (
+                  <button
+                    key={mi}
+                    onClick={() => setNewsNearMiles(mi)}
+                    className={`flex-1 rounded px-1 py-1 text-[11px] font-medium transition ${
+                      newsNearMiles === mi
+                        ? 'bg-accent/20 text-accent'
+                        : 'bg-white/5 text-white/50 hover:bg-white/10'
+                    }`}
+                  >
+                    {mi === 0 ? 'Global' : `${mi} mi`}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </LayerToggle>
         </Section>
 
         <Section title="Tracking">

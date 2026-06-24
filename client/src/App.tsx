@@ -10,6 +10,7 @@ import { HurricaneLayer } from './layers/hurricanes/HurricaneLayer';
 import { LightningLayer } from './layers/lightning/LightningLayer';
 import { FireLayer } from './layers/fires/FireLayer';
 import { ShipLayer } from './layers/ships/ShipLayer';
+import { NewsMapLayer } from './layers/newsMap/NewsMapLayer';
 import { ShipModelLayer } from './layers/ships/ShipModelLayer';
 import { ShipShockwave } from './screensaver/ShipShockwave';
 import { SatelliteLayer } from './layers/satellites/SatelliteLayer';
@@ -79,6 +80,7 @@ export default function App() {
           <SatelliteLayer />
           <LocationsLayer />
           <WebcamsLayer />
+          <NewsMapLayer />
           <TimeZonesLayer />
           <OsmBuildingsLayer />
           <GoogleEarthLayer />
