@@ -11,6 +11,7 @@ import { LightningLayer } from './layers/lightning/LightningLayer';
 import { FireLayer } from './layers/fires/FireLayer';
 import { SmokeLayer } from './layers/smoke/SmokeLayer';
 import { AqiLayer } from './layers/aqi/AqiLayer';
+import { FuelLayer } from './layers/fuel/FuelLayer';
 import { ShipLayer } from './layers/ships/ShipLayer';
 import { NewsMapLayer } from './layers/newsMap/NewsMapLayer';
 import { ShipModelLayer } from './layers/ships/ShipModelLayer';
@@ -43,6 +44,8 @@ import { TrafficLayer } from './layers/traffic/TrafficLayer';
 import { TimeZonesLayer } from './layers/timezones/TimeZonesLayer';
 import { MeasureController } from './measure/MeasureController';
 import { MeasureOverlay } from './measure/MeasureOverlay';
+import { FuelZoneController } from './fuelzone/FuelZoneController';
+import { FuelZoneOverlay } from './fuelzone/FuelZoneOverlay';
 import { ScreensaverToast } from './screensaver/ScreensaverToast';
 import { NewsTicker } from './widgets/news/NewsTicker';
 import { CrisisOverlay } from './crisis/CrisisOverlay';
@@ -78,6 +81,7 @@ export default function App() {
           <FireLayer />
           <SmokeLayer />
           <AqiLayer />
+          <FuelLayer />
           <LightningLayer />
           <FlightLayer />
           <ShipLayer />
@@ -90,6 +94,7 @@ export default function App() {
           <GoogleEarthLayer />
           <TrafficLayer />
           <MeasureController />
+          <FuelZoneController />
           <CrisisMapLayer />
           <ShipModelLayer />
         </CesiumGlobe>
@@ -112,6 +117,7 @@ export default function App() {
         <WebcamScreensaverCallouts />
         <ScreensaverToast />
         <MeasureOverlay />
+        <FuelZoneOverlay />
         <HoverOverlay />
         <PickChooser />
         <NewsTicker />

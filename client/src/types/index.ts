@@ -8,6 +8,7 @@ export type LayerId =
   | 'fires'
   | 'smoke'
   | 'aqi'
+  | 'fuel'
   | 'ships'
   | 'satellites'
   | 'locations'
@@ -25,7 +26,8 @@ export type WidgetId = 'news-feed' | 'proximity';
 
 // Anything that can occupy a dockable panel. 'property-watch' is a popped-out
 // single-property hazard window spawned from the Property Watch widget.
-export type PanelKind = LayerId | WidgetId | 'property-watch';
+// 'fuel-zone' is the draw-a-circle LANDFIRE fuel breakdown result.
+export type PanelKind = LayerId | WidgetId | 'property-watch' | 'fuel-zone';
 
 export type BasemapId = 'dark' | 'light' | 'satellite' | 'topo';
 

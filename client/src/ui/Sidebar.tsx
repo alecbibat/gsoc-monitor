@@ -6,6 +6,9 @@ import { useLightningStatus } from '../layers/lightning/lightningStore';
 import { useFiresStatus } from '../layers/fires/firesStore';
 import { useSmokeStatus } from '../layers/smoke/smokeStore';
 import { useAqiStatus } from '../layers/aqi/aqiStore';
+import { useFuelStatus } from '../layers/fuel/fuelStore';
+import { FuelLegend } from '../layers/fuel/FuelLegend';
+import { useFuelZoneStore } from '../fuelzone/fuelZoneStore';
 import { useShipsStatus } from '../layers/ships/shipsStore';
 import { useWebcamsStatus } from '../layers/webcams/webcamsStore';
 import { useNewsMapStore } from '../layers/newsMap/newsMapStore';
@@ -68,6 +71,9 @@ export function Sidebar() {
   const firesStatus = useFiresStatus();
   const smokeStatus = useSmokeStatus();
   const aqiStatus = useAqiStatus();
+  const fuelStatus = useFuelStatus();
+  const fuelZoneActive = useFuelZoneStore((s) => s.active);
+  const toggleFuelZone = useFuelZoneStore((s) => s.toggle);
   const shipsStatus = useShipsStatus();
   const webcamsStatus = useWebcamsStatus();
   const newsMapStatus = useNewsMapStore();
@@ -387,6 +393,27 @@ export function Sidebar() {
                     : 'EPA monitoring stations · CONUS · hourly')
             }
           />
+          <LayerToggle
+            label="Fuel Models (LANDFIRE)"
+            active={(active as Record<string, boolean>).fuel ?? false}
+            onToggle={() => toggleLayer('fuel')}
+            statusText={
+              fuelStatus.error ?? 'Scott & Burgan 40 fuel models · CONUS · 30 m'
+            }
+          >
+            <FuelLegend />
+            <button
+              onClick={toggleFuelZone}
+              className={`mt-2 flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
+                fuelZoneActive
+                  ? 'bg-amber-400/20 text-amber-300'
+                  : 'bg-white/5 text-white/60 hover:bg-white/10'
+              }`}
+            >
+              <span>◎</span>
+              {fuelZoneActive ? 'Drawing — click the globe' : 'Analyze fuels in a circle'}
+            </button>
+          </LayerToggle>
         </Section>
 
         <Section title="Traffic">

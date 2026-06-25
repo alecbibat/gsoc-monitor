@@ -126,6 +126,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'fuel',
+    info: {
+      name: 'Surface Fuel Models',
+      icon: '🌾',
+      source: 'LANDFIRE (USGS / USFS)',
+      method:
+        'Scott & Burgan 40 fire-behavior fuel models (FBFM40) from the LANDFIRE national program, classifying every ~30 m cell of the continental US by its surface vegetation and how fire spreads through it. Served live from the LANDFIRE ImageServer; draw a circle to get the fuel-type breakdown for any area.',
+      trust:
+        'The interagency USGS/USFS standard used by federal and state agencies for wildfire-behavior modeling and operational fire planning.',
+      url: 'https://landfire.gov',
+    },
+  },
+  {
     id: 'ships',
     info: {
       name: 'Ships (AIS)',

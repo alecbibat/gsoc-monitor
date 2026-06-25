@@ -6,6 +6,7 @@ import { useLayersStore } from '../store/layersStore';
 import { usePanelStore } from '../panels/panelStore';
 import { usePickChooserStore, type PanelOpenData } from '../panels/pickChooserStore';
 import { useMeasureStore } from '../measure/measureStore';
+import { useFuelZoneStore } from '../fuelzone/fuelZoneStore';
 import { useHoverStore } from '../screensaver/hoverStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { usePerfStore, QUALITY_SETTINGS } from '../perf/perfStore';
@@ -170,6 +171,8 @@ export function CesiumGlobe({ children, onReady }: Props) {
       (click: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
         // While the measure tool owns the cursor, don't open entity panels.
         if (useMeasureStore.getState().active) return;
+        // Same for the fuel-zone draw tool.
+        if (useFuelZoneStore.getState().active) return;
         // While hover mode is waiting for an orbit center, the HoverController
         // consumes the click — don't also open a panel.
         if (useHoverStore.getState().picking) return;
