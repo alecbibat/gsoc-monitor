@@ -3,11 +3,53 @@ import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { usePanelStore } from '../panels/panelStore';
 import { useFuelZoneStore, formatRadius } from './fuelZoneStore';
-import { analyzeFuelZone, distanceM, type LngLat } from './zonalStats';
+import { analyzeFuelZone, circleRing, distanceM, type LngLat } from './zonalStats';
 
-const LINE_COLOR = Cesium.Color.fromCssColorString('#ff9d3c'); // warm amber — fuel/fire theme
-const FILL_COLOR = LINE_COLOR.withAlpha(0.14);
+// Bright cyan reads strongly against the warm orange/red/tan FBFM40 palette
+// (and against dark ocean when the fuel layer is off). The dark casing keeps the
+// ring legible even where it crosses a pale, high-value fuel class.
+const LINE_COLOR = Cesium.Color.fromCssColorString('#2fe1ff');
+const LINE_CASING = Cesium.Color.fromCssColorString('#04212e').withAlpha(0.9);
+const FILL_COLOR = LINE_COLOR.withAlpha(0.1);
 const CENTER_COLOR = Cesium.Color.fromCssColorString('#ffffff');
+// The ellipse `outline` is rendered as GL_LINES and clamped to 1px on most GPUs,
+// so we draw the perimeter as a polyline instead — those honor width and give a
+// crisp, cased ring (same approach as the measure tool).
+const RING_WIDTH = 4;
+
+// Geodesic ring positions for the perimeter polyline, reusing the same circle
+// geometry as the histogram query so the drawn outline matches what's analyzed.
+function ringPositions(center: LngLat, radiusM: number): Cesium.Cartesian3[] {
+  return circleRing(center, radiusM, 128).map(([lon, lat]) =>
+    Cesium.Cartesian3.fromDegrees(lon, lat)
+  );
+}
+
+// A draped circle: faint fill disc + a high-contrast cased polyline perimeter.
+// Both the live preview and the committed (panel-pinned) circle use this so they
+// look identical.
+function circleGraphics(center: LngLat, radiusM: number): Cesium.Entity.ConstructorOptions {
+  return {
+    position: Cesium.Cartesian3.fromDegrees(center.lon, center.lat),
+    ellipse: {
+      semiMajorAxis: radiusM,
+      semiMinorAxis: radiusM, // equal axes → circle
+      material: FILL_COLOR,
+      height: 0, // ellipsoid-draped; no classificationType / heightReference
+    },
+    polyline: {
+      positions: ringPositions(center, radiusM),
+      width: RING_WIDTH,
+      material: new Cesium.PolylineOutlineMaterialProperty({
+        color: LINE_COLOR,
+        outlineColor: LINE_CASING,
+        outlineWidth: 2,
+      }),
+      arcType: Cesium.ArcType.GEODESIC,
+      clampToGround: false,
+    },
+  };
+}
 
 // Below this the second click reads as an accidental double-click on the center;
 // keep waiting for a real radius. Above the max we'd be asking LANDFIRE to
@@ -102,18 +144,7 @@ export function FuelZoneController() {
         // Persist the committed circle so it stays visible while the panel is open.
         // The circle is removed when the panel closes (see the subscriber above).
         if (persistDsRef.current) {
-          const entity = persistDsRef.current.entities.add({
-            position: Cesium.Cartesian3.fromDegrees(zoneCenter.lon, zoneCenter.lat),
-            ellipse: {
-              semiMajorAxis: radius,
-              semiMinorAxis: radius,
-              material: FILL_COLOR,
-              outline: true,
-              outlineColor: LINE_COLOR,
-              outlineWidth: 2,
-              height: 0,
-            },
-          });
+          const entity = persistDsRef.current.entities.add(circleGraphics(zoneCenter, radius));
           entityMapRef.current.set(panelId, entity);
         }
         store().exit();
@@ -175,18 +206,7 @@ export function FuelZoneController() {
         },
       });
       if (radiusM > 0) {
-        ds.entities.add({
-          position: Cesium.Cartesian3.fromDegrees(center.lon, center.lat),
-          ellipse: {
-            semiMajorAxis: radiusM,
-            semiMinorAxis: radiusM, // equal axes → circle
-            material: FILL_COLOR,
-            outline: true,
-            outlineColor: LINE_COLOR,
-            outlineWidth: 2,
-            height: 0, // ellipsoid-draped; no classificationType / heightReference
-          },
-        });
+        ds.entities.add(circleGraphics(center, radiusM));
       }
     }
 

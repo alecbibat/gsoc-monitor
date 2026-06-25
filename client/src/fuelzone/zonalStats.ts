@@ -81,8 +81,10 @@ export function distanceM(a: LngLat, b: LngLat): number {
 
 // Build an ArcGIS polygon ring approximating the circle, wound clockwise (the
 // orientation ArcGIS expects for an outer ring). Returned as [lon, lat] pairs in
-// WGS84 — the ImageServer reprojects to its native Albers automatically.
-function circleRing(center: LngLat, radiusM: number, segments = 64): number[][] {
+// WGS84 — the ImageServer reprojects to its native Albers automatically. Also
+// reused to draw the on-globe outline, so the rendered ring matches the exact
+// geometry that gets histogrammed.
+export function circleRing(center: LngLat, radiusM: number, segments = 64): number[][] {
   const ring: number[][] = [];
   for (let i = 0; i <= segments; i++) {
     // Clockwise: bearing increases 0(N) → 90(E) → 180(S) → 270(W).
