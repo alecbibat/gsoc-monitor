@@ -31,8 +31,44 @@ export function FuelZoneController() {
   const radiusM = useFuelZoneStore((s) => s.radiusM);
 
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
+  // Persistent DS: holds committed circles that survive the draw tool exiting.
+  // Each circle lives until its corresponding panel is closed.
+  const persistDsRef = useRef<Cesium.CustomDataSource | null>(null);
+  const entityMapRef = useRef<Map<string, Cesium.Entity>>(new Map());
 
-  // Create the data source + input handler while the tool is active.
+  // Persistent data source — lives as long as the viewer, not the draw tool.
+  // Subscribes to the panel store so circles are removed when their panel closes.
+  useEffect(() => {
+    if (!viewer) return;
+    const v = viewer;
+
+    const ds = new Cesium.CustomDataSource('fuel-zone-committed');
+    persistDsRef.current = ds;
+    v.dataSources.add(ds);
+
+    const unsub = usePanelStore.subscribe((state, prevState) => {
+      const closedIds = prevState.panels
+        .filter((p) => p.kind === 'fuel-zone' && !state.panels.some((q) => q.id === p.id))
+        .map((p) => p.id);
+      for (const id of closedIds) {
+        const entity = entityMapRef.current.get(id);
+        if (entity && persistDsRef.current) {
+          persistDsRef.current.entities.remove(entity);
+        }
+        entityMapRef.current.delete(id);
+      }
+      if (closedIds.length > 0) v.scene.requestRender();
+    });
+
+    return () => {
+      unsub();
+      v.dataSources.remove(ds, true);
+      persistDsRef.current = null;
+      entityMapRef.current.clear();
+    };
+  }, [viewer]);
+
+  // Create the draw-preview data source + input handler while the tool is active.
   useEffect(() => {
     if (!viewer || !active) return;
     const v = viewer;
@@ -55,13 +91,31 @@ export function FuelZoneController() {
         const result = await analyzeFuelZone(zoneCenter, radius);
         const seq = store().seq + 1;
         store().bumpSeq();
+        const panelId = `fuel-zone-${seq}`;
         usePanelStore.getState().open({
-          id: `fuel-zone-${seq}`,
+          id: panelId,
           kind: 'fuel-zone',
           title: 'Fuel breakdown',
           subtitle: `${formatRadius(radius)} radius`,
           payload: result as unknown as Record<string, unknown>,
         });
+        // Persist the committed circle so it stays visible while the panel is open.
+        // The circle is removed when the panel closes (see the subscriber above).
+        if (persistDsRef.current) {
+          const entity = persistDsRef.current.entities.add({
+            position: Cesium.Cartesian3.fromDegrees(zoneCenter.lon, zoneCenter.lat),
+            ellipse: {
+              semiMajorAxis: radius,
+              semiMinorAxis: radius,
+              material: FILL_COLOR,
+              outline: true,
+              outlineColor: LINE_COLOR,
+              outlineWidth: 2,
+              height: 0,
+            },
+          });
+          entityMapRef.current.set(panelId, entity);
+        }
         store().exit();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
