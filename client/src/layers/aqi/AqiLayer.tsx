@@ -5,9 +5,9 @@ import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { api } from '../../api/client';
 import { useAqiStatus } from './aqiStore';
-import type { AqiStation } from '../../types';
 
-// Official EPA AQI color scale.
+// Official EPA / AirNow AQI color scale — the standard AirNow legend, keyed by
+// category number (1–6).
 const CATEGORY_COLOR: Record<number, string> = {
   1: '#00e400', // Good
   2: '#ffff00', // Moderate
@@ -27,9 +27,24 @@ const TEXT_COLOR: Record<number, string> = {
   6: '#ffffff',
 };
 
-function makeAqiSvg(aqi: number, categoryNum: number): string {
-  const fill = CATEGORY_COLOR[categoryNum] ?? '#888888';
-  const text = TEXT_COLOR[categoryNum] ?? '#ffffff';
+// Map an AQI value to its EPA/AirNow category number (1–6) via the official
+// breakpoints. Driving the dot color and size off the AQI value itself — rather
+// than the feed's Category.Number, which can be absent or "Unavailable" (7) and
+// would otherwise fall back to a gray dot — guarantees every dot's color matches
+// both the number it shows and the AirNow chart.
+function aqiCategory(aqi: number): number {
+  if (!Number.isFinite(aqi) || aqi <= 50) return 1; // Good
+  if (aqi <= 100) return 2; // Moderate
+  if (aqi <= 150) return 3; // Unhealthy for Sensitive Groups
+  if (aqi <= 200) return 4; // Unhealthy
+  if (aqi <= 300) return 5; // Very Unhealthy
+  return 6; // Hazardous
+}
+
+function makeAqiSvg(aqi: number): string {
+  const cat = aqiCategory(aqi);
+  const fill = CATEGORY_COLOR[cat];
+  const text = TEXT_COLOR[cat];
   const fontSize = aqi >= 100 ? 10 : 12;
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">` +
@@ -40,18 +55,16 @@ function makeAqiSvg(aqi: number, categoryNum: number): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-const iconCache = new Map<string, string>();
-function aqiIcon(station: AqiStation): string {
-  const key = `${station.aqi}-${station.categoryNum}`;
-  if (!iconCache.has(key)) iconCache.set(key, makeAqiSvg(station.aqi, station.categoryNum));
-  return iconCache.get(key)!;
+const iconCache = new Map<number, string>();
+function aqiIcon(aqi: number): string {
+  if (!iconCache.has(aqi)) iconCache.set(aqi, makeAqiSvg(aqi));
+  return iconCache.get(aqi)!;
 }
 
-// Billboard size: 22px for Good, up to 34px for Hazardous.
-// Clamp the result so a bad categoryNum can never produce NaN/negative width.
-function iconSize(categoryNum: number): number {
-  const cat = Number.isFinite(categoryNum) ? Math.max(1, Math.min(6, categoryNum)) : 1;
-  return 22 + (cat - 1) * 3;
+// Billboard size: 22px for Good, growing 3px per category up to 34px for
+// Hazardous, so worse air both reads redder and looms larger.
+function iconSize(aqi: number): number {
+  return 22 + (aqiCategory(aqi) - 1) * 3;
 }
 
 export function AqiLayer() {
@@ -111,12 +124,12 @@ export function AqiLayer() {
       for (const s of data.stations) {
         if (!Number.isFinite(s.lon) || !Number.isFinite(s.lat)) continue;
         if (s.lat < -90 || s.lat > 90 || s.lon < -180 || s.lon > 180) continue;
-        const sz = iconSize(s.categoryNum);
+        const sz = iconSize(s.aqi);
         const entity = ds.entities.add({
           id: s.id,
           position: Cesium.Cartesian3.fromDegrees(s.lon, s.lat, 0),
           billboard: {
-            image: aqiIcon(s),
+            image: aqiIcon(s.aqi),
             width: sz,
             height: sz,
             verticalOrigin: Cesium.VerticalOrigin.CENTER,
