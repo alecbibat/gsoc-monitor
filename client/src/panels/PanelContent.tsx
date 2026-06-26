@@ -11,6 +11,7 @@ import { NewsMapDetails } from '../layers/newsMap/NewsMapDetails';
 import { SmokeDetails } from '../layers/smoke/SmokeDetails';
 import { AqiDetails } from '../layers/aqi/AqiDetails';
 import { FuelZoneDetails } from '../fuelzone/FuelZoneDetails';
+import { WindForecastDetails } from '../layers/wind/WindForecastDetails';
 import { PropertyDetail } from '../widgets/proximity/PropertyDetail';
 import { TimezonePanel } from '../layers/timezones/TimezonePanel';
 import { WIDGET_BY_ID } from '../widgets/registry';
@@ -26,6 +27,7 @@ const ACCENT_BY_KIND: Record<string, string> = {
   smoke: 'border-amber-500/40',
   aqi: 'border-green-500/40',
   'fuel-zone': 'border-orange-500/40',
+  'wind-forecast': 'border-sky-500/40',
   ships: 'border-accent/40',
   satellites: 'border-sky-400/40',
   locations: 'border-violet-500/40',
@@ -61,6 +63,7 @@ export function PanelContent({ panel }: { panel: PanelData }) {
       {panel.kind === 'smoke' && <SmokeDetails payload={panel.payload as never} />}
       {panel.kind === 'aqi' && <AqiDetails payload={panel.payload as never} />}
       {panel.kind === 'fuel-zone' && <FuelZoneDetails payload={panel.payload as never} />}
+      {panel.kind === 'wind-forecast' && <WindForecastDetails payload={panel.payload as never} />}
       {panel.kind === 'property-watch' && <PropertyDetail payload={panel.payload as never} />}
       {panel.kind === 'timezones' && <TimezonePanel payload={panel.payload} />}
     </>

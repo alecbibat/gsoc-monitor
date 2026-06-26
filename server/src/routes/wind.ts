@@ -122,4 +122,110 @@ router.get('/', async (_req, res) => {
   }
 });
 
+// --- Point forecast ---------------------------------------------------------
+// A per-point wind forecast for a dropped wind probe: hourly speed/direction/
+// gusts for the week ahead plus a daily rollup. Sourced from the same NOAA GFS
+// model as the animated grid, via Open-Meteo. Speeds stay in m/s; the client
+// converts for display.
+
+const FORECAST_TTL_MS = 30 * 60 * 1000;
+
+export interface WindForecast {
+  latitude: number;
+  longitude: number;
+  timezone: string;
+  timezoneAbbr: string;
+  utcOffsetSeconds: number;
+  // Hourly arrays are parallel: time[i] (local ISO) ↔ speed/dir/gust[i].
+  hourly: { time: string[]; speed: number[]; dir: number[]; gust: number[] };
+  daily: { time: string[]; speedMax: number[]; gustMax: number[]; dirDominant: number[] };
+  updated: number;
+}
+
+interface OmForecast {
+  latitude: number;
+  longitude: number;
+  timezone?: string;
+  timezone_abbreviation?: string;
+  utc_offset_seconds?: number;
+  hourly?: {
+    time: string[];
+    wind_speed_10m: number[];
+    wind_direction_10m: number[];
+    wind_gusts_10m: number[];
+  };
+  daily?: {
+    time: string[];
+    wind_speed_10m_max: number[];
+    wind_gusts_10m_max: number[];
+    wind_direction_10m_dominant: number[];
+  };
+}
+
+async function fetchForecast(lat: number, lon: number): Promise<WindForecast> {
+  const url =
+    `https://api.open-meteo.com/v1/gfs?latitude=${lat}&longitude=${lon}` +
+    `&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
+    `&daily=wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant` +
+    `&wind_speed_unit=ms&forecast_days=7&timezone=auto`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Open-Meteo HTTP ${res.status}`);
+  const d = (await res.json()) as OmForecast;
+  const h = d.hourly;
+  const dy = d.daily;
+  if (!h || !dy) throw new Error('Open-Meteo: missing forecast fields');
+  return {
+    latitude: d.latitude,
+    longitude: d.longitude,
+    timezone: d.timezone ?? 'GMT',
+    timezoneAbbr: d.timezone_abbreviation ?? 'GMT',
+    utcOffsetSeconds: d.utc_offset_seconds ?? 0,
+    hourly: {
+      time: h.time,
+      speed: h.wind_speed_10m,
+      dir: h.wind_direction_10m,
+      gust: h.wind_gusts_10m,
+    },
+    daily: {
+      time: dy.time,
+      speedMax: dy.wind_speed_10m_max,
+      gustMax: dy.wind_gusts_10m_max,
+      dirDominant: dy.wind_direction_10m_dominant,
+    },
+    updated: Date.now(),
+  };
+}
+
+router.get('/forecast', async (req, res) => {
+  const lat = Number(req.query.lat);
+  const lon = Number(req.query.lon);
+  if (
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lon) ||
+    lat < -90 ||
+    lat > 90 ||
+    lon < -180 ||
+    lon > 180
+  ) {
+    res.status(400).json({ error: 'valid lat and lon query params required' });
+    return;
+  }
+  // Round to ~0.1° (~11 km) so nearby probes share one cached upstream call
+  // without smearing the forecast across noticeably different locations.
+  const latR = Math.round(lat * 10) / 10;
+  const lonR = Math.round(lon * 10) / 10;
+  try {
+    const data = await cache.getOrFetch<WindForecast>(
+      `wind-fc:${latR},${lonR}`,
+      FORECAST_TTL_MS,
+      () => fetchForecast(latR, lonR),
+      { staleOnError: true }
+    );
+    res.json(data);
+  } catch (err) {
+    console.error('Wind forecast route error', err);
+    res.status(502).json({ error: 'Wind forecast unavailable' });
+  }
+});
+
 export default router;

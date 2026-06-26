@@ -5,6 +5,7 @@ import { useLayersStore } from '../../store/layersStore';
 import { probeWindAt } from './windStore';
 import { useWindProbeStore } from './windProbeStore';
 import { ARROW_DATA_URI, flowAxis } from './windProbe';
+import { attachPanelData } from '../../cesium/entityPanelLink';
 
 // Pixel radius within which a right-click lands "on" an existing pin (toggles it
 // off rather than adding a new one).
@@ -160,6 +161,24 @@ export function WindProbeController() {
           backgroundColor: LABEL_BG,
           backgroundPadding: new Cesium.Cartesian2(7, 4),
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      });
+      // Left-click a pin → open its wind-forecast panel (the global click
+      // handler reads this off whatever entity gets picked).
+      attachPanelData(ent, {
+        id: `wind-forecast-${pin.id}`,
+        kind: 'wind-forecast',
+        title: 'Wind forecast',
+        subtitle: `${Math.abs(pin.lat).toFixed(3)}°${pin.lat >= 0 ? 'N' : 'S'}, ${Math.abs(
+          pin.lon
+        ).toFixed(3)}°${pin.lon >= 0 ? 'E' : 'W'}`,
+        payload: {
+          lon: pin.lon,
+          lat: pin.lat,
+          cardinal: pin.cardinal,
+          fromDeg: pin.fromDeg,
+          toDeg: pin.toDeg,
+          speedMph: pin.speedMph,
         },
       });
       pinEntsRef.current.push(ent);

@@ -118,7 +118,7 @@ export function WindReadout() {
         )}
 
         <p className="mt-2 border-t border-white/5 pt-1.5 text-[10px] text-white/30">
-          Right-click to pin · arrow shows where it’s blowing
+          Right-click to pin · click a pin for its forecast
         </p>
       </div>
     </div>

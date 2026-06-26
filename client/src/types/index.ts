@@ -28,7 +28,13 @@ export type WidgetId = 'news-feed' | 'proximity';
 // Anything that can occupy a dockable panel. 'property-watch' is a popped-out
 // single-property hazard window spawned from the Property Watch widget.
 // 'fuel-zone' is the draw-a-circle LANDFIRE fuel breakdown result.
-export type PanelKind = LayerId | WidgetId | 'property-watch' | 'fuel-zone';
+// 'wind-forecast' is the per-point forecast for a dropped wind probe.
+export type PanelKind =
+  | LayerId
+  | WidgetId
+  | 'property-watch'
+  | 'fuel-zone'
+  | 'wind-forecast';
 
 export type BasemapId = 'dark' | 'light' | 'satellite' | 'topo';
 
@@ -258,6 +264,21 @@ export interface WindGrid {
   u: number[];
   v: number[];
   speedMax: number;
+  updated: number;
+}
+
+// Per-point wind forecast for a dropped wind probe (NOAA GFS via Open-Meteo).
+// Hourly arrays are parallel (time[i] ↔ speed/dir/gust[i]); speeds are m/s,
+// direction is the meteorological "from" bearing in degrees. Times are local to
+// the forecast point (see utcOffsetSeconds).
+export interface WindForecast {
+  latitude: number;
+  longitude: number;
+  timezone: string;
+  timezoneAbbr: string;
+  utcOffsetSeconds: number;
+  hourly: { time: string[]; speed: number[]; dir: number[]; gust: number[] };
+  daily: { time: string[]; speedMax: number[]; gustMax: number[]; dirDominant: number[] };
   updated: number;
 }
 

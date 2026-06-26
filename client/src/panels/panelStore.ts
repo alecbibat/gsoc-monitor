@@ -61,6 +61,7 @@ const CASCADE_OFFSET = 32;
 // unnecessary scrolling on most screens.
 const KIND_HEIGHTS: Partial<Record<PanelKind, number>> = {
   ships: 630,
+  'wind-forecast': 560,
 };
 
 export const usePanelStore = create<PanelsState>((set, get) => ({
