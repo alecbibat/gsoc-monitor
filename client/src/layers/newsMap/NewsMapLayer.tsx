@@ -136,8 +136,9 @@ export function NewsMapLayer() {
           width: sz,
           height: sz,
           verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          // Fade in once moderately zoomed so the globe view isn't cluttered.
+          // Default depth test (disableDepthTestDistance = 0) so dots on the far
+          // side of the planet are correctly hidden behind the globe instead of
+          // showing through it.
           scaleByDistance: new Cesium.NearFarScalar(3.0e5, 1.0, 8.0e6, 0.4),
         },
       });
