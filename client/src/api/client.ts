@@ -54,6 +54,8 @@ export const api = {
   smoke: () => getJson<import('../types').SmokeResponse>('/api/smoke'),
   aqi: () => getJson<import('../types').AqiResponse>('/api/aqi'),
   wind: () => getJson<import('../types').WindGrid>('/api/wind'),
+  lightningHistory: (minutes: number) =>
+    getJson<import('../types').LightningHistoryResponse>(`/api/lightning?minutes=${minutes}`),
   windForecast: (lat: number, lon: number) =>
     getJson<import('../types').WindForecast>(`/api/wind/forecast?lat=${lat}&lon=${lon}`),
 };

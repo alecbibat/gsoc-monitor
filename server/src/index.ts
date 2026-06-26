@@ -22,6 +22,7 @@ import newsMapRouter from './routes/newsMap';
 import smokeRouter from './routes/smoke';
 import aqiRouter from './routes/aqi';
 import windRouter from './routes/wind';
+import lightningRouter, { initLightningStream } from './routes/lightning';
 import crisisRouter from './routes/crisis';
 import authRouter from './routes/auth';
 import adminRouter from './routes/admin';
@@ -98,8 +99,12 @@ function main() {
   app.use('/api/smoke', smokeRouter);
   app.use('/api/aqi', aqiRouter);
   app.use('/api/wind', windRouter);
+  app.use('/api/lightning', lightningRouter);
 
   initShipsStream();
+  // Persistent Blitzortung collector → rolling buffer behind /api/lightning so
+  // the client can request the last 1/6/12/24h of strikes.
+  initLightningStream();
 
   const clientDist = path.join(__dirname, '../../client/dist');
   app.use(express.static(clientDist));

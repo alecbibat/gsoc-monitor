@@ -8,6 +8,7 @@ import { RadarLayer } from './layers/radar/RadarLayer';
 import { FlightLayer } from './layers/flights/FlightLayer';
 import { HurricaneLayer } from './layers/hurricanes/HurricaneLayer';
 import { LightningLayer } from './layers/lightning/LightningLayer';
+import { LightningHistoryLayer } from './layers/lightning/LightningHistoryLayer';
 import { FireLayer } from './layers/fires/FireLayer';
 import { SmokeLayer } from './layers/smoke/SmokeLayer';
 import { AqiLayer } from './layers/aqi/AqiLayer';
@@ -88,6 +89,7 @@ export default function App() {
           <WindLayer />
           <WindProbeController />
           <LightningLayer />
+          <LightningHistoryLayer />
           <FlightLayer />
           <ShipLayer />
           <SatelliteLayer />

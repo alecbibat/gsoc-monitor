@@ -344,3 +344,18 @@ export interface WebcamsResponse {
   providers: WebcamProviderStatus[];
   stale?: boolean;
 }
+
+// Windowed lightning history from the server's rolling Blitzortung buffer.
+// Coordinates are parallel arrays; `t` is epoch SECONDS.
+export interface LightningHistoryResponse {
+  lat: number[];
+  lon: number[];
+  t: number[];
+  windowMin: number;
+  totalInWindow: number; // count in the window before any thinning
+  returned: number; // points actually returned (≤ totalInWindow)
+  thinned: boolean; // true when the window was strided down to fit the cap
+  coverageMin: number; // how far back the buffer actually reaches (≤ windowMin)
+  connected: boolean; // collector's live connection state
+  updated: number; // epoch seconds
+}
