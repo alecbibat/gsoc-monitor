@@ -13,24 +13,28 @@ const PARTICLE_COUNT = 7000;
 // out within each) keeps the field shimmering rather than pulsing in lockstep.
 const LIFE_MIN = 50;
 const LIFE_MAX = 170;
-// Degrees of travel per (m/s) per tick. The field is real but globe-scale
-// surface wind would crawl imperceptibly, so motion is exaggerated; this value
-// gives lively-but-readable streaks (a 10 m/s breeze ≈ 0.05°/tick).
+// Degrees of travel per (m/s) per tick.
 const STEP_DEG_PER_MS = 0.0052;
-// Trim particles that wander into the polar cap where the grid stops and the
-// 1/cos(lat) longitude term explodes.
+// Trim particles that wander into the polar cap.
 const LAT_LIMIT = 84;
-// A few km of lift so near-side particles sit cleanly in front of the ellipsoid
-// (no z-fighting) while far-side ones stay hidden behind the globe — the depth
-// test does the 3D occlusion, the lift just breaks the surface tie.
+// A few km of lift so particles sit cleanly above the ellipsoid.
 const PARTICLE_ALT_M = 3000;
 const POINT_SIZE = 2.4;
-// ~33 ms → cap the animation near 30 fps. Smooth enough for flowing wind and
-// noticeably kinder to weak GPUs than rendering every vsync.
+// ~33 ms → cap near 30 fps.
 const FRAME_MS = 33;
 
-// Speed → color ramp (m/s). Calm blues through green/yellow to hot reds for the
-// jet — a compact, legible wind palette.
+// Trail: each particle keeps a ring buffer of past positions rendered as
+// progressively smaller, dimmer points behind the head — making the direction
+// of flow easy to read at a glance.
+const TRAIL_LEN = 8;
+// Alpha of the head particle at peak fade. Each trail slot is this fraction
+// dimmer than the one in front of it.
+const HEAD_ALPHA = 0.9;
+const TRAIL_FALLOFF = 0.62;
+// Minimum pixel size for the oldest trail segment.
+const TRAIL_SIZE_MIN = 1.0;
+
+// Speed → color ramp (m/s). Calm blues through green/yellow to hot reds.
 const RAMP: Array<[number, Cesium.Color]> = [
   [0, Cesium.Color.fromCssColorString('#3b4cc0')],
   [4, Cesium.Color.fromCssColorString('#2a9d8f')],
@@ -42,7 +46,6 @@ const RAMP: Array<[number, Cesium.Color]> = [
   [45, Cesium.Color.fromCssColorString('#d6336c')],
 ];
 
-// Write the speed-ramp color into `out` (reused scratch — no per-particle alloc).
 function speedColor(spd: number, out: Cesium.Color): Cesium.Color {
   if (spd <= RAMP[0][0]) return Cesium.Color.clone(RAMP[0][1], out);
   const last = RAMP[RAMP.length - 1];
@@ -62,13 +65,13 @@ function speedColor(spd: number, out: Cesium.Color): Cesium.Color {
   return Cesium.Color.clone(last[1], out);
 }
 
-// Bilinear sampler over the grid. Longitude wraps (column nx → column 0);
-// returns null outside the covered latitude band.
+// Bilinear sampler over the grid. Longitude wraps; returns false outside the
+// covered latitude band.
 function makeSampler(grid: WindGrid) {
   const { nx, ny, lon0, lat0, dLon, dLat, u, v } = grid;
   return (lon: number, lat: number, out: [number, number]): boolean => {
     let x = (lon - lon0) / dLon;
-    x = ((x % nx) + nx) % nx; // wrap into [0, nx)
+    x = ((x % nx) + nx) % nx;
     const y = (lat - lat0) / dLat;
     if (y < 0 || y > ny - 1) return false;
     const x0 = Math.floor(x);
@@ -96,6 +99,11 @@ interface Particle {
   lat: number;
   age: number;
   life: number;
+  // Ring buffer of past positions (lon/lat before each step).
+  trailLons: Float32Array;
+  trailLats: Float32Array;
+  trailHead: number; // index of next write slot
+  trailFill: number; // how many slots have valid data (0..TRAIL_LEN)
 }
 
 function randomizeParticle(p: Particle): void {
@@ -103,6 +111,8 @@ function randomizeParticle(p: Particle): void {
   p.lat = Math.random() * 2 * (LAT_LIMIT - 4) - (LAT_LIMIT - 4);
   p.age = 0;
   p.life = LIFE_MIN + Math.random() * (LIFE_MAX - LIFE_MIN);
+  p.trailHead = 0;
+  p.trailFill = 0;
 }
 
 export function WindLayer() {
@@ -115,22 +125,49 @@ export function WindLayer() {
     let cancelled = false;
 
     const points = v.scene.primitives.add(new Cesium.PointPrimitiveCollection());
+
+    // Allocate head handles + trail handles in one flat collection.
+    // Layout: heads[0..PARTICLE_COUNT), then trail segments interleaved:
+    //   trail slot j of particle i → index PARTICLE_COUNT + i * TRAIL_LEN + j
+    //   j=0 is the most recent position (one tick ago), j=TRAIL_LEN-1 is oldest.
     const particles: Particle[] = [];
-    const handles: Cesium.PointPrimitive[] = [];
+    const headHandles: Cesium.PointPrimitive[] = [];
+    const trailHandles: Cesium.PointPrimitive[] = [];
+
     for (let i = 0; i < PARTICLE_COUNT; i++) {
-      const p: Particle = { lon: 0, lat: 0, age: 0, life: 0 };
+      const p: Particle = {
+        lon: 0,
+        lat: 0,
+        age: 0,
+        life: 0,
+        trailLons: new Float32Array(TRAIL_LEN),
+        trailLats: new Float32Array(TRAIL_LEN),
+        trailHead: 0,
+        trailFill: 0,
+      };
       randomizeParticle(p);
       p.age = Math.random() * p.life; // stagger so they don't all respawn together
       particles.push(p);
-      handles.push(
+
+      headHandles.push(
         points.add({
           position: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, PARTICLE_ALT_M),
           pixelSize: POINT_SIZE,
           color: Cesium.Color.TRANSPARENT,
-          // Default depth test → particles behind the globe are occluded (the
-          // whole point of doing this in 3D). No disableDepthTestDistance.
         })
       );
+
+      for (let j = 0; j < TRAIL_LEN; j++) {
+        // Pre-size: smaller & dimmer for older slots.
+        const size = Math.max(TRAIL_SIZE_MIN, POINT_SIZE - (j + 1) * 0.15);
+        trailHandles.push(
+          points.add({
+            position: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, PARTICLE_ALT_M),
+            pixelSize: size,
+            color: Cesium.Color.TRANSPARENT,
+          })
+        );
+      }
     }
 
     let sample: ((lon: number, lat: number, out: [number, number]) => boolean) | null = null;
@@ -145,19 +182,29 @@ export function WindLayer() {
       if (!sample) return;
       for (let i = 0; i < particles.length; i++) {
         const p = particles[i];
-        const handle = handles[i];
+        const head = headHandles[i];
 
         if (p.age >= p.life || !sample(p.lon, p.lat, wind)) {
+          // Reset particle and wipe all trail segments.
           randomizeParticle(p);
-          handle.show = false;
+          head.show = false;
+          for (let j = 0; j < TRAIL_LEN; j++) {
+            trailHandles[i * TRAIL_LEN + j].show = false;
+          }
           continue;
         }
 
         const u = wind[0];
         const vv = wind[1];
         const spd = Math.hypot(u, vv);
-        // Move along the wind. Longitude degrees shrink toward the poles, so
-        // divide by cos(lat) (clamped) to keep the heading true on the sphere.
+
+        // Record current position into trail ring buffer before moving.
+        p.trailLons[p.trailHead] = p.lon;
+        p.trailLats[p.trailHead] = p.lat;
+        p.trailHead = (p.trailHead + 1) % TRAIL_LEN;
+        p.trailFill = Math.min(p.trailFill + 1, TRAIL_LEN);
+
+        // Move along the wind.
         const cosLat = Math.max(0.25, Math.cos((p.lat * Math.PI) / 180));
         p.lon += (u * STEP_DEG_PER_MS) / cosLat;
         p.lat += vv * STEP_DEG_PER_MS;
@@ -168,18 +215,19 @@ export function WindLayer() {
 
         if (p.lat > LAT_LIMIT || p.lat < -LAT_LIMIT) {
           randomizeParticle(p);
-          handle.show = false;
+          head.show = false;
+          for (let j = 0; j < TRAIL_LEN; j++) {
+            trailHandles[i * TRAIL_LEN + j].show = false;
+          }
           continue;
         }
 
-        // Fade in over the first fifth of life, out over the last quarter, so
-        // particles appear and vanish softly instead of popping.
+        // Fade in over the first fifth of life, out over the last quarter.
         const f = p.age / p.life;
         const fade = f < 0.2 ? f / 0.2 : f > 0.75 ? (1 - f) / 0.25 : 1;
 
-        // Assign through the setters (not by mutating the getter result) so the
-        // collection flags the point dirty and re-uploads it.
-        handle.position = Cesium.Cartesian3.fromDegrees(
+        // Update head.
+        head.position = Cesium.Cartesian3.fromDegrees(
           p.lon,
           p.lat,
           PARTICLE_ALT_M,
@@ -187,9 +235,33 @@ export function WindLayer() {
           scratchCart
         );
         speedColor(spd, scratch);
-        scratch.alpha = Math.max(0, Math.min(1, fade)) * 0.9;
-        handle.color = scratch;
-        handle.show = true;
+        scratch.alpha = Math.max(0, Math.min(1, fade)) * HEAD_ALPHA;
+        head.color = scratch;
+        head.show = true;
+
+        // Update trail segments. j=0 is most recent, j=TRAIL_LEN-1 is oldest.
+        for (let j = 0; j < TRAIL_LEN; j++) {
+          const th = trailHandles[i * TRAIL_LEN + j];
+          if (j >= p.trailFill) {
+            th.show = false;
+            continue;
+          }
+          // Ring-buffer read: slot j steps behind the last written entry.
+          const rIdx = ((p.trailHead - 1 - j) % TRAIL_LEN + TRAIL_LEN) % TRAIL_LEN;
+          th.position = Cesium.Cartesian3.fromDegrees(
+            p.trailLons[rIdx],
+            p.trailLats[rIdx],
+            PARTICLE_ALT_M,
+            undefined,
+            scratchCart
+          );
+          speedColor(spd, scratch);
+          // Alpha drops off exponentially along the trail.
+          const trailAlpha = fade * HEAD_ALPHA * Math.pow(TRAIL_FALLOFF, j + 1);
+          scratch.alpha = Math.max(0, trailAlpha);
+          th.color = scratch;
+          th.show = true;
+        }
       }
     };
 
@@ -221,15 +293,13 @@ export function WindLayer() {
     };
 
     loadGrid();
-    // Refresh the field periodically; particles keep flowing on the old one
-    // until the new grid swaps in.
     const interval = setInterval(loadGrid, 30 * 60_000);
 
     return () => {
       cancelled = true;
       clearInterval(interval);
       if (rafId != null) cancelAnimationFrame(rafId);
-      v.scene.primitives.remove(points); // destroys the collection + its points
+      v.scene.primitives.remove(points);
       useWindStatus.getState().setStatus({ ready: false, error: null, maxSpeedMps: 0 });
       v.scene.requestRender();
     };
