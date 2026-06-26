@@ -7,6 +7,7 @@ import { useFiresStatus } from '../layers/fires/firesStore';
 import { useSmokeStatus } from '../layers/smoke/smokeStore';
 import { useAqiStatus } from '../layers/aqi/aqiStore';
 import { useFuelStatus } from '../layers/fuel/fuelStore';
+import { useWindStatus } from '../layers/wind/windStore';
 import { FuelLegend } from '../layers/fuel/FuelLegend';
 import { useFuelZoneStore } from '../fuelzone/fuelZoneStore';
 import { useShipsStatus } from '../layers/ships/shipsStore';
@@ -72,6 +73,7 @@ export function Sidebar() {
   const smokeStatus = useSmokeStatus();
   const aqiStatus = useAqiStatus();
   const fuelStatus = useFuelStatus();
+  const windStatus = useWindStatus();
   const fuelZoneActive = useFuelZoneStore((s) => s.active);
   const toggleFuelZone = useFuelZoneStore((s) => s.toggle);
   const shipsStatus = useShipsStatus();
@@ -391,6 +393,17 @@ export function Sidebar() {
                   (aqiStatus.count > 0
                     ? `${aqiStatus.count} stations · worst AQI ${aqiStatus.worstAqi} (${aqiStatus.worstCategory}) · hourly`
                     : 'EPA monitoring stations · CONUS · hourly')
+            }
+          />
+          <LayerToggle
+            label="Wind (GFS)"
+            active={(active as Record<string, boolean>).wind ?? false}
+            onToggle={() => toggleLayer('wind')}
+            statusText={
+              windStatus.error ??
+              (windStatus.ready
+                ? `Live surface wind · peak ${Math.round(windStatus.maxSpeedMps * 2.23694)} mph`
+                : 'Animated global wind streamlines')
             }
           />
           <LayerToggle

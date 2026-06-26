@@ -57,6 +57,7 @@ export const useLayersStore = create<LayersState>()(
         timezones: false,
         webcams: false,
         newsMap: false,
+        wind: false,
       },
       basemap: 'dark',
       toggleLayer: (id) =>

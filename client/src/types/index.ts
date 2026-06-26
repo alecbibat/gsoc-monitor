@@ -17,7 +17,8 @@ export type LayerId =
   | 'traffic'
   | 'timezones'
   | 'webcams'
-  | 'newsMap';
+  | 'newsMap'
+  | 'wind';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
@@ -242,6 +243,22 @@ export interface AqiResponse {
   updated: number;
   noKey?: boolean;
   error?: string;
+}
+
+// Global wind field sampled on a regular lat/lon grid. Row-major (row = latitude
+// south→north, col = longitude west→east); u/v are the eastward/northward wind
+// components in m/s. Column `nx` wraps back to column 0 (the grid spans 360°).
+export interface WindGrid {
+  nx: number;
+  ny: number;
+  lon0: number;
+  lat0: number;
+  dLon: number;
+  dLat: number;
+  u: number[];
+  v: number[];
+  speedMax: number;
+  updated: number;
 }
 
 export interface RouteStep {

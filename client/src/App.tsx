@@ -12,6 +12,7 @@ import { FireLayer } from './layers/fires/FireLayer';
 import { SmokeLayer } from './layers/smoke/SmokeLayer';
 import { AqiLayer } from './layers/aqi/AqiLayer';
 import { FuelLayer } from './layers/fuel/FuelLayer';
+import { WindLayer } from './layers/wind/WindLayer';
 import { ShipLayer } from './layers/ships/ShipLayer';
 import { NewsMapLayer } from './layers/newsMap/NewsMapLayer';
 import { ShipModelLayer } from './layers/ships/ShipModelLayer';
@@ -82,6 +83,7 @@ export default function App() {
           <SmokeLayer />
           <AqiLayer />
           <FuelLayer />
+          <WindLayer />
           <LightningLayer />
           <FlightLayer />
           <ShipLayer />

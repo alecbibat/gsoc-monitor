@@ -100,6 +100,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'wind',
+    info: {
+      name: 'Wind',
+      icon: '🌬',
+      source: 'NOAA GFS (via Open-Meteo)',
+      method:
+        'Current 10 m wind (speed + direction) sampled on a global grid from NOAA’s Global Forecast System and animated client-side: thousands of particles are advected through the bilinearly interpolated field to trace the live flow, colored by wind speed.',
+      trust:
+        'GFS is NOAA’s flagship global numerical weather model; Open-Meteo serves it as an open, key-free API. The same model underlies most public wind maps.',
+      url: 'https://www.nco.ncep.noaa.gov/pmb/products/gfs/',
+    },
+  },
+  {
     id: 'smoke',
     info: {
       name: 'Smoke',

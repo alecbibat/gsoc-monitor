@@ -53,4 +53,5 @@ export const api = {
   },
   smoke: () => getJson<import('../types').SmokeResponse>('/api/smoke'),
   aqi: () => getJson<import('../types').AqiResponse>('/api/aqi'),
+  wind: () => getJson<import('../types').WindGrid>('/api/wind'),
 };
