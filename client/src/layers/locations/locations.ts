@@ -44,16 +44,21 @@ export const LOCATION_GROUPS: LocationGroup[] = [
     icon: '🏔',
     locations: [
       { name: 'Grand Canyon Railway & Hotel', lat: 35.25185, lon: -112.19152 },
+      { name: 'City of Valle - Employee Housing', lat: 35.65216, lon: -112.13947 },
       { name: 'Grand Canyon Village', lat: 36.05624, lon: -112.13939 },
+      { name: 'The Grand Hotel', lat: 35.96997, lon: -112.12712 },
+      { name: 'Grand Canyon Hotel & Suites', lat: 35.97134, lon: -112.12840 },
+      { name: 'Grand Canyon Trading Post', lat: 35.97243, lon: -112.12635 },
     ],
   },
   {
     id: 'corporate',
-    name: 'Xanterra HQ',
+    name: 'Corporate Offices',
     color: '#8b5cf6',
     icon: '🏢',
     locations: [
       { name: 'Xanterra Corporate Office', lat: 39.60323, lon: -104.89349, altitudeM: 80_000 },
+      { name: 'Flagstaff Corporate Office', lat: 35.18762, lon: -111.66774, altitudeM: 80_000 },
     ],
   },
   {
@@ -138,6 +143,15 @@ export const LOCATION_GROUPS: LocationGroup[] = [
     icon: '🚂',
     locations: [
       { name: 'Cog Railway', lat: 38.85606, lon: -104.93156, altitudeM: 60_000 },
+    ],
+  },
+  {
+    id: 'rocky-mountain',
+    name: 'Rocky Mountain NP',
+    color: '#16a34a',
+    icon: '🌲',
+    locations: [
+      { name: 'Rocky Mountain Offices', lat: 40.36420, lon: -105.54726, altitudeM: 80_000 },
     ],
   },
 ];
