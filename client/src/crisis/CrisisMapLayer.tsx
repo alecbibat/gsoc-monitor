@@ -90,6 +90,7 @@ function addLayerEntities(ds: Cesium.CustomDataSource, layer: DrawLayer) {
 export function CrisisMapLayer() {
   const viewer = useCesiumViewer();
   const incidents = useCrisisStore((s) => s.incidents);
+  const activeIncidentId = useCrisisStore((s) => s.activeIncidentId);
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
 
   // Data source lifecycle
@@ -104,18 +105,25 @@ export function CrisisMapLayer() {
     };
   }, [viewer]);
 
-  // Render all visible layers across all incidents
+  // Render all visible layers across all incidents.
+  //
+  // Stood-down (archived) incidents are kept off the globe so the map isn't
+  // cluttered with concluded events — except while that incident is the one
+  // currently being viewed, when its layers reappear temporarily. Opening an
+  // archived incident sets it as active; navigating back to the list clears it
+  // and the layers hide again.
   useEffect(() => {
     const ds = dsRef.current;
     if (!ds || !viewer) return;
     ds.entities.removeAll();
     incidents.forEach((inc) => {
+      if (inc.archivedAt && inc.id !== activeIncidentId) return;
       inc.drawLayers
         .filter((l) => l.visible && l.positions.length > 0)
         .forEach((layer) => addLayerEntities(ds, layer));
     });
     viewer.scene.requestRender();
-  }, [viewer, incidents]);
+  }, [viewer, incidents, activeIncidentId]);
 
   // Click-to-identify: clicking a drawn layer opens its info popup
   useEffect(() => {
