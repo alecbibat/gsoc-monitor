@@ -24,6 +24,32 @@ const DLAT = 5;
 // per request keeps the URL near 4 KB with comfortable headroom.
 const BATCH = 500;
 
+// Open-Meteo occasionally stalls or returns a transient 5xx/429. Without a
+// timeout a hung request blocks until the platform's router kills it (a 30s
+// H12 on Heroku); without a retry a single blip fails the whole call. For a
+// freshly-dropped probe there's no cached value to fall back on, so that blip
+// surfaces to the user as "Forecast unavailable". A couple of quick retries
+// with a short backoff turns most one-off failures into a clean fetch. Worst
+// case (all attempts time out) stays comfortably under 30s.
+async function fetchJsonWithRetry(
+  url: string,
+  attempts = 3,
+  timeoutMs = 8_000
+): Promise<unknown> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+      if (!res.ok) throw new Error(`Open-Meteo HTTP ${res.status}`);
+      return await res.json();
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 // Row-major (row = latitude south→north, col = longitude west→east), u/v in m/s.
 export interface WindGrid {
   nx: number;
@@ -61,9 +87,7 @@ async function fetchBatch(batch: Array<{ lat: number; lon: number }>): Promise<O
   const url =
     `https://api.open-meteo.com/v1/gfs?latitude=${lat}&longitude=${lon}` +
     `&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Open-Meteo HTTP ${res.status}`);
-  const data = (await res.json()) as OmResult[] | OmResult;
+  const data = (await fetchJsonWithRetry(url)) as OmResult[] | OmResult;
   return Array.isArray(data) ? data : [data];
 }
 
@@ -168,9 +192,7 @@ async function fetchForecast(lat: number, lon: number): Promise<WindForecast> {
     `&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
     `&daily=wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant` +
     `&wind_speed_unit=ms&forecast_days=7&timezone=auto`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Open-Meteo HTTP ${res.status}`);
-  const d = (await res.json()) as OmForecast;
+  const d = (await fetchJsonWithRetry(url)) as OmForecast;
   const h = d.hourly;
   const dy = d.daily;
   if (!h || !dy) throw new Error('Open-Meteo: missing forecast fields');

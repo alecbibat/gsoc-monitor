@@ -212,6 +212,7 @@ export function WindForecastDetails({ payload }: { payload: Payload }) {
   const setUnit = useWindUnit((s) => s.setUnit);
   const [fc, setFc] = useState<WindForecast | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -224,14 +225,23 @@ export function WindForecastDetails({ payload }: { payload: Payload }) {
     return () => {
       cancelled = true;
     };
-  }, [lat, lon]);
+  }, [lat, lon, reloadKey]);
 
   const win = useMemo(() => (fc ? buildWindow(fc) : null), [fc]);
 
   if (err) {
     return (
-      <div className="rounded-lg bg-white/5 px-3 py-4 text-[13px] leading-relaxed text-white/60">
-        {err}. The forecast feed (NOAA GFS via Open-Meteo) didn’t respond — try again shortly.
+      <div className="space-y-3 rounded-lg bg-white/5 px-3 py-4 text-[13px] leading-relaxed text-white/60">
+        <p>
+          {err}. The forecast feed (NOAA GFS via Open-Meteo) didn’t respond — it can be briefly
+          rate-limited or slow to wake.
+        </p>
+        <button
+          onClick={() => setReloadKey((k) => k + 1)}
+          className="rounded-md border border-white/15 bg-white/5 px-3 py-1.5 text-[12px] font-semibold text-white/80 transition hover:bg-white/10"
+        >
+          Retry
+        </button>
       </div>
     );
   }
