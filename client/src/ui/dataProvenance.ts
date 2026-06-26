@@ -91,11 +91,11 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     info: {
       name: 'Air Quality Index',
       icon: '🌫',
-      source: 'US EPA AirNow',
+      source: 'US EPA AirNow + PurpleAir',
       method:
-        'Real-time AQI readings from official EPA and state monitoring stations across the continental US, fetched hourly from the AirNow Data API (airnowapi.org). Each station reports the dominant pollutant (PM2.5, Ozone, PM10, CO, NO₂ or SO₂).',
+        'Two sources on one EPA AQI scale. Numbered badges are official EPA/state reference monitors from the AirNow Data API (airnowapi.org), reporting the dominant pollutant (PM2.5, Ozone, PM10, CO, NO₂ or SO₂). Dots are PurpleAir community PM2.5 sensors (api.purpleair.com): their raw readings are corrected with the US EPA US-wide equation (Barkjohn 2021) and converted to AQI with the 2024 PM2.5 breakpoints, so the crowd-sourced field lines up with the reference monitors.',
       trust:
-        'The definitive US government air-quality monitoring network — the same data that drives AirNow.gov, Airnow mobile apps, and public health advisories.',
+        'AirNow is the definitive US government monitoring network behind AirNow.gov and public health advisories. PurpleAir is a large low-cost-sensor network; EPA-corrected, it powers the AirNow Fire & Smoke Map — far denser than the reference network, but treat individual readings as indicative rather than regulatory.',
       url: 'https://www.airnow.gov',
     },
   },

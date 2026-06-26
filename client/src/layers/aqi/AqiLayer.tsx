@@ -1,10 +1,11 @@
 import * as Cesium from 'cesium';
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { api } from '../../api/client';
 import { useAqiStatus } from './aqiStore';
+import type { AqiResponse } from '../../types';
 
 // Official EPA / AirNow AQI color scale — the standard AirNow legend, keyed by
 // category number (1–6).
@@ -41,6 +42,7 @@ function aqiCategory(aqi: number): number {
   return 6; // Hazardous
 }
 
+// --- AirNow numbered badge (authoritative reference monitors) ----------------
 function makeAqiSvg(aqi: number): string {
   const cat = aqiCategory(aqi);
   const fill = CATEGORY_COLOR[cat];
@@ -67,10 +69,33 @@ function iconSize(aqi: number): number {
   return 22 + (aqiCategory(aqi) - 1) * 3;
 }
 
+// --- PurpleAir dot (dense low-cost sensor field) -----------------------------
+// A small colored dot, no number — there are thousands, so the number would be
+// noise. The size/number difference makes the two sources distinguishable at a
+// glance: numbered badges = official AirNow, plain dots = PurpleAir.
+const paIconCache = new Map<number, string>();
+function paDotIcon(cat: number): string {
+  if (!paIconCache.has(cat)) {
+    const svg =
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">` +
+      `<circle cx="10" cy="10" r="6.5" fill="${CATEGORY_COLOR[cat]}" stroke="#0a0e1a" stroke-width="1.5"/>` +
+      `</svg>`;
+    paIconCache.set(cat, `data:image/svg+xml,${encodeURIComponent(svg)}`);
+  }
+  return paIconCache.get(cat)!;
+}
+function paSize(cat: number): number {
+  return 12 + (cat - 1) * 1.5; // 12–19.5px, smaller than the AirNow badges
+}
+
 export function AqiLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.aqi);
+  const showAirnow = useAqiStatus((s) => s.showAirnow);
+  const showPurpleair = useAqiStatus((s) => s.showPurpleair);
+
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
+  const dataRef = useRef<AqiResponse | null>(null);
 
   useEffect(() => {
     if (!viewer) return;
@@ -83,93 +108,125 @@ export function AqiLayer() {
     };
   }, [viewer]);
 
-  useEffect(() => {
+  // Render the last-fetched stations honoring the per-source visibility toggles.
+  // Kept separate from the fetch so flipping a source on/off re-renders instantly
+  // without a network round-trip.
+  const render = useCallback(() => {
     const ds = dsRef.current;
     if (!viewer || !ds) return;
-
+    ds.entities.removeAll();
     if (!active) {
-      ds.entities.removeAll();
       viewer.scene.requestRender();
-      useAqiStatus.getState().setStatus({ count: 0, worstAqi: 0, worstCategory: '' });
+      return;
+    }
+    const data = dataRef.current;
+    if (!data) {
+      viewer.scene.requestRender();
       return;
     }
 
-    let cancelled = false;
+    // Draw PurpleAir first so the larger AirNow badges layer on top where they
+    // overlap.
+    const ordered = [...data.stations].sort(
+      (a, b) => (a.source === 'purpleair' ? 0 : 1) - (b.source === 'purpleair' ? 0 : 1)
+    );
 
+    let worstAqi = 0;
+    let worstCategory = '';
+    let visible = 0;
+
+    for (const s of ordered) {
+      if (s.source === 'airnow' && !showAirnow) continue;
+      if (s.source === 'purpleair' && !showPurpleair) continue;
+      if (!Number.isFinite(s.lon) || !Number.isFinite(s.lat)) continue;
+      if (s.lat < -90 || s.lat > 90 || s.lon < -180 || s.lon > 180) continue;
+
+      const isPa = s.source === 'purpleair';
+      const cat = aqiCategory(s.aqi);
+      const sz = isPa ? paSize(cat) : iconSize(s.aqi);
+      const entity = ds.entities.add({
+        id: s.id,
+        position: Cesium.Cartesian3.fromDegrees(s.lon, s.lat, 0),
+        billboard: {
+          image: isPa ? paDotIcon(cat) : aqiIcon(s.aqi),
+          width: sz,
+          height: sz,
+          verticalOrigin: Cesium.VerticalOrigin.CENTER,
+          // Fade out at globe scale so the map isn't a wall of dots.
+          scaleByDistance: new Cesium.NearFarScalar(1.0e5, 1.0, 6.0e6, 0.3),
+        },
+      });
+      attachPanelData(entity, {
+        id: s.id,
+        kind: 'aqi',
+        title: s.reportingArea,
+        subtitle: `AQI ${s.aqi} · ${s.categoryName}${isPa ? ' · PurpleAir' : ''}`,
+        payload: s as unknown as Record<string, unknown>,
+      });
+
+      visible++;
+      if (s.aqi > worstAqi) {
+        worstAqi = s.aqi;
+        worstCategory = s.categoryName;
+      }
+    }
+
+    useAqiStatus.getState().setStatus({
+      count: visible,
+      worstAqi,
+      worstCategory,
+      airnowCount: data.counts?.airnow ?? 0,
+      purpleairCount: data.counts?.purpleair ?? 0,
+      noKey: !!data.noKey,
+      purpleAirNoKey: !!data.purpleAirNoKey,
+      error: null,
+    });
+    viewer.scene.requestRender();
+  }, [viewer, active, showAirnow, showPurpleair]);
+
+  // Always call the latest render from the fetch loop without making the fetch
+  // effect depend on the visibility toggles.
+  const renderRef = useRef(render);
+  renderRef.current = render;
+
+  // Fetch + poll.
+  useEffect(() => {
+    if (!viewer) return;
+    if (!active) {
+      const ds = dsRef.current;
+      if (ds) ds.entities.removeAll();
+      useAqiStatus.getState().setStatus({ count: 0, worstAqi: 0, worstCategory: '' });
+      viewer.scene.requestRender();
+      return;
+    }
+    let cancelled = false;
     const load = async () => {
-      let data;
+      let data: AqiResponse;
       try {
         data = await api.aqi();
       } catch (err) {
         if (cancelled) return;
         console.error('Failed to load AQI data', err);
-        useAqiStatus.getState().setStatus({ error: 'AirNow feed unavailable' });
+        useAqiStatus.getState().setStatus({ error: 'Air quality feed unavailable' });
         return;
       }
       if (cancelled) return;
-
-      if (data.noKey) {
-        useAqiStatus.getState().setStatus({ noKey: true });
-        return;
-      }
-      if (data.error) {
-        useAqiStatus.getState().setStatus({ error: data.error });
-        return;
-      }
-
-      ds.entities.removeAll();
-      let worstAqi = 0;
-      let worstCategory = '';
-
-      for (const s of data.stations) {
-        if (!Number.isFinite(s.lon) || !Number.isFinite(s.lat)) continue;
-        if (s.lat < -90 || s.lat > 90 || s.lon < -180 || s.lon > 180) continue;
-        const sz = iconSize(s.aqi);
-        const entity = ds.entities.add({
-          id: s.id,
-          position: Cesium.Cartesian3.fromDegrees(s.lon, s.lat, 0),
-          billboard: {
-            image: aqiIcon(s.aqi),
-            width: sz,
-            height: sz,
-            verticalOrigin: Cesium.VerticalOrigin.CENTER,
-            // Fade out at globe scale so the map isn't a wall of dots.
-            scaleByDistance: new Cesium.NearFarScalar(1.0e5, 1.0, 6.0e6, 0.3),
-          },
-        });
-        attachPanelData(entity, {
-          id: s.id,
-          kind: 'aqi',
-          title: s.reportingArea,
-          subtitle: `AQI ${s.aqi} · ${s.categoryName}`,
-          payload: s as unknown as Record<string, unknown>,
-        });
-
-        if (s.aqi > worstAqi) {
-          worstAqi = s.aqi;
-          worstCategory = s.categoryName;
-        }
-      }
-
-      useAqiStatus.getState().setStatus({
-        count: data.stations.length,
-        worstAqi,
-        worstCategory,
-        error: null,
-        noKey: false,
-      });
-      viewer.scene.requestRender();
+      dataRef.current = data;
+      renderRef.current();
     };
-
     load();
-    // AirNow updates every hour; poll slightly less often to avoid hitting the
-    // cache on the nose.
-    const interval = setInterval(load, 65 * 60_000);
+    // AirNow is hourly, PurpleAir ~real-time; 15 min keeps the dense field fresh.
+    const interval = setInterval(load, 15 * 60_000);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
   }, [viewer, active]);
+
+  // Re-render (no refetch) when a source is toggled on/off.
+  useEffect(() => {
+    renderRef.current();
+  }, [showAirnow, showPurpleair]);
 
   return null;
 }

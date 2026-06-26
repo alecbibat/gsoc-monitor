@@ -387,18 +387,58 @@ export function Sidebar() {
             }
           />
           <LayerToggle
-            label="Air Quality (AirNow)"
+            label="Air Quality (AirNow + PurpleAir)"
             active={(active as Record<string, boolean>).aqi ?? false}
             onToggle={() => toggleLayer('aqi')}
             statusText={
-              aqiStatus.noKey
-                ? 'No AIRNOW_API_KEY set — free key at airnowapi.org'
-                : aqiStatus.error ??
-                  (aqiStatus.count > 0
-                    ? `${aqiStatus.count} stations · worst AQI ${aqiStatus.worstAqi} (${aqiStatus.worstCategory}) · hourly`
-                    : 'EPA monitoring stations · CONUS · hourly')
+              aqiStatus.error
+                ? aqiStatus.error
+                : aqiStatus.noKey && aqiStatus.purpleAirNoKey
+                  ? 'Set AIRNOW_API_KEY and/or PURPLEAIR_API_KEY'
+                  : aqiStatus.count > 0
+                    ? `${aqiStatus.count.toLocaleString()} sensors · worst AQI ${aqiStatus.worstAqi} (${aqiStatus.worstCategory})`
+                    : 'EPA + community sensors · CONUS'
             }
-          />
+          >
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {aqiStatus.noKey ? (
+                <span className="rounded bg-white/5 px-2 py-1 text-[10px] text-white/30">
+                  AirNow: no AIRNOW_API_KEY
+                </span>
+              ) : (
+                <button
+                  onClick={() => aqiStatus.toggleSource('airnow')}
+                  className={`rounded px-2 py-1 text-[11px] font-medium transition ${
+                    aqiStatus.showAirnow
+                      ? 'bg-accent/20 text-accent'
+                      : 'bg-white/5 text-white/40 hover:bg-white/10'
+                  }`}
+                >
+                  AirNow{aqiStatus.airnowCount > 0 ? ` · ${aqiStatus.airnowCount.toLocaleString()}` : ''}
+                </button>
+              )}
+              {aqiStatus.purpleAirNoKey ? (
+                <span className="rounded bg-white/5 px-2 py-1 text-[10px] text-white/30">
+                  PurpleAir: set PURPLEAIR_API_KEY
+                </span>
+              ) : (
+                <button
+                  onClick={() => aqiStatus.toggleSource('purpleair')}
+                  className={`rounded px-2 py-1 text-[11px] font-medium transition ${
+                    aqiStatus.showPurpleair
+                      ? 'bg-purple-400/20 text-purple-300'
+                      : 'bg-white/5 text-white/40 hover:bg-white/10'
+                  }`}
+                >
+                  PurpleAir{aqiStatus.purpleairCount > 0 ? ` · ${aqiStatus.purpleairCount.toLocaleString()}` : ''}
+                </button>
+              )}
+            </div>
+            <p className="pt-1.5 text-[10px] leading-relaxed text-white/30">
+              Numbered badges = AirNow reference monitors · dots = PurpleAir
+              (PM2.5, EPA-corrected)
+            </p>
+          </LayerToggle>
           <LayerToggle
             label="Wind (GFS)"
             active={(active as Record<string, boolean>).wind ?? false}

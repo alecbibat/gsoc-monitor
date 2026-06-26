@@ -231,6 +231,7 @@ export interface SmokeResponse {
 
 export interface AqiStation {
   id: string;
+  source: 'airnow' | 'purpleair';
   lat: number;
   lon: number;
   aqi: number;
@@ -239,15 +240,23 @@ export interface AqiStation {
   parameter: string;    // dominant pollutant name
   reportingArea: string;
   state: string;
-  hourObserved: number;
+  hourObserved: number; // -1 for PurpleAir (use lastSeen)
   timezone: string;
   all: Array<{ parameter: string; aqi: number; category: string }>;
+  // PurpleAir-only extras
+  pm25?: number;        // EPA-corrected PM2.5 (µg/m³)
+  pm25Raw?: number;     // raw cf_1 PM2.5 before correction
+  humidity?: number;    // % RH used in the correction
+  confidence?: number;  // PurpleAir 0–100 channel-agreement score
+  lastSeen?: number;    // epoch seconds of the sensor's last report
 }
 
 export interface AqiResponse {
   stations: AqiStation[];
   updated: number;
-  noKey?: boolean;
+  noKey?: boolean;            // AirNow key missing
+  purpleAirNoKey?: boolean;   // PurpleAir key missing
+  counts?: { airnow: number; purpleair: number };
   error?: string;
 }
 
