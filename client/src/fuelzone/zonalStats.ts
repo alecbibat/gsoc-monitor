@@ -4,6 +4,59 @@ import {
   FUEL_GROUPS,
   type FuelGroupKey,
 } from '../layers/fuel/fbfm40';
+
+// --- Fire-behavior risk scoring -------------------------------------------
+// Per-FBFM40 composite score (0–100) derived from Scott & Burgan (2005) rate-
+// of-spread and flame-length values at standard test conditions (20-ft wind
+// 10 mph, 1-hr fuel moisture 5%).  Nonburnable codes are 0.
+const CODE_SCORE: Record<number, number> = {
+  // Grass (GR) — fastest surface-fire spread
+  101: 25, 102: 45, 103: 50, 104: 65, 105: 60, 106: 75, 107: 85, 108: 90, 109: 95,
+  // Grass-Shrub (GS)
+  121: 50, 122: 65, 123: 75, 124: 90,
+  // Shrub (SH)
+  141: 25, 142: 30, 143: 55, 144: 40, 145: 65, 146: 40, 147: 80, 148: 75, 149: 90,
+  // Timber-Understory (TU)
+  161: 25, 162: 20, 163: 50, 164: 35, 165: 75,
+  // Timber-Litter (TL) — slow surface fire
+  181: 5,  182: 8,  183: 15, 184: 20, 185: 20, 186: 18, 187: 22, 188: 25, 189: 25,
+  // Slash-Blowdown (SB) — intense, erratic
+  201: 25, 202: 40, 203: 60, 204: 75,
+  // Nonburnable
+  91: 0, 92: 0, 93: 0, 98: 0, 99: 0,
+};
+
+// Rate-of-spread sub-score.
+const CODE_SPREAD: Record<number, number> = {
+  101: 20, 102: 60, 103: 55, 104: 75, 105: 65, 106: 80, 107: 90, 108: 95, 109: 100,
+  121: 55, 122: 70, 123: 80, 124: 95,
+  141: 20, 142: 20, 143: 40, 144: 25, 145: 60, 146: 22, 147: 75, 148: 65, 149: 80,
+  161: 18, 162: 10, 163: 35, 164: 20, 165: 65,
+  181: 3,  182: 3,  183: 8,  184: 7,  185: 10, 186: 8,  187: 5,  188: 12, 189: 8,
+  201: 15, 202: 25, 203: 50, 204: 70,
+  91: 0, 92: 0, 93: 0, 98: 0, 99: 0,
+};
+
+// Expected flame-length sub-score.
+const CODE_FLAME: Record<number, number> = {
+  101: 25, 102: 40, 103: 60, 104: 55, 105: 70, 106: 85, 107: 75, 108: 100, 109: 100,
+  121: 50, 122: 65, 123: 85, 124: 100,
+  141: 30, 142: 35, 143: 60, 144: 45, 145: 75, 146: 50, 147: 90, 148: 90, 149: 100,
+  161: 28, 162: 25, 163: 55, 164: 45, 165: 85,
+  181: 8,  182: 12, 183: 18, 184: 35, 185: 30, 186: 25, 187: 50, 188: 45, 189: 50,
+  201: 30, 202: 60, 203: 80, 204: 90,
+  91: 0, 92: 0, 93: 0, 98: 0, 99: 0,
+};
+
+export type RiskLevel = 'Low' | 'Moderate' | 'High' | 'Very High' | 'Extreme';
+
+export interface FuelRisk {
+  score: number;      // 0–100 weighted over burnable pixels only
+  level: RiskLevel;
+  spreadCat: 'Slow' | 'Moderate' | 'Fast' | 'Very Fast';
+  flameCat: 'Short' | 'Moderate' | 'Long' | 'Very Long';
+  drivers: string[];  // 1–3 concise factor strings
+}
 import { LANDFIRE_FBFM40_IMAGESERVER, LANDFIRE_VERSION_LABEL } from '../layers/fuel/landfireService';
 
 export interface LngLat {
@@ -40,6 +93,7 @@ export interface FuelZoneResult {
   burnablePct: number; // share of burnable (non-Nonburnable) pixels
   classes: FuelClassShare[]; // sorted desc by pixels
   groups: FuelGroupShare[]; // sorted desc by pixels (only non-empty groups)
+  risk: FuelRisk | null; // null when burnablePct === 0
   source: string;
   version: string;
 }
@@ -121,6 +175,123 @@ function decodeHistogram(h: Histogram): Map<number, number> {
   return byValue;
 }
 
+// Pixel-weighted mean score over burnable pixels only.
+function burnableWeightedScore(
+  classes: FuelClassShare[],
+  scores: Record<number, number>,
+  burnablePixels: number
+): number {
+  if (burnablePixels === 0) return 0;
+  let sum = 0;
+  for (const c of classes) {
+    if (c.group === 'Nonburnable') continue;
+    sum += (scores[c.value] ?? 0) * c.pixels;
+  }
+  return sum / burnablePixels;
+}
+
+function riskLevelFromScore(s: number): RiskLevel {
+  if (s < 20) return 'Low';
+  if (s < 40) return 'Moderate';
+  if (s < 60) return 'High';
+  if (s < 78) return 'Very High';
+  return 'Extreme';
+}
+
+function spreadCatFromScore(s: number): FuelRisk['spreadCat'] {
+  if (s < 20) return 'Slow';
+  if (s < 50) return 'Moderate';
+  if (s < 75) return 'Fast';
+  return 'Very Fast';
+}
+
+function flameCatFromScore(s: number): FuelRisk['flameCat'] {
+  if (s < 25) return 'Short';
+  if (s < 55) return 'Moderate';
+  if (s < 78) return 'Long';
+  return 'Very Long';
+}
+
+function buildDrivers(
+  classes: FuelClassShare[],
+  groups: FuelGroupShare[],
+  burnablePixels: number
+): string[] {
+  if (burnablePixels === 0) return [];
+  const drivers: string[] = [];
+  const bp = (c: FuelClassShare) => (c.pixels / burnablePixels) * 100;
+  const burnable = classes.filter((c) => c.group !== 'Nonburnable');
+
+  // Fast-spread threat: grass/grass-shrub with high spread scores
+  const rapidFuels = burnable.filter(
+    (c) => ['Grass', 'Grass-Shrub'].includes(c.group) && (CODE_SPREAD[c.value] ?? 0) >= 60
+  );
+  const rapidPct = rapidFuels.reduce((s, c) => s + bp(c), 0);
+  if (rapidPct > 5) {
+    const codes = rapidFuels.slice(0, 3).map((c) => c.code).join('/');
+    drivers.push(`Rapid-spread fuels (${codes}): ${Math.round(rapidPct)}% of burnable area`);
+  }
+
+  // High flame-length threat: any code with flame score ≥ 70 covering >3% of burnable
+  const intenseFuels = burnable.filter(
+    (c) => (CODE_FLAME[c.value] ?? 0) >= 70 && bp(c) > 3
+  );
+  const intensePct = intenseFuels.reduce((s, c) => s + bp(c), 0);
+  if (intensePct > 5 && drivers.length < 3) {
+    const codes = intenseFuels.slice(0, 2).map((c) => c.code).join('/');
+    drivers.push(`High flame-length fuels (${codes}): ${Math.round(intensePct)}% of burnable area`);
+  }
+
+  // Slash-blowdown: erratic behavior / spotting
+  const slashPct = burnable
+    .filter((c) => c.group === 'Slash-Blowdown')
+    .reduce((s, c) => s + bp(c), 0);
+  if (slashPct > 1 && drivers.length < 3) {
+    drivers.push('Slash/blowdown present — spotting and erratic behavior possible');
+  }
+
+  // Timber-dominant fallback (slower but steady)
+  if (drivers.length === 0) {
+    const timberPct = burnable
+      .filter((c) => ['Timber-Litter', 'Timber-Understory'].includes(c.group))
+      .reduce((s, c) => s + bp(c), 0);
+    if (timberPct > 40) {
+      drivers.push(
+        `Timber fuels dominant (${Math.round(timberPct)}%) — slower surface fire, crown fire possible`
+      );
+    }
+  }
+
+  // Generic fallback: name the top burnable group
+  if (drivers.length === 0) {
+    const topGroup = groups.find((g) => g.burnable);
+    if (topGroup) {
+      const pct = (topGroup.pixels / burnablePixels) * 100;
+      drivers.push(`${topGroup.label} is ${Math.round(pct)}% of burnable area`);
+    }
+  }
+
+  return drivers.slice(0, 3);
+}
+
+function computeRisk(
+  classes: FuelClassShare[],
+  groups: FuelGroupShare[],
+  burnablePixels: number
+): FuelRisk | null {
+  if (burnablePixels === 0) return null;
+  const score = burnableWeightedScore(classes, CODE_SCORE, burnablePixels);
+  const spreadScore = burnableWeightedScore(classes, CODE_SPREAD, burnablePixels);
+  const flameScore = burnableWeightedScore(classes, CODE_FLAME, burnablePixels);
+  return {
+    score: Math.round(score),
+    level: riskLevelFromScore(score),
+    spreadCat: spreadCatFromScore(spreadScore),
+    flameCat: flameCatFromScore(flameScore),
+    drivers: buildDrivers(classes, groups, burnablePixels),
+  };
+}
+
 function emptyResult(center: LngLat, radiusM: number): FuelZoneResult {
   return {
     center,
@@ -130,6 +301,7 @@ function emptyResult(center: LngLat, radiusM: number): FuelZoneResult {
     burnablePct: 0,
     classes: [],
     groups: [],
+    risk: null,
     source: 'LANDFIRE (USGS/USFS)',
     version: LANDFIRE_VERSION_LABEL,
   };
@@ -217,6 +389,7 @@ export async function analyzeFuelZone(center: LngLat, radiusM: number): Promise<
     burnablePct: (burnablePixels / totalPixels) * 100,
     classes,
     groups,
+    risk: computeRisk(classes, groups, burnablePixels),
     source: 'LANDFIRE (USGS/USFS)',
     version: LANDFIRE_VERSION_LABEL,
   };

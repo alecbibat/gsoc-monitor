@@ -1,6 +1,6 @@
 import { rgbCss } from '../layers/fuel/fbfm40';
 import { formatRadius } from './fuelZoneStore';
-import type { FuelZoneResult } from './zonalStats';
+import type { FuelZoneResult, FuelRisk, RiskLevel } from './zonalStats';
 
 interface Props {
   payload: FuelZoneResult;
@@ -28,8 +28,91 @@ function fmtCoord(lon: number, lat: number): string {
   return `${Math.abs(lat).toFixed(3)}°${ns}, ${Math.abs(lon).toFixed(3)}°${ew}`;
 }
 
+// --- Risk card --------------------------------------------------------------
+
+const RISK_STYLE: Record<RiskLevel, { text: string; border: string; bar: string }> = {
+  'Low':       { text: 'text-emerald-400', border: 'border-emerald-500/25', bar: 'bg-emerald-400' },
+  'Moderate':  { text: 'text-yellow-400',  border: 'border-yellow-500/25',  bar: 'bg-yellow-400' },
+  'High':      { text: 'text-amber-400',   border: 'border-amber-500/25',   bar: 'bg-amber-400' },
+  'Very High': { text: 'text-orange-400',  border: 'border-orange-500/25',  bar: 'bg-orange-400' },
+  'Extreme':   { text: 'text-red-500',     border: 'border-red-500/30',     bar: 'bg-red-500' },
+};
+
+const SPREAD_COLOR: Record<FuelRisk['spreadCat'], string> = {
+  'Slow':      'text-emerald-400',
+  'Moderate':  'text-yellow-400',
+  'Fast':      'text-amber-400',
+  'Very Fast': 'text-red-400',
+};
+
+const FLAME_COLOR: Record<FuelRisk['flameCat'], string> = {
+  'Short':     'text-emerald-400',
+  'Moderate':  'text-yellow-400',
+  'Long':      'text-amber-400',
+  'Very Long': 'text-red-400',
+};
+
+function RiskCard({ risk }: { risk: FuelRisk | null }) {
+  if (!risk) return null;
+  const s = RISK_STYLE[risk.level];
+  return (
+    <div className={`rounded-lg border bg-white/[0.03] px-3 py-2.5 ${s.border}`}>
+      <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-white/35">
+        Fire Behavior Potential
+      </div>
+
+      {/* Level label + numeric score */}
+      <div className="flex items-baseline justify-between">
+        <span className={`text-[17px] font-black uppercase tracking-wide ${s.text}`}>
+          {risk.level}
+        </span>
+        <span className="font-mono text-[11px] text-white/35">{risk.score} / 100</span>
+      </div>
+
+      {/* Score bar */}
+      <div className="mb-3 mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+        <div className={`h-full rounded-full ${s.bar}`} style={{ width: `${risk.score}%` }} />
+      </div>
+
+      {/* Sub-indicators */}
+      <div className="mb-2.5 flex gap-5">
+        <div>
+          <div className="text-[9px] uppercase tracking-wider text-white/30">Spread Rate</div>
+          <div className={`text-[12px] font-semibold ${SPREAD_COLOR[risk.spreadCat]}`}>
+            {risk.spreadCat}
+          </div>
+        </div>
+        <div>
+          <div className="text-[9px] uppercase tracking-wider text-white/30">Flame Length</div>
+          <div className={`text-[12px] font-semibold ${FLAME_COLOR[risk.flameCat]}`}>
+            {risk.flameCat}
+          </div>
+        </div>
+      </div>
+
+      {/* Driver bullets */}
+      {risk.drivers.length > 0 && (
+        <ul className="space-y-1 border-t border-white/5 pt-2">
+          {risk.drivers.map((d, i) => (
+            <li key={i} className="flex items-start gap-1.5 text-[11px] leading-snug text-white/50">
+              <span className="mt-0.5 shrink-0 text-white/20">•</span>
+              {d}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-2 text-[9px] text-white/20">
+        Fuel-model potential · standard fire weather
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
 export function FuelZoneDetails({ payload }: Props) {
-  const { center, radiusM, totalPixels, areaM2, burnablePct, classes, groups } = payload;
+  const { center, radiusM, totalPixels, areaM2, burnablePct, classes, groups, risk } = payload;
 
   if (totalPixels === 0) {
     return (
@@ -61,6 +144,9 @@ export function FuelZoneDetails({ payload }: Props) {
           burnable fuels across {fmtArea(areaM2)}
         </div>
       </div>
+
+      {/* Risk assessment */}
+      <RiskCard risk={risk} />
 
       {/* Stacked group bar */}
       <div>
