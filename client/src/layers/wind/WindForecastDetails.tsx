@@ -8,6 +8,7 @@ import {
   WIND_UNIT_LABEL,
   type WindUnit,
 } from './windProbe';
+
 import { useWindUnit } from './windUnitStore';
 import type { WindForecast } from '../../types';
 
@@ -17,6 +18,7 @@ interface Payload {
   cardinal: string;
   fromDeg: number;
   toDeg: number;
+  speedMps: number;
   speedMph: number;
 }
 
@@ -243,11 +245,12 @@ export function WindForecastDetails({ payload }: { payload: Payload }) {
   }
 
   const u = WIND_UNIT_LABEL[unit];
-  const now = win.hours[0];
-  const nowSpeed = now ? formatSpeed(now.speedMps, unit) : formatSpeed(payload.speedMph / 2.236936, unit);
-  const nowGust = now ? formatSpeed(now.gustMps, unit) : null;
-  const nowCardinal = now ? cardinal16(now.dir) : payload.cardinal;
-  const nowColor = now ? speedColorHex(now.speedMps) : speedColorHex(payload.speedMph / 2.236936);
+  // Always use the pin's captured grid values for speed/direction so the card
+  // matches the on-globe arrow (both come from the same GFS bilinear sample).
+  // Gust comes from the forecast API since the static grid has no gust data.
+  const nowSpeed = formatSpeed(payload.speedMps, unit);
+  const nowGust = win.hours[0] ? formatSpeed(win.hours[0].gustMps, unit) : null;
+  const nowColor = speedColorHex(payload.speedMps);
 
   // Chart scale in the display unit, off the windowed gust peak.
   const maxGustDisp = win.hours.reduce((m, h) => Math.max(m, convertSpeed(h.gustMps, unit)), 0);
@@ -262,7 +265,7 @@ export function WindForecastDetails({ payload }: { payload: Payload }) {
 
       {/* Now headline */}
       <div className="flex items-center gap-3 rounded-lg bg-white/5 px-3 py-2.5">
-        <DirArrow fromDeg={now ? now.dir : payload.fromDeg} color={nowColor} size={34} />
+        <DirArrow fromDeg={payload.fromDeg} color={nowColor} size={34} />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1">
             <span className="text-3xl font-black tabular-nums text-white">{nowSpeed}</span>
@@ -272,7 +275,7 @@ export function WindForecastDetails({ payload }: { payload: Payload }) {
             )}
           </div>
           <div className="text-[12px] font-semibold text-white/75">
-            from {nowCardinal}
+            from {payload.cardinal}
             <span className="ml-1.5 font-normal text-white/35">now · GFS</span>
           </div>
         </div>

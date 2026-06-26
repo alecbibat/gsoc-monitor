@@ -180,6 +180,7 @@ export function WindProbeController() {
           cardinal: pin.cardinal,
           fromDeg: pin.fromDeg,
           toDeg: pin.toDeg,
+          speedMps: pin.speedMps,
           speedMph: pin.speedMph,
         },
       });
