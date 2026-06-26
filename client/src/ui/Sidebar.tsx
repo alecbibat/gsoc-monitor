@@ -8,6 +8,7 @@ import { useSmokeStatus } from '../layers/smoke/smokeStore';
 import { useAqiStatus } from '../layers/aqi/aqiStore';
 import { useFuelStatus } from '../layers/fuel/fuelStore';
 import { useWindStatus } from '../layers/wind/windStore';
+import { useWindProbeStore } from '../layers/wind/windProbeStore';
 import { FuelLegend } from '../layers/fuel/FuelLegend';
 import { useFuelZoneStore } from '../fuelzone/fuelZoneStore';
 import { useShipsStatus } from '../layers/ships/shipsStore';
@@ -74,6 +75,8 @@ export function Sidebar() {
   const aqiStatus = useAqiStatus();
   const fuelStatus = useFuelStatus();
   const windStatus = useWindStatus();
+  const windProbeEnabled = useWindProbeStore((s) => s.probeEnabled);
+  const toggleWindProbe = useWindProbeStore((s) => s.toggleProbe);
   const fuelZoneActive = useFuelZoneStore((s) => s.active);
   const toggleFuelZone = useFuelZoneStore((s) => s.toggle);
   const shipsStatus = useShipsStatus();
@@ -405,7 +408,19 @@ export function Sidebar() {
                 ? `Live surface wind · peak ${Math.round(windStatus.maxSpeedMps * 2.23694)} mph`
                 : 'Animated global wind streamlines')
             }
-          />
+          >
+            <button
+              onClick={toggleWindProbe}
+              className={`mt-2 flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
+                windProbeEnabled
+                  ? 'bg-accent/15 text-accent'
+                  : 'bg-white/5 text-white/60 hover:bg-white/10'
+              }`}
+            >
+              <span>🎯</span>
+              {windProbeEnabled ? 'Probe on · right-click to pin' : 'Wind probe off'}
+            </button>
+          </LayerToggle>
           <LayerToggle
             label="Fuel Models (LANDFIRE)"
             active={(active as Record<string, boolean>).fuel ?? false}

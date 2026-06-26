@@ -47,13 +47,14 @@ function Compass({ reading }: { reading: WindReading | null }) {
 // on: hover the globe for a live reading, right-click to pin one.
 export function WindReadout() {
   const active = useLayersStore((s) => s.active.wind);
+  const probeEnabled = useWindProbeStore((s) => s.probeEnabled);
   const ready = useWindStatus((s) => s.ready);
   const error = useWindStatus((s) => s.error);
   const hover = useWindProbeStore((s) => s.hover);
   const pins = useWindProbeStore((s) => s.pins);
   const clearPins = useWindProbeStore((s) => s.clearPins);
 
-  if (!active) return null;
+  if (!active || !probeEnabled) return null;
 
   const calm = hover != null && hover.speedMph < 1;
   const kt = hover ? hover.speedMps * 1.94384 : 0;

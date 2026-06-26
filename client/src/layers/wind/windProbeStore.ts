@@ -10,8 +10,10 @@ export interface WindPin extends WindReading {
 }
 
 interface WindProbeState {
+  probeEnabled: boolean;
   hover: WindReading | null;
   pins: WindPin[];
+  toggleProbe: () => void;
   setHover: (r: WindReading | null) => void;
   addPin: (r: WindReading) => void;
   removePin: (id: number) => void;
@@ -21,8 +23,16 @@ interface WindProbeState {
 let nextPinId = 1;
 
 export const useWindProbeStore = create<WindProbeState>((set) => ({
+  probeEnabled: true,
   hover: null,
   pins: [],
+  toggleProbe: () =>
+    set((s) => ({
+      probeEnabled: !s.probeEnabled,
+      // Clear transient state when turning off so stale readings don't linger.
+      hover: s.probeEnabled ? null : s.hover,
+      pins: s.probeEnabled ? [] : s.pins,
+    })),
   // Avoid churning React when the cursor leaves the globe repeatedly.
   setHover: (r) => set((s) => (r === null && s.hover === null ? s : { hover: r })),
   addPin: (r) => set((s) => ({ pins: [...s.pins, { ...r, id: nextPinId++ }] })),

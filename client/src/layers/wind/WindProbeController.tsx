@@ -28,6 +28,7 @@ function pickLngLat(viewer: Cesium.Viewer, pos: Cesium.Cartesian2) {
 export function WindProbeController() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.wind);
+  const probeEnabled = useWindProbeStore((s) => s.probeEnabled);
   const pins = useWindProbeStore((s) => s.pins);
 
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
@@ -36,7 +37,7 @@ export function WindProbeController() {
 
   // Set up the data source, the hover arrow, and the pointer handlers.
   useEffect(() => {
-    if (!viewer || !active) return;
+    if (!viewer || !active || !probeEnabled) return;
     const v = viewer;
 
     const ds = new Cesium.CustomDataSource('wind-probe');
@@ -126,12 +127,12 @@ export function WindProbeController() {
       useWindProbeStore.getState().setHover(null);
       v.scene.requestRender();
     };
-  }, [viewer, active]);
+  }, [viewer, active, probeEnabled]);
 
   // Reconcile pin entities whenever the pin set changes.
   useEffect(() => {
     const ds = dsRef.current;
-    if (!viewer || !ds || !active) return;
+    if (!viewer || !ds || !active || !probeEnabled) return;
 
     pinEntsRef.current.forEach((ent) => ds.entities.remove(ent));
     pinEntsRef.current = [];
@@ -165,7 +166,7 @@ export function WindProbeController() {
     });
 
     viewer.scene.requestRender();
-  }, [viewer, active, pins]);
+  }, [viewer, active, probeEnabled, pins]);
 
   return null;
 }
