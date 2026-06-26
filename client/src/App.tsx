@@ -13,6 +13,8 @@ import { SmokeLayer } from './layers/smoke/SmokeLayer';
 import { AqiLayer } from './layers/aqi/AqiLayer';
 import { FuelLayer } from './layers/fuel/FuelLayer';
 import { WindLayer } from './layers/wind/WindLayer';
+import { WindProbeController } from './layers/wind/WindProbeController';
+import { WindReadout } from './layers/wind/WindReadout';
 import { ShipLayer } from './layers/ships/ShipLayer';
 import { NewsMapLayer } from './layers/newsMap/NewsMapLayer';
 import { ShipModelLayer } from './layers/ships/ShipModelLayer';
@@ -84,6 +86,7 @@ export default function App() {
           <AqiLayer />
           <FuelLayer />
           <WindLayer />
+          <WindProbeController />
           <LightningLayer />
           <FlightLayer />
           <ShipLayer />
@@ -120,6 +123,7 @@ export default function App() {
         <ScreensaverToast />
         <MeasureOverlay />
         <FuelZoneOverlay />
+        <WindReadout />
         <HoverOverlay />
         <PickChooser />
         <NewsTicker />

@@ -4,7 +4,7 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
 import { useWindStatus } from './windStore';
-import type { WindGrid } from '../../types';
+import { makeSampler } from './windProbe';
 
 // --- Tuning -----------------------------------------------------------------
 
@@ -63,35 +63,6 @@ function speedColor(spd: number, out: Cesium.Color): Cesium.Color {
     }
   }
   return Cesium.Color.clone(last[1], out);
-}
-
-// Bilinear sampler over the grid. Longitude wraps; returns false outside the
-// covered latitude band.
-function makeSampler(grid: WindGrid) {
-  const { nx, ny, lon0, lat0, dLon, dLat, u, v } = grid;
-  return (lon: number, lat: number, out: [number, number]): boolean => {
-    let x = (lon - lon0) / dLon;
-    x = ((x % nx) + nx) % nx;
-    const y = (lat - lat0) / dLat;
-    if (y < 0 || y > ny - 1) return false;
-    const x0 = Math.floor(x);
-    const x1 = (x0 + 1) % nx;
-    const y0 = Math.floor(y);
-    const y1 = Math.min(y0 + 1, ny - 1);
-    const fx = x - x0;
-    const fy = y - y0;
-    const i00 = y0 * nx + x0;
-    const i10 = y0 * nx + x1;
-    const i01 = y1 * nx + x0;
-    const i11 = y1 * nx + x1;
-    const u0 = u[i00] + (u[i10] - u[i00]) * fx;
-    const u1 = u[i01] + (u[i11] - u[i01]) * fx;
-    const v0 = v[i00] + (v[i10] - v[i00]) * fx;
-    const v1 = v[i01] + (v[i11] - v[i01]) * fx;
-    out[0] = u0 + (u1 - u0) * fy;
-    out[1] = v0 + (v1 - v0) * fy;
-    return true;
-  };
 }
 
 interface Particle {
@@ -283,6 +254,7 @@ export function WindLayer() {
           ready: true,
           error: null,
           maxSpeedMps: grid.speedMax,
+          grid,
         });
         if (rafId == null) rafId = requestAnimationFrame(tick);
       } catch (err) {
@@ -300,7 +272,7 @@ export function WindLayer() {
       clearInterval(interval);
       if (rafId != null) cancelAnimationFrame(rafId);
       v.scene.primitives.remove(points);
-      useWindStatus.getState().setStatus({ ready: false, error: null, maxSpeedMps: 0 });
+      useWindStatus.getState().setStatus({ ready: false, error: null, maxSpeedMps: 0, grid: null });
       v.scene.requestRender();
     };
   }, [viewer, active]);
