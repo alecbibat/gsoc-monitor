@@ -37,6 +37,27 @@ export function makeSampler(grid: WindGrid) {
   };
 }
 
+// --- Units ------------------------------------------------------------------
+// All wind speeds are stored in m/s; the UI converts at the edge. The chosen
+// unit is a global preference (see windUnitStore) so the forecast panel, pins,
+// and HUD all agree.
+
+export type WindUnit = 'mph' | 'kt' | 'ms';
+
+export const WIND_UNIT_LABEL: Record<WindUnit, string> = { mph: 'mph', kt: 'kt', ms: 'm/s' };
+
+const UNIT_FACTOR: Record<WindUnit, number> = { mph: 2.236936, kt: 1.943844, ms: 1 };
+
+export function convertSpeed(mps: number, unit: WindUnit): number {
+  return mps * UNIT_FACTOR[unit];
+}
+
+// Display string in the given unit — integer for mph/kt, one decimal for m/s.
+export function formatSpeed(mps: number, unit: WindUnit): string {
+  const v = convertSpeed(mps, unit);
+  return unit === 'ms' ? v.toFixed(1) : String(Math.round(v));
+}
+
 export interface WindReading {
   lon: number;
   lat: number;

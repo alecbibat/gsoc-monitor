@@ -4,7 +4,8 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { probeWindAt } from './windStore';
 import { useWindProbeStore } from './windProbeStore';
-import { ARROW_DATA_URI, flowAxis } from './windProbe';
+import { ARROW_DATA_URI, flowAxis, formatSpeed, WIND_UNIT_LABEL } from './windProbe';
+import { useWindUnit } from './windUnitStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 
 // Pixel radius within which a right-click lands "on" an existing pin (toggles it
@@ -31,6 +32,7 @@ export function WindProbeController() {
   const active = useLayersStore((s) => s.active.wind);
   const probeEnabled = useWindProbeStore((s) => s.probeEnabled);
   const pins = useWindProbeStore((s) => s.pins);
+  const unit = useWindUnit((s) => s.unit);
 
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
   const hoverRef = useRef<Cesium.Entity | null>(null);
@@ -149,7 +151,7 @@ export function WindProbeController() {
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
         label: {
-          text: `${pin.cardinal} · ${Math.round(pin.speedMph)} mph`,
+          text: `${pin.cardinal} · ${formatSpeed(pin.speedMps, unit)} ${WIND_UNIT_LABEL[unit]}`,
           font: '600 12px ui-sans-serif, system-ui, sans-serif',
           fillColor: Cesium.Color.WHITE,
           outlineColor: OUTLINE,
@@ -185,7 +187,7 @@ export function WindProbeController() {
     });
 
     viewer.scene.requestRender();
-  }, [viewer, active, probeEnabled, pins]);
+  }, [viewer, active, probeEnabled, pins, unit]);
 
   return null;
 }

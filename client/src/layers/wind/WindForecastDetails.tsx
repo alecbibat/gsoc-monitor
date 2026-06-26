@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/client';
-import { speedColorHex, cardinal16 } from './windProbe';
+import {
+  speedColorHex,
+  cardinal16,
+  convertSpeed,
+  formatSpeed,
+  WIND_UNIT_LABEL,
+  type WindUnit,
+} from './windProbe';
+import { useWindUnit } from './windUnitStore';
 import type { WindForecast } from '../../types';
 
 interface Payload {
@@ -12,7 +20,6 @@ interface Payload {
   speedMph: number;
 }
 
-const MPS_TO_MPH = 2.236936;
 const MAX_HOURS = 48;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -20,6 +27,10 @@ const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 function fmtHour(hh: number): string {
   const h12 = hh % 12 === 0 ? 12 : hh % 12;
   return `${h12}${hh < 12 ? 'a' : 'p'}`;
+}
+function fmtHourLong(hh: number): string {
+  const h12 = hh % 12 === 0 ? 12 : hh % 12;
+  return `${h12} ${hh < 12 ? 'AM' : 'PM'}`;
 }
 
 // Weekday/month-day from a "YYYY-MM-DD" calendar date, computed in UTC so the
@@ -50,18 +61,35 @@ function DirArrow({ fromDeg, color, size = 16 }: { fromDeg: number; color: strin
   );
 }
 
+function UnitToggle({ unit, setUnit }: { unit: WindUnit; setUnit: (u: WindUnit) => void }) {
+  return (
+    <div className="flex items-center gap-0.5 rounded-lg bg-black/30 p-0.5">
+      {(['mph', 'kt', 'ms'] as WindUnit[]).map((u) => (
+        <button
+          key={u}
+          onClick={() => setUnit(u)}
+          className={`rounded px-2 py-0.5 text-[10px] font-semibold transition ${
+            unit === u ? 'bg-accent/20 text-accent' : 'text-white/45 hover:text-white/70'
+          }`}
+        >
+          {WIND_UNIT_LABEL[u]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 interface HourPoint {
   hh: number;
   date: string;
   speedMps: number;
-  speedMph: number;
-  gustMph: number;
+  gustMps: number;
   dir: number;
 }
 
 // Slice the hourly arrays to the next MAX_HOURS starting at the forecast point's
-// current local hour.
-function buildWindow(fc: WindForecast): { hours: HourPoint[]; niceMax: number } {
+// current local hour. Speeds stay in m/s — the component converts for display.
+function buildWindow(fc: WindForecast): { hours: HourPoint[]; peak: HourPoint | null } {
   const { time, speed, dir, gust } = fc.hourly;
   // Property-local "now" as a "YYYY-MM-DDTHH" prefix: shift the instant by the
   // point's UTC offset, then read the UTC fields back (ISO sorts chronologically).
@@ -70,21 +98,25 @@ function buildWindow(fc: WindForecast): { hours: HourPoint[]; niceMax: number } 
   if (start < 0) start = 0;
 
   const hours: HourPoint[] = [];
-  let maxGust = 0;
+  let peak: HourPoint | null = null;
   for (let i = start; i < time.length && hours.length < MAX_HOURS; i++) {
-    const gustMph = gust[i] * MPS_TO_MPH;
-    if (gustMph > maxGust) maxGust = gustMph;
-    hours.push({
+    const h: HourPoint = {
       hh: Number(time[i].slice(11, 13)),
       date: time[i].slice(0, 10),
       speedMps: speed[i],
-      speedMph: speed[i] * MPS_TO_MPH,
-      gustMph,
+      gustMps: gust[i],
       dir: dir[i],
-    });
+    };
+    hours.push(h);
+    if (!peak || h.gustMps > peak.gustMps) peak = h;
   }
-  const niceMax = Math.max(10, Math.ceil(maxGust / 5) * 5);
-  return { hours, niceMax };
+  return { hours, peak };
+}
+
+function niceScale(maxDisplay: number, unit: WindUnit): number {
+  const step = unit === 'ms' ? 2 : 5;
+  const min = unit === 'ms' ? 4 : 10;
+  return Math.max(min, Math.ceil(maxDisplay / step) * step);
 }
 
 // --- Hourly chart geometry (viewBox units) ---
@@ -98,7 +130,15 @@ const BAR_H = BAR_BOT - BAR_TOP;
 const LABEL_Y = BAR_BOT + 13;
 const CHART_H = LABEL_Y + 4;
 
-function HourlyChart({ hours, niceMax }: { hours: HourPoint[]; niceMax: number }) {
+function HourlyChart({
+  hours,
+  unit,
+  niceMax,
+}: {
+  hours: HourPoint[];
+  unit: WindUnit;
+  niceMax: number;
+}) {
   const chartW = PAD_L + hours.length * STEP + PAD_R;
   const barW = STEP - 2.4;
   return (
@@ -108,7 +148,6 @@ function HourlyChart({ hours, niceMax }: { hours: HourPoint[]; niceMax: number }
       preserveAspectRatio="xMidYMid meet"
       className="block"
     >
-      {/* y gridlines + labels */}
       {[0, 0.5, 1].map((f) => {
         const y = BAR_BOT - f * BAR_H;
         return (
@@ -123,18 +162,17 @@ function HourlyChart({ hours, niceMax }: { hours: HourPoint[]; niceMax: number }
 
       {hours.map((h, i) => {
         const x = PAD_L + i * STEP + STEP / 2;
-        const sh = (h.speedMph / niceMax) * BAR_H;
-        const gy = BAR_BOT - (h.gustMph / niceMax) * BAR_H;
+        const speedDisp = convertSpeed(h.speedMps, unit);
+        const gustDisp = convertSpeed(h.gustMps, unit);
+        const sh = (speedDisp / niceMax) * BAR_H;
+        const gy = BAR_BOT - (gustDisp / niceMax) * BAR_H;
         const showMarker = h.hh % 6 === 0;
         return (
           <g key={i}>
-            {/* midnight day divider */}
             {h.hh === 0 && i > 0 && (
               <line x1={x - STEP / 2} y1={BAR_TOP} x2={x - STEP / 2} y2={BAR_BOT} stroke="#ffffff1f" strokeWidth="0.6" strokeDasharray="2 2" />
             )}
-            {/* gust cap */}
             <line x1={x - barW / 2} y1={gy} x2={x + barW / 2} y2={gy} stroke="#ffffff70" strokeWidth="1.2" />
-            {/* sustained-speed bar */}
             <rect
               x={x - barW / 2}
               y={BAR_BOT - sh}
@@ -143,7 +181,6 @@ function HourlyChart({ hours, niceMax }: { hours: HourPoint[]; niceMax: number }
               rx="0.8"
               fill={speedColorHex(h.speedMps)}
             />
-            {/* direction arrow + time label every 6h */}
             {showMarker && (
               <g transform={`translate(${x} ${ARROW_Y}) rotate(${(h.dir + 180) % 360})`}>
                 <path
@@ -169,6 +206,8 @@ function HourlyChart({ hours, niceMax }: { hours: HourPoint[]; niceMax: number }
 
 export function WindForecastDetails({ payload }: { payload: Payload }) {
   const { lat, lon } = payload;
+  const unit = useWindUnit((s) => s.unit);
+  const setUnit = useWindUnit((s) => s.setUnit);
   const [fc, setFc] = useState<WindForecast | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -203,22 +242,32 @@ export function WindForecastDetails({ payload }: { payload: Payload }) {
     );
   }
 
+  const u = WIND_UNIT_LABEL[unit];
   const now = win.hours[0];
-  const nowSpeed = now ? Math.round(now.speedMph) : Math.round(payload.speedMph);
-  const nowGust = now ? Math.round(now.gustMph) : null;
+  const nowSpeed = now ? formatSpeed(now.speedMps, unit) : formatSpeed(payload.speedMph / 2.236936, unit);
+  const nowGust = now ? formatSpeed(now.gustMps, unit) : null;
   const nowCardinal = now ? cardinal16(now.dir) : payload.cardinal;
-  const nowColor = now ? speedColorHex(now.speedMps) : speedColorHex(payload.speedMph / MPS_TO_MPH);
+  const nowColor = now ? speedColorHex(now.speedMps) : speedColorHex(payload.speedMph / 2.236936);
+
+  // Chart scale in the display unit, off the windowed gust peak.
+  const maxGustDisp = win.hours.reduce((m, h) => Math.max(m, convertSpeed(h.gustMps, unit)), 0);
+  const niceMax = niceScale(maxGustDisp, unit);
 
   return (
-    <div className="space-y-3.5">
+    <div className="space-y-3">
+      {/* Unit toggle */}
+      <div className="flex justify-end">
+        <UnitToggle unit={unit} setUnit={setUnit} />
+      </div>
+
       {/* Now headline */}
       <div className="flex items-center gap-3 rounded-lg bg-white/5 px-3 py-2.5">
         <DirArrow fromDeg={now ? now.dir : payload.fromDeg} color={nowColor} size={34} />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1">
             <span className="text-3xl font-black tabular-nums text-white">{nowSpeed}</span>
-            <span className="text-[12px] text-white/45">mph</span>
-            {nowGust != null && nowGust > nowSpeed && (
+            <span className="text-[12px] text-white/45">{u}</span>
+            {nowGust != null && Number(nowGust) > Number(nowSpeed) && (
               <span className="ml-1 text-[12px] text-white/45">gusts {nowGust}</span>
             )}
           </div>
@@ -229,49 +278,60 @@ export function WindForecastDetails({ payload }: { payload: Payload }) {
         </div>
       </div>
 
+      {/* Peak gust callout */}
+      {win.peak && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-400/25 bg-amber-400/[0.07] px-3 py-2">
+          <span className="text-[15px]">⚡</span>
+          <div className="min-w-0 flex-1 text-[12px]">
+            <span className="font-semibold text-amber-200/90">
+              Peak gust {formatSpeed(win.peak.gustMps, unit)} {u}
+            </span>
+            <span className="ml-1 text-white/45">
+              {weekday(win.peak.date)} {fmtHourLong(win.peak.hh)} · next {win.hours.length}h
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Hourly chart */}
       <div>
         <div className="mb-1 flex items-center justify-between">
           <span className="text-[10px] font-semibold uppercase tracking-wider text-white/35">
-            Next {win.hours.length}h · sustained
+            Hourly · sustained ({u})
           </span>
           <span className="flex items-center gap-1 text-[10px] text-white/35">
-            <span className="inline-block h-2 w-3 rounded-sm bg-white/40" /> bar
+            <span className="inline-block h-2 w-3 rounded-sm bg-white/40" /> wind
             <span className="ml-1.5 inline-block h-[2px] w-3 bg-white/70" /> gust
           </span>
         </div>
-        <HourlyChart hours={win.hours} niceMax={win.niceMax} />
+        <HourlyChart hours={win.hours} unit={unit} niceMax={niceMax} />
       </div>
 
       {/* 7-day outlook */}
       <div>
         <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-white/35">
-          7-day outlook · max
+          7-day outlook · max ({u})
         </div>
         <div className="flex gap-1">
-          {fc.daily.time.map((d, i) => {
-            const speedMax = fc.daily.speedMax[i] * MPS_TO_MPH;
-            const gustMax = fc.daily.gustMax[i] * MPS_TO_MPH;
-            const dir = fc.daily.dirDominant[i];
-            return (
-              <div
-                key={d}
-                className="flex flex-1 flex-col items-center gap-0.5 rounded-md bg-white/[0.04] py-1.5"
-                title={`${weekday(d)} · max ${Math.round(speedMax)} mph, gusts ${Math.round(
-                  gustMax
-                )} mph, from ${cardinal16(dir)}`}
-              >
-                <span className="text-[10px] font-semibold text-white/55">{weekday(d)}</span>
-                <DirArrow fromDeg={dir} color={speedColorHex(fc.daily.speedMax[i])} size={15} />
-                <span className="font-mono text-[12px] font-bold tabular-nums text-white/85">
-                  {Math.round(speedMax)}
-                </span>
-                <span className="font-mono text-[9px] tabular-nums text-white/35">
-                  g{Math.round(gustMax)}
-                </span>
-              </div>
-            );
-          })}
+          {fc.daily.time.map((d, i) => (
+            <div
+              key={d}
+              className="flex flex-1 flex-col items-center gap-0.5 rounded-md bg-white/[0.04] py-1.5"
+              title={`${weekday(d)} · max ${formatSpeed(fc.daily.speedMax[i], unit)} ${u}, gusts ${formatSpeed(
+                fc.daily.gustMax[i],
+                unit
+              )} ${u}, from ${cardinal16(fc.daily.dirDominant[i])}`}
+            >
+              <span className="text-[10px] font-semibold text-white/55">{weekday(d)}</span>
+              <DirArrow fromDeg={fc.daily.dirDominant[i]} color={speedColorHex(fc.daily.speedMax[i])} size={15} />
+              <span className="font-mono text-[12px] font-bold tabular-nums text-white/85">
+                {formatSpeed(fc.daily.speedMax[i], unit)}
+              </span>
+              <span className="font-mono text-[9px] tabular-nums text-white/35">
+                g{formatSpeed(fc.daily.gustMax[i], unit)}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
 

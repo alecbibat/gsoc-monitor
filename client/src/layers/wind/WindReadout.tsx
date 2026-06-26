@@ -1,7 +1,8 @@
 import { useLayersStore } from '../../store/layersStore';
 import { useWindStatus } from './windStore';
 import { useWindProbeStore } from './windProbeStore';
-import { speedColorHex, type WindReading } from './windProbe';
+import { useWindUnit } from './windUnitStore';
+import { speedColorHex, formatSpeed, WIND_UNIT_LABEL, type WindReading, type WindUnit } from './windProbe';
 
 // A small compass with an arrow pointing the way the wind is blowing (toward
 // `toDeg`), tinted by speed.
@@ -53,11 +54,13 @@ export function WindReadout() {
   const hover = useWindProbeStore((s) => s.hover);
   const pins = useWindProbeStore((s) => s.pins);
   const clearPins = useWindProbeStore((s) => s.clearPins);
+  const unit = useWindUnit((s) => s.unit);
 
   if (!active || !probeEnabled) return null;
 
-  const calm = hover != null && hover.speedMph < 1;
-  const kt = hover ? hover.speedMps * 1.94384 : 0;
+  const calm = hover != null && hover.speedMps < 0.5;
+  // Show the other two units beneath the primary reading for quick reference.
+  const others = (['mph', 'kt', 'ms'] as WindUnit[]).filter((u) => u !== unit);
 
   return (
     <div className="pointer-events-none absolute bottom-24 right-4 z-30 w-[230px]">
@@ -91,9 +94,9 @@ export function WindReadout() {
                   ) : (
                     <div className="flex items-baseline gap-1">
                       <span className="font-mono text-[20px] font-bold tabular-nums text-white">
-                        {Math.round(hover.speedMph)}
+                        {formatSpeed(hover.speedMps, unit)}
                       </span>
-                      <span className="text-[11px] text-white/45">mph</span>
+                      <span className="text-[11px] text-white/45">{WIND_UNIT_LABEL[unit]}</span>
                     </div>
                   )}
                   <div className="mt-0.5 text-[12px] font-semibold text-white/80">
@@ -104,7 +107,7 @@ export function WindReadout() {
                   </div>
                   {!calm && (
                     <div className="text-[10px] text-white/35">
-                      {hover.speedMps.toFixed(1)} m/s · {Math.round(kt)} kt
+                      {others.map((u) => `${formatSpeed(hover.speedMps, u)} ${WIND_UNIT_LABEL[u]}`).join(' · ')}
                     </div>
                   )}
                 </>
