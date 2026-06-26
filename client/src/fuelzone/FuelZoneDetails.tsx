@@ -112,17 +112,18 @@ function RiskCard({ risk }: { risk: FuelRisk | null }) {
 // ---------------------------------------------------------------------------
 
 export function FuelZoneDetails({ payload }: Props) {
-  const { center, radiusM, totalPixels, areaM2, burnablePct, classes, groups, risk } = payload;
+  const { totalPixels, areaM2, burnablePct, classes, groups, risk } = payload;
 
   if (totalPixels === 0) {
     return (
       <div className="space-y-3">
         <div className="rounded-lg bg-white/5 px-3 py-4 text-[13px] leading-relaxed text-white/60">
-          No LANDFIRE fuel data in this area. The circle falls outside the
+          No LANDFIRE fuel data in this area. The{' '}
+          {payload.shape === 'polygon' ? 'polygon' : 'circle'} falls outside the
           continental-US coverage of the fuel-model raster — most likely over
           ocean or beyond the CONUS border.
         </div>
-        <Footer center={center} radiusM={radiusM} totalPixels={totalPixels} payload={payload} />
+        <Footer payload={payload} />
       </div>
     );
   }
@@ -210,29 +211,29 @@ export function FuelZoneDetails({ payload }: Props) {
         </div>
       </div>
 
-      <Footer center={center} radiusM={radiusM} totalPixels={totalPixels} payload={payload} />
+      <Footer payload={payload} />
     </div>
   );
 }
 
-function Footer({
-  center,
-  radiusM,
-  totalPixels,
-  payload,
-}: {
-  center: { lon: number; lat: number };
-  radiusM: number;
-  totalPixels: number;
-  payload: FuelZoneResult;
-}) {
+function Footer({ payload }: { payload: FuelZoneResult }) {
+  const { center, radiusM, vertexCount, totalPixels, shape } = payload;
   return (
     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 border-t border-white/10 pt-2.5 text-[12px]">
-      <dt className="text-white/40">Center</dt>
+      <dt className="text-white/40">{shape === 'polygon' ? 'Centroid' : 'Center'}</dt>
       <dd className="font-mono text-white/70">{fmtCoord(center.lon, center.lat)}</dd>
 
-      <dt className="text-white/40">Radius</dt>
-      <dd className="text-white/70">{formatRadius(radiusM)}</dd>
+      {shape === 'polygon' ? (
+        <>
+          <dt className="text-white/40">Vertices</dt>
+          <dd className="text-white/70">{vertexCount}-point boundary</dd>
+        </>
+      ) : (
+        <>
+          <dt className="text-white/40">Radius</dt>
+          <dd className="text-white/70">{formatRadius(radiusM)}</dd>
+        </>
+      )}
 
       {totalPixels > 0 && (
         <>

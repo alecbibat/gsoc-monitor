@@ -86,8 +86,10 @@ export interface FuelGroupShare {
 }
 
 export interface FuelZoneResult {
-  center: LngLat;
-  radiusM: number;
+  shape: 'circle' | 'polygon';
+  center: LngLat; // circle center, or polygon centroid (label/camera point)
+  radiusM: number; // circle radius; 0 for a polygon
+  vertexCount: number; // polygon vertex count; 0 for a circle
   totalPixels: number;
   areaM2: number; // data-covered area (excludes NoData ocean/outside-CONUS)
   burnablePct: number; // share of burnable (non-Nonburnable) pixels
@@ -96,6 +98,15 @@ export interface FuelZoneResult {
   risk: FuelRisk | null; // null when burnablePct === 0
   source: string;
   version: string;
+}
+
+// Geometry/identity metadata that travels with a result regardless of how the
+// zone was drawn.
+interface ZoneMeta {
+  shape: 'circle' | 'polygon';
+  center: LngLat;
+  radiusM: number;
+  vertexCount: number;
 }
 
 const EARTH_RADIUS_M = 6378137;
@@ -146,6 +157,38 @@ export function circleRing(center: LngLat, radiusM: number, segments = 64): numb
     ring.push(destPoint(center.lon, center.lat, radiusM, bearing));
   }
   return ring;
+}
+
+// Build a closed ArcGIS polygon ring from user-drawn vertices. ArcGIS treats an
+// outer ring as clockwise and a counter-clockwise ring as a hole (→ empty
+// histogram), so we check the signed area and reverse if needed, then close the
+// ring. Returned as [lon, lat] pairs in WGS84, like circleRing.
+export function polygonRing(vertices: LngLat[]): number[][] {
+  const pts = vertices.map((v): number[] => [v.lon, v.lat]);
+  // Shoelace signed area (x = lon east, y = lat north). > 0 ⇒ counter-clockwise.
+  let area2 = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, y1] = pts[i];
+    const [x2, y2] = pts[(i + 1) % pts.length];
+    area2 += x1 * y2 - x2 * y1;
+  }
+  const ordered = area2 > 0 ? pts.slice().reverse() : pts;
+  const first = ordered[0];
+  const last = ordered[ordered.length - 1];
+  if (first[0] !== last[0] || first[1] !== last[1]) ordered.push([first[0], first[1]]);
+  return ordered;
+}
+
+// Vertex-average centroid — used only to place the map label / camera point, so
+// the (non-area-weighted) approximation is good enough.
+function polygonCentroid(vertices: LngLat[]): LngLat {
+  let lon = 0;
+  let lat = 0;
+  for (const v of vertices) {
+    lon += v.lon;
+    lat += v.lat;
+  }
+  return { lon: lon / vertices.length, lat: lat / vertices.length };
 }
 
 interface Histogram {
@@ -292,10 +335,9 @@ function computeRisk(
   };
 }
 
-function emptyResult(center: LngLat, radiusM: number): FuelZoneResult {
+function emptyResult(meta: ZoneMeta): FuelZoneResult {
   return {
-    center,
-    radiusM,
+    ...meta,
     totalPixels: 0,
     areaM2: 0,
     burnablePct: 0,
@@ -307,12 +349,33 @@ function emptyResult(center: LngLat, radiusM: number): FuelZoneResult {
   };
 }
 
-// Run the zonal histogram for a circle and return the FBFM40 fuel-type
-// breakdown. Talks to the LANDFIRE ImageServer directly (open CORS); a POST with
-// a form-encoded body is a "simple" CORS request, so there's no preflight.
+// Circle convenience wrapper: build the geodesic ring, then analyze it.
 export async function analyzeFuelZone(center: LngLat, radiusM: number): Promise<FuelZoneResult> {
+  return analyzeRing(circleRing(center, radiusM), {
+    shape: 'circle',
+    center,
+    radiusM,
+    vertexCount: 0,
+  });
+}
+
+// Polygon variant: analyze an arbitrary user-drawn boundary (≥3 vertices).
+export async function analyzeFuelPolygon(vertices: LngLat[]): Promise<FuelZoneResult> {
+  return analyzeRing(polygonRing(vertices), {
+    shape: 'polygon',
+    center: polygonCentroid(vertices),
+    radiusM: 0,
+    vertexCount: vertices.length,
+  });
+}
+
+// Run the zonal histogram for any closed ring ([lon,lat] pairs, wound clockwise)
+// and return the FBFM40 fuel-type breakdown. Talks to the LANDFIRE ImageServer
+// directly (open CORS); a POST with a form-encoded body is a "simple" CORS
+// request, so there's no preflight.
+async function analyzeRing(ring: number[][], meta: ZoneMeta): Promise<FuelZoneResult> {
   const geometry = {
-    rings: [circleRing(center, radiusM)],
+    rings: [ring],
     spatialReference: { wkid: 4326 },
   };
 
@@ -337,13 +400,13 @@ export async function analyzeFuelZone(center: LngLat, radiusM: number): Promise<
   const hist: Histogram | undefined = data?.histograms?.[0];
   if (!hist || !Array.isArray(hist.counts) || hist.counts.length === 0) {
     // No data in the geometry — typically ocean or outside CONUS coverage.
-    return emptyResult(center, radiusM);
+    return emptyResult(meta);
   }
 
   const byValue = decodeHistogram(hist);
   let totalPixels = 0;
   for (const c of byValue.values()) totalPixels += c;
-  if (totalPixels === 0) return emptyResult(center, radiusM);
+  if (totalPixels === 0) return emptyResult(meta);
 
   // Per-class shares.
   const classes: FuelClassShare[] = [];
@@ -382,8 +445,7 @@ export async function analyzeFuelZone(center: LngLat, radiusM: number): Promise<
     .sort((a, b) => b.pixels - a.pixels);
 
   return {
-    center,
-    radiusM,
+    ...meta,
     totalPixels,
     areaM2: totalPixels * PIXEL_AREA_M2,
     burnablePct: (burnablePixels / totalPixels) * 100,

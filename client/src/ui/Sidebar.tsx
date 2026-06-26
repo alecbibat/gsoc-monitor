@@ -78,6 +78,7 @@ export function Sidebar() {
   const windProbeEnabled = useWindProbeStore((s) => s.probeEnabled);
   const toggleWindProbe = useWindProbeStore((s) => s.toggleProbe);
   const fuelZoneActive = useFuelZoneStore((s) => s.active);
+  const fuelZoneMode = useFuelZoneStore((s) => s.mode);
   const toggleFuelZone = useFuelZoneStore((s) => s.toggle);
   const shipsStatus = useShipsStatus();
   const webcamsStatus = useWebcamsStatus();
@@ -430,17 +431,35 @@ export function Sidebar() {
             }
           >
             <FuelLegend />
-            <button
-              onClick={toggleFuelZone}
-              className={`mt-2 flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
-                fuelZoneActive
-                  ? 'bg-amber-400/20 text-amber-300'
-                  : 'bg-white/5 text-white/60 hover:bg-white/10'
-              }`}
-            >
-              <span>◎</span>
-              {fuelZoneActive ? 'Drawing — click the globe' : 'Analyze fuels in a circle'}
-            </button>
+            <div className="mt-2">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/30">
+                Analyze fuels in an area
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  onClick={() => toggleFuelZone('circle')}
+                  className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
+                    fuelZoneActive && fuelZoneMode === 'circle'
+                      ? 'bg-amber-400/20 text-amber-300'
+                      : 'bg-white/5 text-white/60 hover:bg-white/10'
+                  }`}
+                >
+                  <span>◎</span>
+                  {fuelZoneActive && fuelZoneMode === 'circle' ? 'Drawing…' : 'Circle'}
+                </button>
+                <button
+                  onClick={() => toggleFuelZone('polygon')}
+                  className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
+                    fuelZoneActive && fuelZoneMode === 'polygon'
+                      ? 'bg-amber-400/20 text-amber-300'
+                      : 'bg-white/5 text-white/60 hover:bg-white/10'
+                  }`}
+                >
+                  <span>⬠</span>
+                  {fuelZoneActive && fuelZoneMode === 'polygon' ? 'Drawing…' : 'Polygon'}
+                </button>
+              </div>
+            </div>
           </LayerToggle>
         </Section>
 
