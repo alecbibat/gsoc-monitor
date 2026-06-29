@@ -69,8 +69,8 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
       icon: '🌀',
       source: 'NOAA National Hurricane Center',
       method:
-        'Active tropical-cyclone positions, tracks and forecast cones served via NOAA’s ArcGIS feature service.',
-      trust: 'The official US authority for tropical-cyclone forecasts.',
+        'Global active tropical-cyclone positions, past + forecast tracks, intensity and forecast cones from NOAA’s ArcGIS feed (covers Atlantic, E/C Pacific, and — via the aggregated feed — W Pacific typhoons & other basins). Also overlays NHC’s Graphical Tropical Weather Outlook: the dashed "areas of disturbance" with 2-day / 7-day formation odds for systems that haven’t formed yet.',
+      trust: 'The official US authority for tropical-cyclone forecasts and formation outlooks.',
       url: 'https://www.nhc.noaa.gov',
     },
   },

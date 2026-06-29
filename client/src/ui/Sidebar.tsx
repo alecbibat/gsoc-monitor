@@ -295,9 +295,18 @@ export function Sidebar() {
             onToggle={() => toggleLayer('hurricanes')}
             statusText={
               hurricanesStatus.error ??
-              (hurricanesStatus.count > 0
-                ? `${hurricanesStatus.count} active system${hurricanesStatus.count === 1 ? '' : 's'}`
-                : 'No active tropical systems')
+              ([
+                hurricanesStatus.count > 0
+                  ? `${hurricanesStatus.count} active system${hurricanesStatus.count === 1 ? '' : 's'}`
+                  : null,
+                hurricanesStatus.disturbances > 0
+                  ? `${hurricanesStatus.disturbances} area${
+                      hurricanesStatus.disturbances === 1 ? '' : 's'
+                    } to watch`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(' · ') || 'No active tropical systems')
             }
           />
           <LayerToggle

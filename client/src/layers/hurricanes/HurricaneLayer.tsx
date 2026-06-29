@@ -165,6 +165,48 @@ function hurricaneIcon(color: string): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
+// --- Areas of disturbance (NHC Graphical Tropical Weather Outlook) ----------
+// The 7-day "potential development region" polygons + their 2/7-day formation
+// odds, from NOAA's tropical map service. Same ArcGIS GeoJSON shape as the storm
+// feed, open CORS, so it's fetched straight from the browser too.
+const GTWO =
+  'https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/NHC_tropical_weather_summary/MapServer';
+const GTWO_REGION_LAYER = 3; // "Seven-Day: Potential Development Region" (polygons)
+
+// NHC's formation-risk tiers → the warm yellow→orange→red ramp zoom.earth uses.
+const RISK_COLOR: Record<string, string> = {
+  Low: '#ffd23f',
+  Medium: '#ff8c1a',
+  High: '#ff3b30',
+};
+function riskColor(risk: string | undefined): string {
+  return RISK_COLOR[risk ?? ''] ?? '#ffd23f';
+}
+
+function ringCentroid(ring: number[][]): [number, number] {
+  let x = 0;
+  let y = 0;
+  for (const c of ring) {
+    x += c[0];
+    y += c[1];
+  }
+  return [x / ring.length, y / ring.length];
+}
+
+// A dashed ring with an X — reads as "area to watch for development".
+function disturbanceIcon(color: string): string {
+  const x = 'M9.5 9.5 L18.5 18.5 M18.5 9.5 L9.5 18.5';
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 28">` +
+    `<g fill="none" stroke-linecap="round">` +
+    `<circle cx="14" cy="14" r="10.5" stroke="#04161c" stroke-width="4.5" stroke-dasharray="3.2 3.2"/>` +
+    `<path d="${x}" stroke="#04161c" stroke-width="4.5"/>` +
+    `<circle cx="14" cy="14" r="10.5" stroke="${color}" stroke-width="2.3" stroke-dasharray="3.2 3.2"/>` +
+    `<path d="${x}" stroke="${color}" stroke-width="2.3"/>` +
+    `</g></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
 export function HurricaneLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.hurricanes);
@@ -261,11 +303,8 @@ export function HurricaneLayer() {
         return needles.every((needle) => n.includes(needle));
       })?.id;
 
-    const queryLayer = async (id: number | undefined): Promise<GeoJSON.Feature[]> => {
-      if (id == null) return [];
+    const queryGeo = async (url: string): Promise<GeoJSON.Feature[]> => {
       try {
-        const url =
-          `${SERVICE}/${id}/query?where=1%3D1&outFields=*&outSR=4326&returnGeometry=true&f=geojson`;
         const r = await fetch(url);
         if (!r.ok) return [];
         const j = (await r.json()) as { features?: GeoJSON.Feature[] };
@@ -274,6 +313,10 @@ export function HurricaneLayer() {
         return [];
       }
     };
+    const queryLayer = (id: number | undefined): Promise<GeoJSON.Feature[]> =>
+      id == null
+        ? Promise.resolve([])
+        : queryGeo(`${SERVICE}/${id}/query?where=1%3D1&outFields=*&outSR=4326&returnGeometry=true&f=geojson`);
 
     const load = async () => {
       let layers: ServiceLayer[];
@@ -300,13 +343,17 @@ export function HurricaneLayer() {
       let fcstTracks: GeoJSON.Feature[];
       let obsPts: GeoJSON.Feature[];
       let fcstPts: GeoJSON.Feature[];
+      let disturbances: GeoJSON.Feature[];
       try {
-        [cones, obsTracks, fcstTracks, obsPts, fcstPts] = await Promise.all([
+        [cones, obsTracks, fcstTracks, obsPts, fcstPts, disturbances] = await Promise.all([
           queryLayer(coneId),
           queryLayer(obsTrackId),
           queryLayer(fcstTrackId),
           queryLayer(obsPtId),
           queryLayer(fcstPtId),
+          queryGeo(
+            `${GTWO}/${GTWO_REGION_LAYER}/query?where=1%3D1&outFields=*&outSR=4326&returnGeometry=true&f=geojson`
+          ),
         ]);
       } catch (err) {
         if (cancelled) return;
@@ -374,15 +421,30 @@ export function HurricaneLayer() {
       }
 
       const named = [...storms.values()].filter((s) => s.lat != null && s.lon != null);
+      const distList = (disturbances ?? []).filter((f) => ringParts(f.geometry).length > 0);
 
       // Skip the teardown/redraw when nothing meaningful changed.
-      const sig = named
+      const stormSig = named
         .map((s) => `${s.id}:${s.advDate ?? ''}:${s.windKt ?? ''}:${s.lat}:${s.lon}`)
         .sort()
         .join('|');
+      const distSig = distList
+        .map((f) => {
+          const p = f.properties ?? undefined;
+          return `${pick(p, ['objectid', 'OBJECTID']) ?? ''}:${pick(p, ['prob7day', 'PROB7DAY']) ?? ''}:${
+            pick(p, ['risk7day', 'RISK7DAY']) ?? ''
+          }`;
+        })
+        .sort()
+        .join(',');
+      const sig = `${stormSig}#${distSig}`;
+      const setCount = () =>
+        useHurricanesStatus
+          .getState()
+          .setStatus({ count: named.length, disturbances: distList.length, error: null });
       if (sig === lastSigRef.current) {
         ensureSpin(named.length > 0);
-        useHurricanesStatus.getState().setStatus({ count: named.length, error: null });
+        setCount();
         return;
       }
       lastSigRef.current = sig;
@@ -390,6 +452,72 @@ export function HurricaneLayer() {
       ds.entities.removeAll();
       hovered = null;
       useHurricaneHover.getState().hide();
+
+      // 0) Areas of disturbance (GTWO 7-day formation outlook) — drawn first, as
+      //    background context beneath any active storms.
+      for (const f of distList) {
+        const p = f.properties ?? undefined;
+        const risk7 = pick<string>(p, ['risk7day', 'RISK7DAY']) ?? 'Low';
+        const prob7 = pick<string>(p, ['prob7day', 'PROB7DAY']) ?? '';
+        const prob2 = pick<string>(p, ['prob2day', 'PROB2DAY']) ?? '';
+        const risk2 = pick<string>(p, ['risk2day', 'RISK2DAY']) ?? '';
+        const basin = pick<string>(p, ['basin', 'BASIN']) ?? '';
+        const color = riskColor(risk7);
+        const rings = ringParts(f.geometry);
+        for (const ring of rings) {
+          ds.entities.add({
+            polygon: {
+              hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(ring.flat())),
+              material: Cesium.Color.fromCssColorString(color).withAlpha(0.14),
+              outline: true,
+              outlineColor: Cesium.Color.fromCssColorString(color).withAlpha(0.85),
+            },
+          });
+        }
+        // Marker + formation-odds label at the largest ring's centroid.
+        const [clon, clat] = ringCentroid(rings[0]);
+        const id = `disturbance-${pick(p, ['objectid', 'OBJECTID']) ?? `${clon},${clat}`}`;
+        const ent = ds.entities.add({
+          id,
+          position: Cesium.Cartesian3.fromDegrees(clon, clat),
+          billboard: {
+            image: disturbanceIcon(color),
+            width: 26,
+            height: 26,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+          label: {
+            text: prob7 ? `${prob7}` : 'watch',
+            font: '700 12px Inter, system-ui, sans-serif',
+            fillColor: Cesium.Color.fromCssColorString(color),
+            outlineColor: Cesium.Color.BLACK.withAlpha(0.85),
+            outlineWidth: 3,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            verticalOrigin: Cesium.VerticalOrigin.TOP,
+            pixelOffset: new Cesium.Cartesian2(0, 16),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        });
+        attachPanelData(ent, {
+          id,
+          kind: 'hurricanes',
+          title: 'Area of Disturbance',
+          subtitle: `${risk7} chance · ${prob7} (7-day)`,
+          payload: {
+            disturbance: true,
+            name: 'Area of Disturbance',
+            classification: `${risk7} formation chance`,
+            color,
+            basin,
+            prob2day: prob2,
+            risk2day: risk2,
+            prob7day: prob7,
+            risk7day: risk7,
+            latitude: clat,
+            longitude: clon,
+          },
+        });
+      }
 
       // 1) Cone of uncertainty (drawn first so everything else sits on top).
       for (const f of cones) {
@@ -523,7 +651,7 @@ export function HurricaneLayer() {
       }
 
       ensureSpin(named.length > 0);
-      useHurricanesStatus.getState().setStatus({ count: named.length, error: null });
+      setCount();
       viewer.scene.requestRender();
     };
 
