@@ -8,10 +8,11 @@ interface RiversState {
   showForecast: boolean; // also surface gauges forecast to worsen into flood
   counts: Record<FloodCat, number> | null; // national counts from the last fetch
   total: number; // points currently rendered (after filter)
+  loading: boolean; // server is still warming its national snapshot
   error: string | null;
   setFilter: (f: RiverFilter) => void;
   toggleForecast: () => void;
-  setStatus: (p: Partial<Pick<RiversState, 'counts' | 'total' | 'error'>>) => void;
+  setStatus: (p: Partial<Pick<RiversState, 'counts' | 'total' | 'loading' | 'error'>>) => void;
 }
 
 export const useRiversStatus = create<RiversState>((set) => ({
@@ -19,6 +20,7 @@ export const useRiversStatus = create<RiversState>((set) => ({
   showForecast: false,
   counts: null,
   total: 0,
+  loading: false,
   error: null,
   setFilter: (filter) => set({ filter }),
   toggleForecast: () => set((s) => ({ showForecast: !s.showForecast })),

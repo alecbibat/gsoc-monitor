@@ -465,7 +465,9 @@ export function Sidebar() {
                       riversStatus.counts.moderate +
                       riversStatus.counts.major
                     } at/above action · ${riversStatus.total.toLocaleString()} shown`
-                  : 'NOAA river forecast gauges · live'
+                  : riversStatus.loading
+                    ? 'Loading national gauges…'
+                    : 'NOAA river forecast gauges · live'
             }
           >
             <div className="flex flex-wrap gap-1.5 pt-1">

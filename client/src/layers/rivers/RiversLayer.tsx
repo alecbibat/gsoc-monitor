@@ -132,26 +132,38 @@ export function RiversLayer() {
     };
   }, [viewer, active]);
 
-  // Fetch + poll.
+  // Fetch + poll, self-scheduling so we can back off / retry adaptively: the
+  // server warms its big national snapshot in the background and answers
+  // `warming` until it's ready, so we just retry soon rather than erroring.
   useEffect(() => {
     if (!viewer || !active) return;
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
+      let delay = POLL_MS;
       try {
         const data = await api.rivers();
         if (cancelled) return;
-        dataRef.current = data.gauges;
-        useRiversStatus.getState().setStatus({ counts: data.counts, error: null });
-        renderRef.current();
+        if (data.warming || data.gauges.length === 0) {
+          useRiversStatus.getState().setStatus({ loading: true, error: null });
+          delay = 12_000; // server still warming — check back shortly
+        } else {
+          dataRef.current = data.gauges;
+          useRiversStatus.getState().setStatus({ counts: data.counts, loading: false, error: null });
+          renderRef.current();
+        }
       } catch {
-        if (!cancelled) useRiversStatus.getState().setStatus({ error: 'River gauge feed unavailable' });
+        if (!cancelled) {
+          useRiversStatus.getState().setStatus({ loading: false, error: 'River gauge feed unavailable' });
+          delay = 30_000;
+        }
       }
+      if (!cancelled) timer = setTimeout(load, delay);
     };
     load();
-    const timer = setInterval(load, POLL_MS);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      clearTimeout(timer);
     };
   }, [viewer, active]);
 

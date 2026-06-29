@@ -95,6 +95,7 @@ export interface RiversResponse {
   gauges: RiverGauge[];
   counts: Record<FloodCat, number>;
   updated: number;
+  warming?: boolean; // true when the snapshot isn't ready yet (cold start)
 }
 
 function round4(n: number): number {
@@ -147,28 +148,54 @@ async function fetchRivers(): Promise<RiversResponse> {
   return { gauges, counts, updated: Date.now() };
 }
 
-// Keep the (large, slow) bulk fetch warm in the background so a client GET always
-// hits a populated cache and returns instantly — the 13 MB upstream pull must
-// never block an inbound request (or trip a platform router timeout).
-export function initRiversStream(): void {
-  const warm = () =>
-    cache
-      .getOrFetch<RiversResponse>('rivers', BULK_TTL_MS, fetchRivers, { staleOnError: true })
-      .catch((err) => console.error('[rivers] warm fetch failed:', err instanceof Error ? err.message : err));
-  warm();
-  setInterval(warm, BULK_TTL_MS);
+// Background-refreshed national snapshot. NWPS's /gauges pull is ~13 MB and has
+// been observed at ~50s time-to-first-byte, so it must NEVER run on the request
+// path — that would blow past the platform's inbound timeout and 502 the client
+// (which is exactly the "feed unavailable" symptom). The route only ever serves
+// this in-memory snapshot; a background loop keeps it fresh, and a failed
+// refresh simply keeps serving the last good value.
+let latest: RiversResponse | null = null;
+let refreshing = false;
+
+async function refreshRivers(): Promise<void> {
+  if (refreshing) return; // coalesce — one slow pull at a time
+  refreshing = true;
+  try {
+    latest = await fetchRivers();
+  } catch (err) {
+    console.error(
+      '[rivers] refresh failed (serving last good):',
+      err instanceof Error ? err.message : err
+    );
+  } finally {
+    refreshing = false;
+  }
 }
 
-router.get('/', async (_req, res) => {
-  try {
-    const data = await cache.getOrFetch<RiversResponse>('rivers', BULK_TTL_MS, fetchRivers, {
-      staleOnError: true,
-    });
-    res.json(data);
-  } catch (err) {
-    console.error('Rivers route error', err);
-    res.status(502).json({ error: 'River gauge feed unavailable' });
+export function initRiversStream(): void {
+  void refreshRivers();
+  setInterval(() => void refreshRivers(), BULK_TTL_MS);
+}
+
+const EMPTY_COUNTS: Record<FloodCat, number> = {
+  major: 0,
+  moderate: 0,
+  minor: 0,
+  action: 0,
+  normal: 0,
+  low: 0,
+  none: 0,
+};
+
+router.get('/', (_req, res) => {
+  if (latest) {
+    res.json(latest);
+    return;
   }
+  // Snapshot not ready yet (cold start / just-deployed). Kick a background
+  // refresh and tell the client to retry shortly — never block on the slow pull.
+  void refreshRivers();
+  res.json({ gauges: [], counts: { ...EMPTY_COUNTS }, updated: Date.now(), warming: true });
 });
 
 // --- Per-gauge detail -------------------------------------------------------

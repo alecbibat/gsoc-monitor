@@ -379,6 +379,7 @@ export interface RiversResponse {
   gauges: RiverGauge[];
   counts: Record<FloodCat, number>;
   updated: number;
+  warming?: boolean; // server snapshot not ready yet — retry shortly
 }
 
 export interface RiverThreshold {
