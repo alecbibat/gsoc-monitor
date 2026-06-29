@@ -3,9 +3,18 @@ import type { RadarFrame } from '../../types';
 
 export type RadarMode = 'radar' | 'satellite' | 'combined';
 
+// One slot on the playback timeline: a frame, its time (epoch seconds), and
+// whether it's a forecast (nowcast) frame rather than an observed one.
+export interface TimelineFrame {
+  frame: RadarFrame;
+  time: number;
+  forecast: boolean;
+}
+
 interface RadarState {
   host: string;
-  frames: RadarFrame[];
+  frames: RadarFrame[]; // observed (past) radar
+  nowcastFrames: RadarFrame[]; // RainViewer forecast/nowcast radar
   satelliteFrames: RadarFrame[];
   mode: RadarMode;
   windowMinutes: 30 | 60 | 120;
@@ -13,7 +22,12 @@ interface RadarState {
   playing: boolean;
   opacity: number;
   colorScheme: number;
-  setManifest: (host: string, frames: RadarFrame[], satelliteFrames: RadarFrame[]) => void;
+  setManifest: (
+    host: string,
+    frames: RadarFrame[],
+    nowcastFrames: RadarFrame[],
+    satelliteFrames: RadarFrame[]
+  ) => void;
   setMode: (m: RadarMode) => void;
   setWindowMinutes: (m: 30 | 60 | 120) => void;
   setCurrentIndex: (i: number) => void;
@@ -25,17 +39,21 @@ interface RadarState {
 export const useRadarStore = create<RadarState>((set) => ({
   host: '',
   frames: [],
+  nowcastFrames: [],
   satelliteFrames: [],
   // 'radar' shows just the precipitation, no busy infrared cloud base.
   mode: 'radar',
-  windowMinutes: 30,
+  // Default to the full ~2h window so the scrubber spans a satisfying range
+  // (plus the forecast frames appended after "now").
+  windowMinutes: 120,
   currentIndex: 0,
   playing: true,
   opacity: 0.75,
   // RainViewer color scheme 4 = "The Weather Channel": the clean green → yellow
   // → orange → red → magenta gradient zoom.earth uses.
   colorScheme: 4,
-  setManifest: (host, frames, satelliteFrames) => set({ host, frames, satelliteFrames }),
+  setManifest: (host, frames, nowcastFrames, satelliteFrames) =>
+    set({ host, frames, nowcastFrames, satelliteFrames }),
   setMode: (mode) => set({ mode, currentIndex: 0 }),
   setWindowMinutes: (m) => set({ windowMinutes: m }),
   setCurrentIndex: (i) => set({ currentIndex: i }),
@@ -47,4 +65,37 @@ export const useRadarStore = create<RadarState>((set) => ({
 export function framesInWindow(frames: RadarFrame[], windowMinutes: number): RadarFrame[] {
   const count = Math.max(1, Math.round(windowMinutes / 10));
   return frames.slice(Math.max(0, frames.length - count));
+}
+
+// The full ordered playback timeline for the current mode: observed frames
+// (within the window) followed by the forecast frames. Satellite mode has no
+// forecast product, so it's just the windowed satellite frames.
+export function buildTimeline(s: {
+  mode: RadarMode;
+  frames: RadarFrame[];
+  nowcastFrames: RadarFrame[];
+  satelliteFrames: RadarFrame[];
+  windowMinutes: number;
+}): TimelineFrame[] {
+  if (s.mode === 'satellite') {
+    return framesInWindow(s.satelliteFrames, s.windowMinutes).map((f) => ({
+      frame: f,
+      time: f.time,
+      forecast: false,
+    }));
+  }
+  const past = framesInWindow(s.frames, s.windowMinutes).map((f) => ({
+    frame: f,
+    time: f.time,
+    forecast: false,
+  }));
+  const fcst = s.nowcastFrames.map((f) => ({ frame: f, time: f.time, forecast: true }));
+  return [...past, ...fcst];
+}
+
+// Index of the "now" frame (the last observed frame) within a timeline.
+export function nowIndex(timeline: TimelineFrame[]): number {
+  const firstForecast = timeline.findIndex((t) => t.forecast);
+  if (firstForecast === -1) return Math.max(0, timeline.length - 1);
+  return Math.max(0, firstForecast - 1);
 }

@@ -17,6 +17,7 @@ import { FuelLayer } from './layers/fuel/FuelLayer';
 import { WindLayer } from './layers/wind/WindLayer';
 import { WindProbeController } from './layers/wind/WindProbeController';
 import { WindReadout } from './layers/wind/WindReadout';
+import { RadarTimeline } from './layers/radar/RadarTimeline';
 import { ShipLayer } from './layers/ships/ShipLayer';
 import { NewsMapLayer } from './layers/newsMap/NewsMapLayer';
 import { ShipModelLayer } from './layers/ships/ShipModelLayer';
@@ -128,6 +129,7 @@ export default function App() {
         <MeasureOverlay />
         <FuelZoneOverlay />
         <WindReadout />
+        <RadarTimeline />
         <HoverOverlay />
         <PickChooser />
         <NewsTicker />

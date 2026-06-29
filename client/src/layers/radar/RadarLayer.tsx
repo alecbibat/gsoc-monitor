@@ -3,7 +3,8 @@ import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
-import { useRadarStore, framesInWindow } from './radarStore';
+import type { RadarFrame } from '../../types';
+import { useRadarStore, buildTimeline, nowIndex } from './radarStore';
 
 // 512px tiles render noticeably smoother than 256 at the same zoom.
 const TILE_SIZE = 512;
@@ -17,8 +18,11 @@ const RADAR_SNOW = 0;
 // pixels — letting Cesium smoothly upscale a level-9 tile looks far cleaner
 // (this is the trick zoom.earth uses).
 const RADAR_MAX_LEVEL = 9;
-const SAT_COLOR = 0;      // Classic IR (white = cold/high clouds)
+const SAT_COLOR = 0; // Classic IR (white = cold/high clouds)
 const SAT_OPTIONS = '0';
+// Frame dwell during playback (ms). A touch quicker than real-time for a fluid
+// "play" feel without blowing past frames.
+const FRAME_MS = 500;
 
 function makeRadarProvider(host: string, frame: { path: string }, colorScheme: number) {
   return new Cesium.UrlTemplateImageryProvider({
@@ -39,6 +43,7 @@ export function RadarLayer() {
   const active = useLayersStore((s) => s.active.radar);
   const host = useRadarStore((s) => s.host);
   const frames = useRadarStore((s) => s.frames);
+  const nowcastFrames = useRadarStore((s) => s.nowcastFrames);
   const satelliteFrames = useRadarStore((s) => s.satelliteFrames);
   const mode = useRadarStore((s) => s.mode);
   const windowMinutes = useRadarStore((s) => s.windowMinutes);
@@ -48,128 +53,113 @@ export function RadarLayer() {
   const colorScheme = useRadarStore((s) => s.colorScheme);
   const setCurrentIndex = useRadarStore((s) => s.setCurrentIndex);
 
-  // Animated radar frames
-  const radarLayersRef = useRef<Cesium.ImageryLayer[]>([]);
-  // Static satellite base (used in 'combined' mode) or animated sat frames (satellite mode)
-  const satLayersRef = useRef<Cesium.ImageryLayer[]>([]);
+  // One imagery layer per timeline frame; we cross-fade by toggling alpha.
+  const animLayersRef = useRef<Cesium.ImageryLayer[]>([]);
+  // Static satellite base used only in 'combined' mode.
+  const baseLayersRef = useRef<Cesium.ImageryLayer[]>([]);
 
-  // Fetch manifest periodically
+  // Fetch manifest periodically.
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
-
     const load = async () => {
       try {
         const manifest = await api.radarManifest();
         if (cancelled) return;
-        useRadarStore.getState().setManifest(
-          manifest.host,
-          manifest.radar.past,
-          manifest.satellite?.infrared ?? [],
-        );
+        useRadarStore
+          .getState()
+          .setManifest(
+            manifest.host,
+            manifest.radar.past,
+            manifest.radar.nowcast ?? [],
+            manifest.satellite?.infrared ?? []
+          );
       } catch (err) {
         console.error('Failed to load radar manifest', err);
       }
     };
-
     load();
     const interval = setInterval(load, 2 * 60_000);
-    return () => { cancelled = true; clearInterval(interval); };
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [active]);
 
-  // Rebuild layer stacks when mode / frames / window changes
+  // Rebuild the layer stack when the mode / frames / window / palette change.
   useEffect(() => {
     if (!viewer) return;
 
-    // Tear down everything first
-    for (const l of [...satLayersRef.current, ...radarLayersRef.current]) {
+    for (const l of [...baseLayersRef.current, ...animLayersRef.current]) {
       viewer.imageryLayers.remove(l, true);
     }
-    satLayersRef.current = [];
-    radarLayersRef.current = [];
+    baseLayersRef.current = [];
+    animLayersRef.current = [];
 
     if (!active || !host) {
       viewer.scene.requestRender();
       return;
     }
 
-    if (mode === 'radar' && frames.length > 0) {
-      const windowed = framesInWindow(frames, windowMinutes);
-      radarLayersRef.current = windowed.map((frame) => {
-        const layer = viewer.imageryLayers.addImageryProvider(makeRadarProvider(host, frame, colorScheme));
-        layer.alpha = 0;
-        return layer;
-      });
-      setCurrentIndex(windowed.length - 1);
-
-    } else if (mode === 'satellite' && satelliteFrames.length > 0) {
-      // Animate satellite frames
-      const windowed = framesInWindow(satelliteFrames, windowMinutes);
-      satLayersRef.current = windowed.map((frame) => {
-        const layer = viewer.imageryLayers.addImageryProvider(makeSatProvider(host, frame));
-        layer.alpha = 0;
-        return layer;
-      });
-      setCurrentIndex(windowed.length - 1);
-
-    } else if (mode === 'combined') {
-      // Static satellite base (latest frame)
-      if (satelliteFrames.length > 0) {
-        const latest = satelliteFrames[satelliteFrames.length - 1];
-        const satLayer = viewer.imageryLayers.addImageryProvider(makeSatProvider(host, latest));
-        satLayer.alpha = opacity * 0.45; // subdued base
-        satLayersRef.current = [satLayer];
-      }
-      // Animated radar on top
-      if (frames.length > 0) {
-        const windowed = framesInWindow(frames, windowMinutes);
-        radarLayersRef.current = windowed.map((frame) => {
-          const layer = viewer.imageryLayers.addImageryProvider(makeRadarProvider(host, frame, colorScheme));
-          layer.alpha = 0;
-          return layer;
-        });
-        setCurrentIndex(windowed.length - 1);
-      }
+    const timeline = buildTimeline({
+      mode,
+      frames,
+      nowcastFrames,
+      satelliteFrames,
+      windowMinutes,
+    });
+    if (timeline.length === 0) {
+      viewer.scene.requestRender();
+      return;
     }
 
+    // Combined mode: a subdued static satellite base under the animated radar.
+    if (mode === 'combined' && satelliteFrames.length > 0) {
+      const latest = satelliteFrames[satelliteFrames.length - 1];
+      const base = viewer.imageryLayers.addImageryProvider(makeSatProvider(host, latest));
+      base.alpha = opacity * 0.45;
+      baseLayersRef.current = [base];
+    }
+
+    const makeProvider =
+      mode === 'satellite'
+        ? (f: RadarFrame) => makeSatProvider(host, f)
+        : (f: RadarFrame) => makeRadarProvider(host, f, colorScheme);
+
+    animLayersRef.current = timeline.map((t) => {
+      const layer = viewer.imageryLayers.addImageryProvider(makeProvider(t.frame));
+      layer.alpha = 0;
+      return layer;
+    });
+
+    // Start paused on "now" (latest observed) so the first thing shown is the
+    // current conditions; playback runs forward into the forecast then loops.
+    setCurrentIndex(nowIndex(timeline));
     viewer.scene.requestRender();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewer, active, host, frames, satelliteFrames, mode, windowMinutes, colorScheme]);
+  }, [viewer, active, host, frames, nowcastFrames, satelliteFrames, mode, windowMinutes, colorScheme]);
 
-  // Sync alpha with currentIndex / opacity
+  // Sync alpha with the current frame / opacity.
   useEffect(() => {
     if (!viewer) return;
-
-    if (mode === 'radar') {
-      radarLayersRef.current.forEach((l, i) => {
-        l.alpha = i === currentIndex ? opacity : 0;
-      });
-    } else if (mode === 'satellite') {
-      satLayersRef.current.forEach((l, i) => {
-        l.alpha = i === currentIndex ? opacity : 0;
-      });
-    } else {
-      // combined — satellite base stays at its fixed opacity; animate radar on top
-      radarLayersRef.current.forEach((l, i) => {
-        l.alpha = i === currentIndex ? opacity : 0;
-      });
-    }
-
+    animLayersRef.current.forEach((l, i) => {
+      l.alpha = i === currentIndex ? opacity : 0;
+    });
+    baseLayersRef.current.forEach((l) => {
+      l.alpha = opacity * 0.45;
+    });
     viewer.scene.requestRender();
   }, [viewer, currentIndex, opacity, mode]);
 
-  // Animation ticker
+  // Playback ticker.
   useEffect(() => {
     if (!viewer || !active || !playing) return;
-
     const interval = setInterval(() => {
-      const state = useRadarStore.getState();
-      const source = state.mode === 'satellite' ? state.satelliteFrames : state.frames;
-      const windowed = framesInWindow(source, state.windowMinutes);
-      if (windowed.length === 0) return;
-      state.setCurrentIndex((state.currentIndex + 1) % windowed.length);
-    }, 600);
-
+      const s = useRadarStore.getState();
+      const tl = buildTimeline(s);
+      if (tl.length === 0) return;
+      s.setCurrentIndex((s.currentIndex + 1) % tl.length);
+    }, FRAME_MS);
     return () => clearInterval(interval);
   }, [viewer, active, playing]);
 
