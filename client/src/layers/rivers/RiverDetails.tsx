@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/client';
 import type { FloodCat, RiverDetail, RiverSeriesPoint, RiverThreshold } from '../../types';
 import { CAT, catColor, catLabel } from './riverMeta';
@@ -115,17 +115,26 @@ function ThresholdBar({
   );
 }
 
-// Stage hydrograph: observed history + forecast, with flood-stage threshold lines.
+// Stage hydrograph: observed history + forecast, with flood-stage threshold
+// lines. Hovering reveals a crosshair and the time + value at that point.
 function StageChart({
   observed,
   forecast,
   thresholds,
+  unit,
 }: {
   observed: RiverSeriesPoint[];
   forecast: RiverSeriesPoint[];
   thresholds: RiverThreshold[];
+  unit: string;
 }) {
-  const all = [...observed, ...forecast];
+  const [hover, setHover] = useState<number | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  const all: Array<{ t: number; v: number; forecast: boolean }> = [
+    ...observed.map((p) => ({ t: p.t, v: p.v, forecast: false })),
+    ...forecast.map((p) => ({ t: p.t, v: p.v, forecast: true })),
+  ];
   if (all.length < 2) return null;
   const W = 300;
   const H = 132;
@@ -150,37 +159,94 @@ function StageChart({
   const nowX = forecast.length ? X(forecast[0].t) : null;
   const fcPath = forecast.length ? [observed[observed.length - 1], ...forecast] : [];
 
+  const h = hover != null ? all[hover] : null;
+  const hx = h ? X(h.t) : 0;
+  const tipLeft = Math.min(86, Math.max(14, (hx / W) * 100));
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" className="block">
-      {ths.map((t, i) => (
-        <g key={i}>
-          <line
-            x1={padL}
-            y1={Y(t.stage)}
-            x2={W - padR}
-            y2={Y(t.stage)}
-            stroke={catColor(t.cat)}
-            strokeWidth="0.7"
-            strokeDasharray="3 2"
-            opacity="0.7"
-          />
-          <text x={W - padR + 2} y={Y(t.stage) + 2.2} fontSize="6" fill={catColor(t.cat)}>
-            {CAT[t.cat].short}
-          </text>
-        </g>
-      ))}
-      {nowX != null && (
-        <line x1={nowX} y1={padT} x2={nowX} y2={H - padB} stroke="#ffffff35" strokeWidth="0.7" strokeDasharray="2 2" />
+    <div
+      ref={wrapRef}
+      className="relative"
+      onPointerMove={(e) => {
+        const el = wrapRef.current;
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        const vbX = ((e.clientX - r.left) / r.width) * W; // back into viewBox units
+        const t = tMin + ((vbX - padL) / (W - padL - padR || 1)) * (tMax - tMin);
+        let best = 0;
+        let bd = Infinity;
+        for (let i = 0; i < all.length; i++) {
+          const dd = Math.abs(all[i].t - t);
+          if (dd < bd) {
+            bd = dd;
+            best = i;
+          }
+        }
+        setHover(best);
+      }}
+      onPointerLeave={() => setHover(null)}
+    >
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" className="block">
+        {ths.map((t, i) => (
+          <g key={i}>
+            <line
+              x1={padL}
+              y1={Y(t.stage)}
+              x2={W - padR}
+              y2={Y(t.stage)}
+              stroke={catColor(t.cat)}
+              strokeWidth="0.7"
+              strokeDasharray="3 2"
+              opacity="0.7"
+            />
+            <text x={W - padR + 2} y={Y(t.stage) + 2.2} fontSize="6" fill={catColor(t.cat)}>
+              {CAT[t.cat].short}
+            </text>
+          </g>
+        ))}
+        {nowX != null && (
+          <line x1={nowX} y1={padT} x2={nowX} y2={H - padB} stroke="#ffffff35" strokeWidth="0.7" strokeDasharray="2 2" />
+        )}
+        <path d={toPath(observed)} fill="none" stroke="#9fd8ff" strokeWidth="1.5" />
+        {fcPath.length > 1 && <path d={toPath(fcPath)} fill="none" stroke="#ffd23f" strokeWidth="1.5" strokeDasharray="3 2" />}
+        {h && (
+          <g>
+            <line x1={hx} y1={padT} x2={hx} y2={H - padB} stroke="#ffffff80" strokeWidth="0.7" />
+            <circle
+              cx={hx}
+              cy={Y(h.v)}
+              r="2.6"
+              fill={h.forecast ? '#ffd23f' : '#9fd8ff'}
+              stroke="#04161c"
+              strokeWidth="0.8"
+            />
+          </g>
+        )}
+        <text x={padL} y={H - 4} fontSize="6" fill="#ffffff55">
+          {fmtTime(new Date(tMin * 1000).toISOString())}
+        </text>
+        <text x={W - padR} y={H - 4} textAnchor="end" fontSize="6" fill="#ffffff55">
+          {fmtTime(new Date(tMax * 1000).toISOString())}
+        </text>
+      </svg>
+      {h && (
+        <div
+          className="pointer-events-none absolute top-0 z-10 -translate-x-1/2 whitespace-nowrap rounded-md border border-white/10 bg-ink-900/95 px-2 py-1 text-center shadow-panel"
+          style={{ left: `${tipLeft}%` }}
+        >
+          <div className="text-[11px] font-semibold leading-tight text-white">
+            {fmtTime(new Date(h.t * 1000).toISOString())}
+          </div>
+          <div
+            className="mt-0.5 text-[10px] leading-none"
+            style={{ color: h.forecast ? '#ffd23f' : '#9fd8ff' }}
+          >
+            {fmtNum(h.v, unit)} {unit}
+            {h.forecast ? ' · forecast' : ''}
+          </div>
+        </div>
       )}
-      <path d={toPath(observed)} fill="none" stroke="#9fd8ff" strokeWidth="1.5" />
-      {fcPath.length > 1 && <path d={toPath(fcPath)} fill="none" stroke="#ffd23f" strokeWidth="1.5" strokeDasharray="3 2" />}
-      <text x={padL} y={H - 4} fontSize="6" fill="#ffffff55">
-        {fmtTime(new Date(tMin * 1000).toISOString())}
-      </text>
-      <text x={W - padR} y={H - 4} textAnchor="end" fontSize="6" fill="#ffffff55">
-        {fmtTime(new Date(tMax * 1000).toISOString())}
-      </text>
-    </svg>
+    </div>
   );
 }
 
@@ -317,7 +383,12 @@ export function RiverDetails({ payload }: { payload: Payload }) {
                   <span className="ml-1 inline-block h-[2px] w-3 bg-[#ffd23f]" /> fcst
                 </span>
               </div>
-              <StageChart observed={d.observedSeries} forecast={d.forecastSeries} thresholds={displayThresholds} />
+              <StageChart
+                observed={d.observedSeries}
+                forecast={d.forecastSeries}
+                thresholds={displayThresholds}
+                unit={d.unit}
+              />
             </div>
           )}
 
