@@ -13,6 +13,8 @@ import { useWindStatus } from '../layers/wind/windStore';
 import { useWindProbeStore } from '../layers/wind/windProbeStore';
 import { FuelLegend } from '../layers/fuel/FuelLegend';
 import { useFuelZoneStore } from '../fuelzone/fuelZoneStore';
+import { useFireOutlookStore } from '../layers/fireOutlook/fireOutlookStore';
+import { FireOutlookControls } from '../layers/fireOutlook/FireOutlookControls';
 import { useShipsStatus } from '../layers/ships/shipsStore';
 import { useWebcamsStatus } from '../layers/webcams/webcamsStore';
 import { useNewsMapStore } from '../layers/newsMap/newsMapStore';
@@ -76,6 +78,7 @@ export function Sidebar() {
   const smokeStatus = useSmokeStatus();
   const aqiStatus = useAqiStatus();
   const riversStatus = useRiversStatus();
+  const fireOutlookError = useFireOutlookStore((s) => s.error);
   const fuelStatus = useFuelStatus();
   const windStatus = useWindStatus();
   const windProbeEnabled = useWindProbeStore((s) => s.probeEnabled);
@@ -523,6 +526,14 @@ export function Sidebar() {
               <span>🎯</span>
               {windProbeEnabled ? 'Probe on · right-click to pin' : 'Wind probe off'}
             </button>
+          </LayerToggle>
+          <LayerToggle
+            label="7-Day Fire Potential (NWCG)"
+            active={(active as Record<string, boolean>).fireOutlook ?? false}
+            onToggle={() => toggleLayer('fireOutlook')}
+            statusText={fireOutlookError ?? 'Significant fire potential · next 7 days · CONUS'}
+          >
+            <FireOutlookControls />
           </LayerToggle>
           <LayerToggle
             label="Fuel Models (LANDFIRE)"

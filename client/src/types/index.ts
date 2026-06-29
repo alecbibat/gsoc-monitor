@@ -19,7 +19,8 @@ export type LayerId =
   | 'webcams'
   | 'newsMap'
   | 'wind'
-  | 'rivers';
+  | 'rivers'
+  | 'fireOutlook';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
@@ -353,6 +354,23 @@ export interface WebcamsResponse {
   updated: number;
   providers: WebcamProviderStatus[];
   stale?: boolean;
+}
+
+// --- 7-Day Significant Fire Potential (NWCG Predictive Services) ------------
+export interface FireOutlookDayCode {
+  dryness: number | null; // fuel dryness 1 (normal) → 3 (very dry); 0/null = none
+  type: string | null; // 'CRITICAL' | 'IGNITION' significant-fire-potential flag
+}
+export interface FireOutlookPsa {
+  code: string; // Predictive Service Area id
+  gacc: string; // Geographic Area Coordination Center
+  rings: number[][][]; // outer ring(s), [lon,lat] pairs
+  days: (FireOutlookDayCode | null)[]; // length 7
+}
+export interface FireOutlookResponse {
+  updated: number;
+  dates: (string | null)[]; // 7 ISO dates
+  psas: FireOutlookPsa[];
 }
 
 // --- Rivers & floods (NOAA NWPS) -------------------------------------------

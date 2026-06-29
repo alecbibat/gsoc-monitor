@@ -57,6 +57,7 @@ export const api = {
   lightningHistory: (minutes: number) =>
     getJson<import('../types').LightningHistoryResponse>(`/api/lightning?minutes=${minutes}`),
   rivers: () => getJson<import('../types').RiversResponse>('/api/rivers'),
+  fireOutlook: () => getJson<import('../types').FireOutlookResponse>('/api/fire-outlook'),
   riverDetail: (lid: string) =>
     getJson<import('../types').RiverDetail>(`/api/rivers/${encodeURIComponent(lid)}`),
   windForecast: (lat: number, lon: number) =>

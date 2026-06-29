@@ -10,6 +10,7 @@ import { HurricaneLayer } from './layers/hurricanes/HurricaneLayer';
 import { LightningLayer } from './layers/lightning/LightningLayer';
 import { LightningHistoryLayer } from './layers/lightning/LightningHistoryLayer';
 import { RiversLayer } from './layers/rivers/RiversLayer';
+import { FireOutlookLayer } from './layers/fireOutlook/FireOutlookLayer';
 import { FireLayer } from './layers/fires/FireLayer';
 import { SmokeLayer } from './layers/smoke/SmokeLayer';
 import { AqiLayer } from './layers/aqi/AqiLayer';
@@ -86,6 +87,7 @@ export default function App() {
           <HurricaneLayer />
           <FireLayer />
           <SmokeLayer />
+          <FireOutlookLayer />
           <RiversLayer />
           <AqiLayer />
           <FuelLayer />

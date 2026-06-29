@@ -100,6 +100,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'fireOutlook',
+    info: {
+      name: '7-Day Fire Potential',
+      icon: '🔥',
+      source: 'NWCG National Predictive Services',
+      method:
+        'The National 7-Day Significant Wildland Fire Potential Outlook (fsapps.nwcg.gov). Each Predictive Service Area is shaded by fuel dryness (normal → very dry) and flagged when significant fire potential is forecast (Critical / Ignition fire-weather conditions). Pick any of the next 7 days; click an area for its outlook.',
+      trust:
+        'Produced by NWCG/GACC Predictive Services fire-weather meteorologists — the operational outlook used by the US wildland-fire community.',
+      url: 'https://fsapps.nwcg.gov/psp/npsg/forecast',
+    },
+  },
+  {
     id: 'aqi',
     info: {
       name: 'Air Quality Index',
