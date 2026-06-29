@@ -62,6 +62,7 @@ const CASCADE_OFFSET = 32;
 const KIND_HEIGHTS: Partial<Record<PanelKind, number>> = {
   ships: 630,
   'wind-forecast': 560,
+  rivers: 620,
 };
 
 export const usePanelStore = create<PanelsState>((set, get) => ({

@@ -87,6 +87,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'rivers',
+    info: {
+      name: 'Rivers & Floods',
+      icon: '🌊',
+      source: 'NOAA NWPS + USGS',
+      method:
+        'Live river-gauge levels and flood status from NOAA’s National Water Prediction Service (api.water.noaa.gov), the modern successor to AHPS. Each of ~12,700 forecast points reports its current stage (ft) or flow, classified against official flood-stage thresholds (action → minor → moderate → major) and, where issued, a multi-day forecast crest. Clicking a gauge pulls its thresholds, impact statements, recent/record crests and an observed+forecast hydrograph; the underlying monitor links back to USGS.',
+      trust:
+        'The authoritative US river-forecast network operated by NOAA/NWS River Forecast Centers — the same data behind water.noaa.gov and official flood warnings.',
+      url: 'https://water.noaa.gov',
+    },
+  },
+  {
     id: 'aqi',
     info: {
       name: 'Air Quality Index',

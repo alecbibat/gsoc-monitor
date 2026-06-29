@@ -18,7 +18,8 @@ export type LayerId =
   | 'timezones'
   | 'webcams'
   | 'newsMap'
-  | 'wind';
+  | 'wind'
+  | 'rivers';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
@@ -352,6 +353,70 @@ export interface WebcamsResponse {
   updated: number;
   providers: WebcamProviderStatus[];
   stale?: boolean;
+}
+
+// --- Rivers & floods (NOAA NWPS) -------------------------------------------
+// Normalized flood tiers (most → least severe) plus the non-flood states kept.
+export type FloodCat = 'major' | 'moderate' | 'minor' | 'action' | 'normal' | 'low' | 'none';
+
+// One river gauge in the bulk national list (one map point each).
+export interface RiverGauge {
+  lid: string;
+  name: string;
+  lat: number;
+  lon: number;
+  state: string;
+  cat: FloodCat; // observed flood tier
+  fcat: FloodCat | null; // forecast tier (null = no current forecast)
+  stage: number | null; // primary reading
+  unit: string; // 'ft' for stage gauges, 'kcfs' for flow gauges
+  flow: number | null; // secondary reading when primary is stage
+  flowUnit: string;
+  isFlow: boolean; // true when primary reading is flow, not stage
+}
+
+export interface RiversResponse {
+  gauges: RiverGauge[];
+  counts: Record<FloodCat, number>;
+  updated: number;
+}
+
+export interface RiverThreshold {
+  cat: 'action' | 'minor' | 'moderate' | 'major';
+  stage: number | null;
+  flow: number | null;
+}
+export interface RiverSeriesPoint {
+  t: number; // epoch seconds
+  v: number; // primary value
+}
+export interface RiverCrest {
+  time: string;
+  stage: number;
+}
+
+export interface RiverDetail {
+  lid: string;
+  name: string;
+  state: string;
+  county: string;
+  usgsId: string | null;
+  primaryName: string; // 'Stage' | 'Flow'
+  unit: string;
+  flowUnit: string;
+  isFlow: boolean;
+  observed: { value: number | null; flow: number | null; cat: FloodCat | null; time: string | null };
+  forecastCrest: { value: number | null; cat: FloodCat | null; time: string | null };
+  trend: 'rising' | 'falling' | 'steady' | null;
+  thresholds: RiverThreshold[];
+  observedSeries: RiverSeriesPoint[];
+  forecastSeries: RiverSeriesPoint[];
+  impacts: Array<{ stage: number; statement: string }>;
+  recentCrest: RiverCrest | null;
+  recordCrest: RiverCrest | null;
+  forecastReliability: string | null;
+  inServiceMsg: string | null;
+  updated: number;
 }
 
 // Windowed lightning history from the server's rolling Blitzortung buffer.

@@ -56,6 +56,9 @@ export const api = {
   wind: () => getJson<import('../types').WindGrid>('/api/wind'),
   lightningHistory: (minutes: number) =>
     getJson<import('../types').LightningHistoryResponse>(`/api/lightning?minutes=${minutes}`),
+  rivers: () => getJson<import('../types').RiversResponse>('/api/rivers'),
+  riverDetail: (lid: string) =>
+    getJson<import('../types').RiverDetail>(`/api/rivers/${encodeURIComponent(lid)}`),
   windForecast: (lat: number, lon: number) =>
     getJson<import('../types').WindForecast>(`/api/wind/forecast?lat=${lat}&lon=${lon}`),
 };

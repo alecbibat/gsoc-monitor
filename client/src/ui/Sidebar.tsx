@@ -6,6 +6,8 @@ import { useLightningStatus } from '../layers/lightning/lightningStore';
 import { useFiresStatus } from '../layers/fires/firesStore';
 import { useSmokeStatus } from '../layers/smoke/smokeStore';
 import { useAqiStatus } from '../layers/aqi/aqiStore';
+import { useRiversStatus } from '../layers/rivers/riversStore';
+import { RIVER_FILTERS } from '../layers/rivers/riverMeta';
 import { useFuelStatus } from '../layers/fuel/fuelStore';
 import { useWindStatus } from '../layers/wind/windStore';
 import { useWindProbeStore } from '../layers/wind/windProbeStore';
@@ -73,6 +75,7 @@ export function Sidebar() {
   const firesStatus = useFiresStatus();
   const smokeStatus = useSmokeStatus();
   const aqiStatus = useAqiStatus();
+  const riversStatus = useRiversStatus();
   const fuelStatus = useFuelStatus();
   const windStatus = useWindStatus();
   const windProbeEnabled = useWindProbeStore((s) => s.probeEnabled);
@@ -437,6 +440,54 @@ export function Sidebar() {
             <p className="pt-1.5 text-[10px] leading-relaxed text-white/30">
               Numbered badges = AirNow reference monitors · dots = PurpleAir
               (PM2.5, EPA-corrected)
+            </p>
+          </LayerToggle>
+          <LayerToggle
+            label="Rivers & Floods (NWPS)"
+            active={(active as Record<string, boolean>).rivers ?? false}
+            onToggle={() => toggleLayer('rivers')}
+            statusText={
+              riversStatus.error
+                ? riversStatus.error
+                : riversStatus.counts
+                  ? `${
+                      riversStatus.counts.action +
+                      riversStatus.counts.minor +
+                      riversStatus.counts.moderate +
+                      riversStatus.counts.major
+                    } at/above action · ${riversStatus.total.toLocaleString()} shown`
+                  : 'NOAA river forecast gauges · live'
+            }
+          >
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {RIVER_FILTERS.map((f) => (
+                <button
+                  key={f.value}
+                  onClick={() => riversStatus.setFilter(f.value)}
+                  className={`rounded px-1.5 py-1 text-[11px] font-medium transition ${
+                    riversStatus.filter === f.value
+                      ? 'bg-accent/20 text-accent'
+                      : 'bg-white/5 text-white/50 hover:bg-white/10'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={riversStatus.toggleForecast}
+              className={`mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
+                riversStatus.showForecast
+                  ? 'bg-amber-400/20 text-amber-300'
+                  : 'bg-white/5 text-white/55 hover:bg-white/10'
+              }`}
+            >
+              <span>🔮</span>
+              {riversStatus.showForecast ? 'Showing forecast-to-flood' : 'Highlight forecast-to-flood'}
+            </button>
+            <p className="pt-1.5 text-[10px] leading-relaxed text-white/30">
+              Dot color = flood stage (cyan normal → purple major). Click a gauge
+              for levels, thresholds &amp; forecast.
             </p>
           </LayerToggle>
           <LayerToggle
