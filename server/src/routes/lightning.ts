@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import WebSocket from 'ws';
+import { promises as fsp } from 'fs';
+import path from 'path';
 
 const router = Router();
 
@@ -55,6 +57,81 @@ function push(lat: number, lon: number, t: number): void {
   tBuf[head] = t;
   head = (head + 1) % CAP;
   if (count < CAP) count++;
+}
+
+// --- Disk persistence (survive restarts/deploys) ----------------------------
+// The ring buffer is RAM-only, so a restart would otherwise wipe the 24h
+// history and force it to rebuild live over the next day. We periodically dump
+// the last ~24h of strikes to disk (mirrors the ships snapshot) and reload them
+// on boot — BEFORE connecting, so reloaded (older) strikes precede live ones and
+// the buffer stays time-ordered for the query walk. On an ephemeral dyno the
+// file survives the dyno's life but is wiped on a fresh deploy; the periodic
+// save + live stream cover the gap. Snapshot is columnar JSON (~14 MB at cap).
+const SNAPSHOT_PATH =
+  process.env.LIGHTNING_SNAPSHOT_PATH ?? path.join(__dirname, '../../lightning-snapshot.json');
+const PERSIST_WINDOW_MS = 24 * 60 * 60_000;
+const MAX_PERSIST = 600_000; // bound the file; stride-thin the window if larger
+let savingSnapshot = false;
+
+async function saveSnapshot(): Promise<void> {
+  if (savingSnapshot || count === 0) return;
+  savingSnapshot = true;
+  try {
+    const now = Date.now();
+    const cutoff = now - PERSIST_WINDOW_MS;
+    const newest = (head - 1 + CAP) % CAP;
+    let total = 0;
+    for (let i = 0; i < count; i++) {
+      if (tBuf[(newest - i + CAP) % CAP] < cutoff) break;
+      total++;
+    }
+    const stride = Math.max(1, Math.ceil(total / MAX_PERSIST));
+    const lat: number[] = [];
+    const lon: number[] = [];
+    const t: number[] = [];
+    for (let i = 0, k = 0; i < count; i++) {
+      const idx = (newest - i + CAP) % CAP;
+      const tv = tBuf[idx];
+      if (tv < cutoff) break;
+      if (k % stride === 0) {
+        lat.push(Math.round(latBuf[idx] * 1000) / 1000);
+        lon.push(Math.round(lonBuf[idx] * 1000) / 1000);
+        t.push(Math.round(tv / 1000)); // epoch seconds
+      }
+      k++;
+    }
+    // Collected newest→oldest; store chronological so reload preserves order.
+    lat.reverse();
+    lon.reverse();
+    t.reverse();
+    await fsp.writeFile(SNAPSHOT_PATH, JSON.stringify({ lat, lon, t, savedAt: now }));
+  } catch (err) {
+    console.error('[lightning] snapshot save failed:', err instanceof Error ? err.message : err);
+  } finally {
+    savingSnapshot = false;
+  }
+}
+
+async function loadSnapshot(): Promise<void> {
+  try {
+    const raw = await fsp.readFile(SNAPSHOT_PATH, 'utf8');
+    const snap = JSON.parse(raw) as { lat?: number[]; lon?: number[]; t?: number[] };
+    const lat = snap.lat ?? [];
+    const lon = snap.lon ?? [];
+    const t = snap.t ?? [];
+    const n = Math.min(lat.length, lon.length, t.length);
+    const cutoff = Date.now() - PERSIST_WINDOW_MS;
+    let loaded = 0;
+    for (let i = 0; i < n; i++) {
+      const tms = t[i] * 1000; // seconds → ms
+      if (tms < cutoff) continue; // drop strikes now older than the window
+      push(lat[i], lon[i], tms);
+      loaded++;
+    }
+    if (loaded > 0) console.log(`[lightning] restored ${loaded} strikes from snapshot`);
+  } catch {
+    // No snapshot yet — normal on first boot.
+  }
 }
 
 // --- Connection --------------------------------------------------------------
@@ -128,7 +205,13 @@ function connect(): void {
 }
 
 export function initLightningStream(): void {
-  connect();
+  // Restore the persisted 24h buffer first (so reloaded strikes precede live
+  // ones and the buffer stays time-ordered), then connect the live stream.
+  loadSnapshot()
+    .catch(() => {})
+    .finally(() => connect());
+  setInterval(() => void saveSnapshot(), 5 * 60_000);
+  process.once('SIGTERM', () => void saveSnapshot());
 }
 
 // --- Query route -------------------------------------------------------------

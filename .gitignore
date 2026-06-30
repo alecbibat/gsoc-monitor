@@ -9,6 +9,6 @@ build/
 .idea/
 *.tsbuildinfo
 .cache/
-server/ships-snapshot.json
+server/*-snapshot.json
 server/data/
 globe-preview.html
