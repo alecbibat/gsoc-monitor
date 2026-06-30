@@ -58,6 +58,7 @@ import { CrisisDrawController } from './crisis/CrisisDrawController';
 import { CrisisLayerPopup } from './crisis/CrisisLayerPopup';
 import { CrisisShareView } from './crisis/CrisisShareView';
 import { IncidentSync } from './crisis/IncidentSync';
+import { DashboardView } from './dashboard/DashboardView';
 import { AuthGate } from './auth/AuthGate';
 
 // Detect share link — renders a completely separate read-only view
@@ -133,6 +134,7 @@ export default function App() {
         <CrisisDrawController />
         <CrisisLayerPopup />
         <IncidentSync />
+        <DashboardView />
       </div>
     </CesiumContext.Provider>
     </AuthGate>

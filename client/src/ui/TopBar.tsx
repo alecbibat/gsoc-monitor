@@ -9,6 +9,7 @@ import { useTrackedHistory } from './useTrackedHistory';
 import { useUiStore } from './uiStore';
 import { useMeasureStore } from '../measure/measureStore';
 import { useCrisisStore } from '../crisis/crisisStore';
+import { useDashboardStore } from '../dashboard/dashboardStore';
 import { UserMenu } from '../auth/UserMenu';
 import {
   fullscreenElement,
@@ -318,6 +319,41 @@ function CrisisButton() {
   );
 }
 
+function DashboardButton() {
+  const open = useDashboardStore((s) => s.open);
+  const setOpen = useDashboardStore((s) => s.setOpen);
+  return (
+    <button
+      onClick={() => setOpen(!open)}
+      className={`pointer-events-auto flex items-center gap-1.5 rounded-lg border px-3 py-1.5 shadow-panel backdrop-blur-sm transition-all ${
+        open
+          ? 'border-accent/50 bg-accent/15 text-accent'
+          : 'border-white/10 bg-ink-900/80 text-white/55 hover:text-white/85'
+      }`}
+      title="Property status dashboard"
+      aria-label="Open status dashboard"
+    >
+      <svg
+        width="13"
+        height="13"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="shrink-0"
+      >
+        <rect x="3" y="3" width="7" height="9" rx="1" />
+        <rect x="14" y="3" width="7" height="5" rx="1" />
+        <rect x="14" y="12" width="7" height="9" rx="1" />
+        <rect x="3" y="16" width="7" height="5" rx="1" />
+      </svg>
+      <span className="text-[11px] font-bold uppercase tracking-[0.1em]">Status</span>
+    </button>
+  );
+}
+
 // Tiny SVG sparkline for the items-tracked counter.
 function Sparkline({ history }: { history: number[] }) {
   if (history.length < 2) return null;
@@ -404,6 +440,7 @@ export function TopBar() {
         <ResetCameraButton />
         <FullscreenButton />
         <MeasureButton />
+        <DashboardButton />
         <CrisisButton />
         <UserMenu />
         {/* Screensaver modes — desktop only; mobile gets them in the drawer. */}
