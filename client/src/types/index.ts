@@ -18,7 +18,8 @@ export type LayerId =
   | 'newsMap'
   | 'wind'
   | 'rivers'
-  | 'fireOutlook';
+  | 'fireOutlook'
+  | 'precip';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 

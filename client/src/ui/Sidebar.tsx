@@ -33,6 +33,8 @@ import { Section } from './Section';
 import { BasemapSwitcher } from './BasemapSwitcher';
 import { ScreensaverControls } from './ScreensaverControls';
 import { RadarControls } from '../layers/radar/RadarControls';
+import { PrecipControls } from '../layers/precip/PrecipControls';
+import { usePrecipStore, QPF_PERIOD_LABEL } from '../layers/precip/precipStore';
 import { LightningControls } from '../layers/lightning/LightningControls';
 import { useUiStore } from './uiStore';
 import type { SatelliteGroup } from '../types';
@@ -106,6 +108,7 @@ export function Sidebar() {
   const smokeStatus = useSmokeStatus();
   const aqiStatus = useAqiStatus();
   const riversStatus = useRiversStatus();
+  const precipPeriod = usePrecipStore((s) => s.period);
   const fireOutlookError = useFireOutlookStore((s) => s.error);
   const fuelStatus = useFuelStatus();
   const windStatus = useWindStatus();
@@ -258,6 +261,14 @@ export function Sidebar() {
             onToggle={() => toggleLayer('radar')}
           >
             <RadarControls />
+          </LayerToggle>
+          <LayerToggle
+            label="Precipitation Forecast (WPC)"
+            active={(active as Record<string, boolean>).precip ?? false}
+            onToggle={() => toggleLayer('precip')}
+            statusText={`NOAA QPF accumulation · ${QPF_PERIOD_LABEL[precipPeriod]}`}
+          >
+            <PrecipControls />
           </LayerToggle>
           <LayerToggle
             label="Hurricanes (NHC)"

@@ -113,6 +113,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'precip',
+    info: {
+      name: 'Precipitation Forecast',
+      icon: '🌧',
+      source: 'NOAA Weather Prediction Center (WPC)',
+      method:
+        "The WPC Quantitative Precipitation Forecast (QPF): forecast total precipitation accumulation over the selected window (24h / 48h / 72h / 5-day), shaded by amount in inches. Rendered live from the NOAA mapservices WPC QPF MapServer over CONUS; issued twice daily (06Z & 18Z).",
+      trust:
+        'The operational human-refined precipitation forecast produced by WPC meteorologists — the same QPF that anchors NWS flood, hydrology and winter-weather guidance.',
+      url: 'https://www.wpc.ncep.noaa.gov/qpf/qpf2.shtml',
+    },
+  },
+  {
     id: 'aqi',
     info: {
       name: 'Air Quality Index',
