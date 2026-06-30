@@ -25,7 +25,6 @@ import { ShipModelLayer } from './layers/ships/ShipModelLayer';
 import { ShipShockwave } from './screensaver/ShipShockwave';
 import { SatelliteLayer } from './layers/satellites/SatelliteLayer';
 import { LocationsLayer } from './layers/locations/LocationsLayer';
-import { WebcamsLayer } from './layers/webcams/WebcamsLayer';
 import { HurricaneTooltip } from './layers/hurricanes/HurricaneTooltip';
 import { TopBar } from './ui/TopBar';
 import { Sidebar } from './ui/Sidebar';
@@ -44,10 +43,8 @@ import { ShipFocusCard } from './screensaver/ShipFocusCard';
 import { PinsLootBeam } from './screensaver/PinsLootBeam';
 import { PinsVoice } from './screensaver/PinsVoice';
 import { ScreensaverWatchCards } from './screensaver/ScreensaverWatchCards';
-import { WebcamScreensaverCallouts } from './screensaver/WebcamScreensaverCallouts';
 import { GoogleEarthLayer } from './layers/earth3d/GoogleEarthLayer';
 import { OsmBuildingsLayer } from './layers/osmBuildings/OsmBuildingsLayer';
-import { TrafficLayer } from './layers/traffic/TrafficLayer';
 import { TimeZonesLayer } from './layers/timezones/TimeZonesLayer';
 import { MeasureController } from './measure/MeasureController';
 import { MeasureOverlay } from './measure/MeasureOverlay';
@@ -99,12 +96,10 @@ export default function App() {
           <ShipLayer />
           <SatelliteLayer />
           <LocationsLayer />
-          <WebcamsLayer />
           <NewsMapLayer />
           <TimeZonesLayer />
           <OsmBuildingsLayer />
           <GoogleEarthLayer />
-          <TrafficLayer />
           <MeasureController />
           <FuelZoneController />
           <CrisisMapLayer />
@@ -126,7 +121,6 @@ export default function App() {
         <PinsVoice />
         <ShipShockwave />
         <ScreensaverWatchCards />
-        <WebcamScreensaverCallouts />
         <ScreensaverToast />
         <MeasureOverlay />
         <FuelZoneOverlay />

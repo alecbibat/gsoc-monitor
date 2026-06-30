@@ -23,7 +23,9 @@ interface WindProbeState {
 let nextPinId = 1;
 
 export const useWindProbeStore = create<WindProbeState>((set) => ({
-  probeEnabled: true,
+  // Off by default — the probe is opt-in, so a fresh load/refresh isn't already
+  // capturing the cursor. (Store isn't persisted, so this resets every load.)
+  probeEnabled: false,
   hover: null,
   pins: [],
   toggleProbe: () =>

@@ -9,7 +9,7 @@ import { useMeasureStore } from '../measure/measureStore';
 import { useFuelZoneStore } from '../fuelzone/fuelZoneStore';
 import { useHoverStore } from '../screensaver/hoverStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
-import { usePerfStore, QUALITY_SETTINGS } from '../perf/perfStore';
+import { QUALITY_SETTINGS } from '../perf/perfStore';
 import { getGpuInfo, describeGpu } from '../perf/gpuInfo';
 import { HOME_VIEW } from './flyTo';
 
@@ -89,7 +89,8 @@ export function CesiumGlobe({ children, onReady }: Props) {
   const baseLayerRef = useRef<Cesium.ImageryLayer | null>(null);
   const overlayLayerRef = useRef<Cesium.ImageryLayer | null>(null);
   const basemap = useLayersStore((s) => s.basemap);
-  const qualityLevel = usePerfStore((s) => s.qualityLevel);
+  // Always render at max quality — the user-facing quality control was removed.
+  const qualityLevel = 'quality' as const;
 
   // WebGL context-loss recovery. Bumping recreateKey tears down and rebuilds
   // the viewer on a fresh GPU context; contextLost drives the overlay shown
@@ -227,7 +228,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
         gpu: describeGpu(gpu),
         vendor: gpu.vendor,
         maxTextureSize: gpu.maxTextureSize,
-        quality: usePerfStore.getState().qualityLevel,
+        quality: qualityLevel,
         uptimeSec: Math.round((performance.now() - mountTime) / 1000),
         osm3D: useLayersStore.getState().active.osmBuildings,
         google3D: useLayersStore.getState().active.earth3d,

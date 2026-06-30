@@ -1,3 +1,4 @@
+import { useState, type ReactNode } from 'react';
 import { useLayersStore } from '../store/layersStore';
 import { useFlightsStatus } from '../layers/flights/flightsStore';
 import { useAlertsStatus } from '../layers/alerts/alertsStore';
@@ -16,15 +17,11 @@ import { useFuelZoneStore } from '../fuelzone/fuelZoneStore';
 import { useFireOutlookStore } from '../layers/fireOutlook/fireOutlookStore';
 import { FireOutlookControls } from '../layers/fireOutlook/FireOutlookControls';
 import { useShipsStatus } from '../layers/ships/shipsStore';
-import { useWebcamsStatus } from '../layers/webcams/webcamsStore';
 import { useNewsMapStore } from '../layers/newsMap/newsMapStore';
 import { useSatellitesStatus } from '../layers/satellites/satellitesStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { useOsmStatus } from '../layers/osmBuildings/osmStore';
-import { useTrafficStatus } from '../layers/traffic/trafficStore';
 import { useTimeZonesStatus } from '../layers/timezones/timezonesStore';
-import { usePerfStore, QUALITY_LEVELS, QUALITY_META } from '../perf/perfStore';
-import { getGpuInfo, describeGpu } from '../perf/gpuInfo';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { flyToLonLat } from '../cesium/flyTo';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
@@ -53,6 +50,36 @@ const SATELLITE_GROUPS: Array<{ value: SatelliteGroup; label: string }> = [
   { value: 'weather', label: 'Weather' },
   { value: 'starlink', label: 'Starlink' },
 ];
+
+// A compact collapsible sub-group for the Locations list — collapsed by default
+// so the menu shows just headers (icon · name · count) until one is expanded.
+function CollapsibleSubgroup({
+  icon,
+  name,
+  count,
+  children,
+}: {
+  icon: string;
+  name: string;
+  count: number;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="px-1">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-1.5 px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-white/35 transition hover:text-white/55"
+      >
+        <span>{icon}</span>
+        <span className="flex-1 text-left">{name}</span>
+        <span className="text-white/25">{count}</span>
+        <span className={`transition-transform ${open ? 'rotate-0' : '-rotate-90'}`}>▾</span>
+      </button>
+      {open && <div className="space-y-px">{children}</div>}
+    </div>
+  );
+}
 
 export function Sidebar() {
   const active = useLayersStore((s) => s.active);
@@ -87,14 +114,10 @@ export function Sidebar() {
   const fuelZoneMode = useFuelZoneStore((s) => s.mode);
   const toggleFuelZone = useFuelZoneStore((s) => s.toggle);
   const shipsStatus = useShipsStatus();
-  const webcamsStatus = useWebcamsStatus();
   const newsMapStatus = useNewsMapStore();
   const satellitesStatus = useSatellitesStatus();
   const osmStatus = useOsmStatus();
-  const trafficStatus = useTrafficStatus();
   const timeZonesStatus = useTimeZonesStatus();
-  const qualityLevel = usePerfStore((s) => s.qualityLevel);
-  const setQualityLevel = usePerfStore((s) => s.setQualityLevel);
   const screensaverActive = useScreensaverStore((s) => s.active);
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
   const setSidebarOpen = useUiStore((s) => s.setSidebarOpen);
@@ -130,12 +153,6 @@ export function Sidebar() {
     }
     if (ship && viewer) flyToLonLat(viewer, ship.longitude, ship.latitude, 250_000);
     setSidebarOpen(false);
-  }
-
-  function webcamsStatusText() {
-    if (webcamsStatus.error) return webcamsStatus.error;
-    if (webcamsStatus.count === 0) return 'No DOT cams yet — add state 511 keys';
-    return `${webcamsStatus.count} DOT cams · ${webcamsStatus.statesActive} states`;
   }
 
   function newsMapStatusText() {
@@ -210,61 +227,6 @@ export function Sidebar() {
                   : 'Color-coded UTC offset bands · free')
             }
           />
-          {/* Render quality slider — quality ↔ performance. */}
-          <div className="px-1 py-2">
-            <div className="mb-1.5 flex items-center justify-between">
-              <span className="text-[13px] font-medium text-white/80">Render Quality</span>
-              <span className="text-[11px] font-semibold text-accent">
-                {QUALITY_META[qualityLevel].label}
-              </span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={QUALITY_LEVELS.length - 1}
-              step={1}
-              value={QUALITY_LEVELS.indexOf(qualityLevel)}
-              onChange={(e) => setQualityLevel(QUALITY_LEVELS[Number(e.target.value)])}
-              className="w-full cursor-pointer accent-[#3ddcff]"
-              aria-label="Render quality"
-            />
-            <div className="mt-0.5 flex justify-between text-[9px] font-semibold uppercase tracking-wider text-white/30">
-              <span>Quality</span>
-              <span>Performance</span>
-            </div>
-            <div className="mt-1 text-[11px] leading-snug text-white/40">
-              {QUALITY_META[qualityLevel].desc}
-            </div>
-            {/* GPU diagnostics: what the 3D view is actually running on. Purely
-                advisory — render load is controlled only by the quality slider
-                above, not auto-capped from this detection. */}
-            {(() => {
-              const gpu = getGpuInfo();
-              const warn =
-                gpu.software || gpu.majorPerformanceCaveat || gpu.virtualized || gpu.integrated;
-              return (
-                <div
-                  className={`mt-2 rounded border px-2 py-1.5 text-[10px] leading-snug ${
-                    warn
-                      ? 'border-amber-400/30 bg-amber-400/5 text-amber-200/70'
-                      : 'border-white/8 bg-white/[0.02] text-white/35'
-                  }`}
-                >
-                  <div className="font-semibold uppercase tracking-wider text-[9px] opacity-70">
-                    Graphics
-                  </div>
-                  <div className="mt-0.5 break-words">{describeGpu(gpu)}</div>
-                  {warn && (
-                    <div className="mt-0.5 opacity-80">
-                      {gpu.software || gpu.virtualized
-                        ? 'No GPU acceleration — lower the quality if the globe stutters or blacks out.'
-                        : 'Integrated/shared GPU — lower the quality if the globe stutters or blacks out.'}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
           <LayerToggle
             label="3D Buildings & Terrain"
             active={(active as Record<string, boolean>).osmBuildings ?? false}
@@ -576,24 +538,6 @@ export function Sidebar() {
           </LayerToggle>
         </Section>
 
-        <Section title="Traffic">
-          <LayerToggle
-            label="Live Traffic (TomTom)"
-            active={active.traffic}
-            onToggle={() => toggleLayer('traffic')}
-            statusText={
-              trafficStatus.noKey
-                ? 'Set VITE_TOMTOM_KEY to enable'
-                : trafficStatus.error ??
-                  (trafficStatus.loading
-                    ? 'Loading incidents…'
-                    : trafficStatus.ready
-                      ? `${trafficStatus.incidentCount} incidents · US · live`
-                      : 'Road flow + incidents · continental US')
-            }
-          />
-        </Section>
-
         <Section title="Open-Source Intel">
           <LayerToggle
             label="News (GDELT)"
@@ -660,12 +604,6 @@ export function Sidebar() {
               Show past &amp; future paths
             </label>
           </LayerToggle>
-          <LayerToggle
-            label="Webcams"
-            active={active.webcams}
-            onToggle={() => toggleLayer('webcams')}
-            statusText={webcamsStatusText()}
-          />
         </Section>
 
         <Section title="Space">
@@ -731,64 +669,57 @@ export function Sidebar() {
             </button>
           </div>
 
-          {/* Grouped location list */}
+          {/* Grouped location list — each group collapsible (collapsed by default) */}
           {LOCATION_GROUPS.map((group) => (
-            <div key={group.id} className="px-1">
-              <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-white/35">
-                <span>{group.icon}</span>
-                <span>{group.name}</span>
-              </div>
-              <div className="space-y-px">
-                {group.locations.map((loc) => (
-                  <button
-                    key={loc.name}
-                    onClick={() => {
-                      if (viewer) flyToLonLat(viewer, loc.lon, loc.lat, loc.altitudeM ?? 30_000);
-                      setSidebarOpen(false); // dismiss the drawer on mobile
-                    }}
-                    className="flex w-full items-center gap-2 rounded px-3 py-1 text-left text-[12px] text-white/60 transition hover:bg-white/8 hover:text-white/90"
-                  >
-                    <span
-                      className="h-1.5 w-1.5 shrink-0 rounded-full"
-                      style={{ backgroundColor: group.color }}
-                    />
-                    {loc.name}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <CollapsibleSubgroup
+              key={group.id}
+              icon={group.icon}
+              name={group.name}
+              count={group.locations.length}
+            >
+              {group.locations.map((loc) => (
+                <button
+                  key={loc.name}
+                  onClick={() => {
+                    if (viewer) flyToLonLat(viewer, loc.lon, loc.lat, loc.altitudeM ?? 30_000);
+                    setSidebarOpen(false); // dismiss the drawer on mobile
+                  }}
+                  className="flex w-full items-center gap-2 rounded px-3 py-1 text-left text-[12px] text-white/60 transition hover:bg-white/8 hover:text-white/90"
+                >
+                  <span
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: group.color }}
+                  />
+                  {loc.name}
+                </button>
+              ))}
+            </CollapsibleSubgroup>
           ))}
 
           {/* Windstar fleet — same list, fly to a ship's live position */}
-          <div className="px-1">
-            <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-white/35">
-              <span>🚢</span>
-              <span>Windstar Ships</span>
-            </div>
-            <div className="space-y-px">
-              {FLEET_ROSTER.map((s) => {
-                const live = shipsStatus.ships.find((x) => x.mmsi === s.mmsi);
-                return (
-                  <button
-                    key={s.mmsi}
-                    onClick={() => flyToShip(s.mmsi)}
-                    className="flex w-full items-center gap-2 rounded px-3 py-1 text-left text-[12px] text-white/60 transition hover:bg-white/8 hover:text-white/90"
-                  >
-                    <span
-                      className="h-1.5 w-1.5 shrink-0 rounded-full"
-                      style={{ backgroundColor: fleetColor(s.cls) }}
-                    />
-                    <span className="flex-1 truncate">{s.name}</span>
-                    {live && live.speedKt != null && live.speedKt > 0.5 && (
-                      <span className="shrink-0 font-mono text-[9px] text-white/30">
-                        {live.speedKt.toFixed(0)} kt
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          <CollapsibleSubgroup icon="🚢" name="Windstar Ships" count={FLEET_ROSTER.length}>
+            {FLEET_ROSTER.map((s) => {
+              const live = shipsStatus.ships.find((x) => x.mmsi === s.mmsi);
+              return (
+                <button
+                  key={s.mmsi}
+                  onClick={() => flyToShip(s.mmsi)}
+                  className="flex w-full items-center gap-2 rounded px-3 py-1 text-left text-[12px] text-white/60 transition hover:bg-white/8 hover:text-white/90"
+                >
+                  <span
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: fleetColor(s.cls) }}
+                  />
+                  <span className="flex-1 truncate">{s.name}</span>
+                  {live && live.speedKt != null && live.speedKt > 0.5 && (
+                    <span className="shrink-0 font-mono text-[9px] text-white/30">
+                      {live.speedKt.toFixed(0)} kt
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </CollapsibleSubgroup>
         </Section>
         </div>
       </div>

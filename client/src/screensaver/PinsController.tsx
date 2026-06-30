@@ -85,7 +85,9 @@ function buildShipEntries(): ShipEntry[] {
         cls: fleet.cls,
         speedKt: ship.speedKt,
         heading: ship.heading ?? ship.course ?? null,
-        aisTimestamp: ship.lastSeenSec > 0 ? ship.lastSeenSec * 1000 : null,
+        // lastSeenSec is an AGE in seconds (server: (now - updatedAt)/1000), so
+        // convert to an absolute epoch-ms timestamp for the card's age display.
+        aisTimestamp: ship.lastSeenSec >= 0 ? Date.now() - ship.lastSeenSec * 1000 : null,
         destination: ship.destination,
         navStatus: ship.navStatus,
       },

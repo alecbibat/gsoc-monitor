@@ -203,18 +203,6 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
-    id: 'traffic',
-    info: {
-      name: 'Live Traffic',
-      icon: '🚗',
-      source: 'TomTom',
-      method:
-        'Real-time road-flow speeds and incident reports for the continental US, served as tiles plus incident details.',
-      trust: 'A major commercial traffic provider, the same data used in automotive navigation.',
-      url: 'https://www.tomtom.com',
-    },
-  },
-  {
     id: 'osmBuildings',
     info: {
       name: '3D Buildings & Terrain',
@@ -246,19 +234,6 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
       source: 'Curated internal list',
       method: 'Hand-maintained coordinates for the properties and assets this console monitors.',
       trust: 'Maintained by your team — not a third-party feed.',
-    },
-  },
-  {
-    id: 'webcams',
-    info: {
-      name: 'DOT Traffic Cameras',
-      icon: '📷',
-      source: 'State Departments of Transportation',
-      method:
-        'Public traffic cameras within 10 miles of each property pin, pulled from state DOT 511 feeds (Caltrans is open; Arizona, Georgia, Florida and Wisconsin use free per-state developer keys). The live view is each camera’s own JPEG, refreshed on an interval and proxied over HTTPS.',
-      trust:
-        'Camera feeds are published directly by state transportation agencies for public traveler information — official government sources.',
-      url: 'https://cwwp2.dot.ca.gov',
     },
   },
   {

@@ -17,7 +17,6 @@ import directionsRouter from './routes/directions';
 import driveRouter from './routes/route';
 import parkNewsRouter from './routes/parkNews';
 import satellitesRouter from './routes/satellites';
-import webcamsRouter from './routes/webcams';
 import newsMapRouter from './routes/newsMap';
 import smokeRouter from './routes/smoke';
 import aqiRouter from './routes/aqi';
@@ -96,7 +95,6 @@ function main() {
   app.use('/api/drive', driveRouter);
   app.use('/api/park-news', parkNewsRouter);
   app.use('/api/satellites', satellitesRouter);
-  app.use('/api/webcams', webcamsRouter);
   app.use('/api/news-map', newsMapRouter);
   app.use('/api/smoke', smokeRouter);
   app.use('/api/aqi', aqiRouter);

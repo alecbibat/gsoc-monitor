@@ -14,9 +14,7 @@ export type LayerId =
   | 'locations'
   | 'osmBuildings'
   | 'earth3d'
-  | 'traffic'
   | 'timezones'
-  | 'webcams'
   | 'newsMap'
   | 'wind'
   | 'rivers'
@@ -324,36 +322,6 @@ export interface DriveResult {
   geometry: Array<[number, number]>; // [lon, lat] pairs
   steps: RouteStep[];
   routed: boolean;
-}
-
-export interface Webcam {
-  id: string;
-  title: string;
-  lat: number;
-  lon: number;
-  imageUrl: string | null; // proxied, auto-refreshing JPEG (the live view)
-  source: string; // DOT name, e.g. "Arizona DOT"
-  sourceUrl: string | null; // link to the state 511 site
-  roadway: string | null;
-  status: string; // 'active' | 'disabled' | 'unknown'
-  lastUpdated: number | null;
-  nearestPin: string;
-  distanceMi: number;
-}
-
-export interface WebcamProviderStatus {
-  code: string;
-  name: string;
-  configured: boolean;
-  count: number;
-  error: string | null;
-}
-
-export interface WebcamsResponse {
-  webcams: Webcam[];
-  updated: number;
-  providers: WebcamProviderStatus[];
-  stale?: boolean;
 }
 
 // --- 7-Day Significant Fire Potential (NWCG Predictive Services) ------------

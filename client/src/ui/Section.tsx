@@ -1,7 +1,15 @@
 import { useState, type ReactNode } from 'react';
 
-export function Section({ title, children }: { title: string; children: ReactNode }) {
-  const [open, setOpen] = useState(true);
+export function Section({
+  title,
+  children,
+  defaultOpen = true,
+}: {
+  title: string;
+  children: ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="border-b border-white/5 py-2">
       <button
