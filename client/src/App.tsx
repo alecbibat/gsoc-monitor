@@ -37,6 +37,8 @@ import { IssController } from './screensaver/IssController';
 import { PinsController } from './screensaver/PinsController';
 import { HoverController } from './screensaver/HoverController';
 import { HoverOverlay } from './screensaver/HoverOverlay';
+import { HoverContextBox } from './screensaver/HoverContextBox';
+import { HoverFocusCard } from './screensaver/HoverFocusCard';
 import { PinsContextBox } from './screensaver/PinsContextBox';
 import { PinsFocusCard } from './screensaver/PinsFocusCard';
 import { ShipFocusCard } from './screensaver/ShipFocusCard';
@@ -117,6 +119,8 @@ export default function App() {
         <HoverController />
         <PinsContextBox />
         <PinsFocusCard />
+        <HoverContextBox />
+        <HoverFocusCard />
         <ShipFocusCard />
         <PinsLootBeam />
         <PinsVoice />

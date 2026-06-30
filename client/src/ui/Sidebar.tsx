@@ -20,6 +20,7 @@ import { useShipsStatus } from '../layers/ships/shipsStore';
 import { useNewsMapStore } from '../layers/newsMap/newsMapStore';
 import { useSatellitesStatus } from '../layers/satellites/satellitesStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
+import { useHoverStore } from '../screensaver/hoverStore';
 import { useOsmStatus } from '../layers/osmBuildings/osmStore';
 import { useTimeZonesStatus } from '../layers/timezones/timezonesStore';
 import { useCesiumViewer } from '../cesium/CesiumContext';
@@ -119,6 +120,10 @@ export function Sidebar() {
   const osmStatus = useOsmStatus();
   const timeZonesStatus = useTimeZonesStatus();
   const screensaverActive = useScreensaverStore((s) => s.active);
+  // Hover mode (custom-point orbit) also takes over the screen, so collapse the
+  // chrome while picking a point or orbiting, just like a screensaver.
+  const hoverEngaged = useHoverStore((s) => s.active || s.picking);
+  const chromeHidden = screensaverActive || hoverEngaged;
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
   const setSidebarOpen = useUiStore((s) => s.setSidebarOpen);
   const viewer = useCesiumViewer();
@@ -174,7 +179,7 @@ export function Sidebar() {
 
   // On md+ the sidebar is always docked. On small screens it's an off-canvas
   // drawer toggled by the TopBar hamburger. The screensaver hides it entirely.
-  const translate = screensaverActive
+  const translate = chromeHidden
     ? '-translate-x-full'
     : sidebarOpen
       ? 'translate-x-0'
@@ -183,7 +188,7 @@ export function Sidebar() {
   return (
     <>
       {/* Mobile backdrop — tap to dismiss the drawer. */}
-      {sidebarOpen && !screensaverActive && (
+      {sidebarOpen && !chromeHidden && (
         <div
           className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden"
           onClick={() => setSidebarOpen(false)}
