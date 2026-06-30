@@ -20,7 +20,7 @@ import satellitesRouter from './routes/satellites';
 import newsMapRouter from './routes/newsMap';
 import smokeRouter from './routes/smoke';
 import aqiRouter from './routes/aqi';
-import windRouter from './routes/wind';
+import windRouter, { initWindStream } from './routes/wind';
 import lightningRouter, { initLightningStream } from './routes/lightning';
 import riversRouter, { initRiversStream } from './routes/rivers';
 import fireOutlookRouter from './routes/fireOutlook';
@@ -110,6 +110,9 @@ function main() {
   // Keep the NWPS national gauge list warm in the cache so /api/rivers never
   // blocks on the ~13 MB upstream pull.
   initRiversStream();
+  // Keep the wind grid warm in the background; the route always serves the best
+  // available grid (live → snapshot → baked-in fallback), never blocking.
+  initWindStream();
 
   const clientDist = path.join(__dirname, '../../client/dist');
   app.use(express.static(clientDist));

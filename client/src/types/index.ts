@@ -274,6 +274,7 @@ export interface WindGrid {
   v: number[];
   speedMax: number;
   updated: number;
+  stale?: boolean; // grid is historical (server snapshot/fallback), not live
 }
 
 // Per-point wind forecast for a dropped wind probe (NOAA GFS via Open-Meteo).

@@ -255,6 +255,7 @@ export function WindLayer() {
           error: null,
           maxSpeedMps: grid.speedMax,
           grid,
+          stale: grid.stale ?? false,
         });
         if (rafId == null) rafId = requestAnimationFrame(tick);
       } catch (err) {

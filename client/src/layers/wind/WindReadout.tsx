@@ -51,6 +51,7 @@ export function WindReadout() {
   const probeEnabled = useWindProbeStore((s) => s.probeEnabled);
   const ready = useWindStatus((s) => s.ready);
   const error = useWindStatus((s) => s.error);
+  const stale = useWindStatus((s) => s.stale);
   const hover = useWindProbeStore((s) => s.hover);
   const pins = useWindProbeStore((s) => s.pins);
   const clearPins = useWindProbeStore((s) => s.clearPins);
@@ -68,6 +69,11 @@ export function WindReadout() {
         <div className="mb-1.5 flex items-center justify-between">
           <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
             🌬 Wind probe
+            {ready && stale && (
+              <span className="ml-1.5 rounded bg-amber-400/15 px-1 py-0.5 text-[8px] font-bold text-amber-300/90">
+                HISTORICAL
+              </span>
+            )}
           </span>
           {pins.length > 0 && (
             <button

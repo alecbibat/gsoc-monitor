@@ -1,5 +1,9 @@
 import { Router } from 'express';
+import fs from 'fs';
+import { promises as fsp } from 'fs';
+import path from 'path';
 import { cache } from '../cache';
+import { WIND_FALLBACK } from '../data/windFallback';
 
 const router = Router();
 
@@ -62,6 +66,7 @@ export interface WindGrid {
   v: number[]; // northward component, m/s
   speedMax: number;
   updated: number;
+  stale?: boolean; // true when served from snapshot/fallback, not a live fetch
 }
 
 interface OmResult {
@@ -134,16 +139,56 @@ async function fetchWind(): Promise<WindGrid> {
   };
 }
 
-router.get('/', async (_req, res) => {
+// --- Always-available grid (live → disk snapshot → baked-in fallback) -------
+// Open-Meteo rate-limits shared (Heroku) IPs, so the grid fetch can fail —
+// especially on a fresh dyno with no cached value, which surfaced to users as
+// "may be slow to fetch". Like the rivers route, the grid fetch now runs in the
+// BACKGROUND and the request is served instantly from the best value we have;
+// a committed historical grid guarantees the layer always shows something
+// (flagged stale), so it never errors.
+const WIND_SNAPSHOT_PATH =
+  process.env.WIND_SNAPSHOT_PATH ?? path.join(__dirname, '../../wind-snapshot.json');
+
+let latestGrid: WindGrid | null = null; // freshest grid we hold
+let liveAt = 0; // when latestGrid was fetched live (0 = from snapshot/never)
+let refreshing = false;
+
+function loadWindSnapshot(): void {
   try {
-    const data = await cache.getOrFetch<WindGrid>('wind', TTL_MS, fetchWind, {
-      staleOnError: true,
-    });
-    res.json(data);
-  } catch (err) {
-    console.error('Wind route error', err);
-    res.status(502).json({ error: 'Wind feed unavailable' });
+    const grid = JSON.parse(fs.readFileSync(WIND_SNAPSHOT_PATH, 'utf8')) as WindGrid;
+    if (grid?.u?.length) latestGrid = grid;
+  } catch {
+    // No snapshot yet — the baked-in fallback covers it.
   }
+}
+
+async function refreshWind(): Promise<void> {
+  if (refreshing) return;
+  refreshing = true;
+  try {
+    const grid = await fetchWind();
+    latestGrid = grid;
+    liveAt = Date.now();
+    fsp.writeFile(WIND_SNAPSHOT_PATH, JSON.stringify(grid)).catch(() => {});
+  } catch (err) {
+    console.error('[wind] refresh failed (serving last good/fallback):', err instanceof Error ? err.message : err);
+  } finally {
+    refreshing = false;
+  }
+}
+
+export function initWindStream(): void {
+  loadWindSnapshot();
+  void refreshWind();
+  setInterval(() => void refreshWind(), TTL_MS);
+}
+
+router.get('/', (_req, res) => {
+  const grid = latestGrid ?? WIND_FALLBACK;
+  // "Fresh" only if we actually fetched a live grid within ~1.5 TTLs.
+  const fresh = latestGrid != null && Date.now() - liveAt < TTL_MS * 1.5;
+  if (!fresh) void refreshWind(); // nudge a background refresh, never block
+  res.json({ ...grid, stale: !fresh });
 });
 
 // --- Point forecast ---------------------------------------------------------

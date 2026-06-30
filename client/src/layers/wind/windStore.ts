@@ -10,6 +10,7 @@ interface WindState {
   error: string | null;
   maxSpeedMps: number;
   grid: WindGrid | null;
+  stale: boolean; // grid is historical (snapshot/fallback), not a live fetch
   setStatus: (partial: Partial<Omit<WindState, 'setStatus'>>) => void;
 }
 
@@ -18,6 +19,7 @@ export const useWindStatus = create<WindState>((set) => ({
   error: null,
   maxSpeedMps: 0,
   grid: null,
+  stale: false,
   setStatus: (partial) => set((s) => ({ ...s, ...partial })),
 }));
 

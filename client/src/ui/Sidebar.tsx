@@ -473,7 +473,13 @@ export function Sidebar() {
             statusText={
               windStatus.error ??
               (windStatus.ready
-                ? `Live surface wind · peak ${Math.round(windStatus.maxSpeedMps * 2.23694)} mph`
+                ? windStatus.stale
+                  ? `Historical wind${
+                      windStatus.grid?.updated
+                        ? ` · as of ${new Date(windStatus.grid.updated).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+                        : ''
+                    } · peak ${Math.round(windStatus.maxSpeedMps * 2.23694)} mph`
+                  : `Live surface wind · peak ${Math.round(windStatus.maxSpeedMps * 2.23694)} mph`
                 : 'Animated global wind streamlines')
             }
           >
