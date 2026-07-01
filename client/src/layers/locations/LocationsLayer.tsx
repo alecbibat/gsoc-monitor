@@ -4,6 +4,7 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { LOCATION_GROUPS } from './locations';
+import { makePinIcon } from './pinIcon';
 import { useScreensaverStore } from '../../screensaver/screensaverStore';
 
 export function LocationsLayer() {
@@ -17,27 +18,26 @@ export function LocationsLayer() {
     viewer.dataSources.add(ds);
     dsRef.current = ds;
 
-    const pinBuilder = new Cesium.PinBuilder();
-
     for (const group of LOCATION_GROUPS) {
-      const color = Cesium.Color.fromCssColorString(group.color);
-      const pinCanvas = pinBuilder.fromColor(color, 36);
-      const pinUrl = pinCanvas.toDataURL();
+      const pin = makePinIcon(group.color);
 
       for (const loc of group.locations) {
         const entity = ds.entities.add({
           position: Cesium.Cartesian3.fromDegrees(loc.lon, loc.lat),
           billboard: {
-            image: pinUrl,
+            image: pin.url,
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
             // Clamp to terrain so pins sit on mountain surfaces (Yellowstone,
             // Grand Canyon, etc.) rather than appearing underground when World
             // Terrain or OSM buildings + terrain are active.
             heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
-            width: 24,
-            height: 32,
-            scaleByDistance: new Cesium.NearFarScalar(1_500_000, 1.0, 8_000_000, 0.4),
+            width: pin.width,
+            height: pin.height,
+            // Stay prominent when zoomed out: the old ramp shrank pins to 40%
+            // (near-invisible at continental zoom). Hold ~0.8× even at globe
+            // distance so the markers read as pins, not specks.
+            scaleByDistance: new Cesium.NearFarScalar(600_000, 1.0, 16_000_000, 0.8),
             // While the pins screensaver is orbiting THIS pin, hide the flat
             // marker — it's replaced by the animated loot beam.
             show: new Cesium.CallbackProperty(() => {
@@ -58,7 +58,7 @@ export function LocationsLayer() {
             outlineColor: Cesium.Color.fromCssColorString('#0a0c10').withAlpha(0.9),
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
             heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-            pixelOffset: new Cesium.Cartesian2(0, -36),
+            pixelOffset: new Cesium.Cartesian2(0, -54),
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 800_000),
             showBackground: true,
