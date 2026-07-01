@@ -5,6 +5,7 @@ import { useAlertsStatus } from '../layers/alerts/alertsStore';
 import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { useLightningStatus } from '../layers/lightning/lightningStore';
 import { useFiresStatus } from '../layers/fires/firesStore';
+import { useWildfiresStatus } from '../layers/wildfires/wildfiresStore';
 import { useSmokeStatus } from '../layers/smoke/smokeStore';
 import { useAqiStatus } from '../layers/aqi/aqiStore';
 import { useRiversStatus } from '../layers/rivers/riversStore';
@@ -105,6 +106,7 @@ export function Sidebar() {
   const hurricanesStatus = useHurricanesStatus();
   const lightningStatus = useLightningStatus();
   const firesStatus = useFiresStatus();
+  const wildfiresStatus = useWildfiresStatus();
   const smokeStatus = useSmokeStatus();
   const aqiStatus = useAqiStatus();
   const riversStatus = useRiversStatus();
@@ -368,6 +370,19 @@ export function Sidebar() {
               </div>
             </div>
           </LayerToggle>
+          <LayerToggle
+            label="Named Fires (NIFC)"
+            active={(active as Record<string, boolean>).wildfires ?? false}
+            onToggle={() => toggleLayer('wildfires')}
+            statusText={
+              wildfiresStatus.error ??
+              (wildfiresStatus.count > 0
+                ? `${wildfiresStatus.count} active incident${
+                    wildfiresStatus.count === 1 ? '' : 's'
+                  } · acres, containment, crews`
+                : 'Named fires + response · NIFC/WFIGS')
+            }
+          />
           <LayerToggle
             label="Smoke (NOAA HMS)"
             active={(active as Record<string, boolean>).smoke ?? false}

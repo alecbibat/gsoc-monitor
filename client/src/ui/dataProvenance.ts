@@ -178,6 +178,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'wildfires',
+    info: {
+      name: 'Named Fires',
+      icon: '🚒',
+      source: 'NIFC / WFIGS (interagency)',
+      method:
+        'Named, human-managed wildfire incidents from the interagency Wildland Fire Interagency Geospatial Services (WFIGS) feed — the IRWIN / ICS-209 system of record. Each active incident shows its acres, containment %, assigned personnel, incident-management complexity, and cause, plus the fire perimeter when available. Fetched live from NIFC’s ArcGIS services.',
+      trust:
+        'The US interagency source of record for wildfire incident reporting (NIFC), used by the agencies actually fighting the fires. Attributes update as incident-management teams file reports (≈ daily), so it lags real-time detection but names the fire and its response — which raw satellite hotspots cannot.',
+      url: 'https://www.nifc.gov',
+    },
+  },
+  {
     id: 'fuel',
     info: {
       name: 'Surface Fuel Models',

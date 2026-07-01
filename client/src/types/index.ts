@@ -19,7 +19,8 @@ export type LayerId =
   | 'wind'
   | 'rivers'
   | 'fireOutlook'
-  | 'precip';
+  | 'precip'
+  | 'wildfires';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
