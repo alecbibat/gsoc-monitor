@@ -24,9 +24,12 @@ export interface GroupStatus {
   nearestFireMi: number | null;
   nearestQuake: { mi: number; mag: number } | null;
   weather: { tempF: number; windKt: number } | null;
+  precip7d: number | null; // 7-day forecast precipitation accumulation, inches
   aqi: { value: number; category: string } | null;
   news: { count: number; nearestMi: number | null };
 }
+
+type GroupWeather = { tempF: number; windKt: number; precip7d: number | null };
 
 export interface FeedEvent {
   id: string; // stable dedup key
@@ -48,26 +51,38 @@ function round3(n: number): number {
   return Math.round(n * 1000) / 1000;
 }
 
-// One Open-Meteo call with every group's primary location → current temp + wind.
-async function fetchGroupWeather(): Promise<Map<string, { tempF: number; windKt: number }>> {
-  const map = new Map<string, { tempF: number; windKt: number }>();
+// One Open-Meteo call with every group's primary location → current temp + wind
+// plus the 7-day forecast precipitation-accumulation total (inches).
+async function fetchGroupWeather(): Promise<Map<string, GroupWeather>> {
+  const map = new Map<string, GroupWeather>();
   const groups = LOCATION_GROUPS.filter((g) => g.locations.length > 0);
   if (groups.length === 0) return map;
   const lats = groups.map((g) => g.locations[0].lat).join(',');
   const lons = groups.map((g) => g.locations[0].lon).join(',');
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}` +
-    `&current=temperature_2m,wind_speed_10m&temperature_unit=fahrenheit&wind_speed_unit=kn`;
+    `&current=temperature_2m,wind_speed_10m&daily=precipitation_sum&forecast_days=7` +
+    `&temperature_unit=fahrenheit&wind_speed_unit=kn&precipitation_unit=inch&timezone=auto`;
   const res = await fetch(url, { signal: AbortSignal.timeout(12_000) });
   if (!res.ok) throw new Error(`weather HTTP ${res.status}`);
-  const data = (await res.json()) as
-    | Array<{ current?: { temperature_2m?: number; wind_speed_10m?: number } }>
-    | { current?: { temperature_2m?: number; wind_speed_10m?: number } };
+  type LocForecast = {
+    current?: { temperature_2m?: number; wind_speed_10m?: number };
+    daily?: { precipitation_sum?: Array<number | null> };
+  };
+  const data = (await res.json()) as LocForecast[] | LocForecast;
   const arr = Array.isArray(data) ? data : [data];
   groups.forEach((g, i) => {
     const c = arr[i]?.current;
     if (c && typeof c.temperature_2m === 'number') {
-      map.set(g.id, { tempF: Math.round(c.temperature_2m), windKt: Math.round(c.wind_speed_10m ?? 0) });
+      const ps = arr[i]?.daily?.precipitation_sum;
+      const precip7d = Array.isArray(ps)
+        ? ps.reduce<number>((sum, v) => sum + (typeof v === 'number' ? v : 0), 0)
+        : null;
+      map.set(g.id, {
+        tempF: Math.round(c.temperature_2m),
+        windKt: Math.round(c.wind_speed_10m ?? 0),
+        precip7d,
+      });
     }
   });
   return map;
@@ -122,7 +137,7 @@ export async function scanDashboard(): Promise<DashboardScan> {
     scanProximity(RADIUS_MI),
     fetchGroupWeather().catch((e) => {
       errors.push(`weather: ${e instanceof Error ? e.message : e}`);
-      return new Map<string, { tempF: number; windKt: number }>();
+      return new Map<string, GroupWeather>();
     }),
     api
       .aqi()
@@ -169,13 +184,15 @@ export async function scanDashboard(): Promise<DashboardScan> {
           ? 'watch'
           : 'ok';
 
+    const w = weather.get(group.id) ?? null;
     groups.push({
       group,
       level,
       alerts,
       nearestFireMi,
       nearestQuake,
-      weather: weather.get(group.id) ?? null,
+      weather: w ? { tempF: w.tempF, windKt: w.windKt } : null,
+      precip7d: w?.precip7d ?? null,
       aqi: nearestAqi(group, aqiStations),
       news: { count: news.count, nearestMi: news.nearestMi },
     });

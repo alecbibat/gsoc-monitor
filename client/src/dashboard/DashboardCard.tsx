@@ -43,6 +43,20 @@ function aqiTextColor(v: number | undefined): string {
   return 'text-rose-400';
 }
 
+// 7-day forecast precipitation accumulation (inches) → compact label + a sky
+// tint that deepens with heavier totals.
+function fmtPrecip(v: number | null): string {
+  if (v == null) return '—';
+  if (v < 0.005) return '0"';
+  return `${v.toFixed(2)}"`;
+}
+function precipColor(v: number | null): string | undefined {
+  if (v == null) return 'text-white/40';
+  if (v >= 1) return 'text-sky-300';
+  if (v >= 0.1) return 'text-sky-400/80';
+  return undefined;
+}
+
 function ClockIcon() {
   return (
     <svg
@@ -143,6 +157,7 @@ export function DashboardCard({ s }: { s: GroupStatus }) {
 
         <div className="mt-3 grid grid-cols-2 gap-x-5 gap-y-2 border-t border-white/5 pt-3 text-[13px]">
           <Metric label="Weather" value={s.weather ? `${s.weather.tempF}°F · ${s.weather.windKt}kt` : '—'} />
+          <Metric label="Rain 7d" value={fmtPrecip(s.precip7d)} valueClass={precipColor(s.precip7d)} />
           <Metric
             label="Air"
             value={s.aqi ? `AQI ${s.aqi.value}` : '—'}
