@@ -3,6 +3,8 @@ import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
+import { api } from '../../api/client';
+import type { JtwcInvest } from '../../types';
 import { useHurricanesStatus } from './hurricanesStore';
 import { classifyStorm } from './classify';
 import {
@@ -319,6 +321,17 @@ export function HurricaneLayer() {
         : queryGeo(`${SERVICE}/${id}/query?where=1%3D1&outFields=*&outSR=4326&returnGeometry=true&f=geojson`);
 
     const load = async () => {
+      // JTWC invests (developing areas in the W Pacific / Indian Ocean / S Hem
+      // basins NHC doesn't cover) come from our own parse+cache route. Fetch in
+      // parallel and tolerate failure — it must never break the NHC feed.
+      const investsPromise: Promise<JtwcInvest[]> = api
+        .jtwcInvests()
+        .then((r) => r.invests)
+        .catch((err) => {
+          console.warn('JTWC invests unavailable', err);
+          return [];
+        });
+
       let layers: ServiceLayer[];
       try {
         const r = await fetch(`${SERVICE}?f=json`);
@@ -362,6 +375,9 @@ export function HurricaneLayer() {
         useHurricanesStatus.getState().setStatus({ error: `NHC feed error: ${reason}` });
         return;
       }
+      if (cancelled) return;
+
+      const invests = await investsPromise;
       if (cancelled) return;
 
       // Aggregate per-storm summary info that drives the clickable marker.
@@ -437,11 +453,18 @@ export function HurricaneLayer() {
         })
         .sort()
         .join(',');
-      const sig = `${stormSig}#${distSig}`;
+      const investSig = invests
+        .map((v) => `${v.id}:${v.potential}:${v.lat}:${v.lon}`)
+        .sort()
+        .join(',');
+      const sig = `${stormSig}#${distSig}#${investSig}`;
       const setCount = () =>
-        useHurricanesStatus
-          .getState()
-          .setStatus({ count: named.length, disturbances: distList.length, error: null });
+        useHurricanesStatus.getState().setStatus({
+          count: named.length,
+          disturbances: distList.length,
+          invests: invests.length,
+          error: null,
+        });
       if (sig === lastSigRef.current) {
         ensureSpin(named.length > 0);
         setCount();
@@ -515,6 +538,60 @@ export function HurricaneLayer() {
             risk7day: risk7,
             latitude: clat,
             longitude: clon,
+          },
+        });
+      }
+
+      // 0b) JTWC invests — developing areas in the basins NHC doesn't cover
+      //     (W Pacific, Indian Ocean, S Hemisphere). Drawn like the GTWO areas:
+      //     a soft ~100 NM ring, a dashed marker, and the invest id.
+      for (const inv of invests) {
+        const color = riskColor(inv.potential);
+        const id = `invest-${inv.id}`;
+        const ent = ds.entities.add({
+          id,
+          position: Cesium.Cartesian3.fromDegrees(inv.lon, inv.lat),
+          ellipse: {
+            semiMajorAxis: 185_000, // ~100 NM
+            semiMinorAxis: 185_000,
+            material: Cesium.Color.fromCssColorString(color).withAlpha(0.12),
+            outline: true,
+            outlineColor: Cesium.Color.fromCssColorString(color).withAlpha(0.8),
+            outlineWidth: 1.5,
+          },
+          billboard: {
+            image: disturbanceIcon(color),
+            width: 26,
+            height: 26,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+          label: {
+            text: inv.id,
+            font: '700 12px Inter, system-ui, sans-serif',
+            fillColor: Cesium.Color.fromCssColorString(color),
+            outlineColor: Cesium.Color.BLACK.withAlpha(0.85),
+            outlineWidth: 3,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            verticalOrigin: Cesium.VerticalOrigin.TOP,
+            pixelOffset: new Cesium.Cartesian2(0, 16),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        });
+        attachPanelData(ent, {
+          id,
+          kind: 'hurricanes',
+          title: `Invest ${inv.id}`,
+          subtitle: `${inv.potential} formation chance · JTWC`,
+          payload: {
+            invest: true,
+            name: `Invest ${inv.id}`,
+            classification: `${inv.potential} formation chance`,
+            color,
+            basin: inv.basin,
+            potential: inv.potential,
+            investId: inv.id,
+            latitude: inv.lat,
+            longitude: inv.lon,
           },
         });
       }

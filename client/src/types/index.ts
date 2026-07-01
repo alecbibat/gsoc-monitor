@@ -343,6 +343,21 @@ export interface FireOutlookResponse {
   psas: FireOutlookPsa[];
 }
 
+// --- JTWC invests (tropical disturbances in the non-NHC basins) -------------
+export type InvestPotential = 'Low' | 'Medium' | 'High' | 'Unknown';
+export interface JtwcInvest {
+  id: string; // e.g. "96W"
+  basin: string;
+  lat: number;
+  lon: number;
+  potential: InvestPotential;
+}
+export interface JtwcInvestsResponse {
+  invests: JtwcInvest[];
+  updated: number;
+  error?: string;
+}
+
 // --- Rivers & floods (NOAA NWPS) -------------------------------------------
 // Normalized flood tiers (most → least severe) plus the non-flood states kept.
 export type FloodCat = 'major' | 'moderate' | 'minor' | 'action' | 'normal' | 'low' | 'none';

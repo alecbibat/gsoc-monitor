@@ -18,6 +18,10 @@ interface Props {
     risk2day?: string;
     prob7day?: string;
     risk7day?: string;
+    // JTWC invest fields
+    invest?: boolean;
+    investId?: string;
+    potential?: string;
   };
 }
 
@@ -53,6 +57,56 @@ function OddsRow({ label, prob, color }: { label: string; prob?: string; color: 
 }
 
 export function HurricaneDetails({ payload }: Props) {
+  // --- JTWC invest (developing area in a non-NHC basin) ---
+  if (payload.invest) {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <span
+            className="rounded px-2 py-0.5 text-xs font-semibold text-ink-950"
+            style={{ backgroundColor: payload.color }}
+          >
+            {payload.potential ?? 'Low'}
+          </span>
+          <span className="text-white/70">Formation potential</span>
+        </div>
+
+        <p className="text-[13px] leading-relaxed text-white/70">
+          Invest {payload.investId ?? ''} — an area JTWC is monitoring for tropical-cyclone
+          development.
+        </p>
+
+        <dl className="grid grid-cols-2 gap-y-1.5 text-[13px]">
+          <dt className="text-white/40">Center</dt>
+          <dd className="tabular-nums">
+            {formatLat(payload.latitude)} {formatLon(payload.longitude)}
+          </dd>
+          {payload.basin && (
+            <>
+              <dt className="text-white/40">Basin</dt>
+              <dd>{payload.basin}</dd>
+            </>
+          )}
+        </dl>
+
+        <p className="text-[11px] leading-relaxed text-white/40">
+          The Joint Typhoon Warning Center tracks &ldquo;invests&rdquo; in the Western Pacific, Indian
+          Ocean, and Southern Hemisphere — the basins NHC doesn&rsquo;t cover. Potential (Low / Medium /
+          High) is its 24-hour chance of developing into a significant tropical cyclone.
+        </p>
+
+        <a
+          href="https://www.metoc.navy.mil/jtwc/jtwc.html"
+          target="_blank"
+          rel="noreferrer"
+          className="inline-block text-xs text-accent underline underline-offset-2 hover:text-accent/80"
+        >
+          JTWC &rarr;
+        </a>
+      </div>
+    );
+  }
+
   // --- Area of disturbance (formation outlook) ---
   if (payload.disturbance) {
     return (

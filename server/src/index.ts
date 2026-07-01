@@ -24,6 +24,7 @@ import windRouter, { initWindStream } from './routes/wind';
 import lightningRouter, { initLightningStream } from './routes/lightning';
 import riversRouter, { initRiversStream } from './routes/rivers';
 import fireOutlookRouter from './routes/fireOutlook';
+import jtwcRouter from './routes/jtwc';
 import crisisRouter from './routes/crisis';
 import authRouter from './routes/auth';
 import adminRouter from './routes/admin';
@@ -102,6 +103,7 @@ function main() {
   app.use('/api/lightning', lightningRouter);
   app.use('/api/rivers', riversRouter);
   app.use('/api/fire-outlook', fireOutlookRouter);
+  app.use('/api/jtwc-invests', jtwcRouter);
 
   initShipsStream();
   // Persistent Blitzortung collector → rolling buffer behind /api/lightning so

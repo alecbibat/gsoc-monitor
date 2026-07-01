@@ -67,10 +67,10 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     info: {
       name: 'Hurricanes',
       icon: '🌀',
-      source: 'NOAA National Hurricane Center',
+      source: 'NOAA NHC + US Navy JTWC',
       method:
-        'Global active tropical-cyclone positions, past + forecast tracks, intensity and forecast cones from NOAA’s ArcGIS feed (covers Atlantic, E/C Pacific, and — via the aggregated feed — W Pacific typhoons & other basins). Also overlays NHC’s Graphical Tropical Weather Outlook: the dashed "areas of disturbance" with 2-day / 7-day formation odds for systems that haven’t formed yet.',
-      trust: 'The official US authority for tropical-cyclone forecasts and formation outlooks.',
+        'Global active tropical-cyclone positions, past + forecast tracks, intensity and forecast cones from NOAA’s ArcGIS feed (covers Atlantic, E/C Pacific, and — via the aggregated feed — W Pacific typhoons & other basins). Also overlays NHC’s Graphical Tropical Weather Outlook: the dashed "areas of disturbance" with 2-day / 7-day formation odds. In the basins NHC doesn’t cover (W Pacific, Indian Ocean, S Hemisphere), it adds JTWC "invests" — developing areas parsed from the Joint Typhoon Warning Center’s Significant Tropical Weather Advisories, with their Low / Medium / High formation potential.',
+      trust: 'The official US authorities for tropical-cyclone forecasts: NHC (civilian basins) and JTWC (DoD, all other basins).',
       url: 'https://www.nhc.noaa.gov',
     },
   },

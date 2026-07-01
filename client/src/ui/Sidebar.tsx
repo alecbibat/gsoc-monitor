@@ -271,7 +271,7 @@ export function Sidebar() {
             <PrecipControls />
           </LayerToggle>
           <LayerToggle
-            label="Hurricanes (NHC)"
+            label="Hurricanes (NHC + JTWC)"
             active={active.hurricanes}
             onToggle={() => toggleLayer('hurricanes')}
             statusText={
@@ -280,9 +280,9 @@ export function Sidebar() {
                 hurricanesStatus.count > 0
                   ? `${hurricanesStatus.count} active system${hurricanesStatus.count === 1 ? '' : 's'}`
                   : null,
-                hurricanesStatus.disturbances > 0
-                  ? `${hurricanesStatus.disturbances} area${
-                      hurricanesStatus.disturbances === 1 ? '' : 's'
+                hurricanesStatus.disturbances + hurricanesStatus.invests > 0
+                  ? `${hurricanesStatus.disturbances + hurricanesStatus.invests} area${
+                      hurricanesStatus.disturbances + hurricanesStatus.invests === 1 ? '' : 's'
                     } to watch`
                   : null,
               ]
