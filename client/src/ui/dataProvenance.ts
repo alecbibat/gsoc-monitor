@@ -191,6 +191,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'outages',
+    info: {
+      name: 'Power Outages',
+      icon: '⚡',
+      source: 'Cal OES (California OES)',
+      method:
+        'California statewide electric outages from the California Office of Emergency Services public ArcGIS feed, which aggregates the state’s utilities. Each incident carries the utility company, start + estimated-restoration times, cause, impacted customers, county, and planned/unplanned type. Fetched live client-side.',
+      trust:
+        'A California state-government aggregation of the utilities’ own outage reports. California only — there is no free, sanctioned national per-outage feed (PowerOutage.us is paid and prohibits scraping; individual utility feeds are fragmented), so coverage stops at the state line.',
+      url: 'https://gis.data.ca.gov',
+    },
+  },
+  {
     id: 'fuel',
     info: {
       name: 'Surface Fuel Models',

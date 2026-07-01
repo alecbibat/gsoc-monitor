@@ -6,6 +6,7 @@ import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { useLightningStatus } from '../layers/lightning/lightningStore';
 import { useFiresStatus } from '../layers/fires/firesStore';
 import { useWildfiresStatus } from '../layers/wildfires/wildfiresStore';
+import { useOutagesStatus } from '../layers/outages/outagesStore';
 import { useSmokeStatus } from '../layers/smoke/smokeStore';
 import { useAqiStatus } from '../layers/aqi/aqiStore';
 import { useRiversStatus } from '../layers/rivers/riversStore';
@@ -107,6 +108,7 @@ export function Sidebar() {
   const lightningStatus = useLightningStatus();
   const firesStatus = useFiresStatus();
   const wildfiresStatus = useWildfiresStatus();
+  const outagesStatus = useOutagesStatus();
   const smokeStatus = useSmokeStatus();
   const aqiStatus = useAqiStatus();
   const riversStatus = useRiversStatus();
@@ -381,6 +383,17 @@ export function Sidebar() {
                     wildfiresStatus.count === 1 ? '' : 's'
                   } · acres, containment, crews`
                 : 'Named fires + response · NIFC/WFIGS')
+            }
+          />
+          <LayerToggle
+            label="Power Outages (Cal OES · CA)"
+            active={(active as Record<string, boolean>).outages ?? false}
+            onToggle={() => toggleLayer('outages')}
+            statusText={
+              outagesStatus.error ??
+              (outagesStatus.count > 0
+                ? `${outagesStatus.count} active · ${outagesStatus.customers.toLocaleString()} customers · CA`
+                : 'Utility, cause, restoration ETA · California only')
             }
           />
           <LayerToggle

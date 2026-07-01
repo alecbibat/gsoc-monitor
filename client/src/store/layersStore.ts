@@ -60,6 +60,7 @@ export const useLayersStore = create<LayersState>()(
         fireOutlook: false,
         precip: false,
         wildfires: false,
+        outages: false,
       },
       basemap: 'dark',
       toggleLayer: (id) =>
