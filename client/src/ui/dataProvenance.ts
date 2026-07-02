@@ -152,6 +152,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'windArrows',
+    info: {
+      name: 'Wind Arrows',
+      icon: '➳',
+      source: 'NOAA GFS (via Open-Meteo)',
+      method:
+        'The same 10 m GFS wind grid as the particle layer, rendered as a field of direction arrows: one arrow per cell of a camera-adaptive grid (density follows zoom), oriented along the flow and colored/sized by speed.',
+      trust:
+        'GFS is NOAA’s flagship global numerical weather model; Open-Meteo serves it as an open, key-free API.',
+      url: 'https://www.nco.ncep.noaa.gov/pmb/products/gfs/',
+    },
+  },
+  {
     id: 'smoke',
     info: {
       name: 'Smoke',

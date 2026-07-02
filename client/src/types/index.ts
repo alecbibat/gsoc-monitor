@@ -17,6 +17,7 @@ export type LayerId =
   | 'timezones'
   | 'newsMap'
   | 'wind'
+  | 'windArrows'
   | 'rivers'
   | 'fireOutlook'
   | 'precip'

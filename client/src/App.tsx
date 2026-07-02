@@ -19,6 +19,7 @@ import { PrecipLayer } from './layers/precip/PrecipLayer';
 import { AqiLayer } from './layers/aqi/AqiLayer';
 import { FuelLayer } from './layers/fuel/FuelLayer';
 import { WindLayer } from './layers/wind/WindLayer';
+import { WindArrowsLayer } from './layers/wind/WindArrowsLayer';
 import { WindProbeController } from './layers/wind/WindProbeController';
 import { WindReadout } from './layers/wind/WindReadout';
 import { RadarTimeline } from './layers/radar/RadarTimeline';
@@ -113,6 +114,7 @@ export default function App() {
           <AqiLayer />
           <FuelLayer />
           <WindLayer />
+          <WindArrowsLayer />
           <WindProbeController />
           <LightningLayer />
           <LightningHistoryLayer />

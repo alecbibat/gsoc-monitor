@@ -2,34 +2,8 @@ import * as Cesium from 'cesium';
 import { useEffect } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
-import { api } from '../../api/client';
-import { useWindStatus } from './windStore';
+import { useWindStatus, acquireWindGrid } from './windStore';
 import { makeSampler } from './windProbe';
-import type { WindGrid } from '../../types';
-
-// The last fetched grid, cached in localStorage (~80 KB) so the field renders
-// the instant the layer mounts — even on a fresh page load or with the server
-// unreachable — and the network fetch swaps in fresh data seamlessly behind it.
-const GRID_CACHE_KEY = 'gsoc-wind-grid';
-
-function readCachedGrid(): WindGrid | null {
-  try {
-    const raw = localStorage.getItem(GRID_CACHE_KEY);
-    if (!raw) return null;
-    const grid = JSON.parse(raw) as WindGrid;
-    return grid?.u?.length ? grid : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeCachedGrid(grid: WindGrid): void {
-  try {
-    localStorage.setItem(GRID_CACHE_KEY, JSON.stringify(grid));
-  } catch {
-    // Quota/private-mode — the server snapshot still covers reloads.
-  }
-}
 
 // --- Tuning -----------------------------------------------------------------
 
@@ -270,52 +244,27 @@ export function WindLayer() {
       v.scene.requestRender();
     };
 
-    const applyGrid = (grid: WindGrid, stale: boolean) => {
+    // The shared loader hydrates the store instantly from the localStorage
+    // cache and keeps it fresh; the animation just follows the store's grid.
+    const release = acquireWindGrid();
+
+    let sampledGrid: ReturnType<typeof useWindStatus.getState>['grid'] = null;
+    const applyGrid = () => {
+      const grid = useWindStatus.getState().grid;
+      if (!grid || grid === sampledGrid || cancelled) return;
+      sampledGrid = grid;
       sample = makeSampler(grid);
-      useWindStatus.getState().setStatus({
-        ready: true,
-        error: null,
-        maxSpeedMps: grid.speedMax,
-        grid,
-        stale,
-      });
       if (rafId == null) rafId = requestAnimationFrame(tick);
     };
-
-    // Start the field immediately from the cached grid (if any) — the fetch
-    // below replaces it the moment fresh data lands. No blank state, ever.
-    const cached = readCachedGrid();
-    if (cached) applyGrid(cached, true);
-
-    const loadGrid = async () => {
-      try {
-        const grid = await api.wind();
-        if (cancelled) return;
-        applyGrid(grid, grid.stale ?? false);
-        writeCachedGrid(grid);
-      } catch (err) {
-        if (cancelled) return;
-        console.error('Failed to load wind grid', err);
-        // Keep animating whatever grid we already have (cached or previous
-        // fetch) rather than blanking the field; only surface a hard error when
-        // there is truly nothing to show.
-        if (useWindStatus.getState().grid) {
-          useWindStatus.getState().setStatus({ stale: true, error: null });
-        } else {
-          useWindStatus.getState().setStatus({ error: 'Wind feed unavailable' });
-        }
-      }
-    };
-
-    loadGrid();
-    const interval = setInterval(loadGrid, 30 * 60_000);
+    applyGrid();
+    const unsub = useWindStatus.subscribe(applyGrid);
 
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      unsub();
+      release();
       if (rafId != null) cancelAnimationFrame(rafId);
       v.scene.primitives.remove(points);
-      useWindStatus.getState().setStatus({ ready: false, error: null, maxSpeedMps: 0, grid: null });
       v.scene.requestRender();
     };
   }, [viewer, active]);

@@ -551,6 +551,17 @@ export function Sidebar() {
             </button>
           </LayerToggle>
           <LayerToggle
+            label="Wind Arrows"
+            active={(active as Record<string, boolean>).windArrows ?? false}
+            onToggle={() => toggleLayer('windArrows')}
+            statusText={
+              windStatus.error ??
+              (windStatus.arrowCount > 0
+                ? `${windStatus.arrowCount.toLocaleString()} arrows · density follows zoom${windStatus.stale ? ' · historical' : ''}`
+                : 'Direction arrows · colored by speed')
+            }
+          />
+          <LayerToggle
             label="7-Day Fire Potential (NWCG)"
             active={(active as Record<string, boolean>).fireOutlook ?? false}
             onToggle={() => toggleLayer('fireOutlook')}

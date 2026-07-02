@@ -56,6 +56,7 @@ export const useLayersStore = create<LayersState>()(
         timezones: false,
         newsMap: false,
         wind: false,
+        windArrows: false,
         rivers: false,
         fireOutlook: false,
         precip: false,
