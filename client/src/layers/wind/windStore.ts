@@ -58,10 +58,19 @@ function writeCachedGrid(grid: WindGrid): void {
 const REFRESH_MS = 30 * 60_000;
 let loaderRefs = 0;
 let loaderTimer: ReturnType<typeof setInterval> | null = null;
+let loadSeq = 0; // increments per fetch; only the latest, still-wanted result applies
 
 async function loadGrid(): Promise<void> {
+  const seq = ++loadSeq;
   try {
     const grid = await api.wind();
+    // Drop the result if a newer fetch superseded this one (out-of-order
+    // resolution) or every consumer released while it was in flight (so a late
+    // fetch can't repopulate the store after the layer was toggled off).
+    if (seq !== loadSeq || loaderRefs === 0) return;
+    // Never let a stale served grid (snapshot/fallback) downgrade a fresher one.
+    const current = useWindStatus.getState().grid;
+    if (current && grid.updated < current.updated) return;
     useWindStatus.getState().setStatus({
       ready: true,
       error: null,
@@ -71,6 +80,7 @@ async function loadGrid(): Promise<void> {
     });
     writeCachedGrid(grid);
   } catch (err) {
+    if (seq !== loadSeq || loaderRefs === 0) return;
     console.error('Failed to load wind grid', err);
     // Keep whatever grid we already have (cached or a previous fetch) rather
     // than blanking the field; hard-error only when there is nothing to show.
