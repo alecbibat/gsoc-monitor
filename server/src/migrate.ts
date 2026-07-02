@@ -62,6 +62,19 @@ export async function migrate() {
         added_by   UUID,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      -- Lightning strike history, persisted in ~5-minute append-only chunks so
+      -- the 24h buffer survives deploys and dyno restarts (the dyno filesystem
+      -- is wiped on both). data = gzip(Float32 lat[] · Float32 lon[] · Uint32
+      -- tSec[]), ~30-60 KB per chunk, ~290 rows/day; rows older than the window
+      -- are pruned on each save.
+      CREATE TABLE IF NOT EXISTS lightning_chunks (
+        id          BIGSERIAL   PRIMARY KEY,
+        chunk_start BIGINT      NOT NULL,
+        n           INTEGER     NOT NULL,
+        data        BYTEA       NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
     `);
 
     // Signup code. If SIGNUP_CODE is set in the environment it is authoritative

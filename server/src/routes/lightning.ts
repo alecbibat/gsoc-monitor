@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import WebSocket from 'ws';
-import { promises as fsp } from 'fs';
-import path from 'path';
+import zlib from 'zlib';
+import { pool } from '../db';
 
 const router = Router();
 
@@ -76,78 +76,136 @@ function push(lat: number, lon: number, t: number): void {
   if (count < CAP) count++;
 }
 
-// --- Disk persistence (survive restarts/deploys) ----------------------------
-// The ring buffer is RAM-only, so a restart would otherwise wipe the 24h
-// history and force it to rebuild live over the next day. We periodically dump
-// the last ~24h of strikes to disk (mirrors the ships snapshot) and reload them
-// on boot — BEFORE connecting, so reloaded (older) strikes precede live ones and
-// the buffer stays time-ordered for the query walk. On an ephemeral dyno the
-// file survives the dyno's life but is wiped on a fresh deploy; the periodic
-// save + live stream cover the gap. Snapshot is columnar JSON (~14 MB at cap).
-const SNAPSHOT_PATH =
-  process.env.LIGHTNING_SNAPSHOT_PATH ?? path.join(__dirname, '../../lightning-snapshot.json');
+// --- Postgres persistence (survive restarts AND deploys) ---------------------
+// The ring buffer is RAM-only, and the dyno filesystem is wiped on every deploy
+// and daily dyno cycle — a disk snapshot only survived same-dyno restarts. So
+// strikes are persisted to Postgres in ~5-minute append-only chunks: each save
+// packs only the strikes since the previous save (~30-60 KB gzipped), and rows
+// older than the window are pruned. On boot all chunks in the window are loaded
+// chronologically BEFORE the live stream connects, so the buffer stays
+// time-ordered for the query walk. Losing at most the last save interval on a
+// hard kill is fine — the live stream refills minutes of data immediately.
 const PERSIST_WINDOW_MS = 24 * 60 * 60_000;
-const MAX_PERSIST = 600_000; // bound the file; stride-thin the window if larger
-let savingSnapshot = false;
+const SAVE_INTERVAL_MS = 5 * 60_000;
+const MAX_CHUNK = 300_000; // stride-thin one save after an extended DB outage
+let lastSavedT = 0; // newest strike time already persisted (high-water mark)
+let savingChunk = false;
 
-async function saveSnapshot(): Promise<void> {
-  if (savingSnapshot || count === 0) return;
-  savingSnapshot = true;
+// Chunk codec: gzip(Float32 lat[] · Float32 lon[] · Uint32 tSec[]). Exported for
+// tests. Uint32 epoch-seconds is plenty — the display buckets by hour.
+export function packStrikes(lat: number[], lon: number[], tMs: number[]): Buffer {
+  const n = lat.length;
+  const la = new Float32Array(n);
+  const lo = new Float32Array(n);
+  const ts = new Uint32Array(n);
+  for (let i = 0; i < n; i++) {
+    la[i] = lat[i];
+    lo[i] = lon[i];
+    ts[i] = Math.round(tMs[i] / 1000);
+  }
+  return zlib.gzipSync(
+    Buffer.concat([Buffer.from(la.buffer), Buffer.from(lo.buffer), Buffer.from(ts.buffer)])
+  );
+}
+export function unpackStrikes(data: Buffer, n: number): { lat: Float32Array; lon: Float32Array; tMs: Float64Array } {
+  const raw = zlib.gunzipSync(data);
+  if (raw.length < n * 12) throw new Error(`chunk too short: ${raw.length} < ${n * 12}`);
+  // Copy out of the Buffer pool region before viewing as typed arrays (the
+  // underlying ArrayBuffer may be shared and misaligned).
+  const own = new Uint8Array(raw).slice().buffer;
+  const lat = new Float32Array(own, 0, n);
+  const lon = new Float32Array(own, n * 4, n);
+  const tSec = new Uint32Array(own, n * 8, n);
+  const tMs = new Float64Array(n);
+  for (let i = 0; i < n; i++) tMs[i] = tSec[i] * 1000;
+  return { lat, lon, tMs };
+}
+
+// Persist the strikes received since the last save as one chunk, then prune
+// rows that have aged out of the window. DB errors leave lastSavedT untouched,
+// so the next attempt simply covers a longer span.
+async function saveChunk(): Promise<void> {
+  if (savingChunk || count === 0) return;
+  savingChunk = true;
   try {
-    const now = Date.now();
-    const cutoff = now - PERSIST_WINDOW_MS;
     const newest = (head - 1 + CAP) % CAP;
-    let total = 0;
-    for (let i = 0; i < count; i++) {
-      if (tBuf[(newest - i + CAP) % CAP] < cutoff) break;
-      total++;
-    }
-    const stride = Math.max(1, Math.ceil(total / MAX_PERSIST));
+    // Collect newest→oldest until we reach already-persisted strikes.
     const lat: number[] = [];
     const lon: number[] = [];
     const t: number[] = [];
-    for (let i = 0, k = 0; i < count; i++) {
+    for (let i = 0; i < count; i++) {
       const idx = (newest - i + CAP) % CAP;
-      const tv = tBuf[idx];
-      if (tv < cutoff) break;
-      if (k % stride === 0) {
-        lat.push(Math.round(latBuf[idx] * 1000) / 1000);
-        lon.push(Math.round(lonBuf[idx] * 1000) / 1000);
-        t.push(Math.round(tv / 1000)); // epoch seconds
-      }
-      k++;
+      if (tBuf[idx] <= lastSavedT) break;
+      lat.push(latBuf[idx]);
+      lon.push(lonBuf[idx]);
+      t.push(tBuf[idx]);
     }
-    // Collected newest→oldest; store chronological so reload preserves order.
+    if (lat.length === 0) return;
     lat.reverse();
     lon.reverse();
     t.reverse();
-    await fsp.writeFile(SNAPSHOT_PATH, JSON.stringify({ lat, lon, t, savedAt: now }));
+    // After a long DB outage the pending span can be huge — stride-thin it so a
+    // single chunk stays bounded.
+    if (lat.length > MAX_CHUNK) {
+      const stride = Math.ceil(lat.length / MAX_CHUNK);
+      const keep = (arr: number[]) => arr.filter((_, i) => i % stride === 0);
+      const [l2, o2, t2] = [keep(lat), keep(lon), keep(t)];
+      lat.length = 0; lat.push(...l2);
+      lon.length = 0; lon.push(...o2);
+      t.length = 0; t.push(...t2);
+    }
+    const data = packStrikes(lat, lon, t);
+    await pool.query(
+      'INSERT INTO lightning_chunks (chunk_start, n, data) VALUES ($1, $2, $3)',
+      [Math.round(t[0]), lat.length, data]
+    );
+    lastSavedT = t[t.length - 1];
+    // Prune aged-out chunks (25h so we never trim mid-window).
+    await pool.query('DELETE FROM lightning_chunks WHERE chunk_start < $1', [
+      Date.now() - PERSIST_WINDOW_MS - 60 * 60_000,
+    ]);
   } catch (err) {
-    console.error('[lightning] snapshot save failed:', err instanceof Error ? err.message : err);
+    console.error('[lightning] chunk save failed:', err instanceof Error ? err.message : err);
   } finally {
-    savingSnapshot = false;
+    savingChunk = false;
   }
 }
 
-async function loadSnapshot(): Promise<void> {
-  try {
-    const raw = await fsp.readFile(SNAPSHOT_PATH, 'utf8');
-    const snap = JSON.parse(raw) as { lat?: number[]; lon?: number[]; t?: number[] };
-    const lat = snap.lat ?? [];
-    const lon = snap.lon ?? [];
-    const t = snap.t ?? [];
-    const n = Math.min(lat.length, lon.length, t.length);
-    const cutoff = Date.now() - PERSIST_WINDOW_MS;
-    let loaded = 0;
-    for (let i = 0; i < n; i++) {
-      const tms = t[i] * 1000; // seconds → ms
-      if (tms < cutoff) continue; // drop strikes now older than the window
-      push(lat[i], lon[i], tms);
-      loaded++;
+// Load every chunk still in the window, oldest first, into the ring buffer.
+// Retries a few times because boot-time migration may still be creating the
+// table; gives up quietly (cold start) if the DB stays unreachable.
+async function loadChunks(attempts = 5): Promise<void> {
+  const cutoff = Date.now() - PERSIST_WINDOW_MS;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const { rows } = await pool.query<{ n: number; data: Buffer }>(
+        'SELECT n, data FROM lightning_chunks WHERE chunk_start >= $1 ORDER BY chunk_start ASC',
+        [cutoff]
+      );
+      let loaded = 0;
+      for (const row of rows) {
+        try {
+          const { lat, lon, tMs } = unpackStrikes(row.data, row.n);
+          for (let i = 0; i < row.n; i++) {
+            if (tMs[i] < cutoff) continue;
+            push(lat[i], lon[i], tMs[i]);
+            loaded++;
+            if (tMs[i] > lastSavedT) lastSavedT = tMs[i];
+          }
+        } catch (err) {
+          console.warn('[lightning] skipping corrupt chunk:', err instanceof Error ? err.message : err);
+        }
+      }
+      if (loaded > 0) console.log(`[lightning] restored ${loaded} strikes from ${rows.length} chunks`);
+      return;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (attempt >= attempts) {
+        console.warn(`[lightning] history load failed after ${attempt} attempts (${msg}) — starting cold`);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 3_000));
     }
-    if (loaded > 0) console.log(`[lightning] restored ${loaded} strikes from snapshot`);
-  } catch {
-    // No snapshot yet — normal on first boot.
   }
 }
 
@@ -226,13 +284,17 @@ function connect(): void {
 }
 
 export function initLightningStream(): void {
-  // Restore the persisted 24h buffer first (so reloaded strikes precede live
-  // ones and the buffer stays time-ordered), then connect the live stream.
-  loadSnapshot()
+  // Restore the persisted 24h history first (so reloaded strikes precede live
+  // ones and the buffer stays time-ordered), then connect the live stream. The
+  // load retries briefly around boot-time migration, worst case ~15s of missed
+  // live strikes — negligible against a 24h window.
+  loadChunks()
     .catch(() => {})
     .finally(() => connect());
-  setInterval(() => void saveSnapshot(), 5 * 60_000);
-  process.once('SIGTERM', () => void saveSnapshot());
+  setInterval(() => void saveChunk(), SAVE_INTERVAL_MS);
+  // Heroku sends SIGTERM before a dyno restart and allows ~30s of grace — a
+  // final small chunk write shrinks the loss window to near zero.
+  process.once('SIGTERM', () => void saveChunk());
 }
 
 // --- Query route -------------------------------------------------------------
