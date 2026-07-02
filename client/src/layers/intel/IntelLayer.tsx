@@ -88,9 +88,12 @@ export function IntelLayer() {
     }
 
     const filterOn = categories.size > 0;
+    const seen = new Set<string>(); // a duplicate id would make ds.entities.add throw mid-loop
     for (const item of items) {
       if (item.lat == null || item.lon == null) continue; // feed-only, not mappable
       if (filterOn && !categories.has(item.category)) continue;
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
       const entity = ds.entities.add({
         id: `intel-${item.id}`,
         position: Cesium.Cartesian3.fromDegrees(item.lon, item.lat, 0),
