@@ -75,6 +75,15 @@ export async function migrate() {
         data        BYTEA       NOT NULL,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      -- Small key/value snapshots for layers whose latest state should survive
+      -- deploys (the dyno filesystem is wiped on every deploy/restart). First
+      -- user: the wind grid (~80 KB JSONB, upserted after each live fetch).
+      CREATE TABLE IF NOT EXISTS snapshots (
+        key        TEXT        PRIMARY KEY,
+        data       JSONB       NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
     `);
 
     // Signup code. If SIGNUP_CODE is set in the environment it is authoritative

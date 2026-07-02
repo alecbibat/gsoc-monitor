@@ -1,8 +1,6 @@
 import { Router } from 'express';
-import fs from 'fs';
-import { promises as fsp } from 'fs';
-import path from 'path';
 import { cache } from '../cache';
+import { pool } from '../db';
 import { WIND_FALLBACK } from '../data/windFallback';
 
 const router = Router();
@@ -139,26 +137,44 @@ async function fetchWind(): Promise<WindGrid> {
   };
 }
 
-// --- Always-available grid (live → disk snapshot → baked-in fallback) -------
+// --- Always-available grid (live → Postgres snapshot → baked-in fallback) ----
 // Open-Meteo rate-limits shared (Heroku) IPs, so the grid fetch can fail —
 // especially on a fresh dyno with no cached value, which surfaced to users as
-// "may be slow to fetch". Like the rivers route, the grid fetch now runs in the
-// BACKGROUND and the request is served instantly from the best value we have;
-// a committed historical grid guarantees the layer always shows something
-// (flagged stale), so it never errors.
-const WIND_SNAPSHOT_PATH =
-  process.env.WIND_SNAPSHOT_PATH ?? path.join(__dirname, '../../wind-snapshot.json');
+// "may be slow to fetch". Like the rivers route, the grid fetch runs in the
+// BACKGROUND and the request is served instantly from the best value we have.
+// The last live grid is upserted into Postgres (the dyno filesystem is wiped on
+// every deploy, so a disk snapshot only survived same-dyno restarts) — after a
+// deploy the layer comes back with the most recent real wind, typically ≤30 min
+// old, and the committed baked-in grid remains the guaranteed floor.
+const SNAPSHOT_KEY = 'wind-grid';
 
 let latestGrid: WindGrid | null = null; // freshest grid we hold
 let liveAt = 0; // when latestGrid was fetched live (0 = from snapshot/never)
 let refreshing = false;
 
-function loadWindSnapshot(): void {
-  try {
-    const grid = JSON.parse(fs.readFileSync(WIND_SNAPSHOT_PATH, 'utf8')) as WindGrid;
-    if (grid?.u?.length) latestGrid = grid;
-  } catch {
-    // No snapshot yet — the baked-in fallback covers it.
+// Restore the last live grid from Postgres. Retries briefly because boot-time
+// migration may still be creating the table; never overwrites a grid that a
+// faster live fetch already produced (compares `updated`).
+async function loadWindSnapshot(attempts = 5): Promise<void> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const { rows } = await pool.query<{ data: WindGrid }>(
+        'SELECT data FROM snapshots WHERE key = $1',
+        [SNAPSHOT_KEY]
+      );
+      const grid = rows[0]?.data;
+      if (grid?.u?.length && (!latestGrid || grid.updated > latestGrid.updated)) {
+        latestGrid = grid;
+        console.log(`[wind] restored grid from snapshot (${Math.round((Date.now() - grid.updated) / 60_000)} min old)`);
+      }
+      return;
+    } catch (err) {
+      if (attempt >= attempts) {
+        console.warn('[wind] snapshot load failed — baked-in fallback covers it:', err instanceof Error ? err.message : err);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 3_000));
+    }
   }
 }
 
@@ -169,7 +185,13 @@ async function refreshWind(): Promise<void> {
     const grid = await fetchWind();
     latestGrid = grid;
     liveAt = Date.now();
-    fsp.writeFile(WIND_SNAPSHOT_PATH, JSON.stringify(grid)).catch(() => {});
+    pool
+      .query(
+        `INSERT INTO snapshots (key, data) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
+        [SNAPSHOT_KEY, JSON.stringify(grid)]
+      )
+      .catch((err) => console.warn('[wind] snapshot save failed:', err instanceof Error ? err.message : err));
   } catch (err) {
     console.error('[wind] refresh failed (serving last good/fallback):', err instanceof Error ? err.message : err);
   } finally {
@@ -178,7 +200,9 @@ async function refreshWind(): Promise<void> {
 }
 
 export function initWindStream(): void {
-  loadWindSnapshot();
+  // Run the DB restore and the live fetch concurrently — whichever lands first
+  // serves; loadWindSnapshot only applies if it's newer than what we hold.
+  void loadWindSnapshot();
   void refreshWind();
   setInterval(() => void refreshWind(), TTL_MS);
 }

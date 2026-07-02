@@ -5,6 +5,31 @@ import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
 import { useWindStatus } from './windStore';
 import { makeSampler } from './windProbe';
+import type { WindGrid } from '../../types';
+
+// The last fetched grid, cached in localStorage (~80 KB) so the field renders
+// the instant the layer mounts — even on a fresh page load or with the server
+// unreachable — and the network fetch swaps in fresh data seamlessly behind it.
+const GRID_CACHE_KEY = 'gsoc-wind-grid';
+
+function readCachedGrid(): WindGrid | null {
+  try {
+    const raw = localStorage.getItem(GRID_CACHE_KEY);
+    if (!raw) return null;
+    const grid = JSON.parse(raw) as WindGrid;
+    return grid?.u?.length ? grid : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedGrid(grid: WindGrid): void {
+  try {
+    localStorage.setItem(GRID_CACHE_KEY, JSON.stringify(grid));
+  } catch {
+    // Quota/private-mode — the server snapshot still covers reloads.
+  }
+}
 
 // --- Tuning -----------------------------------------------------------------
 
@@ -245,23 +270,40 @@ export function WindLayer() {
       v.scene.requestRender();
     };
 
+    const applyGrid = (grid: WindGrid, stale: boolean) => {
+      sample = makeSampler(grid);
+      useWindStatus.getState().setStatus({
+        ready: true,
+        error: null,
+        maxSpeedMps: grid.speedMax,
+        grid,
+        stale,
+      });
+      if (rafId == null) rafId = requestAnimationFrame(tick);
+    };
+
+    // Start the field immediately from the cached grid (if any) — the fetch
+    // below replaces it the moment fresh data lands. No blank state, ever.
+    const cached = readCachedGrid();
+    if (cached) applyGrid(cached, true);
+
     const loadGrid = async () => {
       try {
         const grid = await api.wind();
         if (cancelled) return;
-        sample = makeSampler(grid);
-        useWindStatus.getState().setStatus({
-          ready: true,
-          error: null,
-          maxSpeedMps: grid.speedMax,
-          grid,
-          stale: grid.stale ?? false,
-        });
-        if (rafId == null) rafId = requestAnimationFrame(tick);
+        applyGrid(grid, grid.stale ?? false);
+        writeCachedGrid(grid);
       } catch (err) {
         if (cancelled) return;
         console.error('Failed to load wind grid', err);
-        useWindStatus.getState().setStatus({ error: 'Wind feed unavailable' });
+        // Keep animating whatever grid we already have (cached or previous
+        // fetch) rather than blanking the field; only surface a hard error when
+        // there is truly nothing to show.
+        if (useWindStatus.getState().grid) {
+          useWindStatus.getState().setStatus({ stale: true, error: null });
+        } else {
+          useWindStatus.getState().setStatus({ error: 'Wind feed unavailable' });
+        }
       }
     };
 
