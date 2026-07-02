@@ -24,6 +24,7 @@ import { WindReadout } from './layers/wind/WindReadout';
 import { RadarTimeline } from './layers/radar/RadarTimeline';
 import { ShipLayer } from './layers/ships/ShipLayer';
 import { NewsMapLayer } from './layers/newsMap/NewsMapLayer';
+import { IntelLayer } from './layers/intel/IntelLayer';
 import { ShipModelLayer } from './layers/ships/ShipModelLayer';
 import { ShipShockwave } from './screensaver/ShipShockwave';
 import { SatelliteLayer } from './layers/satellites/SatelliteLayer';
@@ -120,6 +121,7 @@ export default function App() {
           <SatelliteLayer />
           <LocationsLayer />
           <NewsMapLayer />
+          <IntelLayer />
           <TimeZonesLayer />
           <OsmBuildingsLayer />
           <GoogleEarthLayer />

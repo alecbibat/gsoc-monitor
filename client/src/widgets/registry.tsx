@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { WidgetId } from '../types';
 import { NewsWidget } from './news/NewsWidget';
 import { ProximityWidget } from './proximity/ProximityWidget';
+import { IntelWidget } from './intel/IntelWidget';
 
 export interface WidgetDef {
   id: WidgetId;
@@ -31,6 +32,15 @@ export const WIDGETS: WidgetDef[] = [
     glyph: '📡',
     accentClass: 'border-sky-500/40',
     render: () => <NewsWidget />,
+  },
+  {
+    id: 'intel-feed',
+    title: 'Intel Feed',
+    subtitle: 'Scanner · crime · news · social',
+    label: 'Intel',
+    glyph: '🛰',
+    accentClass: 'border-cyan-500/40',
+    render: () => <IntelWidget />,
   },
 ];
 

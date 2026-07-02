@@ -21,12 +21,13 @@ export type LayerId =
   | 'fireOutlook'
   | 'precip'
   | 'wildfires'
-  | 'outages';
+  | 'outages'
+  | 'intel';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
 // Standalone dockable widgets that aren't tied to a clicked map entity.
-export type WidgetId = 'news-feed' | 'proximity';
+export type WidgetId = 'news-feed' | 'proximity' | 'intel-feed';
 
 // Anything that can occupy a dockable panel. 'property-watch' is a popped-out
 // single-property hazard window spawned from the Property Watch widget.
@@ -461,6 +462,72 @@ export interface RiverDetail {
   forecastReliability: string | null;
   inServiceMsg: string | null;
   updated: number;
+}
+
+// --- OSINT intel engine (Dataminr-style ingestion) --------------------------
+// One normalized item from any source — scanner/dispatch, crime, crashes, news
+// or social — plus the team-shared watchlist rows that produce them.
+export type SourceKind =
+  | 'rss'
+  | 'google-news'
+  | 'bluesky-author'
+  | 'bluesky-search'
+  | 'pulsepoint'
+  | 'chp'
+  | 'socrata';
+
+export type IntelCategory =
+  | 'scanner'
+  | 'crime'
+  | 'crash'
+  | 'fire'
+  | 'weather'
+  | 'news'
+  | 'social'
+  | 'other';
+
+export interface IntelItem {
+  id: string;
+  kind: SourceKind;
+  source: string;
+  category: IntelCategory;
+  title: string;
+  text: string | null;
+  author: string | null;
+  url: string;
+  publishedAt: number;
+  lat: number | null;
+  lon: number | null;
+  place: string | null;
+  severity: 'info' | 'watch' | 'urgent';
+}
+
+export interface IntelResponse {
+  items: IntelItem[];
+  updated: number;
+  sourceCount: number;
+  errors: string[];
+}
+
+// A watchlist source row as returned by /api/watchlist.
+export interface WatchlistSource {
+  id: string;
+  kind: SourceKind;
+  url: string | null;
+  label: string;
+  config: {
+    query?: string;
+    handle?: string;
+    agencyId?: string;
+    domain?: string;
+    dataset?: string;
+    dateField?: string;
+    category?: IntelCategory;
+    [k: string]: unknown;
+  };
+  active: boolean;
+  addedBy: string | null;
+  createdAt: string;
 }
 
 // Windowed lightning history from the server's rolling Blitzortung buffer.

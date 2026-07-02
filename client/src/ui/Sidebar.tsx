@@ -20,6 +20,7 @@ import { useFireOutlookStore } from '../layers/fireOutlook/fireOutlookStore';
 import { FireOutlookControls } from '../layers/fireOutlook/FireOutlookControls';
 import { useShipsStatus } from '../layers/ships/shipsStore';
 import { useNewsMapStore } from '../layers/newsMap/newsMapStore';
+import { useIntelStore } from '../layers/intel/intelStore';
 import { useSatellitesStatus } from '../layers/satellites/satellitesStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { useHoverStore } from '../screensaver/hoverStore';
@@ -123,6 +124,9 @@ export function Sidebar() {
   const toggleFuelZone = useFuelZoneStore((s) => s.toggle);
   const shipsStatus = useShipsStatus();
   const newsMapStatus = useNewsMapStore();
+  const intelItems = useIntelStore((s) => s.items);
+  const intelSourceCount = useIntelStore((s) => s.sourceCount);
+  const intelErr = useIntelStore((s) => s.error);
   const satellitesStatus = useSatellitesStatus();
   const osmStatus = useOsmStatus();
   const timeZonesStatus = useTimeZonesStatus();
@@ -172,6 +176,13 @@ export function Sidebar() {
     const scope = newsNearMiles > 0 ? `within ${newsNearMiles} mi of pins` : 'worldwide';
     if (newsMapStatus.total === 0) return 'Awaiting geocoded news · 6h';
     return `${newsMapStatus.count} events ${scope} · 6h`;
+  }
+
+  function intelStatusText() {
+    if (intelErr) return intelErr;
+    const mapped = intelItems.filter((i) => i.lat != null && i.lon != null).length;
+    if (intelItems.length === 0) return `Ingesting from ${intelSourceCount} source${intelSourceCount === 1 ? '' : 's'}…`;
+    return `${mapped} on map · ${intelItems.length} in feed`;
   }
 
   function satellitesStatusText() {
@@ -616,6 +627,12 @@ export function Sidebar() {
               </div>
             </div>
           </LayerToggle>
+          <LayerToggle
+            label="Intel (scanner · crime · social)"
+            active={(active as Record<string, boolean>).intel ?? false}
+            onToggle={() => toggleLayer('intel')}
+            statusText={intelStatusText()}
+          />
         </Section>
 
         <Section title="Tracking">

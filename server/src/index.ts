@@ -32,6 +32,9 @@ import crisisRouter from './routes/crisis';
 import authRouter from './routes/auth';
 import adminRouter from './routes/admin';
 import incidentsRouter from './routes/incidents';
+import watchlistRouter from './routes/watchlist';
+import intelRouter from './routes/intel';
+import { initIntelStream } from './intel/service';
 
 dotenv.config();
 
@@ -87,6 +90,11 @@ function main() {
   // Incident CRUD (requireAuth applied inside router)
   app.use('/api/incidents', incidentsRouter);
 
+  // Team-shared OSINT watchlist CRUD (requireAuth applied inside router)
+  app.use('/api/watchlist', watchlistRouter);
+  // Public read-only intel feed (the ingested Dataminr-style buffer)
+  app.use('/api/intel', intelRouter);
+
   // Crisis share links (public — no auth for viewer access)
   app.use('/api/crisis', crisisRouter);
 
@@ -127,6 +135,9 @@ function main() {
   // Multi-state power-outage aggregator — rebuilt in the background so
   // /api/outages always answers instantly.
   initOutagesStream();
+  // Dataminr-style OSINT ingest: scanner/dispatch, crime, crashes, news and
+  // social feeds normalized into one rolling buffer behind /api/intel.
+  initIntelStream();
 
   const clientDist = path.join(__dirname, '../../client/dist');
   app.use(express.static(clientDist));

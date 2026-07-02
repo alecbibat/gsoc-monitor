@@ -18,6 +18,28 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// Authed JSON request (cookie-JWT). Surfaces the server's error message so the
+// watchlist form can show "socrata needs config.domain and config.dataset" etc.
+async function authJson<T>(path: string, method: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    credentials: 'include',
+    headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    let msg = `Request to ${path} failed: ${res.status}`;
+    try {
+      const j = (await res.json()) as { error?: string };
+      if (j?.error) msg = j.error;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(msg);
+  }
+  return res.json() as Promise<T>;
+}
+
 export const api = {
   earthquakes: (magnitude: string, period: string) =>
     getJson<GeoJSON.FeatureCollection>(
@@ -77,4 +99,18 @@ export const api = {
     getJson<import('../types').RiverDetail>(`/api/rivers/${encodeURIComponent(lid)}`),
   windForecast: (lat: number, lon: number) =>
     getJson<import('../types').WindForecast>(`/api/wind/forecast?lat=${lat}&lon=${lon}`),
+
+  // OSINT intel engine: the public read-only feed + the team-shared watchlist CRUD.
+  intel: () => getJson<import('../types').IntelResponse>('/api/intel'),
+  watchlist: () => authJson<import('../types').WatchlistSource[]>('/api/watchlist', 'GET'),
+  addWatchSource: (body: {
+    kind: string;
+    label: string;
+    url?: string | null;
+    config?: Record<string, unknown>;
+  }) => authJson<import('../types').WatchlistSource>('/api/watchlist', 'POST', body),
+  setWatchSourceActive: (id: string, active: boolean) =>
+    authJson<import('../types').WatchlistSource>(`/api/watchlist/${id}`, 'PATCH', { active }),
+  deleteWatchSource: (id: string) =>
+    authJson<{ ok: boolean }>(`/api/watchlist/${id}`, 'DELETE'),
 };

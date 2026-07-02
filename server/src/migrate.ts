@@ -47,6 +47,21 @@ export async function migrate() {
         active      BOOLEAN     NOT NULL DEFAULT TRUE,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      -- Team-shared OSINT watchlist. Each row is one intel source (news site,
+      -- Google-News topic, scanner agency, crime dataset, social account) the
+      -- background ingest engine polls. Items themselves are never stored — they
+      -- live in an in-memory rolling buffer — so only the sources persist here.
+      CREATE TABLE IF NOT EXISTS watchlist_sources (
+        id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        kind       TEXT        NOT NULL,
+        url        TEXT,
+        label      TEXT        NOT NULL,
+        config     JSONB       NOT NULL DEFAULT '{}'::jsonb,
+        active     BOOLEAN     NOT NULL DEFAULT TRUE,
+        added_by   UUID,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
     `);
 
     // Signup code. If SIGNUP_CODE is set in the environment it is authoritative

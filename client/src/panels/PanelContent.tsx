@@ -9,6 +9,7 @@ import { ShipDetails } from '../layers/ships/ShipDetails';
 import { SatelliteDetails } from '../layers/satellites/SatelliteDetails';
 import { LocationDetails } from '../layers/locations/LocationDetails';
 import { NewsMapDetails } from '../layers/newsMap/NewsMapDetails';
+import { IntelDetails } from '../layers/intel/IntelDetails';
 import { SmokeDetails } from '../layers/smoke/SmokeDetails';
 import { AqiDetails } from '../layers/aqi/AqiDetails';
 import { FuelZoneDetails } from '../fuelzone/FuelZoneDetails';
@@ -39,6 +40,7 @@ const ACCENT_BY_KIND: Record<string, string> = {
   satellites: 'border-sky-400/40',
   locations: 'border-violet-500/40',
   newsMap: 'border-indigo-400/40',
+  intel: 'border-cyan-500/40',
   'property-watch': 'border-accent-ok/40',
 };
 
@@ -67,6 +69,7 @@ export function PanelContent({ panel }: { panel: PanelData }) {
       {panel.kind === 'satellites' && <SatelliteDetails payload={panel.payload as never} />}
       {panel.kind === 'locations' && <LocationDetails payload={panel.payload as never} />}
       {panel.kind === 'newsMap' && <NewsMapDetails payload={panel.payload as never} />}
+      {panel.kind === 'intel' && <IntelDetails payload={panel.payload as never} />}
       {panel.kind === 'smoke' && <SmokeDetails payload={panel.payload as never} />}
       {panel.kind === 'aqi' && <AqiDetails payload={panel.payload as never} />}
       {panel.kind === 'fuel-zone' && <FuelZoneDetails payload={panel.payload as never} />}
