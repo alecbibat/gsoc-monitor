@@ -360,6 +360,35 @@ export interface JtwcInvestsResponse {
   error?: string;
 }
 
+// --- Power outages (multi-state server-side aggregation) ---------------------
+export interface OutagePoint {
+  id: string;
+  utility: string;
+  state: string | null;
+  lat: number;
+  lon: number;
+  start: number | null; // epoch ms
+  estimatedRestore: number | null; // epoch ms
+  cause: string | null;
+  customers: number | null;
+  county: string | null;
+  status: string | null;
+  type: 'Planned' | 'Unplanned' | null;
+  aggregated: number | null; // >1 when the point is a cluster of N outages
+}
+export interface OutageSourceStatus {
+  name: string;
+  state: string;
+  ok: boolean;
+  count: number;
+}
+export interface OutagesResponse {
+  outages: OutagePoint[];
+  sources: OutageSourceStatus[];
+  updated: number;
+  error?: string;
+}
+
 // --- Rivers & floods (NOAA NWPS) -------------------------------------------
 // Normalized flood tiers (most → least severe) plus the non-flood states kept.
 export type FloodCat = 'major' | 'moderate' | 'minor' | 'action' | 'normal' | 'low' | 'none';

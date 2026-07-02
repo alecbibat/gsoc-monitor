@@ -386,14 +386,14 @@ export function Sidebar() {
             }
           />
           <LayerToggle
-            label="Power Outages (Cal OES · CA)"
+            label="Power Outages (Multi-State)"
             active={(active as Record<string, boolean>).outages ?? false}
             onToggle={() => toggleLayer('outages')}
             statusText={
               outagesStatus.error ??
               (outagesStatus.count > 0
-                ? `${outagesStatus.count} active · ${outagesStatus.customers.toLocaleString()} customers · CA`
-                : 'Utility, cause, restoration ETA · California only')
+                ? `${outagesStatus.count} active · ${outagesStatus.customers.toLocaleString()} customers · ${outagesStatus.states} state${outagesStatus.states === 1 ? '' : 's'}`
+                : 'Utility, cause, restoration ETA · 18 feeds, ~19 states')
             }
           />
           <LayerToggle

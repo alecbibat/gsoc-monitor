@@ -3,6 +3,7 @@ import { outageColor } from './outagesData';
 interface Props {
   payload: {
     utility: string;
+    state: string | null;
     lat: number;
     lon: number;
     start: number | null;
@@ -12,6 +13,7 @@ interface Props {
     county: string | null;
     status: string | null;
     type: string | null;
+    aggregated: number | null;
   };
 }
 
@@ -68,9 +70,18 @@ export function OutageDetails({ payload }: Props) {
         <span className="text-white/50">customers affected</span>
       </div>
 
+      {payload.aggregated != null && payload.aggregated > 1 && (
+        <p className="rounded-md bg-white/5 px-2.5 py-1.5 text-[12px] text-white/60">
+          This marker aggregates {payload.aggregated} nearby outages reported by the utility.
+        </p>
+      )}
+
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[13px]">
         <dt className="text-white/40">Utility</dt>
-        <dd className="font-medium">{payload.utility}</dd>
+        <dd className="font-medium">
+          {payload.utility}
+          {payload.state && <span className="text-white/40"> · {payload.state}</span>}
+        </dd>
 
         {started && (
           <>
@@ -101,7 +112,7 @@ export function OutageDetails({ payload }: Props) {
 
         {payload.county && (
           <>
-            <dt className="text-white/40">County</dt>
+            <dt className="text-white/40">Area</dt>
             <dd>{payload.county}</dd>
           </>
         )}
@@ -115,19 +126,11 @@ export function OutageDetails({ payload }: Props) {
       )}
 
       <p className="text-[11px] leading-relaxed text-white/40">
-        Statewide outage data from the California Office of Emergency Services (Cal OES) public feed,
-        aggregating the state’s electric utilities. California only. Times and restoration estimates
-        come from each utility and update as they report.
+        Aggregated server-side from public feeds: state emergency-management services (Cal OES),
+        utilities&rsquo; own outage-map data (KUBRA Storm Center), and co-op outage maps (NISC).
+        Coverage spans ~19 states where such feeds exist — not nationwide. Times, causes and
+        restoration estimates come from each utility and update as they report.
       </p>
-
-      <a
-        href="https://gis.data.ca.gov/"
-        target="_blank"
-        rel="noreferrer"
-        className="inline-block text-xs text-accent underline underline-offset-2 hover:text-accent/80"
-      >
-        Cal OES open data &rarr;
-      </a>
     </div>
   );
 }

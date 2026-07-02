@@ -49,17 +49,26 @@ export function OutageLayer() {
 
     if (!active) {
       ds.entities.removeAll();
-      useOutagesStatus.getState().setStatus({ count: 0, customers: 0, error: null });
+      useOutagesStatus.getState().setStatus({ count: 0, customers: 0, states: 0, error: null });
       viewer.scene.requestRender();
       return;
     }
 
     let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+
     const load = async () => {
       const { outages, error } = await fetchOutages();
       if (cancelled) return;
-      if (error) {
-        console.error('Cal OES outage feed fetch failed', error);
+      // Server cold start: the aggregator answers instantly with "warming up"
+      // while the first background refresh runs — retry shortly instead of
+      // sitting empty until the next 5-minute poll.
+      if (error === 'warming up') {
+        retry = setTimeout(() => void load(), 20_000);
+        return;
+      }
+      if (error && outages.length === 0) {
+        console.error('Outage aggregator fetch failed', error);
         useOutagesStatus.getState().setStatus({ error: `Outage feed error: ${error}` });
         return;
       }
@@ -89,7 +98,7 @@ export function OutageLayer() {
             verticalOrigin: Cesium.VerticalOrigin.TOP,
             pixelOffset: new Cesium.Cartesian2(0, 14),
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
-            // Labels only when zoomed in (CA-scale); markers always show.
+            // Labels only when zoomed in (state-scale); markers always show.
             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 1_500_000),
           },
         });
@@ -97,13 +106,16 @@ export function OutageLayer() {
           id,
           kind: 'outages',
           title: `${o.utility} outage`,
-          subtitle: o.type ? `${o.type}${o.county ? ` · ${o.county}` : ''}` : (o.county ?? 'Power outage'),
+          subtitle: o.type
+            ? `${o.type}${o.state ? ` · ${o.state}` : ''}`
+            : (o.county ?? o.state ?? 'Power outage'),
           payload: { ...o },
         });
       }
 
       const customers = outages.reduce((sum, o) => sum + (o.customers ?? 0), 0);
-      useOutagesStatus.getState().setStatus({ count: outages.length, customers, error: null });
+      const states = new Set(outages.map((o) => o.state).filter(Boolean)).size;
+      useOutagesStatus.getState().setStatus({ count: outages.length, customers, states, error: null });
       viewer.scene.requestRender();
     };
 
@@ -112,6 +124,7 @@ export function OutageLayer() {
     return () => {
       cancelled = true;
       clearInterval(interval);
+      if (retry) clearTimeout(retry);
     };
   }, [viewer, active]);
 

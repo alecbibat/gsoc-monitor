@@ -195,11 +195,11 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     info: {
       name: 'Power Outages',
       icon: '⚡',
-      source: 'Cal OES (California OES)',
+      source: 'Multi-state aggregation (18 feeds)',
       method:
-        'California statewide electric outages from the California Office of Emergency Services public ArcGIS feed, which aggregates the state’s utilities. Each incident carries the utility company, start + estimated-restoration times, cause, impacted customers, county, and planned/unplanned type. Fetched live client-side.',
+        'Per-outage detail aggregated server-side from three families of public feeds: state emergency-management ArcGIS services (Cal OES statewide CA; SRP + SSVEC AZ; Minnesota Power MN/WI; Riverside PU CA), the KUBRA Storm Center data behind major utilities’ own outage maps (Oncor TX, Georgia Power + Cobb EMC GA, JEA FL, Colorado Springs Utilities CO, LG&E/KU KY, Evergy KS/MO, Versant ME, Appalachian Power VA/WV/TN), and NISC co-op outage maps (Sawnee GA, SLEMCO LA, Price Electric WI, Cloverland MI). Each outage carries the utility, start + estimated-restoration times, cause, and impacted customers where the utility reports them.',
       trust:
-        'A California state-government aggregation of the utilities’ own outage reports. California only — there is no free, sanctioned national per-outage feed (PowerOutage.us is paid and prohibits scraping; individual utility feeds are fragmented), so coverage stops at the state line.',
+        'Every source is either a state-government aggregation or the same data a utility’s own public outage map renders — but utility map endpoints are unofficial and can change without notice, and coverage is ~19 states, not nationwide (no free, sanctioned national per-outage feed exists: PowerOutage.us is paid and prohibits scraping). During large storms, dense areas may collapse into aggregated cluster markers.',
       url: 'https://gis.data.ca.gov',
     },
   },

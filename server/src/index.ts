@@ -25,6 +25,7 @@ import lightningRouter, { initLightningStream } from './routes/lightning';
 import riversRouter, { initRiversStream } from './routes/rivers';
 import fireOutlookRouter from './routes/fireOutlook';
 import jtwcRouter from './routes/jtwc';
+import outagesRouter, { initOutagesStream } from './routes/outages';
 import crisisRouter from './routes/crisis';
 import authRouter from './routes/auth';
 import adminRouter from './routes/admin';
@@ -104,6 +105,7 @@ function main() {
   app.use('/api/rivers', riversRouter);
   app.use('/api/fire-outlook', fireOutlookRouter);
   app.use('/api/jtwc-invests', jtwcRouter);
+  app.use('/api/outages', outagesRouter);
 
   initShipsStream();
   // Persistent Blitzortung collector → rolling buffer behind /api/lightning so
@@ -115,6 +117,9 @@ function main() {
   // Keep the wind grid warm in the background; the route always serves the best
   // available grid (live → snapshot → baked-in fallback), never blocking.
   initWindStream();
+  // Multi-state power-outage aggregator — rebuilt in the background so
+  // /api/outages always answers instantly.
+  initOutagesStream();
 
   const clientDist = path.join(__dirname, '../../client/dist');
   app.use(express.static(clientDist));
