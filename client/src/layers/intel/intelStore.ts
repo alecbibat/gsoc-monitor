@@ -35,8 +35,14 @@ export const useIntelStore = create<IntelState>((set) => ({
       else next.add(c);
       return { categories: next };
     }),
+  // The layer and the widget each poll /api/intel; guard against an in-flight
+  // slow response landing after a newer one and regressing the feed.
   setData: (items, updated, sourceCount, errors) =>
-    set({ items, updated, sourceCount, errors, loading: false, error: null }),
+    set((s) =>
+      updated >= s.updated
+        ? { items, updated, sourceCount, errors, loading: false, error: null }
+        : { loading: false }
+    ),
   setLoading: (v) => set({ loading: v }),
   setError: (e) => set({ error: e, loading: false }),
 }));

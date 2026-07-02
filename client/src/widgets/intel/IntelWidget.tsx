@@ -192,8 +192,12 @@ export function IntelWidget() {
   const filterOn = categories.size > 0;
   const visible = filterOn ? items.filter((i) => categories.has(i.category)) : items;
 
-  // Which categories are actually present, in priority order (for the chips).
-  const present = CATEGORY_ORDER.filter((c) => items.some((i) => i.category === c));
+  // Chips: categories present in the feed, plus any currently-selected category
+  // even if its items have aged out — otherwise the user is stranded in an
+  // empty filtered view with no chip left to clear.
+  const present = CATEGORY_ORDER.filter(
+    (c) => categories.has(c) || items.some((i) => i.category === c)
+  );
 
   return (
     <div className="flex flex-col gap-3">

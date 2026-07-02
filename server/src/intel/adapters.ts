@@ -15,6 +15,10 @@ async function fetchText(url: string, headers: Record<string, string> = {}): Pro
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  // Re-validate after redirects: a watchlist URL that passed validation could
+  // still 302 to an internal host; reject the body if the chain left the
+  // public internet. (r.url is the final URL after fetch follows redirects.)
+  if (r.url && !isPublicHttpUrl(r.url)) throw new Error('redirected to a non-public host');
   return r.text();
 }
 async function fetchJson<T>(url: string, headers: Record<string, string> = {}): Promise<T> {
@@ -26,6 +30,11 @@ function stableId(prefix: string, s: string): string {
 }
 
 // --- XML/RSS helpers (tolerant, regex-based — same approach as routes/news.ts) --
+// String.fromCodePoint throws RangeError above U+10FFFF, and one malformed
+// entity in one item must not wipe the whole source's cycle — swallow it.
+function safeCodePoint(n: number): string {
+  return n >= 0 && n <= 0x10ffff ? String.fromCodePoint(n) : '';
+}
 function decodeXml(s: string): string {
   return s
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
@@ -36,8 +45,8 @@ function decodeXml(s: string): string {
     .replace(/&#0?39;/g, "'")
     .replace(/&apos;/g, "'")
     .replace(/&#x27;/g, "'")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&#(\d+);/g, (_, n) => safeCodePoint(+n))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => safeCodePoint(parseInt(n, 16)))
     .replace(/&amp;/g, '&')
     .replace(/\s+/g, ' ')
     .trim();
@@ -46,9 +55,15 @@ function tag(block: string, name: string): string | null {
   const m = block.match(new RegExp(`<${name}[^>]*>([\\s\\S]*?)</${name}>`, 'i'));
   return m ? decodeXml(m[1]) : null;
 }
-// Atom <link href="..."/> or RSS <link>...</link>
+// Atom <link href="..."/> or RSS <link>...</link>. Atom entries often list a
+// rel="self"/"replies" link before the article's rel="alternate" — prefer the
+// alternate, and accept either quote style.
 function linkOf(block: string): string {
-  const href = block.match(/<link[^>]*\bhref="([^"]+)"/i);
+  const alt = block.match(/<link[^>]*\brel=["']alternate["'][^>]*\bhref=["']([^"']+)["']/i);
+  if (alt) return alt[1];
+  const noRel = block.match(/<link(?![^>]*\brel=["'](?:self|replies|edit|enclosure)["'])[^>]*\bhref=["']([^"']+)["']/i);
+  if (noRel) return noRel[1];
+  const href = block.match(/<link[^>]*\bhref=["']([^"']+)["']/i);
   if (href) return href[1];
   const t = tag(block, 'link');
   return t ? t.trim() : '';
@@ -97,15 +112,34 @@ function parseRss(xml: string, src: IntelSource): IntelItem[] {
       publishedAt: Number.isNaN(when) ? Date.now() : when,
       lat: null,
       lon: null,
-      place: null, // geocoded later from title if the source has no staticGeo
+      place: null, // feed-only unless the source has a staticGeo region pin
       severity: severityOf(blob),
     });
   }
   return out;
 }
 
+// Defense-in-depth: adapters re-check the fetch target's shape even though the
+// watchlist route validates on write, so a row that bypassed validation (older
+// schema, direct DB edit) still can't aim the fetcher at private infrastructure.
+const PUBLIC_HOST_RE = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i;
+function isPublicHttpUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    return (
+      (u.protocol === 'http:' || u.protocol === 'https:') &&
+      !u.username &&
+      !u.password &&
+      PUBLIC_HOST_RE.test(u.hostname) &&
+      !/^\d+\.\d+\.\d+\.\d+$/.test(u.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function adaptRss(src: IntelSource): Promise<IntelItem[]> {
-  if (!src.url) return [];
+  if (!src.url || !isPublicHttpUrl(src.url)) return [];
   return parseRss(await fetchText(src.url), src);
 }
 
@@ -317,6 +351,7 @@ async function adaptChp(src: IntelSource): Promise<IntelItem[]> {
 async function adaptSocrata(src: IntelSource): Promise<IntelItem[]> {
   const c = src.config ?? {};
   if (!c.domain || !c.dataset) return [];
+  if (!PUBLIC_HOST_RE.test(c.domain) || !/^[a-z0-9]{4}-[a-z0-9]{4}$/i.test(c.dataset)) return [];
   const dateField = c.dateField ?? 'date';
   const latField = c.latField ?? 'latitude';
   const lonField = c.lonField ?? 'longitude';
@@ -340,8 +375,13 @@ async function adaptSocrata(src: IntelSource): Promise<IntelItem[]> {
     const desc = (c.descField && str(row[c.descField])) ?? str(row.description) ?? null;
     const when = str(row[dateField]);
     const t = when ? Date.parse(when) : NaN;
-    const lat = num(row[latField]);
-    const lon = num(row[lonField]);
+    let lat = num(row[latField]);
+    let lon = num(row[lonField]);
+    // Some datasets encode a redacted location as 0,0 — null island, not a pin.
+    if (lat === 0 && lon === 0) {
+      lat = null;
+      lon = null;
+    }
     const idBase = str(row.case_number) ?? str(row.id) ?? `${when}:${lat}:${lon}:${type}`;
     out.push({
       id: stableId('socrata', `${c.dataset}:${idBase}`),

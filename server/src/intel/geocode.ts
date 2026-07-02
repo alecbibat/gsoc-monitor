@@ -32,7 +32,11 @@ export function cachedPlace(q: string): { lat: number; lon: number } | null {
   return toCoords(cache.get<NomResult[]>(key) ?? cache.getStale<NomResult[]>(key));
 }
 
-export async function geocodePlace(q: string): Promise<{ lat: number; lon: number } | null> {
+// Distinguishes "the place genuinely has no result" (null — safe for callers to
+// blacklist) from "the lookup failed" ('error' — transient, retry another cycle).
+export async function geocodePlace(
+  q: string
+): Promise<{ lat: number; lon: number } | null | 'error'> {
   const trimmed = q.trim();
   if (!trimmed || trimmed.length > 160) return null;
   try {
@@ -52,6 +56,6 @@ export async function geocodePlace(q: string): Promise<{ lat: number; lon: numbe
     );
     return toCoords(data);
   } catch {
-    return null;
+    return 'error';
   }
 }

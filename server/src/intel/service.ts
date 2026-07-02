@@ -178,17 +178,18 @@ async function locate(item: IntelItem, src: IntelSource, budgetLeft: number): Pr
     const key = item.place.toLowerCase().trim();
     if (budgetLeft > 0 && !geocodeMisses.has(key)) {
       const hit = await geocodePlace(item.place);
-      if (hit) {
+      if (hit === 'error') {
+        // Transient lookup failure — do NOT blacklist; retry in a later cycle.
+      } else if (hit) {
         item.lat = hit.lat;
         item.lon = hit.lon;
       } else {
-        noteMiss(key);
+        noteMiss(key); // genuine "no result" — don't re-spend budget on it
       }
       // Whether it resolved or not, we spent the network call.
-      if (!hit && staticGeo) {
+      if (item.lat == null && staticGeo) {
         item.lat = staticGeo.lat;
         item.lon = staticGeo.lon;
-        item.place = item.place ?? staticGeo.place;
       }
       return true;
     }
@@ -221,17 +222,26 @@ async function cycle(): Promise<void> {
     }
   });
 
-  // Geocode the items that need it, newest first, honoring the per-cycle budget.
+  // Geocode the items that need it, newest first, honoring the per-cycle budget
+  // AND Nominatim's ~1 req/s absolute policy: network lookups are spaced out,
+  // not burst back-to-back (cache hits pay no delay).
   fresh.sort((a, b) => b.item.publishedAt - a.item.publishedAt);
   let budget = GEOCODE_BUDGET;
   for (const { item, src } of fresh) {
     const spent = await locate(item, src, budget);
-    if (spent) budget -= 1;
+    if (spent) {
+      budget -= 1;
+      if (budget > 0) await new Promise((r) => setTimeout(r, 1_100));
+    }
   }
 
   // Merge into the rolling buffer (dedup by id; keep first-seen timestamp).
   const now = Date.now();
   for (const { item } of fresh) {
+    // Clamp bogus future timestamps (a bad pubDate like "2050") — otherwise the
+    // item sorts first forever and, worse, is never age-pruned, so at BUFFER_CAP
+    // it would evict genuinely-recent items instead.
+    if (item.publishedAt > now + 300_000) item.publishedAt = now;
     const existing = buffer.get(item.id);
     if (existing) {
       // Refresh mutable fields (a later cycle may have geocoded it) but keep the
@@ -281,14 +291,26 @@ export function getIntel(): IntelResponse {
 }
 
 let started = false;
+let cycleRunning = false;
 export function initIntelStream(): void {
   if (started) return;
   started = true;
   // Kick off immediately, then on an interval. Errors are swallowed so a bad
   // cycle never takes the process down (mirrors the other background streams).
-  const run = () => {
-    cycle().catch((err) => console.error('[intel] cycle error:', err));
+  // A slow cycle (many sources timing out + spaced geocodes) can outlast
+  // REFRESH_MS — skip the tick rather than run two cycles concurrently, which
+  // would double-spend the geocode budget and race the shared buffer.
+  const run = async () => {
+    if (cycleRunning) return;
+    cycleRunning = true;
+    try {
+      await cycle();
+    } catch (err) {
+      console.error('[intel] cycle error:', err);
+    } finally {
+      cycleRunning = false;
+    }
   };
-  run();
+  void run();
   setInterval(run, REFRESH_MS).unref();
 }
