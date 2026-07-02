@@ -3,7 +3,18 @@ import { useEffect } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { useWindStatus, acquireWindGrid } from './windStore';
-import { makeSampler, speedColorHex, flowAxis, ARROW_DATA_URI } from './windProbe';
+import { makeSampler, speedColorHex, flowAxis } from './windProbe';
+
+// A bolder arrow than the probe HUD's — a big triangular head over a solid
+// shaft, thick dark outline. The billboard `color` tints the white fill to the
+// speed color while the near-black outline stays dark (multiply), so each arrow
+// keeps a crisp edge and reads on a light OR dark basemap.
+const BOLD_ARROW_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">' +
+  '<path d="M24 2 L41 27 L31 27 L31 46 L17 46 L17 27 L7 27 Z" ' +
+  'fill="#ffffff" stroke="#0a1520" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"/>' +
+  '</svg>';
+const BOLD_ARROW_URI = `data:image/svg+xml,${encodeURIComponent(BOLD_ARROW_SVG)}`;
 
 // A meteorological direction-arrow field: one oriented arrow per cell of a
 // camera-adaptive grid, colored and sized by wind speed. Complements the
@@ -16,18 +27,28 @@ import { makeSampler, speedColorHex, flowAxis, ARROW_DATA_URI } from './windProb
 // no screen-space rotation bookkeeping.
 
 const ALT_M = 3_000; // match the particle field's lift above the ellipsoid
-const PX_SPACING = 62; // target on-screen spacing between arrows
+const PX_SPACING = 72; // target on-screen spacing — wider now that arrows are bigger
 const MAX_ARROWS = 3_600; // hard cap per rebuild
 const MIN_STEP_DEG = 0.35; // don't oversample far below the 5° data resolution
-const MIN_SPEED_MPS = 0.7; // skip near-calm cells — a direction there is noise
+const MIN_SPEED_MPS = 0.6; // skip near-calm cells — a direction there is noise
+
+// On-screen arrow size, strongly driven by wind speed so the field's structure
+// (jets, fronts, calm zones) reads at a glance: a light breeze is a small mark,
+// a gale is ~3.5× larger.
+const SIZE_MIN = 17; // px at MIN_SPEED_MPS
+const SIZE_PER_MS = 1.5; // px added per m/s
+const SIZE_MAX = 62; // px cap (≈30 m/s) so storms don't blanket the view
+function arrowSize(spd: number): number {
+  return Math.min(SIZE_MAX, SIZE_MIN + spd * SIZE_PER_MS);
+}
 
 // Precompute the color object per ramp step of 1 m/s to avoid allocating a
-// Cesium.Color for every arrow on every rebuild.
+// Cesium.Color for every arrow on every rebuild. Full opacity so they pop.
 const COLOR_LUT: Cesium.Color[] = [];
 function colorFor(spd: number): Cesium.Color {
   const key = Math.min(60, Math.round(spd));
   if (!COLOR_LUT[key]) {
-    COLOR_LUT[key] = Cesium.Color.fromCssColorString(speedColorHex(key)).withAlpha(0.92);
+    COLOR_LUT[key] = Cesium.Color.fromCssColorString(speedColorHex(key));
   }
   return COLOR_LUT[key];
 }
@@ -95,10 +116,10 @@ export function WindArrowsLayer() {
           const spd = Math.hypot(out[0], out[1]);
           if (spd < MIN_SPEED_MPS) continue;
           const toDeg = ((Math.atan2(out[0], out[1]) * 180) / Math.PI + 360) % 360;
-          const size = 13 + 13 * Math.min(1, spd / 26);
+          const size = arrowSize(spd);
           billboards.add({
             position: Cesium.Cartesian3.fromDegrees(lon, lat, ALT_M),
-            image: ARROW_DATA_URI,
+            image: BOLD_ARROW_URI,
             width: size,
             height: size,
             color: colorFor(spd),
