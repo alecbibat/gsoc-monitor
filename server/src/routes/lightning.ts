@@ -40,16 +40,33 @@ function inflate(input: string): string {
 }
 
 // --- Rolling strike buffer ---------------------------------------------------
-// Parallel typed arrays in a ring buffer: compact (~16 MB total at this cap) and
-// allocation-free on the hot path. Strikes are pushed in arrival (time) order,
-// so the logical oldest→newest order is contiguous in time and a query can walk
-// backward from the newest and stop at the window cutoff.
-const CAP = 1_000_000; // hard cap; older strikes are overwritten once full
+// Parallel typed arrays in a ring buffer: compact and allocation-free on the hot
+// path. Strikes are pushed in arrival (time) order, so the logical oldest→newest
+// order is contiguous in time and a query can walk backward from the newest and
+// stop at the window cutoff.
+//
+// Sizing (this is what fixes "24h only ever covers ~2.8h"): the *global*
+// Blitzortung stream runs ~100 strikes/sec, so a 1M-slot ring filled in ~2.8h
+// and then overwrote everything older — the 24h window could never be reached,
+// and the disk snapshot could only ever persist the ~2.8h the buffer physically
+// held. Two changes give a true 24h span within a bounded memory budget:
+//   1. This buffer only ever feeds the *historical* point cloud, which is
+//      thinned to ≤ MAX_RESPONSE points for display regardless of window (the
+//      live browser layer draws the freshest 10 min at full fidelity itself).
+//      So we can decimate on ingest — keep 1 of every KEEP_EVERY strikes — with
+//      no visible loss: even the 1h window still holds far more than the display
+//      cap. This stretches the same slots to cover ~6× longer.
+//   2. Enlarge the ring so 24h fits with headroom.
+// At CAP=3M / KEEP_EVERY=6 the buffer spans 24h for sustained raw rates up to
+// ~200 strikes/sec, using ~48 MB (Float32 lat+lon + Float64 ms time).
+const CAP = 3_000_000; // hard cap; older strikes are overwritten once full
+const KEEP_EVERY = 6; // store 1 of every N received strikes (uniform, spatially unbiased)
 const latBuf = new Float32Array(CAP);
 const lonBuf = new Float32Array(CAP);
 const tBuf = new Float64Array(CAP); // epoch ms (needs f64 precision)
 let head = 0; // next write index
 let count = 0; // number of filled slots (≤ CAP)
+let ingestSeq = 0; // counts received strikes for decimation
 
 function push(lat: number, lon: number, t: number): void {
   latBuf[head] = lat;
@@ -183,9 +200,13 @@ function connect(): void {
     }
     if (!strike || typeof strike.lat !== 'number' || typeof strike.lon !== 'number') return;
     if (strike.lat < -90 || strike.lat > 90 || strike.lon < -180 || strike.lon > 180) return;
-    push(strike.lat, strike.lon, Date.now());
     totalStrikes++;
     lastStrikeAt = Date.now();
+    // Decimate: store 1 of every KEEP_EVERY strikes so the fixed buffer spans a
+    // full 24h. Strikes arrive globally interleaved, so every-Nth is an unbiased
+    // sample; the historical view is display-thinned anyway (see MAX_RESPONSE).
+    if (ingestSeq++ % KEEP_EVERY !== 0) return;
+    push(strike.lat, strike.lon, Date.now());
   });
 
   socket.on('close', () => {
@@ -294,12 +315,17 @@ router.get('/', (req, res) => {
 // GET /api/lightning/debug — collector health at a glance.
 router.get('/debug', (_req, res) => {
   const now = Date.now();
+  const oldestIdx = count > 0 ? (head - count + CAP) % CAP : -1;
+  const coverageMin = oldestIdx >= 0 ? Math.round((now - tBuf[oldestIdx]) / 60_000) : 0;
   res.json({
     connected,
     relay: RELAYS[(relayIndex - 1 + RELAYS.length) % RELAYS.length],
     bufferCount: count,
     bufferCap: CAP,
-    totalStrikes,
+    keepEvery: KEEP_EVERY,
+    coverageMin, // how far back the buffer reaches — should climb toward 1440 (24h)
+    coverageHours: Math.round((coverageMin / 60) * 10) / 10,
+    totalStrikes, // received (before decimation)
     secSinceLastStrike: lastStrikeAt ? Math.round((now - lastStrikeAt) / 1000) : null,
     updated: now,
   });
