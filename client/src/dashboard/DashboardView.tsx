@@ -1,8 +1,12 @@
 import { useEffect } from 'react';
 import { useDashboardStore } from './dashboardStore';
-import { scanDashboard, type StatusLevel } from './dashboardData';
+import { scanDashboard, type FeedEvent, type StatusLevel } from './dashboardData';
 import { DashboardCard } from './DashboardCard';
 import { DashboardFeed } from './DashboardFeed';
+import { BriefingPanel } from './BriefingPanel';
+import { useCesiumViewer } from '../cesium/CesiumContext';
+import { flyToBoundingBox, flyToLonLat } from '../cesium/flyTo';
+import type { LocationGroup } from '../layers/locations/locations';
 
 const SCAN_MS = 75_000; // rescan cadence while the dashboard is open
 const LEVEL_ORDER: Record<StatusLevel, number> = { alert: 0, watch: 1, ok: 2 };
@@ -10,6 +14,7 @@ const LEVEL_ORDER: Record<StatusLevel, number> = { alert: 0, watch: 1, ok: 2 };
 // Full-screen property status dashboard. Mounts the scan loop only while open
 // (the feed + dedup state live in the store, so they persist across open/close).
 export function DashboardView() {
+  const viewer = useCesiumViewer();
   const open = useDashboardStore((s) => s.open);
   const setOpen = useDashboardStore((s) => s.setOpen);
   const groups = useDashboardStore((s) => s.groups);
@@ -42,6 +47,34 @@ export function DashboardView() {
 
   const sorted = [...groups].sort((a, b) => LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level]);
 
+  // Card click → close the overlay and frame the property group on the globe;
+  // feed click → jump to the event itself.
+  const flyToGroup = (group: LocationGroup) => {
+    if (!viewer) return;
+    setOpen(false);
+    const locs = group.locations;
+    if (locs.length > 1) {
+      const lats = locs.map((l) => l.lat);
+      const lons = locs.map((l) => l.lon);
+      const padLat = Math.max(0.3, (Math.max(...lats) - Math.min(...lats)) * 0.4);
+      const padLon = Math.max(0.3, (Math.max(...lons) - Math.min(...lons)) * 0.4);
+      flyToBoundingBox(
+        viewer,
+        Math.min(...lons) - padLon,
+        Math.min(...lats) - padLat,
+        Math.max(...lons) + padLon,
+        Math.max(...lats) + padLat
+      );
+    } else if (locs[0]) {
+      flyToLonLat(viewer, locs[0].lon, locs[0].lat, 120_000);
+    }
+  };
+  const flyToEvent = (e: FeedEvent) => {
+    if (!viewer || e.lat == null || e.lon == null) return;
+    setOpen(false);
+    flyToLonLat(viewer, e.lon, e.lat, 400_000);
+  };
+
   return (
     <div className="absolute inset-0 z-[60] flex flex-col bg-ink-950/95 backdrop-blur-md">
       <div className="flex items-center gap-3 border-b border-white/10 px-5 py-3">
@@ -69,6 +102,7 @@ export function DashboardView() {
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-5 lg:flex-row">
         <div className="min-h-0 flex-1 overflow-y-auto">
+          <BriefingPanel onSelectGroup={flyToGroup} />
           {groups.length === 0 ? (
             <div className="grid h-full place-items-center text-[13px] text-white/40">
               Scanning properties…
@@ -76,7 +110,7 @@ export function DashboardView() {
           ) : (
             <div className="grid grid-cols-1 items-start gap-3.5 sm:grid-cols-2 xl:grid-cols-3">
               {sorted.map((s) => (
-                <DashboardCard key={s.group.id} s={s} />
+                <DashboardCard key={s.group.id} s={s} onSelect={() => flyToGroup(s.group)} />
               ))}
             </div>
           )}
@@ -87,7 +121,7 @@ export function DashboardView() {
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" /> Live feed
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-            <DashboardFeed feed={feed} />
+            <DashboardFeed feed={feed} onSelect={flyToEvent} />
           </div>
         </div>
       </div>

@@ -1,5 +1,6 @@
 import path from 'path';
 import express from 'express';
+import compression from 'compression';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
@@ -26,6 +27,7 @@ import riversRouter, { initRiversStream } from './routes/rivers';
 import fireOutlookRouter from './routes/fireOutlook';
 import jtwcRouter from './routes/jtwc';
 import outagesRouter, { initOutagesStream } from './routes/outages';
+import briefingRouter from './routes/briefing';
 import crisisRouter from './routes/crisis';
 import authRouter from './routes/auth';
 import adminRouter from './routes/admin';
@@ -66,6 +68,10 @@ async function migrateWithRetry(maxAttempts = 6): Promise<void> {
 function main() {
   const app = express();
 
+  // Gzip every response — the API ships large JSON payloads (lightning history,
+  // outages, rivers, ships) that compress 5–10×, and the static client bundle
+  // benefits too. Costs a little CPU on a mostly-idle dyno.
+  app.use(compression());
   app.use(cors());
   app.use(cookieParser());
   // Crisis share state embeds Cloudinary URLs after the migration (previously
@@ -106,6 +112,7 @@ function main() {
   app.use('/api/fire-outlook', fireOutlookRouter);
   app.use('/api/jtwc-invests', jtwcRouter);
   app.use('/api/outages', outagesRouter);
+  app.use('/api/briefing', briefingRouter);
 
   initShipsStream();
   // Persistent Blitzortung collector → rolling buffer behind /api/lightning so

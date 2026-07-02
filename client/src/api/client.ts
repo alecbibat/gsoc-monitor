@@ -6,6 +6,18 @@ async function getJson<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`Request to ${path} failed: ${res.status}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 export const api = {
   earthquakes: (magnitude: string, period: string) =>
     getJson<GeoJSON.FeatureCollection>(
@@ -59,6 +71,8 @@ export const api = {
   fireOutlook: () => getJson<import('../types').FireOutlookResponse>('/api/fire-outlook'),
   jtwcInvests: () => getJson<import('../types').JtwcInvestsResponse>('/api/jtwc-invests'),
   outages: () => getJson<import('../types').OutagesResponse>('/api/outages'),
+  briefing: (signals: unknown) =>
+    postJson<import('../types').BriefingResponse>('/api/briefing', { signals }),
   riverDetail: (lid: string) =>
     getJson<import('../types').RiverDetail>(`/api/rivers/${encodeURIComponent(lid)}`),
   windForecast: (lat: number, lon: number) =>

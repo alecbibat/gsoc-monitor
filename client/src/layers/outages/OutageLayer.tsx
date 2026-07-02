@@ -5,6 +5,7 @@ import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { useOutagesStatus } from './outagesStore';
 import { fetchOutages, outageColor } from './outagesData';
+import { startVisiblePolling } from '../../lib/poll';
 
 // A lightning-bolt-in-ring marker, colored by outage type.
 const iconCache = new Map<string, string>();
@@ -119,11 +120,10 @@ export function OutageLayer() {
       viewer.scene.requestRender();
     };
 
-    load();
-    const interval = setInterval(load, 5 * 60_000);
+    const stopPolling = startVisiblePolling(() => void load(), 5 * 60_000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopPolling();
       if (retry) clearTimeout(retry);
     };
   }, [viewer, active]);

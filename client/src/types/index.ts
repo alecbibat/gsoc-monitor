@@ -389,6 +389,15 @@ export interface OutagesResponse {
   error?: string;
 }
 
+// --- AI duty-officer briefing -------------------------------------------------
+export interface BriefingResponse {
+  headline: string;
+  narrative: string;
+  source: 'ai' | 'rules';
+  model?: string;
+  updated: number;
+}
+
 // --- Rivers & floods (NOAA NWPS) -------------------------------------------
 // Normalized flood tiers (most → least severe) plus the non-flood states kept.
 export type FloodCat = 'major' | 'moderate' | 'minor' | 'action' | 'normal' | 'low' | 'none';

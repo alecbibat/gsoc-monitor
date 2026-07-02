@@ -1,4 +1,5 @@
 import type { GroupStatus, StatusLevel } from './dashboardData';
+import { assessThreat, threatColor } from './threatScore';
 
 const LEVEL: Record<
   StatusLevel,
@@ -103,11 +104,21 @@ function Metric({ label, value, valueClass }: { label: string; value: string; va
   );
 }
 
-export function DashboardCard({ s }: { s: GroupStatus }) {
+function custShort(n: number | null): string {
+  if (n == null) return '?';
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+  return String(n);
+}
+
+export function DashboardCard({ s, onSelect }: { s: GroupStatus; onSelect?: () => void }) {
   const lv = LEVEL[s.level];
+  const threat = assessThreat(s);
   return (
     <div
-      className={`group relative overflow-hidden rounded-2xl border border-white/10 bg-ink-900/60 shadow-lg shadow-black/20 ring-1 ${lv.ring} transition-all duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-ink-900/80`}
+      onClick={onSelect}
+      role={onSelect ? 'button' : undefined}
+      title={onSelect ? 'View on the globe' : undefined}
+      className={`group relative overflow-hidden rounded-2xl border border-white/10 bg-ink-900/60 shadow-lg shadow-black/20 ring-1 ${lv.ring} transition-all duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-ink-900/80 ${onSelect ? 'cursor-pointer' : ''}`}
     >
       {/* status-tinted glow + a soft top accent bar */}
       <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${lv.glow} to-transparent`} />
@@ -119,6 +130,15 @@ export function DashboardCard({ s }: { s: GroupStatus }) {
           <span className="flex-1 truncate text-[16px] font-semibold tracking-tight text-white">
             {s.group.name}
           </span>
+          {threat.score > 0 && (
+            <span
+              title={threat.reasons.join(' · ') || 'Threat score'}
+              className="rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-ink-950"
+              style={{ backgroundColor: threatColor(threat.score) }}
+            >
+              {threat.score}
+            </span>
+          )}
           <span
             className={`flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[10.5px] font-bold uppercase tracking-wider ring-1 ${lv.pill}`}
           >
@@ -173,6 +193,11 @@ export function DashboardCard({ s }: { s: GroupStatus }) {
             value={s.nearestQuake ? `M${s.nearestQuake.mag.toFixed(1)} · ${s.nearestQuake.mi.toFixed(0)}mi` : 'none'}
           />
           <Metric label="News" value={s.news.count ? `${s.news.count} nearby` : 'none'} />
+          <Metric
+            label="Outage"
+            value={s.outage ? `${custShort(s.outage.customers)} out · ${s.outage.mi.toFixed(0)}mi` : 'none'}
+            valueClass={s.outage ? (s.outage.mi < 25 ? 'text-red-400' : 'text-amber-300') : undefined}
+          />
         </div>
       </div>
     </div>

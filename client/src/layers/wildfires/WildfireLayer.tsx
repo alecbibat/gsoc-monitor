@@ -5,6 +5,7 @@ import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { useWildfiresStatus } from './wildfiresStore';
 import { fetchWildfires, containmentColor } from './wildfiresData';
+import { startVisiblePolling } from '../../lib/poll';
 
 // A flame-in-ring marker — the ring reads as a named, managed incident, versus
 // the bare flames the FIRMS satellite layer draws.
@@ -125,13 +126,12 @@ export function WildfireLayer() {
       viewer.scene.requestRender();
     };
 
-    load();
     // WFIGS incident attributes refresh as ICS-209 / IRWIN reports land (roughly
     // daily); 5 min keeps new/updated fires current cheaply.
-    const interval = setInterval(load, 5 * 60_000);
+    const stopPolling = startVisiblePolling(() => void load(), 5 * 60_000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopPolling();
     };
   }, [viewer, active]);
 

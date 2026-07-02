@@ -5,6 +5,9 @@ const TYPE_META: Record<FeedType, { icon: string; color: string }> = {
   fire: { icon: '🔥', color: 'text-orange-400' },
   quake: { icon: '◎', color: 'text-amber-300' },
   news: { icon: '📰', color: 'text-sky-300' },
+  outage: { icon: '⚡', color: 'text-yellow-300' },
+  storm: { icon: '🌀', color: 'text-violet-300' },
+  ais: { icon: '📡', color: 'text-rose-300' },
 };
 
 function relTime(at: number, now: number): string {
@@ -15,13 +18,19 @@ function relTime(at: number, now: number): string {
   return `${Math.round(s / 86400)}d ago`;
 }
 
-export function DashboardFeed({ feed }: { feed: FeedEvent[] }) {
+export function DashboardFeed({
+  feed,
+  onSelect,
+}: {
+  feed: FeedEvent[];
+  onSelect?: (e: FeedEvent) => void;
+}) {
   const now = Date.now();
   if (feed.length === 0) {
     return (
       <div className="px-1 py-6 text-[12px] leading-relaxed text-white/40">
-        No nearby events yet — watching NWS alerts, wildfires, earthquakes, and news around the
-        properties…
+        No nearby events yet — watching NWS alerts, wildfires, earthquakes, power outages,
+        tropical systems, and news around the properties and fleet…
       </div>
     );
   }
@@ -29,8 +38,17 @@ export function DashboardFeed({ feed }: { feed: FeedEvent[] }) {
     <div className="space-y-1.5">
       {feed.map((e, i) => {
         const m = TYPE_META[e.type];
+        const clickable = onSelect && e.lat != null && e.lon != null;
         return (
-          <div key={`${e.id}-${i}`} className="flex gap-2 rounded-lg bg-white/[0.03] px-2.5 py-2">
+          <div
+            key={`${e.id}-${i}`}
+            onClick={clickable ? () => onSelect(e) : undefined}
+            role={clickable ? 'button' : undefined}
+            title={clickable ? 'View on the globe' : undefined}
+            className={`flex gap-2 rounded-lg bg-white/[0.03] px-2.5 py-2 ${
+              clickable ? 'cursor-pointer transition hover:bg-white/[0.07]' : ''
+            }`}
+          >
             <span className={`text-[13px] leading-tight ${m.color}`}>{m.icon}</span>
             <div className="min-w-0 flex-1">
               <div className="truncate text-[12px] text-white/80" title={e.title}>

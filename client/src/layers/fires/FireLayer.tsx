@@ -5,6 +5,7 @@ import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { useFiresStatus } from './firesStore';
 import { MILES_TO_M } from '../../lib/geo';
+import { startVisiblePolling } from '../../lib/poll';
 import {
   fetchHotspotsNearPins,
   fetchEnvelope,
@@ -174,15 +175,14 @@ export function FireLayer() {
       viewer.scene.requestRender();
     };
 
-    load();
+    const stopPolling = startVisiblePolling(() => void load(), 5 * 60_000);
     const debouncedLoad = debounce(load, 800);
     // In near-pins mode the regions are fixed, so we don't refetch on pan/zoom.
     if (nearMiles === 0) viewer.camera.moveEnd.addEventListener(debouncedLoad);
-    const interval = setInterval(load, 5 * 60_000);
 
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopPolling();
       if (nearMiles === 0) viewer.camera.moveEnd.removeEventListener(debouncedLoad);
     };
   }, [viewer, active, nearMiles]);

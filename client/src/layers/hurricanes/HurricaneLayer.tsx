@@ -5,6 +5,7 @@ import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { api } from '../../api/client';
 import type { JtwcInvest } from '../../types';
+import { startVisiblePolling } from '../../lib/poll';
 import { useHurricanesStatus } from './hurricanesStore';
 import { classifyStorm } from './classify';
 import {
@@ -732,12 +733,11 @@ export function HurricaneLayer() {
       viewer.scene.requestRender();
     };
 
-    load();
     // Advisories refresh on a 3–6h cadence; 5 min keeps us current cheaply.
-    const interval = setInterval(load, 5 * 60_000);
+    const stopPolling = startVisiblePolling(() => void load(), 5 * 60_000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopPolling();
       if (spinRaf != null) cancelAnimationFrame(spinRaf);
       viewer.scene.canvas.removeEventListener('pointerleave', onPointerLeave);
       hoverHandler.destroy();

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import type * as Cesium from 'cesium';
 import { CesiumContext } from './cesium/CesiumContext';
 import { CesiumGlobe } from './cesium/CesiumGlobe';
@@ -61,19 +61,33 @@ import { CrisisOverlay } from './crisis/CrisisOverlay';
 import { CrisisMapLayer } from './crisis/CrisisMapLayer';
 import { CrisisDrawController } from './crisis/CrisisDrawController';
 import { CrisisLayerPopup } from './crisis/CrisisLayerPopup';
-import { CrisisShareView } from './crisis/CrisisShareView';
 import { IncidentSync } from './crisis/IncidentSync';
 import { DashboardView } from './dashboard/DashboardView';
 import { AuthGate } from './auth/AuthGate';
 
-// Detect share link — renders a completely separate read-only view
+// Detect share link — renders a completely separate read-only view. Lazy so the
+// main bundle doesn't carry the share view or its Leaflet dependency (and the
+// share page in turn skips the heavy globe bundle it never renders).
 const shareToken = new URLSearchParams(window.location.search).get('share');
+const CrisisShareView = lazy(() =>
+  import('./crisis/CrisisShareView').then((m) => ({ default: m.CrisisShareView }))
+);
 
 export default function App() {
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
 
   if (shareToken) {
-    return <CrisisShareView token={shareToken} />;
+    return (
+      <Suspense
+        fallback={
+          <div className="grid h-full place-items-center bg-black text-sm text-white/40">
+            Loading shared view…
+          </div>
+        }
+      >
+        <CrisisShareView token={shareToken} />
+      </Suspense>
+    );
   }
 
   return (

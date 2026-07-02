@@ -3,10 +3,15 @@
 // in a portal, and print CSS injected via useEffect hides everything else on
 // the page so Ctrl-P / Cmd-P / Save as PDF renders only this report.
 
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import type { Incident, IcsRole, PersonnelAssignment } from './crisisStore';
-import { CrisisShareMap } from './CrisisShareMap';
+
+// Lazy so Leaflet (used only by this printable report and the share view)
+// stays out of the main bundle.
+const CrisisShareMap = lazy(() =>
+  import('./CrisisShareMap').then((m) => ({ default: m.CrisisShareMap }))
+);
 
 const STATUS_BADGE: Record<string, { dot: string; badge: string }> = {
   active:    { dot: '#ef4444', badge: 'text-red-400 bg-red-500/15 border-red-500/40' },
@@ -286,7 +291,9 @@ export function CrisisReportModal({ incident, onClose }: Props) {
         {mapLayers.length > 0 && (
           <div>
             <h2 className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-white/30">Incident Map</h2>
-            <CrisisShareMap layers={mapLayers} />
+            <Suspense fallback={<div className="h-40 rounded-lg bg-white/5" />}>
+              <CrisisShareMap layers={mapLayers} />
+            </Suspense>
           </div>
         )}
 
