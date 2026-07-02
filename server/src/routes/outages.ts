@@ -101,9 +101,11 @@ function toEpochMs(v: unknown): number | null {
 function inferType(cause: string | null, plannedFlag?: boolean | null): Outage['type'] {
   if (plannedFlag === true) return 'Planned';
   if (plannedFlag === false) return 'Unplanned';
-  if (cause && /planned|scheduled|maintenance|upgrad/i.test(cause)) return 'Planned';
-  if (cause) return 'Unplanned';
-  return null;
+  if (!cause) return null;
+  // "Unplanned" / "Not planned" contain the substring "planned" — check first.
+  if (/unplanned|not planned/i.test(cause)) return 'Unplanned';
+  if (/planned|scheduled|maintenance|upgrad/i.test(cause)) return 'Planned';
+  return 'Unplanned';
 }
 
 // ---------------------------------------------------------------------------
@@ -423,18 +425,21 @@ async function fetchKubraSource(src: KubraSource): Promise<Outage[]> {
   const childrenSeen = new Map<string, number>();
   let fetched = 0;
 
-  const emitRecord = (rec: KubraRecord, qk: string) => {
+  const emitRecord = (rec: KubraRecord) => {
     const d = rec.desc ?? {};
     const pt = rec.geom?.p?.[0] ? decodePolylineFirst(rec.geom.p[0]) : null;
     if (!pt) return;
     const cause = d.cause ? (str(d.cause['EN-US']) ?? str(Object.values(d.cause)[0])) : null;
     const nOut = num(d.n_out);
-    // inc_id is null for several utilities (e.g. Georgia Power / Oncor), so the
-    // fallback key must be per-record unique: tile quadkey + record id + coords.
+    // inc_id is null for several utilities (e.g. Georgia Power / Oncor). The
+    // fallback key must be stable ACROSS tiles — the same outage re-appears in
+    // a re-walked child tile and in boundary-straddling siblings (with a
+    // different per-tile rec.id), and only the coordinates identify it there,
+    // letting the dedupe below collapse the duplicates.
     const incId =
       str(d.inc_id as string) ?? (typeof d.inc_id === 'number' ? String(d.inc_id) : null);
     outages.push({
-      id: `kubra-${src.name}-${incId ?? `${qk}:${rec.id ?? ''}:${pt.lat.toFixed(5)},${pt.lon.toFixed(5)}`}`,
+      id: `kubra-${src.name}-${incId ?? `${pt.lat.toFixed(5)},${pt.lon.toFixed(5)}`}`,
       utility: src.name,
       state: src.state,
       lat: pt.lat,
@@ -473,10 +478,11 @@ async function fetchKubraSource(src: KubraSource): Promise<Outage[]> {
         // Recurse; park the clusters until all four children come back.
         pending.set(t.qk, clusters);
         queue.push([t.qk + '0', t.qk + '1', t.qk + '2', t.qk + '3']);
-        // Leaf records sharing a tile with clusters are real outages — emit now.
-        for (const rec of t.records) if (rec.desc?.cluster !== true) emitRecord(rec, t.qk);
+        // Leaf records sharing a tile with clusters are real outages — emit now
+        // (if a child re-renders them, the coordinate-keyed dedupe collapses it).
+        for (const rec of t.records) if (rec.desc?.cluster !== true) emitRecord(rec);
       } else {
-        for (const rec of t.records) emitRecord(rec, t.qk);
+        for (const rec of t.records) emitRecord(rec);
       }
       // Mark this tile as a fetched child of its parent; a parent with all four
       // children fetched has been fully refined — its parked clusters drop.
@@ -491,7 +497,7 @@ async function fetchKubraSource(src: KubraSource): Promise<Outage[]> {
 
   // Anything still pending was never fully refined — emit the parked clusters
   // as aggregate points rather than losing them.
-  for (const [qk, clusters] of pending) for (const rec of clusters) emitRecord(rec, qk);
+  for (const clusters of pending.values()) for (const rec of clusters) emitRecord(rec);
 
   // Defensive dedupe (an outage can straddle a tile boundary re-walk).
   const seen = new Set<string>();
