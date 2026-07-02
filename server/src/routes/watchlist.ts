@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../db';
 import { requireAuth } from '../middleware/auth';
+import { geocodePlace } from '../intel/geocode';
 import { SOURCE_KINDS, type SourceKind } from '../intel/types';
 
 // Team-shared watchlist of intel sources. Any signed-in member can add a source
@@ -55,9 +56,20 @@ function validate(b: Body): { url: string | null; config: Record<string, unknown
     return { url: null, config: {}, error: `kind must be one of: ${SOURCE_KINDS.join(', ')}` };
   }
   const config = { ...(b.config ?? {}) };
+  // staticGeo is server-derived from `place` (never client-supplied), so a
+  // caller can't pin a source to arbitrary coordinates directly.
+  delete config.staticGeo;
   const url = typeof b.url === 'string' && b.url.trim() ? b.url.trim() : null;
   const need = (cond: unknown, msg: string) => (cond ? null : msg);
   const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+
+  // Optional "pin stories to this place" — only meaningful for feed sources
+  // (news/social) whose items lack precise coordinates. Kept as a string; the
+  // route geocodes it into staticGeo. Dropped for coordinate-bearing kinds.
+  const PINNABLE = new Set(['rss', 'google-news', 'bluesky-author', 'bluesky-search']);
+  const place = str(config.place);
+  if (place && place.length <= 120 && PINNABLE.has(kind)) config.place = place;
+  else delete config.place;
 
   let error: string | null = null;
   switch (kind) {
@@ -97,6 +109,21 @@ function validate(b: Body): { url: string | null; config: Record<string, unknown
       break; // statewide, no config required
   }
   return { url, config, error: error ?? undefined };
+}
+
+// Resolve config.place into a staticGeo region pin so a feed source's items
+// (which arrive without coordinates) can appear on the map at that place.
+// Best-effort: if the geocoder can't resolve it, the source is still saved and
+// its items stay feed-only — adding never fails on a flaky geocoder.
+async function applyPlacePin(config: Record<string, unknown>): Promise<void> {
+  const place = typeof config.place === 'string' ? config.place : '';
+  if (!place) {
+    delete config.staticGeo;
+    return;
+  }
+  const hit = await geocodePlace(place);
+  if (hit && hit !== 'error') config.staticGeo = { lat: hit.lat, lon: hit.lon, place };
+  else delete config.staticGeo;
 }
 
 // Async handlers can reject (DB down, bad cast) — without this the request
@@ -148,6 +175,7 @@ router.post('/', wrap(async (req: Request, res: Response) => {
     return;
   }
 
+  await applyPlacePin(config);
   const { rows: [row] } = await pool.query(
     `INSERT INTO watchlist_sources (kind, url, label, config, active, added_by)
      VALUES ($1, $2, $3, $4, TRUE, $5)
@@ -165,6 +193,7 @@ router.put('/:id', wrap(async (req: Request, res: Response) => {
   const { url, config, error } = validate(body);
   if (error) { res.status(400).json({ error }); return; }
 
+  await applyPlacePin(config);
   // COALESCE keeps the stored active flag when the body omits it, so an edit
   // can't silently re-enable a source the team paused.
   const active = typeof body.active === 'boolean' ? body.active : null;

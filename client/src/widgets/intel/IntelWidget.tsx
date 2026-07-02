@@ -18,6 +18,7 @@ interface KindPreset {
   hint: string;
   fields: Array<{ key: FieldKey; placeholder: string; label: string }>;
   category?: IntelCategory;
+  pinnable?: boolean; // offer an optional "pin stories to a place" field
 }
 const KIND_PRESETS: KindPreset[] = [
   {
@@ -26,6 +27,7 @@ const KIND_PRESETS: KindPreset[] = [
     hint: 'Any site with an RSS/Atom feed — paste its feed URL.',
     fields: [{ key: 'url', label: 'Feed URL', placeholder: 'https://example.com/rss' }],
     category: 'news',
+    pinnable: true,
   },
   {
     kind: 'google-news',
@@ -33,6 +35,7 @@ const KIND_PRESETS: KindPreset[] = [
     hint: 'A search we care about — Google News surfaces matching stories.',
     fields: [{ key: 'query', label: 'Search', placeholder: 'Yellowstone flooding OR closure' }],
     category: 'news',
+    pinnable: true,
   },
   {
     kind: 'bluesky-author',
@@ -40,6 +43,7 @@ const KIND_PRESETS: KindPreset[] = [
     hint: 'Follow one account’s posts (e.g. a local agency or reporter).',
     fields: [{ key: 'handle', label: 'Handle', placeholder: 'nws.bsky.social' }],
     category: 'social',
+    pinnable: true,
   },
   {
     kind: 'bluesky-search',
@@ -47,6 +51,7 @@ const KIND_PRESETS: KindPreset[] = [
     hint: 'Every post mentioning a keyword across Bluesky.',
     fields: [{ key: 'query', label: 'Keyword', placeholder: 'wildfire evacuation' }],
     category: 'social',
+    pinnable: true,
   },
   {
     kind: 'pulsepoint',
@@ -103,6 +108,7 @@ export function IntelWidget() {
   const [presetIdx, setPresetIdx] = useState(0);
   const [fields, setFields] = useState<Record<string, string>>({});
   const [label, setLabel] = useState('');
+  const [place, setPlace] = useState('');
   const [addError, setAddError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -150,11 +156,15 @@ export function IntelWidget() {
       else config[f.key] = v;
     }
     if (preset.category) config.category = preset.category;
+    // Optional location pin for feed sources — server geocodes it to a region
+    // so the source's stories can appear on the map, not just in the feed.
+    if (preset.pinnable && place.trim()) config.place = place.trim();
     setBusy(true);
     try {
       await api.addWatchSource({ kind: preset.kind, label: trimmedLabel, url, config });
       setLabel('');
       setFields({});
+      setPlace('');
       await loadSources();
     } catch (e) {
       setAddError(e instanceof Error ? e.message : 'Failed to add source');
@@ -346,7 +356,7 @@ export function IntelWidget() {
             <div className="space-y-1.5 rounded-lg border border-white/8 bg-white/[0.03] p-2">
               <select
                 value={presetIdx}
-                onChange={(e) => { setPresetIdx(Number(e.target.value)); setFields({}); setAddError(''); }}
+                onChange={(e) => { setPresetIdx(Number(e.target.value)); setFields({}); setPlace(''); setAddError(''); }}
                 className="w-full rounded bg-white/5 px-2 py-1.5 text-[11px] text-white/80 outline-none focus:ring-1 focus:ring-accent/50"
               >
                 {KIND_PRESETS.map((p, i) => (
@@ -375,6 +385,16 @@ export function IntelWidget() {
                   className="w-full rounded bg-white/5 px-2 py-1.5 text-[11px] text-white/80 placeholder:text-white/25 outline-none focus:ring-1 focus:ring-accent/50"
                 />
               ))}
+              {preset.pinnable && (
+                <input
+                  type="text"
+                  value={place}
+                  onChange={(e) => { setPlace(e.target.value); setAddError(''); }}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+                  placeholder="Pin stories to a place (optional) — e.g. Great Falls, MT"
+                  className="w-full rounded bg-white/5 px-2 py-1.5 text-[11px] text-white/80 placeholder:text-white/25 outline-none focus:ring-1 focus:ring-accent/50"
+                />
+              )}
               {addError && <div className="text-[10px] text-red-400">{addError}</div>}
               <button
                 onClick={handleAdd}
