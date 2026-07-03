@@ -319,36 +319,49 @@ export function Sidebar() {
           >
             <LightningControls />
           </LayerToggle>
-        </Section>
-
-        <Section title="Hazards">
           <LayerToggle
-            label="Earthquakes (USGS)"
-            active={active.earthquakes}
-            onToggle={() => toggleLayer('earthquakes')}
+            label="Wind (GFS)"
+            active={(active as Record<string, boolean>).wind ?? false}
+            onToggle={() => toggleLayer('wind')}
+            statusText={
+              windStatus.error ??
+              (windStatus.ready
+                ? windStatus.stale
+                  ? `Historical wind${
+                      windStatus.grid?.updated
+                        ? ` · as of ${new Date(windStatus.grid.updated).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+                        : ''
+                    } · peak ${Math.round(windStatus.maxSpeedMps * 2.23694)} mph`
+                  : `Live surface wind · peak ${Math.round(windStatus.maxSpeedMps * 2.23694)} mph`
+                : 'Animated global wind streamlines')
+            }
           >
-            <div className="flex flex-wrap gap-1.5 pt-1">
-              {MAGNITUDES.map((m) => (
-                <button
-                  key={m.value}
-                  onClick={() => setEarthquakeFilter({ magnitude: m.value })}
-                  className={`rounded px-1.5 py-1 text-[11px] font-medium transition ${
-                    earthquakeMagnitude === m.value
-                      ? 'bg-accent/20 text-accent'
-                      : 'bg-white/5 text-white/50 hover:bg-white/10'
-                  }`}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
+            <button
+              onClick={toggleWindProbe}
+              className={`mt-2 flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
+                windProbeEnabled
+                  ? 'bg-accent/15 text-accent'
+                  : 'bg-white/5 text-white/60 hover:bg-white/10'
+              }`}
+            >
+              <span>🎯</span>
+              {windProbeEnabled ? 'Probe on · right-click to pin' : 'Wind probe off'}
+            </button>
           </LayerToggle>
           <LayerToggle
-            label="NWS Alerts"
-            active={active.alerts}
-            onToggle={() => toggleLayer('alerts')}
-            statusText={alertsStatus.error ?? `${alertsStatus.count} active alerts`}
+            label="Wind Streamlines"
+            active={(active as Record<string, boolean>).windArrows ?? false}
+            onToggle={() => toggleLayer('windArrows')}
+            statusText={
+              windStatus.error ??
+              (windStatus.arrowCount > 0
+                ? `${windStatus.arrowCount.toLocaleString()} flow lines · density follows zoom${windStatus.stale ? ' · historical' : ''}`
+                : 'Flow lines with arrows · colored by speed')
+            }
           />
+        </Section>
+
+        <Section title="Fire & Smoke">
           <LayerToggle
             label="Wildfires (NASA FIRMS)"
             active={active.fires}
@@ -394,17 +407,6 @@ export function Sidebar() {
                     wildfiresStatus.count === 1 ? '' : 's'
                   } · acres, containment, crews`
                 : 'Named fires + response · NIFC/WFIGS')
-            }
-          />
-          <LayerToggle
-            label="Power Outages (Multi-State)"
-            active={(active as Record<string, boolean>).outages ?? false}
-            onToggle={() => toggleLayer('outages')}
-            statusText={
-              outagesStatus.error ??
-              (outagesStatus.count > 0
-                ? `${outagesStatus.count} active · ${outagesStatus.customers.toLocaleString()} customers · ${outagesStatus.states} state${outagesStatus.states === 1 ? '' : 's'}`
-                : 'Utility, cause, restoration ETA · 18 feeds, ~19 states')
             }
           />
           <LayerToggle
@@ -472,6 +474,83 @@ export function Sidebar() {
             </p>
           </LayerToggle>
           <LayerToggle
+            label="7-Day Fire Potential (NWCG)"
+            active={(active as Record<string, boolean>).fireOutlook ?? false}
+            onToggle={() => toggleLayer('fireOutlook')}
+            statusText={fireOutlookError ?? 'Significant fire potential · next 7 days · CONUS'}
+          >
+            <FireOutlookControls />
+          </LayerToggle>
+          <LayerToggle
+            label="Fuel Models (LANDFIRE)"
+            active={(active as Record<string, boolean>).fuel ?? false}
+            onToggle={() => toggleLayer('fuel')}
+            statusText={
+              fuelStatus.error ?? 'Scott & Burgan 40 fuel models · CONUS · 30 m'
+            }
+          >
+            <FuelLegend />
+            <div className="mt-2">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/30">
+                Analyze fuels in an area
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  onClick={() => toggleFuelZone('circle')}
+                  className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
+                    fuelZoneActive && fuelZoneMode === 'circle'
+                      ? 'bg-amber-400/20 text-amber-300'
+                      : 'bg-white/5 text-white/60 hover:bg-white/10'
+                  }`}
+                >
+                  <span>◎</span>
+                  {fuelZoneActive && fuelZoneMode === 'circle' ? 'Drawing…' : 'Circle'}
+                </button>
+                <button
+                  onClick={() => toggleFuelZone('polygon')}
+                  className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
+                    fuelZoneActive && fuelZoneMode === 'polygon'
+                      ? 'bg-amber-400/20 text-amber-300'
+                      : 'bg-white/5 text-white/60 hover:bg-white/10'
+                  }`}
+                >
+                  <span>⬠</span>
+                  {fuelZoneActive && fuelZoneMode === 'polygon' ? 'Drawing…' : 'Polygon'}
+                </button>
+              </div>
+            </div>
+          </LayerToggle>
+        </Section>
+
+        <Section title="Hazards & Alerts">
+          <LayerToggle
+            label="NWS Alerts"
+            active={active.alerts}
+            onToggle={() => toggleLayer('alerts')}
+            statusText={alertsStatus.error ?? `${alertsStatus.count} active alerts`}
+          />
+          <LayerToggle
+            label="Earthquakes (USGS)"
+            active={active.earthquakes}
+            onToggle={() => toggleLayer('earthquakes')}
+          >
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {MAGNITUDES.map((m) => (
+                <button
+                  key={m.value}
+                  onClick={() => setEarthquakeFilter({ magnitude: m.value })}
+                  className={`rounded px-1.5 py-1 text-[11px] font-medium transition ${
+                    earthquakeMagnitude === m.value
+                      ? 'bg-accent/20 text-accent'
+                      : 'bg-white/5 text-white/50 hover:bg-white/10'
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </LayerToggle>
+          <LayerToggle
             label="Rivers & Floods (NWPS)"
             active={(active as Record<string, boolean>).rivers ?? false}
             onToggle={() => toggleLayer('rivers')}
@@ -522,92 +601,16 @@ export function Sidebar() {
             </p>
           </LayerToggle>
           <LayerToggle
-            label="Wind (GFS)"
-            active={(active as Record<string, boolean>).wind ?? false}
-            onToggle={() => toggleLayer('wind')}
+            label="Power Outages (Multi-State)"
+            active={(active as Record<string, boolean>).outages ?? false}
+            onToggle={() => toggleLayer('outages')}
             statusText={
-              windStatus.error ??
-              (windStatus.ready
-                ? windStatus.stale
-                  ? `Historical wind${
-                      windStatus.grid?.updated
-                        ? ` · as of ${new Date(windStatus.grid.updated).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
-                        : ''
-                    } · peak ${Math.round(windStatus.maxSpeedMps * 2.23694)} mph`
-                  : `Live surface wind · peak ${Math.round(windStatus.maxSpeedMps * 2.23694)} mph`
-                : 'Animated global wind streamlines')
-            }
-          >
-            <button
-              onClick={toggleWindProbe}
-              className={`mt-2 flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
-                windProbeEnabled
-                  ? 'bg-accent/15 text-accent'
-                  : 'bg-white/5 text-white/60 hover:bg-white/10'
-              }`}
-            >
-              <span>🎯</span>
-              {windProbeEnabled ? 'Probe on · right-click to pin' : 'Wind probe off'}
-            </button>
-          </LayerToggle>
-          <LayerToggle
-            label="Wind Streamlines"
-            active={(active as Record<string, boolean>).windArrows ?? false}
-            onToggle={() => toggleLayer('windArrows')}
-            statusText={
-              windStatus.error ??
-              (windStatus.arrowCount > 0
-                ? `${windStatus.arrowCount.toLocaleString()} flow lines · density follows zoom${windStatus.stale ? ' · historical' : ''}`
-                : 'Flow lines with arrows · colored by speed')
+              outagesStatus.error ??
+              (outagesStatus.count > 0
+                ? `${outagesStatus.count} active · ${outagesStatus.customers.toLocaleString()} customers · ${outagesStatus.states} state${outagesStatus.states === 1 ? '' : 's'}`
+                : 'Utility, cause, restoration ETA · 18 feeds, ~19 states')
             }
           />
-          <LayerToggle
-            label="7-Day Fire Potential (NWCG)"
-            active={(active as Record<string, boolean>).fireOutlook ?? false}
-            onToggle={() => toggleLayer('fireOutlook')}
-            statusText={fireOutlookError ?? 'Significant fire potential · next 7 days · CONUS'}
-          >
-            <FireOutlookControls />
-          </LayerToggle>
-          <LayerToggle
-            label="Fuel Models (LANDFIRE)"
-            active={(active as Record<string, boolean>).fuel ?? false}
-            onToggle={() => toggleLayer('fuel')}
-            statusText={
-              fuelStatus.error ?? 'Scott & Burgan 40 fuel models · CONUS · 30 m'
-            }
-          >
-            <FuelLegend />
-            <div className="mt-2">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/30">
-                Analyze fuels in an area
-              </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                <button
-                  onClick={() => toggleFuelZone('circle')}
-                  className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
-                    fuelZoneActive && fuelZoneMode === 'circle'
-                      ? 'bg-amber-400/20 text-amber-300'
-                      : 'bg-white/5 text-white/60 hover:bg-white/10'
-                  }`}
-                >
-                  <span>◎</span>
-                  {fuelZoneActive && fuelZoneMode === 'circle' ? 'Drawing…' : 'Circle'}
-                </button>
-                <button
-                  onClick={() => toggleFuelZone('polygon')}
-                  className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
-                    fuelZoneActive && fuelZoneMode === 'polygon'
-                      ? 'bg-amber-400/20 text-amber-300'
-                      : 'bg-white/5 text-white/60 hover:bg-white/10'
-                  }`}
-                >
-                  <span>⬠</span>
-                  {fuelZoneActive && fuelZoneMode === 'polygon' ? 'Drawing…' : 'Polygon'}
-                </button>
-              </div>
-            </div>
-          </LayerToggle>
         </Section>
 
         <Section title="Open-Source Intel">
@@ -682,9 +685,6 @@ export function Sidebar() {
               Show past &amp; future paths
             </label>
           </LayerToggle>
-        </Section>
-
-        <Section title="Space">
           <LayerToggle
             label="Satellites (CelesTrak)"
             active={active.satellites}
