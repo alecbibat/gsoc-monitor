@@ -14,7 +14,7 @@ import { RIVER_FILTERS } from '../layers/rivers/riverMeta';
 import { useFuelStatus } from '../layers/fuel/fuelStore';
 import { useWindStatus } from '../layers/wind/windStore';
 import { useXweatherStore } from '../layers/xweather/xweatherStore';
-import { XweatherControls } from '../layers/xweather/XweatherControls';
+import { XweatherControls, XweatherHailControls } from '../layers/xweather/XweatherControls';
 import { useWindProbeStore } from '../layers/wind/windProbeStore';
 import { FuelLegend } from '../layers/fuel/FuelLegend';
 import { useFuelZoneStore } from '../fuelzone/fuelZoneStore';
@@ -333,6 +333,18 @@ export function Sidebar() {
             }
           >
             <XweatherControls />
+          </LayerToggle>
+          <LayerToggle
+            label="Hail & Storm Cells (Xweather)"
+            active={(active as Record<string, boolean>).xweatherHail ?? false}
+            onToggle={() => toggleLayer('xweatherHail')}
+            statusText={
+              xwConfigured === false
+                ? 'Paid API — set XWEATHER_CLIENT_ID + SECRET'
+                : 'Radar cells + tracks · hail, rotation, tornado'
+            }
+          >
+            <XweatherHailControls />
           </LayerToggle>
           <LayerToggle
             label="Wind (GFS)"

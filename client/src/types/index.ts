@@ -19,6 +19,7 @@ export type LayerId =
   | 'wind'
   | 'windArrows'
   | 'xweatherLightning'
+  | 'xweatherHail'
   | 'rivers'
   | 'fireOutlook'
   | 'precip'

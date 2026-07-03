@@ -8,6 +8,7 @@ import { create } from 'zustand';
 
 export type XwMode = 'strikes' | 'all' | 'density';
 export type XwWindow = '5m' | '15m';
+export type XwCellCategory = 'hail' | 'rotating' | 'tornado' | 'major' | 'all';
 
 export const XW_TIMES = [
   { value: 'current', label: 'Now' },
@@ -25,10 +26,15 @@ interface XweatherState {
   mode: XwMode;
   window: XwWindow;
   time: XwTime;
+  // Storm-cells (hail) layer state — independent of the lightning selection.
+  cellCategory: XwCellCategory;
+  cellTime: XwTime;
   setConfigured: (configured: boolean) => void;
   setMode: (mode: XwMode) => void;
   setWindow: (window: XwWindow) => void;
   setTime: (time: XwTime) => void;
+  setCellCategory: (cellCategory: XwCellCategory) => void;
+  setCellTime: (cellTime: XwTime) => void;
 }
 
 export const useXweatherStore = create<XweatherState>((set) => ({
@@ -36,10 +42,14 @@ export const useXweatherStore = create<XweatherState>((set) => ({
   mode: 'strikes',
   window: '15m',
   time: 'current',
+  cellCategory: 'hail',
+  cellTime: 'current',
   setConfigured: (configured) => set({ configured }),
   setMode: (mode) => set({ mode }),
   setWindow: (window) => set({ window }),
   setTime: (time) => set({ time }),
+  setCellCategory: (cellCategory) => set({ cellCategory }),
+  setCellTime: (cellTime) => set({ cellTime }),
 }));
 
 // The proxy layer code for the current mode/window selection. The -icons
@@ -48,4 +58,8 @@ export const useXweatherStore = create<XweatherState>((set) => ({
 export function xwLayerCode(mode: XwMode, window: XwWindow): string {
   if (mode === 'density') return 'lightning-strike-density';
   return mode === 'all' ? `lightning-all-${window}` : `lightning-strikes-${window}-icons`;
+}
+
+export function xwCellsLayerCode(category: XwCellCategory): string {
+  return category === 'all' ? 'stormcells' : `stormcells-${category}`;
 }

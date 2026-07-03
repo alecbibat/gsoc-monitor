@@ -25,6 +25,13 @@ const LAYERS = new Set([
   'lightning-all-15m',
   'lightning-flash', // aggregated flashes (1x multiplier variant)
   'lightning-strike-density', // NOAA 8km heat map (US/Central America)
+  // Radar-derived storm cells with tracks/cones (US, 3-min updates, -7 days).
+  // Category variants filter to the severe signature of interest.
+  'stormcells', // every identified cell
+  'stormcells-hail',
+  'stormcells-rotating',
+  'stormcells-tornado',
+  'stormcells-major',
 ]);
 
 // current | -30minutes / -3hours / -2days | 14-digit UTC valid time

@@ -165,6 +165,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'xweatherHail',
+    info: {
+      name: 'Hail & Storm Cells',
+      icon: '🌨',
+      source: 'Xweather / Vaisala (NEXRAD-derived)',
+      method:
+        'Radar-identified storm cells filtered by severe signature — hail, rotation, tornadic, or any major cell — rendered with motion tracks and forecast cones. US coverage, 3-minute updates, 7 days of history by time offset. Served through our key-holding proxy.',
+      trust:
+        'Derived from the NWS NEXRAD radar network by Vaisala Xweather, the same commercial feed behind major severe-weather products. Paid API (same keys as Lightning Pro).',
+      url: 'https://www.xweather.com/docs/maps/layers',
+    },
+  },
+  {
     id: 'windArrows',
     info: {
       name: 'Wind Streamlines',

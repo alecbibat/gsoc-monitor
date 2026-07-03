@@ -1,4 +1,4 @@
-import { useXweatherStore, XW_TIMES, type XwMode, type XwWindow } from './xweatherStore';
+import { useXweatherStore, XW_TIMES, type XwMode, type XwWindow, type XwCellCategory } from './xweatherStore';
 
 const MODES: Array<{ value: XwMode; label: string }> = [
   { value: 'strikes', label: 'CG strikes' },
@@ -69,6 +69,65 @@ export function XweatherControls() {
           Density heat map covers the US / Central America / East Pacific (NOAA, 8 km).
         </p>
       )}
+    </>
+  );
+}
+
+const CELL_CATEGORIES: Array<{ value: XwCellCategory; label: string }> = [
+  { value: 'hail', label: 'Hail' },
+  { value: 'rotating', label: 'Rotating' },
+  { value: 'tornado', label: 'Tornado' },
+  { value: 'major', label: 'Major' },
+  { value: 'all', label: 'All cells' },
+];
+
+// Controls for the radar-derived storm cells layer (hail-first). Same key
+// gating and 7-day time chips as the lightning raster.
+export function XweatherHailControls() {
+  const configured = useXweatherStore((s) => s.configured);
+  const category = useXweatherStore((s) => s.cellCategory);
+  const time = useXweatherStore((s) => s.cellTime);
+  const setCategory = useXweatherStore((s) => s.setCellCategory);
+  const setTime = useXweatherStore((s) => s.setCellTime);
+
+  if (configured === false) {
+    return (
+      <p className="pt-1 text-[10px] leading-relaxed text-white/30">
+        Requires an Xweather (Vaisala) account — same keys as Lightning Pro.
+        Add XWEATHER_CLIENT_ID + SECRET as server config vars.
+      </p>
+    );
+  }
+
+  const chip = (selected: boolean) =>
+    `rounded px-1.5 py-1 text-[11px] font-medium transition ${
+      selected ? 'bg-accent/20 text-accent' : 'bg-white/5 text-white/50 hover:bg-white/10'
+    }`;
+
+  return (
+    <>
+      <div className="flex flex-wrap gap-1.5 pt-1">
+        {CELL_CATEGORIES.map((c) => (
+          <button key={c.value} onClick={() => setCategory(c.value)} className={chip(category === c.value)}>
+            {c.label}
+          </button>
+        ))}
+      </div>
+      <div className="pt-1.5">
+        <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-white/30">
+          Time
+        </div>
+        <div className="flex flex-wrap gap-1">
+          {XW_TIMES.map((t) => (
+            <button key={t.value} onClick={() => setTime(t.value)} className={chip(time === t.value)}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <p className="pt-1.5 text-[10px] leading-relaxed text-white/30">
+        NEXRAD-derived cells with motion tracks &amp; forecast cones · US coverage · updates every 3 min.
+      </p>
     </>
   );
 }
