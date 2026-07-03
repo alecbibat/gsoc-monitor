@@ -18,6 +18,7 @@ export type LayerId =
   | 'newsMap'
   | 'wind'
   | 'windArrows'
+  | 'xweatherLightning'
   | 'rivers'
   | 'fireOutlook'
   | 'precip'

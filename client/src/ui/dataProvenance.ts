@@ -152,6 +152,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'xweatherLightning',
+    info: {
+      name: 'Lightning Pro',
+      icon: '⚡',
+      source: 'Xweather / Vaisala NLDN + GLD360',
+      method:
+        'Raster strike tiles from Xweather (Vaisala) rendered over the globe: cloud-to-ground strikes or all pulses per 5/15-minute window, or a NOAA 8 km strike-density heat map, with 7 days of history addressable by time offset. Served through our key-holding proxy.',
+      trust:
+        'Vaisala operates the U.S. National Lightning Detection Network and the global GLD360 — the reference-grade commercial lightning networks (the same data behind Dataminr’s strike maps). Substantially higher detection efficiency and location accuracy than the community Blitzortung feed. Paid API.',
+      url: 'https://www.xweather.com/docs/maps/layers',
+    },
+  },
+  {
     id: 'windArrows',
     info: {
       name: 'Wind Streamlines',

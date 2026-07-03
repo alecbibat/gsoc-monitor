@@ -20,4 +20,11 @@ export const config = {
   // DEMO_KEY works out of the box (rate-limited); set NPS_API_KEY in Config Vars
   // for production headroom. Used for park news releases + alerts/closures.
   npsApiKey: process.env.NPS_API_KEY || 'DEMO_KEY',
+  // Xweather (Vaisala) — PAID API. Powers the NLDN-quality lightning raster
+  // layer (the Dataminr-style strike map). Sign up at xweather.com (free
+  // developer account for testing; production needs a paid Maps plan — note
+  // icon layers bill at a 10x multiplier per tile). Keys stay server-side; the
+  // client fetches tiles through our /api/xweather proxy.
+  xweatherClientId: process.env.XWEATHER_CLIENT_ID || '',
+  xweatherClientSecret: process.env.XWEATHER_CLIENT_SECRET || '',
 };

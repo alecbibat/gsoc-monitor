@@ -13,6 +13,8 @@ import { useRiversStatus } from '../layers/rivers/riversStore';
 import { RIVER_FILTERS } from '../layers/rivers/riverMeta';
 import { useFuelStatus } from '../layers/fuel/fuelStore';
 import { useWindStatus } from '../layers/wind/windStore';
+import { useXweatherStore } from '../layers/xweather/xweatherStore';
+import { XweatherControls } from '../layers/xweather/XweatherControls';
 import { useWindProbeStore } from '../layers/wind/windProbeStore';
 import { FuelLegend } from '../layers/fuel/FuelLegend';
 import { useFuelZoneStore } from '../fuelzone/fuelZoneStore';
@@ -117,6 +119,7 @@ export function Sidebar() {
   const fireOutlookError = useFireOutlookStore((s) => s.error);
   const fuelStatus = useFuelStatus();
   const windStatus = useWindStatus();
+  const xwConfigured = useXweatherStore((s) => s.configured);
   const windProbeEnabled = useWindProbeStore((s) => s.probeEnabled);
   const toggleWindProbe = useWindProbeStore((s) => s.toggleProbe);
   const fuelZoneActive = useFuelZoneStore((s) => s.active);
@@ -318,6 +321,18 @@ export function Sidebar() {
             }
           >
             <LightningControls />
+          </LayerToggle>
+          <LayerToggle
+            label="Lightning Pro (Xweather NLDN)"
+            active={(active as Record<string, boolean>).xweatherLightning ?? false}
+            onToggle={() => toggleLayer('xweatherLightning')}
+            statusText={
+              xwConfigured === false
+                ? 'Paid API — set XWEATHER_CLIENT_ID + SECRET'
+                : 'Vaisala strike map · 7-day history'
+            }
+          >
+            <XweatherControls />
           </LayerToggle>
           <LayerToggle
             label="Wind (GFS)"
