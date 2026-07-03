@@ -1,3 +1,5 @@
+import { assessHotspot, kelvinToC, kelvinToF } from './firesData';
+
 interface Props {
   payload: {
     latitude: number;
@@ -101,8 +103,26 @@ function formatAcqUtc(
 }
 
 export function FireDetails({ payload }: Props) {
+  const assessment = assessHotspot(payload.frp, payload.brightness, payload.daynight);
+  const b = payload.brightness;
+
   return (
     <div className="space-y-3">
+      {/* Intensity read: FRP + brightness temp → flaming vs smoldering call */}
+      <div
+        className="rounded-lg border px-2.5 py-2"
+        style={{
+          borderColor: `${assessment.color}55`,
+          backgroundColor: `${assessment.color}1a`,
+        }}
+      >
+        <div className="flex items-center gap-1.5 text-[13px] font-bold" style={{ color: assessment.color }}>
+          <span>{assessment.level === 'residual' ? '♨️' : '🔥'}</span>
+          {assessment.label}
+        </div>
+        <p className="pt-0.5 text-[11px] leading-snug text-white/55">{assessment.detail}</p>
+      </div>
+
       <div className="flex items-baseline gap-2">
         <span className="text-2xl font-bold tabular-nums text-accent-warn">
           {payload.frp != null ? `${Math.round(payload.frp)} MW` : '—'}
@@ -111,13 +131,24 @@ export function FireDetails({ payload }: Props) {
       </div>
 
       <dl className="grid grid-cols-2 gap-y-1.5 text-[13px]">
+        <dt className="text-white/40">Pixel temp</dt>
+        <dd
+          className="tabular-nums"
+          title={
+            'VIIRS I-4 brightness temperature: the average of the whole ~375 m pixel in the 3.74 µm band. ' +
+            'Flames fill only part of the pixel, so actual flame temperature (~1,500–2,200 °F) is far higher. ' +
+            '367 K is the sensor’s saturation ceiling.'
+          }
+        >
+          {b != null
+            ? `${assessment.saturated ? '≥ ' : ''}${Math.round(kelvinToF(b))} °F · ${Math.round(kelvinToC(b))} °C${
+                assessment.saturated ? ' (sensor maxed)' : ''
+              }`
+            : '—'}
+        </dd>
+
         <dt className="text-white/40">Confidence</dt>
         <dd>{payload.confidence}</dd>
-
-        <dt className="text-white/40">Brightness</dt>
-        <dd className="tabular-nums">
-          {payload.brightness != null ? `${payload.brightness.toFixed(1)} K` : '—'}
-        </dd>
 
         <dt className="text-white/40">Satellite</dt>
         <dd>{payload.satellite || '—'}</dd>
@@ -137,8 +168,11 @@ export function FireDetails({ payload }: Props) {
       </dl>
 
       <p className="text-[11px] leading-snug text-white/35">
-        VIIRS thermal anomaly via NASA FIRMS. A detection is a heat signature, not
-        a confirmed wildfire — it can also be flares, volcanoes, or agricultural burns.
+        VIIRS thermal anomaly via NASA FIRMS. A detection is a heat signature, not a
+        confirmed wildfire — it can also be flares, volcanoes, or agricultural burns.
+        “Pixel temp” is the satellite-measured average of the ~375 m pixel, not the
+        flame itself; the flaming/smoldering call combines radiative power with pixel
+        temperature.
       </p>
     </div>
   );

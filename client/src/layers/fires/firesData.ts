@@ -73,6 +73,91 @@ function asNumber(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+// --- Intensity assessment -----------------------------------------------------
+// "Is this open flames?" can't be read from brightness temperature alone: the
+// VIIRS I-4 value is the average of the whole ~375 m pixel (flames fill only a
+// fraction of it) and the band saturates near 367 K. The discriminator fire
+// science actually uses is Fire Radiative Power — MW of radiant output — with
+// brightness temperature as a secondary signal. Thresholds below are rough
+// operational bands for 375 m VIIRS detections, deliberately phrased as
+// likelihoods.
+export type FireIntensityLevel = 'inferno' | 'flaming' | 'active' | 'smoldering' | 'residual';
+
+export interface FireAssessment {
+  level: FireIntensityLevel;
+  label: string; // short badge text
+  detail: string; // one-line explanation for the card
+  color: string; // badge hex
+  saturated: boolean; // sensor pinned at ~367 K — extremely hot pixel
+}
+
+export function kelvinToF(k: number): number {
+  return ((k - 273.15) * 9) / 5 + 32;
+}
+export function kelvinToC(k: number): number {
+  return k - 273.15;
+}
+
+export function assessHotspot(
+  frp: number | null,
+  brightnessK: number | null,
+  daynight: string
+): FireAssessment {
+  const saturated = brightnessK != null && brightnessK >= 366.5;
+  const f = frp ?? -1;
+  const b = brightnessK ?? 0;
+  const night = daynight === 'N';
+  const nightNote = night ? ' Night detection — weak fires stand out clearly.' : '';
+
+  if (f >= 75 || (saturated && f >= 30)) {
+    return {
+      level: 'inferno',
+      label: 'Intense fire front — open flames',
+      detail: 'Radiative power at wildfire-front levels; vigorous flaming combustion.' + nightNote,
+      color: '#ef4444',
+      saturated,
+    };
+  }
+  if (f >= 15 || saturated) {
+    return {
+      level: 'flaming',
+      label: 'Actively flaming',
+      detail: 'Strong heat output consistent with open flames across part of the pixel.' + nightNote,
+      color: '#f97316',
+      saturated,
+    };
+  }
+  if (f >= 3 || b >= 345) {
+    return {
+      level: 'active',
+      label: 'Active fire — flames likely',
+      detail: 'Sustained burning; open flame at least in patches.' + nightNote,
+      color: '#f59e0b',
+      saturated,
+    };
+  }
+  if (f >= 0.8 || b >= 325) {
+    return {
+      level: 'smoldering',
+      label: 'Low intensity — likely smoldering',
+      detail:
+        'Weak heat output: smoldering ground fire, embers, or a small / partly-obscured flame.' +
+        nightNote,
+      color: '#eab308',
+      saturated,
+    };
+  }
+  return {
+    level: 'residual',
+    label: 'Weak or residual heat',
+    detail:
+      'Barely above the detection floor — a cooling burn scar, smoldering remnant, or a non-fire heat source (flare, industrial).' +
+      nightNote,
+    color: '#94a3b8',
+    saturated,
+  };
+}
+
 function confidenceLabel(raw: unknown): string {
   if (raw == null || raw === '') return 'Unknown';
   const s = String(raw).toLowerCase();
