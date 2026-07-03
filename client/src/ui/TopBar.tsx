@@ -354,6 +354,48 @@ function DashboardButton() {
   );
 }
 
+// Mobile-only overflow menu collecting the utility buttons that would otherwise
+// wrap the top bar across several rows on a phone: camera reset, full screen,
+// measure, and the status dashboard. Desktop keeps them as individual buttons.
+function MobileToolsMenu() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative md:hidden">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={`pointer-events-auto flex items-center justify-center rounded-lg border p-2.5 shadow-panel backdrop-blur-sm transition ${
+          open
+            ? 'border-accent/40 bg-accent/10 text-accent'
+            : 'border-white/10 bg-ink-900/80 text-white/60'
+        }`}
+        aria-label="More tools"
+        title="Tools"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="5" cy="12" r="1.8" />
+          <circle cx="12" cy="12" r="1.8" />
+          <circle cx="19" cy="12" r="1.8" />
+        </svg>
+      </button>
+      {open && (
+        <>
+          {/* invisible backdrop: tap anywhere else to dismiss */}
+          <div className="pointer-events-auto fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div
+            className="pointer-events-auto absolute left-0 top-full z-50 mt-2 flex flex-col items-stretch gap-2 rounded-xl border border-white/10 bg-ink-900/95 p-2 shadow-panel backdrop-blur-md"
+            onClickCapture={() => setOpen(false)}
+          >
+            <ResetCameraButton />
+            <FullscreenButton />
+            <MeasureButton />
+            <DashboardButton />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // Tiny SVG sparkline for the items-tracked counter.
 function Sparkline({ history }: { history: number[] }) {
   if (history.length < 2) return null;
@@ -431,16 +473,21 @@ export function TopBar() {
         <div className="pointer-events-auto flex items-center gap-2 rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 shadow-panel backdrop-blur-sm">
           <span className="h-2 w-2 animate-pulse rounded-full bg-accent-ok shadow-glow" />
           <span className="font-mono text-[13px] font-semibold tracking-[0.2em] text-white/90">
-            GSOC<span className="text-accent">MONITOR</span>
+            {/* On the narrowest phones just "GSOC" keeps row one on one line. */}
+            GSOC<span className="text-accent max-[419px]:hidden">MONITOR</span>
           </span>
         </div>
         <DeployStamp />
         <LiveClock />
         <TrackedCounter />
-        <ResetCameraButton />
-        <FullscreenButton />
-        <MeasureButton />
-        <DashboardButton />
+        {/* Utility buttons: individual on md+, collapsed into ⋯ on mobile. */}
+        <MobileToolsMenu />
+        <div className="hidden md:contents">
+          <ResetCameraButton />
+          <FullscreenButton />
+          <MeasureButton />
+          <DashboardButton />
+        </div>
         <CrisisButton />
         <UserMenu />
         {/* Screensaver modes — desktop only; mobile gets them in the drawer. */}

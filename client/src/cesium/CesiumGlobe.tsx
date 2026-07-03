@@ -168,6 +168,50 @@ export function CesiumGlobe({ children, onReady }: Props) {
       destination: Cesium.Cartesian3.fromDegrees(HOME_VIEW.lon, HOME_VIEW.lat, HOME_VIEW.height),
     });
 
+    // --- Make zoom and rotate distinct gestures --------------------------------
+    // Cesium's default wheel/pinch zoom steers toward the cursor / pinch
+    // midpoint, so zooming visibly rotates the globe whenever the pointer is
+    // off-center — and a two-finger pinch additionally tilts. Split them:
+    // drag rotates, wheel zooms straight along the view axis (screen center),
+    // pinch only zooms, and tilt stays available on deliberate inputs
+    // (middle-drag, or Ctrl+drag).
+    const camCtrl = v.scene.screenSpaceCameraController;
+    camCtrl.zoomEventTypes = [Cesium.CameraEventType.PINCH]; // wheel is handled manually below
+    camCtrl.tiltEventTypes = [
+      Cesium.CameraEventType.MIDDLE_DRAG,
+      { eventType: Cesium.CameraEventType.LEFT_DRAG, modifier: Cesium.KeyboardEventModifier.CTRL },
+      { eventType: Cesium.CameraEventType.RIGHT_DRAG, modifier: Cesium.KeyboardEventModifier.CTRL },
+    ];
+    const MIN_CAM_H = 150; // meters — don't dive into the ground
+    const MAX_CAM_H = 45_000_000;
+    camCtrl.minimumZoomDistance = MIN_CAM_H;
+    camCtrl.maximumZoomDistance = MAX_CAM_H;
+
+    // Radial wheel zoom: each notch multiplies camera height by a constant
+    // factor, so one tick feels the same at street scale and globe scale, and
+    // the view never drifts sideways while zooming.
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const cam = v.camera;
+      const h = cam.positionCartographic?.height;
+      if (h == null || !Number.isFinite(h)) return;
+      // Normalize wheels (line deltas) vs. trackpads (pixel deltas), and clamp
+      // huge momentum flicks to a sane number of steps.
+      const lines = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? e.deltaY : e.deltaY / 100;
+      const steps = Math.max(-4, Math.min(4, lines));
+      if (steps === 0) return;
+      const targetH = Math.min(MAX_CAM_H, Math.max(MIN_CAM_H, h * Math.pow(0.82, -steps)));
+      const amount = h - targetH; // >0 → zoom in
+      if (amount > 0) cam.zoomIn(amount);
+      else if (amount < 0) cam.zoomOut(-amount);
+      // zoomIn moves along the view vector, so under tilt the height change is
+      // approximate — hard-stop the floor so we can't tunnel under terrain.
+      const h2 = cam.positionCartographic?.height;
+      if (h2 != null && h2 < MIN_CAM_H) cam.zoomOut(MIN_CAM_H - h2);
+      v.scene.requestRender();
+    };
+    v.canvas.addEventListener('wheel', onWheel, { passive: false });
+
     v.screenSpaceEventHandler.setInputAction(
       (click: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
         // While the measure tool owns the cursor, don't open entity panels.
@@ -265,6 +309,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
     return () => {
       clearTimeout(decay);
       if (recoverTimerRef.current) clearTimeout(recoverTimerRef.current);
+      v.canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('webglcontextlost', onContextLost);
       canvas.removeEventListener('webglcontextrestored', onContextRestored);
       onReady?.(null);
