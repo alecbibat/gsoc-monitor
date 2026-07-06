@@ -249,8 +249,15 @@ router.get('/', async (req, res) => {
       }
     }
 
+    // Extra feeds get the same 5-min cache as the base set (keyed per URL) —
+    // otherwise every poll re-fetches each origin, pinning latency to the
+    // slowest feed and risking blocks from the feed hosts.
     const extraResults = await Promise.allSettled(
-      extraFeeds.map((f) => fetchFeed(f.url, f.source))
+      extraFeeds.map((f) =>
+        cache.getOrFetch(`news:extra:${f.url}`, SUCCESS_TTL, () => fetchFeed(f.url, f.source), {
+          staleOnError: true,
+        })
+      )
     );
     const baseUrls = new Set(baseItems.map((i) => i.url));
     const extraItems: NewsItem[] = [];

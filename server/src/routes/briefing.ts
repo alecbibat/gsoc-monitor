@@ -50,7 +50,10 @@ export interface BriefingResponse {
   updated: number;
 }
 
-let cached: { key: string; result: BriefingResponse } | null = null;
+// Small keyed cache (not a single slot) so several displays with slightly
+// different payloads can't thrash each other out between polls.
+const briefingCache = new Map<string, BriefingResponse>();
+const BRIEFING_CACHE_MAX = 20;
 
 // ---------------------------------------------------------------------------
 // deterministic fallback — always available, no key required
@@ -151,10 +154,14 @@ router.post('/', async (req, res) => {
   }
 
   // Payload-hash cache: identical situations (several displays, rapid reopen)
-  // reuse the same briefing for CACHE_MS.
-  const key = crypto.createHash('sha1').update(payload).digest('hex');
-  if (cached && cached.key === key && Date.now() - cached.result.updated < CACHE_MS) {
-    res.json(cached.result);
+  // reuse the same briefing for CACHE_MS. Hash a copy with the per-client
+  // timestamp stripped — each display stamps its own generatedAt, which made
+  // every POST a distinct hash and a fresh paid model call.
+  const { generatedAt: _ts, ...stable } = signals;
+  const key = crypto.createHash('sha1').update(JSON.stringify(stable)).digest('hex');
+  const hit = briefingCache.get(key);
+  if (hit && Date.now() - hit.updated < CACHE_MS) {
+    res.json(hit);
     return;
   }
 
@@ -173,7 +180,12 @@ router.post('/', async (req, res) => {
     result = composeRulesBriefing(signals);
   }
 
-  cached = { key, result };
+  briefingCache.delete(key);
+  briefingCache.set(key, result);
+  if (briefingCache.size > BRIEFING_CACHE_MAX) {
+    const oldest = briefingCache.keys().next().value;
+    if (oldest !== undefined) briefingCache.delete(oldest);
+  }
   res.json(result);
 });
 

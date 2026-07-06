@@ -79,8 +79,12 @@ function main() {
   app.use(cors());
   app.use(cookieParser());
   // Crisis share state embeds Cloudinary URLs after the migration (previously
-  // base64 blobs), but keep a generous limit for any legacy imports.
-  app.use(express.json({ limit: '50mb' }));
+  // base64 blobs) — only that router keeps a generous limit for legacy imports.
+  // Everywhere else 1mb is plenty, and it stops an oversized (or malicious)
+  // body from synchronously parsing 50 MB of JSON on the single dyno.
+  app.use('/api/crisis', express.json({ limit: '50mb' }));
+  app.use('/api/incidents', express.json({ limit: '5mb' }));
+  app.use(express.json({ limit: '1mb' }));
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
@@ -143,9 +147,31 @@ function main() {
   initIntelStream();
 
   const clientDist = path.join(__dirname, '../../client/dist');
-  app.use(express.static(clientDist));
+  // Vite emits content-hashed filenames under assets/, so they can be cached
+  // forever; index.html must revalidate so a deploy is picked up immediately.
+  app.use(
+    express.static(clientDist, {
+      setHeaders: (res, filePath) => {
+        if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        } else if (filePath.endsWith('index.html')) {
+          res.setHeader('Cache-Control', 'no-cache');
+        } else {
+          res.setHeader('Cache-Control', 'public, max-age=3600');
+        }
+      },
+    })
+  );
   app.get('*', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-cache');
     res.sendFile(path.join(clientDist, 'index.html'));
+  });
+
+  // Backstop for anything that reaches next(err) — without it Express prints
+  // HTML stack traces; with it API consumers get JSON and the process stays up.
+  app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error('[express]', err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'Internal error' });
   });
 
   // Bind the port immediately so the dyno boots even while the database is

@@ -130,9 +130,9 @@ async function saveChunk(): Promise<void> {
   try {
     const newest = (head - 1 + CAP) % CAP;
     // Collect newest→oldest until we reach already-persisted strikes.
-    const lat: number[] = [];
-    const lon: number[] = [];
-    const t: number[] = [];
+    let lat: number[] = [];
+    let lon: number[] = [];
+    let t: number[] = [];
     for (let i = 0; i < count; i++) {
       const idx = (newest - i + CAP) % CAP;
       if (tBuf[idx] <= lastSavedT) break;
@@ -145,14 +145,15 @@ async function saveChunk(): Promise<void> {
     lon.reverse();
     t.reverse();
     // After a long DB outage the pending span can be huge — stride-thin it so a
-    // single chunk stays bounded.
+    // single chunk stays bounded. (Reassign rather than push(...spread): a
+    // 300k-element spread blows V8's argument limit and would kill every
+    // subsequent save.)
     if (lat.length > MAX_CHUNK) {
       const stride = Math.ceil(lat.length / MAX_CHUNK);
       const keep = (arr: number[]) => arr.filter((_, i) => i % stride === 0);
-      const [l2, o2, t2] = [keep(lat), keep(lon), keep(t)];
-      lat.length = 0; lat.push(...l2);
-      lon.length = 0; lon.push(...o2);
-      t.length = 0; t.push(...t2);
+      lat = keep(lat);
+      lon = keep(lon);
+      t = keep(t);
     }
     const data = packStrikes(lat, lon, t);
     await pool.query(
@@ -214,15 +215,23 @@ let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let relayIndex = 0;
 let connected = false;
+let connectedAt = 0;
 let totalStrikes = 0;
 let lastStrikeAt = 0;
 
+// Exponential backoff (with jitter) so unreachable relays aren't hammered every
+// 3s forever; reset as soon as a strike actually arrives.
+let consecutiveFailures = 0;
 function scheduleReconnect(): void {
   if (reconnectTimer) return;
+  const delay =
+    Math.min(120_000, 3_000 * 2 ** Math.min(consecutiveFailures, 5)) +
+    Math.floor(Math.random() * 1_000);
+  consecutiveFailures++;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connect();
-  }, 3_000);
+  }, delay);
 }
 
 function connect(): void {
@@ -239,6 +248,7 @@ function connect(): void {
 
   socket.on('open', () => {
     connected = true;
+    connectedAt = Date.now();
     // Subscribe to the global strike stream.
     socket.send(JSON.stringify({ a: 111 }));
     console.log(`[lightning] connected to ${url}`);
@@ -260,6 +270,7 @@ function connect(): void {
     if (strike.lat < -90 || strike.lat > 90 || strike.lon < -180 || strike.lon > 180) return;
     totalStrikes++;
     lastStrikeAt = Date.now();
+    consecutiveFailures = 0;
     // Decimate: store 1 of every KEEP_EVERY strikes so the fixed buffer spans a
     // full 24h. Strikes arrive globally interleaved, so every-Nth is an unbiased
     // sample; the historical view is display-thinned anyway (see MAX_RESPONSE).
@@ -292,6 +303,22 @@ export function initLightningStream(): void {
     .catch(() => {})
     .finally(() => connect());
   setInterval(() => void saveChunk(), SAVE_INTERVAL_MS);
+  // Half-open-socket watchdog: the global stream never goes 2 minutes silent,
+  // but a NAT timeout can leave the TCP connection "up" with no 'close' event —
+  // which would silently stop 24h collection until someone restarts the dyno.
+  setInterval(() => {
+    const sinceData = Date.now() - Math.max(lastStrikeAt, connectedAt);
+    if (connected && ws && sinceData > 120_000) {
+      console.warn('[lightning] no strikes for 2 min on an open socket — forcing reconnect');
+      try {
+        ws.terminate(); // triggers 'close' → scheduleReconnect
+      } catch {
+        connected = false;
+        ws = null;
+        scheduleReconnect();
+      }
+    }
+  }, 60_000).unref();
   // Heroku sends SIGTERM before a dyno restart and allows ~30s of grace — a
   // final small chunk write shrinks the loss window to near zero.
   process.once('SIGTERM', () => void saveChunk());
@@ -304,10 +331,22 @@ export function initLightningStream(): void {
 // point cloud stay bounded regardless of storm intensity.
 const MAX_RESPONSE = 20_000;
 
+// Identical windows are requested by every polling dashboard — memoize the
+// serialized body briefly so a 24h query (a walk over up to ~1.4M ring slots)
+// runs once per interval, not once per client.
+const MEMO_TTL_MS = 10_000;
+const queryMemo = new Map<number, { at: number; body: string }>();
+
 router.get('/', (req, res) => {
   const minutes = Math.min(1440, Math.max(1, Math.round(Number(req.query.minutes)) || 60));
   const now = Date.now();
   const cutoff = now - minutes * 60_000;
+
+  const memo = queryMemo.get(minutes);
+  if (memo && now - memo.at < MEMO_TTL_MS) {
+    res.type('application/json').send(memo.body);
+    return;
+  }
 
   if (count === 0) {
     res.json({
@@ -325,42 +364,36 @@ router.get('/', (req, res) => {
     return;
   }
 
-  const newest = (head - 1 + CAP) % CAP;
   const oldestIdx = (head - count + CAP) % CAP;
   const coverageMin = Math.min(minutes, Math.round((now - tBuf[oldestIdx]) / 60_000));
 
-  // Pass 1: how many strikes fall inside the window (walk newest → oldest,
-  // stopping at the first one older than the cutoff — the buffer is time-ordered).
-  let totalInWindow = 0;
-  for (let i = 0; i < count; i++) {
-    const idx = (newest - i + CAP) % CAP;
-    if (tBuf[idx] < cutoff) break;
-    totalInWindow++;
+  // The ring is time-ordered oldest→newest, so binary-search the first logical
+  // slot inside the window instead of walking millions of entries.
+  const at = (j: number) => tBuf[(oldestIdx + j) % CAP];
+  let lo = 0;
+  let hi = count; // first index with t >= cutoff (or count if none)
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (at(mid) < cutoff) lo = mid + 1;
+    else hi = mid;
   }
+  const totalInWindow = count - lo;
 
-  // Pass 2: emit every `stride`-th strike so the result is ≤ MAX_RESPONSE while
-  // staying spread evenly across the whole window.
+  // Emit every `stride`-th strike (anchored at the newest, matching the old
+  // newest→oldest walk) so the result is ≤ MAX_RESPONSE and evenly spread.
   const stride = Math.max(1, Math.ceil(totalInWindow / MAX_RESPONSE));
   const lat: number[] = [];
   const lon: number[] = [];
   const t: number[] = [];
-  for (let i = 0, k = 0; i < count; i++) {
-    const idx = (newest - i + CAP) % CAP;
-    const tv = tBuf[idx];
-    if (tv < cutoff) break;
-    if (k % stride === 0) {
-      lat.push(Math.round(latBuf[idx] * 1000) / 1000);
-      lon.push(Math.round(lonBuf[idx] * 1000) / 1000);
-      t.push(Math.round(tv / 1000)); // epoch seconds (smaller payload)
-    }
-    k++;
+  for (let j = lo; j < count; j++) {
+    if ((count - 1 - j) % stride !== 0) continue;
+    const idx = (oldestIdx + j) % CAP;
+    lat.push(Math.round(latBuf[idx] * 1000) / 1000);
+    lon.push(Math.round(lonBuf[idx] * 1000) / 1000);
+    t.push(Math.round(tBuf[idx] / 1000)); // epoch seconds (smaller payload)
   }
-  // Collected newest → oldest; hand back oldest → newest.
-  lat.reverse();
-  lon.reverse();
-  t.reverse();
 
-  res.json({
+  const body = JSON.stringify({
     lat,
     lon,
     t,
@@ -372,6 +405,8 @@ router.get('/', (req, res) => {
     connected,
     updated: Math.round(now / 1000),
   });
+  queryMemo.set(minutes, { at: now, body });
+  res.type('application/json').send(body);
 });
 
 // GET /api/lightning/debug — collector health at a glance.

@@ -624,13 +624,22 @@ async function fetchAllOutages(): Promise<OutagesResponse> {
 }
 
 let latest: OutagesResponse | null = null;
+// Serialized once per refresh — the snapshot is served identically to every
+// polling client, so per-request JSON.stringify is wasted event-loop time.
+let latestBody: Buffer | null = null;
 let refreshing = false;
+// Each rebuild fans out to ~18 utility sources (KUBRA alone can walk ~150 tile
+// fetches per utility during a storm). Pause the loop while nobody has asked
+// for outages recently; the stale-kick in the GET handler revives it.
+let lastRequestedAt = 0;
+const IDLE_AFTER_MS = 15 * 60_000;
 
 async function refreshOutages(): Promise<void> {
   if (refreshing) return;
   refreshing = true;
   try {
     latest = await fetchAllOutages();
+    latestBody = Buffer.from(JSON.stringify(latest));
   } catch (err) {
     console.error('[outages] refresh failed', err);
   } finally {
@@ -640,14 +649,18 @@ async function refreshOutages(): Promise<void> {
 
 export function initOutagesStream(): void {
   void refreshOutages();
-  setInterval(() => void refreshOutages(), REFRESH_MS);
+  setInterval(() => {
+    if (Date.now() - lastRequestedAt > IDLE_AFTER_MS && latest) return; // idle — skip the fan-out
+    void refreshOutages();
+  }, REFRESH_MS);
 }
 
 router.get('/', (_req, res) => {
-  if (latest) {
-    // Kick a refresh if the background loop somehow went stale.
+  lastRequestedAt = Date.now();
+  if (latest && latestBody) {
+    // Kick a refresh if the background loop went stale (or was idle-paused).
     if (Date.now() - latest.updated > REFRESH_MS * 2) void refreshOutages();
-    res.json(latest);
+    res.type('application/json').send(latestBody);
     return;
   }
   // Cold start before the first refresh lands: answer empty-but-valid rather

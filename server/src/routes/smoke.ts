@@ -12,9 +12,12 @@ function padTwo(n: number): string {
 }
 
 function kmlUrl(date: Date): string {
-  const y = date.getFullYear();
-  const m = padTwo(date.getMonth() + 1);
-  const d = padTwo(date.getDate());
+  // UTC getters — the fallback walk and labels below are UTC, and a local-time
+  // file name would fetch the wrong (or a not-yet-existing) day's product on
+  // any server whose TZ isn't UTC.
+  const y = date.getUTCFullYear();
+  const m = padTwo(date.getUTCMonth() + 1);
+  const d = padTwo(date.getUTCDate());
   return (
     `https://satepsanone.nesdis.noaa.gov/pub/FIRE/web/HMS/Smoke_Polygons/KML/${y}/${m}/hms_smoke${y}${m}${d}.kml`
   );
@@ -97,7 +100,7 @@ async function fetchSmokeData(): Promise<SmokePayload> {
 
     let text: string;
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
       if (!res.ok) continue;
       text = await res.text();
     } catch {

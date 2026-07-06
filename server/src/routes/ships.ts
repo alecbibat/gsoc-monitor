@@ -288,7 +288,12 @@ function handleMessage(raw: string) {
       shipType: typeof sd.Type === 'number' ? sd.Type : null,
       destination: (sd.Destination as string | undefined)?.trim() || null,
     };
-    staticCache.set(mmsi, info);
+    // In firehose mode the global stream carries static data for every MMSI
+    // worldwide — apply the same cap logic as `vessels` so this map can't grow
+    // without bound (allowlisted ships always get through).
+    if (staticCache.size < VESSEL_CAP || staticCache.has(mmsi) || allowedMmsis.has(mmsi)) {
+      staticCache.set(mmsi, info);
+    }
 
     // Enrich an existing position entry immediately if we have one.
     const existing = vessels.get(mmsi) ?? tracked.get(mmsi);
@@ -312,6 +317,16 @@ function handleMessage(raw: string) {
   }
 }
 
+// Reconnect with exponential backoff + jitter so a revoked key or upstream
+// outage doesn't open a fresh TLS connection every 5s forever. Failures are
+// counted until the first *message* arrives — auth rejections close after
+// 'open', so 'open' alone can't prove the subscription is healthy.
+let consecutiveFailures = 0;
+function reconnectDelayMs(): number {
+  const base = Math.min(300_000, 5_000 * 2 ** Math.min(consecutiveFailures, 6));
+  return base + Math.floor(Math.random() * 2_000);
+}
+
 function connectAIS() {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
@@ -320,6 +335,7 @@ function connectAIS() {
 
   try {
     connectAttempts++;
+    consecutiveFailures++;
     lastConnectAt = Date.now();
     ws = new WebSocket('wss://stream.aisstream.io/v0/stream');
 
@@ -339,12 +355,13 @@ function connectAIS() {
     ws.on('message', (data: WebSocket.RawData) => {
       totalMessages++;
       lastMessageAt = Date.now();
+      consecutiveFailures = 0;
       handleMessage(data.toString());
     });
 
     ws.on('close', () => {
       ws = null;
-      reconnectTimer = setTimeout(connectAIS, 5_000);
+      reconnectTimer = setTimeout(connectAIS, reconnectDelayMs());
     });
 
     ws.on('error', (err) => {
@@ -354,7 +371,7 @@ function connectAIS() {
     });
   } catch (err) {
     lastError = String(err);
-    reconnectTimer = setTimeout(connectAIS, 5_000);
+    reconnectTimer = setTimeout(connectAIS, reconnectDelayMs());
     console.error('AIS connect failed:', err);
   }
 }

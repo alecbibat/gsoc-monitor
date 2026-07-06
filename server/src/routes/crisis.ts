@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { pool } from '../db';
+import { wrap } from '../asyncWrap';
 
 const router = Router();
 
@@ -10,7 +11,7 @@ const sseClients = new Map<string, Set<Response>>();
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 // POST /api/crisis/publish — create a new share link, returns token + url
-router.post('/publish', async (req: Request, res: Response) => {
+router.post('/publish', wrap(async (req: Request, res: Response) => {
   const snapshot = req.body;
   if (!snapshot || typeof snapshot !== 'object') {
     res.status(400).json({ error: 'Body must be a JSON object' }); return;
@@ -23,10 +24,10 @@ router.post('/publish', async (req: Request, res: Response) => {
     [token, incidentId ?? null, JSON.stringify(snapshot)]
   );
   res.json({ token, url: `/?share=${token}` });
-});
+}, 'crisis'));
 
 // PATCH /api/crisis/share/:token — push updated snapshot, notify SSE clients
-router.patch('/share/:token', async (req: Request, res: Response) => {
+router.patch('/share/:token', wrap(async (req: Request, res: Response) => {
   const { token } = req.params;
   const { rows: [row] } = await pool.query(
     'SELECT snapshot FROM share_links WHERE token = $1 AND active = TRUE',
@@ -35,31 +36,33 @@ router.patch('/share/:token', async (req: Request, res: Response) => {
   if (!row) { res.status(404).json({ error: 'Not found' }); return; }
 
   const merged = { ...(row.snapshot as object), ...req.body, lastUpdated: new Date().toISOString() };
+  // Snapshots can be MB-scale; stringify once and reuse for the UPDATE + SSE.
+  const json = JSON.stringify(merged);
   await pool.query(
     'UPDATE share_links SET snapshot = $1 WHERE token = $2',
-    [JSON.stringify(merged), token]
+    [json, token]
   );
 
-  const payload = `event: update\ndata: ${JSON.stringify(merged)}\n\n`;
+  const payload = `event: update\ndata: ${json}\n\n`;
   sseClients.get(token)?.forEach((client) => {
     try { client.write(payload); } catch { /* disconnected */ }
   });
 
   res.json({ ok: true });
-});
+}, 'crisis'));
 
 // GET /api/crisis/share/:token — return current state snapshot (no auth required)
-router.get('/share/:token', async (req: Request, res: Response) => {
+router.get('/share/:token', wrap(async (req: Request, res: Response) => {
   const { rows: [row] } = await pool.query(
     'SELECT snapshot FROM share_links WHERE token = $1 AND active = TRUE',
     [req.params.token]
   );
   if (!row) { res.status(404).json({ error: 'Not found' }); return; }
   res.json(row.snapshot);
-});
+}, 'crisis'));
 
 // DELETE /api/crisis/share/:token — revoke a share link
-router.delete('/share/:token', async (req: Request, res: Response) => {
+router.delete('/share/:token', wrap(async (req: Request, res: Response) => {
   const { rows: [row] } = await pool.query(
     'SELECT 1 FROM share_links WHERE token = $1',
     [req.params.token]
@@ -75,10 +78,10 @@ router.delete('/share/:token', async (req: Request, res: Response) => {
   sseClients.delete(req.params.token);
 
   res.json({ ok: true });
-});
+}, 'crisis'));
 
 // GET /api/crisis/share/:token/events — SSE stream for live updates (no auth required)
-router.get('/share/:token/events', async (req: Request, res: Response) => {
+router.get('/share/:token/events', wrap(async (req: Request, res: Response) => {
   const { token } = req.params;
   const { rows: [row] } = await pool.query(
     'SELECT snapshot FROM share_links WHERE token = $1 AND active = TRUE',
@@ -106,6 +109,6 @@ router.get('/share/:token/events', async (req: Request, res: Response) => {
     sseClients.get(token)?.delete(res);
     if (sseClients.get(token)?.size === 0) sseClients.delete(token);
   });
-});
+}, 'crisis'));
 
 export default router;
