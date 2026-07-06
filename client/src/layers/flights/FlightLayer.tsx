@@ -4,6 +4,7 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
 import { attachPanelData } from '../../cesium/entityPanelLink';
+import { startVisiblePolling } from '../../lib/poll';
 import { useFlightsStatus } from './flightsStore';
 
 function planeIconDataUri(color: string): string {
@@ -31,6 +32,7 @@ export function FlightLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.flights);
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
+  const lastSigRef = useRef<string>('');
 
   useEffect(() => {
     if (!viewer) return;
@@ -49,6 +51,7 @@ export function FlightLayer() {
 
     if (!active) {
       ds.entities.removeAll();
+      lastSigRef.current = '';
       viewer.scene.requestRender();
       return;
     }
@@ -59,6 +62,29 @@ export function FlightLayer() {
       try {
         const data = await api.flightsByTail();
         if (cancelled) return;
+
+        const setStatus = () =>
+          useFlightsStatus.getState().setStatus({
+            tooWideView: false,
+            count: data.flights.length,
+            error: null,
+          });
+
+        // Skip the teardown/redraw when nothing that affects rendering changed.
+        const sig = data.flights
+          .map(
+            (f) =>
+              `${f.icao24}:${f.latitude}:${f.longitude}:${f.track}:${f.onGround}:${
+                f.lastSeenSec > LIVE_WINDOW_SEC
+              }`
+          )
+          .join('|');
+        if (sig === lastSigRef.current) {
+          setStatus();
+          return;
+        }
+        lastSigRef.current = sig;
+
         ds.entities.removeAll();
 
         for (const flight of data.flights) {
@@ -110,11 +136,7 @@ export function FlightLayer() {
             payload: { ...flight },
           });
         }
-        useFlightsStatus.getState().setStatus({
-          tooWideView: false,
-          count: data.flights.length,
-          error: null,
-        });
+        setStatus();
         viewer.scene.requestRender();
       } catch (err) {
         if (cancelled) return;
@@ -123,12 +145,11 @@ export function FlightLayer() {
       }
     };
 
-    load();
-    const interval = setInterval(load, 30_000);
+    const stopPolling = startVisiblePolling(() => void load(), 30_000);
 
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopPolling();
     };
   }, [viewer, active]);
 

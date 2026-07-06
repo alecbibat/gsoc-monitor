@@ -1,4 +1,12 @@
-import { ShipModel3D } from './ShipModel3D';
+import { lazy, Suspense } from 'react';
+
+// Pulls in Three.js — loaded on demand when a ship panel opens.
+const ShipModel3D = lazy(() => import('./ShipModel3D').then((m) => ({ default: m.ShipModel3D })));
+
+// Matches ShipModel3D's default width/height so the card doesn't jump when
+// the chunk resolves.
+const MODEL_W = 190;
+const MODEL_H = 118;
 
 interface ShipProfile {
   class: 'STAR CLASS' | 'WIND CLASS';
@@ -45,7 +53,9 @@ export function ShipClassCard({ mmsi }: { mmsi: string }) {
     <div className="rounded-lg border bg-white/3 px-3 py-2.5" style={{ borderColor: `${color}30` }}>
       {/* Rotating 3D wireframe */}
       <div className="flex justify-center pb-1">
-        <ShipModel3D variant={isStar ? 'star' : 'wind'} color={color} masts={profile.masts} />
+        <Suspense fallback={<div style={{ width: MODEL_W, height: MODEL_H }} />}>
+          <ShipModel3D variant={isStar ? 'star' : 'wind'} color={color} masts={profile.masts} />
+        </Suspense>
       </div>
 
       {/* Class badge */}

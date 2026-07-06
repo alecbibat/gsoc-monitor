@@ -1,7 +1,9 @@
 import { useState, type ReactNode } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useLayersStore } from '../store/layersStore';
 import { useFlightsStatus } from '../layers/flights/flightsStore';
 import { useAlertsStatus } from '../layers/alerts/alertsStore';
+import { useEarthquakesStatus } from '../layers/earthquakes/earthquakesStore';
 import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { useLightningStatus } from '../layers/lightning/lightningStore';
 import { useFiresStatus } from '../layers/fires/firesStore';
@@ -93,6 +95,7 @@ export function Sidebar() {
   const active = useLayersStore((s) => s.active);
   const toggleLayer = useLayersStore((s) => s.toggleLayer);
   const earthquakeMagnitude = useLayersStore((s) => s.earthquakeMagnitude);
+  const earthquakePeriod = useLayersStore((s) => s.earthquakePeriod);
   const setEarthquakeFilter = useLayersStore((s) => s.setEarthquakeFilter);
   const shipFavoritesOnly = useLayersStore((s) => s.shipFavoritesOnly);
   const setShipFavoritesOnly = useLayersStore((s) => s.setShipFavoritesOnly);
@@ -105,34 +108,109 @@ export function Sidebar() {
   const setNewsNearMiles = useLayersStore((s) => s.setNewsNearMiles);
   const satelliteGroup = useLayersStore((s) => s.satelliteGroup);
   const setSatelliteGroup = useLayersStore((s) => s.setSatelliteGroup);
-  const flightsStatus = useFlightsStatus();
-  const alertsStatus = useAlertsStatus();
-  const hurricanesStatus = useHurricanesStatus();
-  const lightningStatus = useLightningStatus();
-  const firesStatus = useFiresStatus();
-  const wildfiresStatus = useWildfiresStatus();
-  const outagesStatus = useOutagesStatus();
-  const smokeStatus = useSmokeStatus();
-  const aqiStatus = useAqiStatus();
-  const riversStatus = useRiversStatus();
+  // Status stores are written on every poll tick (lightning on every websocket
+  // message during storms) — subscribe to just the fields the sidebar renders,
+  // shallow-compared, so bulk payloads (strike buffers, wind grids, event
+  // lists) can't re-render all ~30 toggles per write.
+  const flightsStatus = useFlightsStatus(useShallow((s) => ({ count: s.count, error: s.error })));
+  const alertsStatus = useAlertsStatus(useShallow((s) => ({ count: s.count, error: s.error })));
+  const earthquakesCount = useEarthquakesStatus((s) => s.count);
+  const earthquakesError = useEarthquakesStatus((s) => s.error);
+  const hurricanesStatus = useHurricanesStatus(
+    useShallow((s) => ({ count: s.count, invests: s.invests, disturbances: s.disturbances, error: s.error }))
+  );
+  const lightningStatus = useLightningStatus(
+    useShallow((s) => ({ connected: s.connected, ratePerMin: s.ratePerMin, error: s.error }))
+  );
+  const firesStatus = useFiresStatus(
+    useShallow((s) => ({ count: s.count, capped: s.capped, error: s.error }))
+  );
+  const wildfiresStatus = useWildfiresStatus(useShallow((s) => ({ count: s.count, error: s.error })));
+  const outagesStatus = useOutagesStatus(
+    useShallow((s) => ({ count: s.count, customers: s.customers, states: s.states, error: s.error }))
+  );
+  const smokeStatus = useSmokeStatus(
+    useShallow((s) => ({ count: s.count, date: s.date, error: s.error }))
+  );
+  const aqiStatus = useAqiStatus(
+    useShallow((s) => ({
+      count: s.count,
+      airnowCount: s.airnowCount,
+      purpleairCount: s.purpleairCount,
+      worstAqi: s.worstAqi,
+      worstCategory: s.worstCategory,
+      noKey: s.noKey,
+      purpleAirNoKey: s.purpleAirNoKey,
+      showAirnow: s.showAirnow,
+      showPurpleair: s.showPurpleair,
+      toggleSource: s.toggleSource,
+      error: s.error,
+    }))
+  );
+  const riversStatus = useRiversStatus(
+    useShallow((s) => ({
+      counts: s.counts,
+      total: s.total,
+      loading: s.loading,
+      filter: s.filter,
+      setFilter: s.setFilter,
+      showForecast: s.showForecast,
+      toggleForecast: s.toggleForecast,
+      error: s.error,
+    }))
+  );
   const precipPeriod = usePrecipStore((s) => s.period);
   const fireOutlookError = useFireOutlookStore((s) => s.error);
-  const fuelStatus = useFuelStatus();
-  const windStatus = useWindStatus();
+  const fuelError = useFuelStatus((s) => s.error);
+  const windStatus = useWindStatus(
+    useShallow((s) => ({
+      ready: s.ready,
+      stale: s.stale,
+      maxSpeedMps: s.maxSpeedMps,
+      arrowCount: s.arrowCount,
+      gridUpdated: s.grid?.updated ?? null,
+      error: s.error,
+    }))
+  );
   const xwConfigured = useXweatherStore((s) => s.configured);
   const windProbeEnabled = useWindProbeStore((s) => s.probeEnabled);
   const toggleWindProbe = useWindProbeStore((s) => s.toggleProbe);
   const fuelZoneActive = useFuelZoneStore((s) => s.active);
   const fuelZoneMode = useFuelZoneStore((s) => s.mode);
   const toggleFuelZone = useFuelZoneStore((s) => s.toggle);
-  const shipsStatus = useShipsStatus();
-  const newsMapStatus = useNewsMapStore();
+  const shipsStatus = useShipsStatus(
+    useShallow((s) => ({
+      count: s.count,
+      total: s.total,
+      connected: s.connected,
+      streaming: s.streaming,
+      messages: s.messages,
+      noKey: s.noKey,
+      ships: s.ships,
+      error: s.error,
+    }))
+  );
+  const newsMapStatus = useNewsMapStore(
+    useShallow((s) => ({ count: s.count, total: s.total, error: s.error }))
+  );
   const intelItems = useIntelStore((s) => s.items);
   const intelSourceCount = useIntelStore((s) => s.sourceCount);
   const intelErr = useIntelStore((s) => s.error);
-  const satellitesStatus = useSatellitesStatus();
-  const osmStatus = useOsmStatus();
-  const timeZonesStatus = useTimeZonesStatus();
+  const satellitesStatus = useSatellitesStatus(
+    useShallow((s) => ({
+      count: s.count,
+      total: s.total,
+      loading: s.loading,
+      requestFocusIss: s.requestFocusIss,
+      error: s.error,
+    }))
+  );
+  const osmStatus = useOsmStatus(
+    useShallow((s) => ({ ready: s.ready, loading: s.loading, error: s.error }))
+  );
+  const timeZonesStatus = useTimeZonesStatus(
+    useShallow((s) => ({ count: s.count, ready: s.ready, loading: s.loading, error: s.error }))
+  );
   const screensaverActive = useScreensaverStore((s) => s.active);
   // Hover mode (custom-point orbit) also takes over the screen, so collapse the
   // chrome while picking a point or orbiting, just like a screensaver.
@@ -355,8 +433,8 @@ export function Sidebar() {
               (windStatus.ready
                 ? windStatus.stale
                   ? `Historical wind${
-                      windStatus.grid?.updated
-                        ? ` · as of ${new Date(windStatus.grid.updated).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+                      windStatus.gridUpdated
+                        ? ` · as of ${new Date(windStatus.gridUpdated).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
                         : ''
                     } · peak ${Math.round(windStatus.maxSpeedMps * 2.23694)} mph`
                   : `Live surface wind · peak ${Math.round(windStatus.maxSpeedMps * 2.23694)} mph`
@@ -513,7 +591,7 @@ export function Sidebar() {
             active={(active as Record<string, boolean>).fuel ?? false}
             onToggle={() => toggleLayer('fuel')}
             statusText={
-              fuelStatus.error ?? 'Scott & Burgan 40 fuel models · CONUS · 30 m'
+              fuelError ?? 'Scott & Burgan 40 fuel models · CONUS · 30 m'
             }
           >
             <FuelLegend />
@@ -560,6 +638,7 @@ export function Sidebar() {
             label="Earthquakes (USGS)"
             active={active.earthquakes}
             onToggle={() => toggleLayer('earthquakes')}
+            statusText={earthquakesError ?? `${earthquakesCount} quakes · past ${earthquakePeriod}`}
           >
             <div className="flex flex-wrap gap-1.5 pt-1">
               {MAGNITUDES.map((m) => (

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   useCrisisStore, useActiveIncident, extractPublicState, type CrisisTab,
@@ -159,40 +159,6 @@ function ShareLinksPanel() {
       )}
     </div>
   );
-}
-
-// ── Auto-push the active incident to all active share links on every change ────
-
-function useAutoPublish() {
-  const inc = useActiveIncident();
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (!inc) return;
-    const activeTokens = (inc.shareLinks ?? [])
-      .filter((l) => l.active)
-      .map((l) => l.token);
-    // Legacy fallback: if shareToken set but shareLinks not yet populated
-    if (activeTokens.length === 0 && inc.shareToken) activeTokens.push(inc.shareToken);
-    if (activeTokens.length === 0) return;
-
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      const body = JSON.stringify(extractPublicState(inc));
-      for (const token of activeTokens) {
-        fetch(`/api/crisis/share/${token}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body,
-        })
-          .then((res) => {
-            if (!res.ok) console.warn(`[crisis] live update failed (${res.status}) for share ${token}`);
-          })
-          .catch(console.error);
-      }
-    }, 1_500);
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [inc]);
 }
 
 // ── Incident detail (right-side panel, leaves the globe visible on the left) ───
@@ -401,12 +367,12 @@ function IncidentListShell() {
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 
+// Auto-publish of share links lives in IncidentSync (always mounted); this
+// overlay is lazy-loaded and only mounted while open — see App.tsx.
 export function CrisisOverlay() {
   const open  = useCrisisStore((s) => s.open);
   const close = useCrisisStore((s) => s.close);
   const activeIncidentId = useCrisisStore((s) => s.activeIncidentId);
-
-  useAutoPublish();
 
   useEffect(() => {
     if (!open) return;

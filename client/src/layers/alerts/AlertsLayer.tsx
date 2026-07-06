@@ -6,6 +6,7 @@ import { attachPanelData, getPanelData } from '../../cesium/entityPanelLink';
 import { usePanelStore } from '../../panels/panelStore';
 import { useAlertsStatus } from './alertsStore';
 import { useScreensaverStore } from '../../screensaver/screensaverStore';
+import { startVisiblePolling } from '../../lib/poll';
 import {
   fetchActiveAlerts,
   loadCounties,
@@ -208,11 +209,10 @@ export function AlertsLayer() {
       }
     };
 
-    load();
-    const interval = setInterval(load, 60_000);
+    const stopPolling = startVisiblePolling(() => void load(), 60_000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopPolling();
     };
   }, [viewer, active]);
 

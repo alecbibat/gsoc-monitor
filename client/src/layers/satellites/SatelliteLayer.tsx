@@ -1,15 +1,8 @@
 import * as Cesium from 'cesium';
 import { useEffect, useRef } from 'react';
-import {
-  twoline2satrec,
-  propagate,
-  gstime,
-  eciToGeodetic,
-  degreesLong,
-  degreesLat,
-  type SatRec,
-  type EciVec3,
-} from 'satellite.js';
+// Type-only: the SGP4 propagator itself is dynamically imported in the load
+// effect so satellite.js stays out of the entry chunk.
+import type { SatRec, EciVec3 } from 'satellite.js';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { usePanelStore } from '../../panels/panelStore';
@@ -151,6 +144,9 @@ export function SatelliteLayer() {
     }
 
     let cancelled = false;
+    // Set by load() before anything that propagates runs (tick/computeOrbit
+    // are only reachable after the TLEs arrive).
+    let sat: typeof import('satellite.js');
     const style = GROUP_STYLE[group];
     const icon = satIcon(style.color);
     const issIcon = satIcon(ISS_STYLE.color);
@@ -180,13 +176,13 @@ export function SatelliteLayer() {
       const pts: Cesium.Cartesian3[] = [];
       for (let i = 0; i <= ORBIT_SAMPLES; i++) {
         const t = new Date(startMs + periodMin * 60_000 * (i / ORBIT_SAMPLES));
-        const pv = propagate(satrec, t);
+        const pv = sat.propagate(satrec, t);
         if (typeof pv.position === 'boolean') continue;
-        const geo = eciToGeodetic(pv.position as EciVec3<number>, gstime(t));
+        const geo = sat.eciToGeodetic(pv.position as EciVec3<number>, sat.gstime(t));
         pts.push(
           Cesium.Cartesian3.fromDegrees(
-            degreesLong(geo.longitude),
-            degreesLat(geo.latitude),
+            sat.degreesLong(geo.longitude),
+            sat.degreesLat(geo.latitude),
             geo.height * 1000
           )
         );
@@ -219,21 +215,22 @@ export function SatelliteLayer() {
     let timer: ReturnType<typeof setInterval> | null = null;
 
     const tick = () => {
+      if (document.hidden) return; // no point propagating for a hidden tab
       const now = new Date();
-      const g = gstime(now);
+      const g = sat.gstime(now);
       const tnow = performance.now();
       const doTrail = trailsEnabled && tnow - lastTrailAt >= TRAIL_SAMPLE_MS;
       if (doTrail) lastTrailAt = tnow;
 
       for (const s of sats) {
-        const pv = propagate(s.satrec, now);
+        const pv = sat.propagate(s.satrec, now);
         if (typeof pv.position === 'boolean') {
           s.entity.show = false;
           continue;
         }
-        const geo = eciToGeodetic(pv.position as EciVec3<number>, g);
-        const lon = degreesLong(geo.longitude);
-        const lat = degreesLat(geo.latitude);
+        const geo = sat.eciToGeodetic(pv.position as EciVec3<number>, g);
+        const lon = sat.degreesLong(geo.longitude);
+        const lat = sat.degreesLat(geo.latitude);
         if (!Number.isFinite(lon) || !Number.isFinite(lat)) {
           s.entity.show = false;
           continue;
@@ -262,8 +259,11 @@ export function SatelliteLayer() {
     const load = async () => {
       useSatellitesStatus.getState().setStatus({ loading: true, error: null });
       try {
-        const data = await api.satellites(group);
+        // Propagator chunk fetches alongside the TLEs (cached after the first
+        // toggle, so this is only a cost once).
+        const [satlib, data] = await Promise.all([import('satellite.js'), api.satellites(group)]);
         if (cancelled) return;
+        sat = satlib;
 
         ds.entities.removeAll();
         sats.length = 0;
@@ -279,7 +279,7 @@ export function SatelliteLayer() {
         for (const tle of visible) {
           let satrec: SatRec;
           try {
-            satrec = twoline2satrec(tle.line1, tle.line2);
+            satrec = sat.twoline2satrec(tle.line1, tle.line2);
           } catch {
             continue;
           }
@@ -385,11 +385,19 @@ export function SatelliteLayer() {
       }
     };
 
+    // Catch up the moment the tab becomes visible again (ticks are skipped
+    // while hidden; the interval itself keeps running).
+    const onVisible = () => {
+      if (!document.hidden && sats.length) tick();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
     load();
 
     return () => {
       cancelled = true;
       if (timer) clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
       ds.entities.removeAll();
       byIdRef.current.clear();
     };

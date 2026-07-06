@@ -80,7 +80,12 @@ function resolvePair(
 
 // Split a raw line into coordinate segment tokens.
 // Handles common delimiters: comma, semicolon, whitespace (preserving DMS spaces).
-function splitLine(line: string): string[] {
+// WKT mode splits on ANY whitespace — WKT pairs are "lon lat" with a single
+// space, which the generic path deliberately doesn't split (it would break DMS).
+function splitLine(line: string, wktMode = false): string[] {
+  if (wktMode) {
+    return line.replace(/[()]/g, ' ').split(/\s+/).map((s) => s.trim()).filter(Boolean);
+  }
   // Try splitting on comma first (most common: "lat, lon")
   const byComma = line.split(',').map((s) => s.trim()).filter(Boolean);
   if (byComma.length >= 2) return byComma;
@@ -122,9 +127,9 @@ export function parseCoords(raw: string): ParseResult {
   const lonLatOrder = wkt?.lonLatOrder ?? false;
   const text = wkt ? wkt.text : raw;
 
-  // Split into candidate lines (newline or semicolon between pairs)
-  const lines = text
-    .split(/[\n;]+/)
+  // Split into candidate lines. WKT separates "lon lat" pairs with commas;
+  // free-form input separates pairs with newlines or semicolons.
+  const lines = (wkt ? text.split(/[,;\n]+/) : text.split(/[\n;]+/))
     .map((l) => l.trim())
     .filter(Boolean);
 
@@ -132,7 +137,7 @@ export function parseCoords(raw: string): ParseResult {
   const errors: string[] = [];
 
   for (const line of lines) {
-    const segs = splitLine(line);
+    const segs = splitLine(line, !!wkt);
     if (segs.length < 2) {
       // Could be a single "37.7749" token — skip
       continue;

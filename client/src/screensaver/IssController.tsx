@@ -1,14 +1,8 @@
 import * as Cesium from 'cesium';
 import { useEffect } from 'react';
-import {
-  twoline2satrec,
-  propagate,
-  gstime,
-  eciToGeodetic,
-  degreesLong,
-  degreesLat,
-  type EciVec3,
-} from 'satellite.js';
+// Type-only: satellite.js is dynamically imported when the ISS mode starts so
+// the propagator stays out of the entry chunk.
+import type { SatRec, EciVec3 } from 'satellite.js';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useScreensaverStore } from './screensaverStore';
 import { useLayersStore } from '../store/layersStore';
@@ -40,7 +34,8 @@ export function IssController() {
 
     let cancelled = false;
     let raf = 0;
-    let satrec: ReturnType<typeof twoline2satrec> | null = null;
+    let sat: typeof import('satellite.js') | null = null;
+    let satrec: SatRec | null = null;
     let lastPoi = 0;
 
     // Make the ISS itself visible (billboard + comet trail) while we chase it.
@@ -57,13 +52,13 @@ export function IssController() {
     setPhase('rotating');
 
     const tick = () => {
-      if (cancelled || !satrec) return;
+      if (cancelled || !sat || !satrec) return;
       const now = new Date();
-      const pv = propagate(satrec, now);
+      const pv = sat.propagate(satrec, now);
       if (typeof pv.position !== 'boolean') {
-        const geo = eciToGeodetic(pv.position as EciVec3<number>, gstime(now));
-        const lat = degreesLat(geo.latitude);
-        const lon = degreesLong(geo.longitude);
+        const geo = sat.eciToGeodetic(pv.position as EciVec3<number>, sat.gstime(now));
+        const lat = sat.degreesLat(geo.latitude);
+        const lon = sat.degreesLong(geo.longitude);
         const altM = geo.height * 1000;
         const target = Cesium.Cartesian3.fromDegrees(lon, lat, altM);
         const heading =
@@ -89,13 +84,13 @@ export function IssController() {
       raf = requestAnimationFrame(tick);
     };
 
-    api
-      .satellites('stations')
-      .then((res) => {
+    Promise.all([import('satellite.js'), api.satellites('stations')])
+      .then(([satlib, res]) => {
         if (cancelled) return;
         const iss = res.satellites.find((s) => s.satnum === ISS_SATNUM) ?? res.satellites[0];
         if (!iss) throw new Error('ISS TLE not found');
-        satrec = twoline2satrec(iss.line1, iss.line2);
+        sat = satlib;
+        satrec = satlib.twoline2satrec(iss.line1, iss.line2);
         raf = requestAnimationFrame(tick);
       })
       .catch(() => {

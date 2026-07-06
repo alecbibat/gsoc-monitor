@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
+import { startVisiblePolling } from '../../lib/poll';
 import type { RadarFrame } from '../../types';
 import { useRadarStore, buildTimeline, nowIndex } from './radarStore';
 
@@ -78,11 +79,10 @@ export function RadarLayer() {
         console.error('Failed to load radar manifest', err);
       }
     };
-    load();
-    const interval = setInterval(load, 2 * 60_000);
+    const stopPolling = startVisiblePolling(() => void load(), 2 * 60_000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopPolling();
     };
   }, [active]);
 

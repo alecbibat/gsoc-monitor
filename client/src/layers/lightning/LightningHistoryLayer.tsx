@@ -4,6 +4,7 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { useLightningStatus } from './lightningStore';
 import { api } from '../../api/client';
+import { startVisiblePolling } from '../../lib/poll';
 
 // How often to refresh the windowed history from the server. Strikes age slowly
 // relative to the windows (1–24h), so a 30 s cadence keeps the field current
@@ -85,12 +86,11 @@ export function LightningHistoryLayer() {
       }
     };
 
-    load();
-    const timer = setInterval(load, REFRESH_MS);
+    const stopPolling = startVisiblePolling(() => void load(), REFRESH_MS);
 
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      stopPolling();
       // remove() destroys the collection and its GPU resources.
       v.scene.primitives.remove(points);
       v.scene.requestRender();

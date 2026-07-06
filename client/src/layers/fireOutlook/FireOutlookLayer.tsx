@@ -4,6 +4,7 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { api } from '../../api/client';
+import { startVisiblePolling } from '../../lib/poll';
 import type { FireOutlookResponse } from '../../types';
 import { useFireOutlookStore } from './fireOutlookStore';
 import { outlookStyle } from './fireOutlookMeta';
@@ -107,11 +108,10 @@ export function FireOutlookLayer() {
           useFireOutlookStore.getState().setStatus({ error: 'Fire potential outlook unavailable' });
       }
     };
-    load();
-    const timer = setInterval(load, POLL_MS);
+    const stopPolling = startVisiblePolling(() => void load(), POLL_MS);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      stopPolling();
     };
   }, [viewer, active]);
 

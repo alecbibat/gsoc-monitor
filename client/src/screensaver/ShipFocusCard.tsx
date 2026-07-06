@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useScreensaverStore, type Poi } from './screensaverStore';
 import { FLEET_ROSTER, fleetColor } from '../layers/ships/fleet';
-import { mastCountForShip } from '../layers/ships/ShipModel3D';
+import { mastCountForShip } from '../layers/ships/shipMeta';
 import { ShipWireframe2D } from '../layers/ships/ShipWireframe2D';
 
 // Bottom-centre card shown while orbiting a Windstar ship in the pins

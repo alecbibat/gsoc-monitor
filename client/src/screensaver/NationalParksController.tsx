@@ -154,6 +154,9 @@ export function NationalParksController() {
   const lastFactIndexRef = useRef<number[]>(PARKS.map(() => -1));
   // Active boundary DataSource reference for cleanup.
   const boundarySourceRef = useRef<Cesium.GeoJsonDataSource | null>(null);
+  // Monotonic park-visit token: boundary fetches that land after their visit
+  // ended are dropped instead of leaking into viewer.dataSources.
+  const visitSeqRef = useRef(0);
 
   function updatePhase(p: typeof phaseRef.current) {
     phaseRef.current = p;
@@ -172,14 +175,17 @@ export function NationalParksController() {
   // Fetch and render the boundary outline for a park (NPS unit) or office
   // (county). Cesium clamps WebGL line width to 1px, so we draw each polygon
   // ring as a glowing polyline to get a clearly visible, thick outline.
-  async function loadBoundaryHighlight(v: Cesium.Viewer, park: ParkPoi) {
+  async function loadBoundaryHighlight(v: Cesium.Viewer, park: ParkPoi, visit: number) {
     try {
       const geoJson = park.unitCode
         ? await api.park(park.unitCode)
         : park.fips
           ? await api.county(park.fips)
           : null;
-      if (!geoJson || cancelledRef.current) return;
+      // Bail if the tour moved on while the boundary was downloading — a late
+      // response would otherwise add an orphaned data source that nothing ever
+      // removes (its per-frame pulse callbacks then run for the session).
+      if (!geoJson || cancelledRef.current || visitSeqRef.current !== visit) return;
 
       const source = await Cesium.GeoJsonDataSource.load(geoJson, {
         fill: Cesium.Color.fromCssColorString('#4ade80').withAlpha(0.1),
@@ -187,7 +193,7 @@ export function NationalParksController() {
         strokeWidth: 2,
         clampToGround: true,
       });
-      if (cancelledRef.current) return;
+      if (cancelledRef.current || visitSeqRef.current !== visit) return;
 
       const now = Cesium.JulianDate.now();
       // Pulsing width + alpha for an animated glowing border.
@@ -224,6 +230,7 @@ export function NationalParksController() {
         poly.outline = new Cesium.ConstantProperty(false);
       }
 
+      removeBoundaryHighlight(v); // reclaim any predecessor before replacing the ref
       boundarySourceRef.current = source;
       await v.dataSources.add(source);
     } catch {
@@ -293,7 +300,7 @@ export function NationalParksController() {
           if (cancelledRef.current) return;
           updatePhase('at-poi');
           // Outline the park (or office county) boundary.
-          loadBoundaryHighlight(v, park);
+          loadBoundaryHighlight(v, park, visitSeqRef.current);
           dwellTimerRef.current = setTimeout(leaveParkAndReturn, rand(POI_DWELL_MIN_MS, POI_DWELL_MAX_MS));
         },
       });
@@ -304,7 +311,9 @@ export function NationalParksController() {
       updatePhase('flying-back');
       setCurrentPoi(null);
 
-      // Remove boundary highlight while flying back.
+      // Remove boundary highlight while flying back; invalidate any fetch
+      // still in flight for the visit we're leaving.
+      visitSeqRef.current++;
       removeBoundaryHighlight(v);
 
       v.camera.flyTo({

@@ -4,6 +4,7 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { api } from '../../api/client';
+import { startVisiblePolling } from '../../lib/poll';
 import { useSmokeStatus } from './smokeStore';
 import type { SmokePolygon } from '../../types';
 
@@ -142,13 +143,12 @@ export function SmokeLayer() {
       viewer.scene.requestRender();
     };
 
-    load();
     // HMS updates once or twice a day; poll every 2 hours so a fresh product
     // appears without a manual reload.
-    const interval = setInterval(load, 2 * 60 * 60_000);
+    const stopPolling = startVisiblePolling(() => void load(), 2 * 60 * 60_000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopPolling();
     };
   }, [viewer, active]);
 

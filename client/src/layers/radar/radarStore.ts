@@ -36,6 +36,22 @@ interface RadarState {
   setColorScheme: (c: number) => void;
 }
 
+// RainViewer republishes an identical manifest on most polls; comparing
+// signatures lets setManifest skip the write so the imagery-layer stack isn't
+// torn down and re-downloaded for no visual change.
+function manifestSig(
+  host: string,
+  frames: RadarFrame[],
+  nowcastFrames: RadarFrame[],
+  satelliteFrames: RadarFrame[]
+): string {
+  return (
+    `${host}|${frames.map((f) => f.path).join(',')}` +
+    `|${nowcastFrames.map((f) => f.path).join(',')}` +
+    `|${satelliteFrames.map((f) => f.path).join(',')}`
+  );
+}
+
 export const useRadarStore = create<RadarState>((set) => ({
   host: '',
   frames: [],
@@ -53,7 +69,12 @@ export const useRadarStore = create<RadarState>((set) => ({
   // → orange → red → magenta gradient zoom.earth uses.
   colorScheme: 4,
   setManifest: (host, frames, nowcastFrames, satelliteFrames) =>
-    set({ host, frames, nowcastFrames, satelliteFrames }),
+    set((s) =>
+      manifestSig(host, frames, nowcastFrames, satelliteFrames) ===
+      manifestSig(s.host, s.frames, s.nowcastFrames, s.satelliteFrames)
+        ? {}
+        : { host, frames, nowcastFrames, satelliteFrames }
+    ),
   setMode: (mode) => set({ mode, currentIndex: 0 }),
   setWindowMinutes: (m) => set({ windowMinutes: m }),
   setCurrentIndex: (i) => set({ currentIndex: i }),

@@ -4,6 +4,7 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { api } from '../../api/client';
+import { startVisiblePolling } from '../../lib/poll';
 import { useAqiStatus } from './aqiStore';
 import type { AqiResponse } from '../../types';
 
@@ -214,12 +215,11 @@ export function AqiLayer() {
       dataRef.current = data;
       renderRef.current();
     };
-    load();
     // AirNow is hourly, PurpleAir ~real-time; 15 min keeps the dense field fresh.
-    const interval = setInterval(load, 15 * 60_000);
+    const stopPolling = startVisiblePolling(() => void load(), 15 * 60_000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopPolling();
     };
   }, [viewer, active]);
 

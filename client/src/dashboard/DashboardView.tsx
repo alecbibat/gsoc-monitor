@@ -6,9 +6,10 @@ import { DashboardFeed } from './DashboardFeed';
 import { BriefingPanel } from './BriefingPanel';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { flyToBoundingBox, flyToLonLat } from '../cesium/flyTo';
+import { startVisiblePolling } from '../lib/poll';
 import type { LocationGroup } from '../layers/locations/locations';
 
-const SCAN_MS = 75_000; // rescan cadence while the dashboard is open
+const SCAN_MS = 300_000; // rescan cadence while the dashboard is open
 const LEVEL_ORDER: Record<StatusLevel, number> = { alert: 0, watch: 1, ok: 2 };
 
 // Full-screen property status dashboard. Mounts the scan loop only while open
@@ -26,20 +27,24 @@ export function DashboardView() {
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    let running = false; // a slow scan must not overlap the next tick
     const run = async () => {
+      if (running) return;
+      running = true;
       useDashboardStore.getState().setLoading(true);
       try {
         const scan = await scanDashboard();
         if (!cancelled) useDashboardStore.getState().applyScan(scan);
       } catch {
         if (!cancelled) useDashboardStore.getState().setLoading(false);
+      } finally {
+        running = false;
       }
     };
-    run();
-    const t = setInterval(run, SCAN_MS);
+    const stop = startVisiblePolling(() => void run(), SCAN_MS);
     return () => {
       cancelled = true;
-      clearInterval(t);
+      stop();
     };
   }, [open]);
 

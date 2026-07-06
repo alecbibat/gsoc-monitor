@@ -279,6 +279,34 @@ export function LightningLayer() {
       if (rafId == null) rafId = requestAnimationFrame(animate);
     };
 
+    // The global stream delivers tens of strikes/sec worldwide. Spawning the
+    // descending-bolt animation for every one keeps the RAF loop (and thus
+    // full-scene rendering) running 24/7 even when every strike is on the far
+    // side of the globe. Cache the camera's view rectangle and only animate
+    // strikes that are actually in view — off-screen strikes still get their
+    // crosshair billboard.
+    let viewRect: Cesium.Rectangle | null = viewer.camera.computeViewRectangle() ?? null;
+    const offCamera = viewer.camera.changed.addEventListener(() => {
+      viewRect = viewer.camera.computeViewRectangle() ?? null;
+    });
+    const scratchCarto = new Cesium.Cartographic();
+    const inView = (lon: number, lat: number): boolean => {
+      if (!viewRect) return true; // can't tell — keep the old behavior
+      Cesium.Cartographic.fromDegrees(lon, lat, 0, scratchCarto);
+      return Cesium.Rectangle.contains(viewRect, scratchCarto);
+    };
+
+    // Billboard-only strikes don't need a render per message — coalesce to one
+    // render per ~250ms (bolt animations drive their own frames via the RAF loop).
+    let renderTimer: ReturnType<typeof setTimeout> | null = null;
+    const requestRenderSoon = () => {
+      if (renderTimer) return;
+      renderTimer = setTimeout(() => {
+        renderTimer = null;
+        viewer.scene.requestRender();
+      }, 250);
+    };
+
     const connect = () => {
       if (cancelled) return;
       const url = RELAYS[relayIndex % RELAYS.length];
@@ -321,7 +349,6 @@ export function LightningLayer() {
         const now = Date.now();
         strikes.set(id, { lat: strike.lat, lon: strike.lon, t: now, stage: 0 });
         recent.push(now);
-        useLightningStatus.getState().addStrike({ lat: strike.lat, lon: strike.lon, t: now });
 
         ds.entities.add({
           id: `bolt-${id}`,
@@ -338,18 +365,19 @@ export function LightningLayer() {
           },
         });
 
-        // Fire the dramatic descending bolt + red impact flash.
-        spawnBolt(strike.lon, strike.lat);
+        // Fire the dramatic descending bolt + red impact flash — only where the
+        // camera can actually see it.
+        if (inView(strike.lon, strike.lat)) spawnBolt(strike.lon, strike.lat);
 
-        // Enforce the cap by evicting the oldest strikes.
-        if (strikes.size > MAX_STRIKES) {
-          const oldest = [...strikes.keys()].slice(0, strikes.size - MAX_STRIKES);
-          for (const oid of oldest) {
-            strikes.delete(oid);
-            ds.entities.removeById(`bolt-${oid}`);
-          }
+        // Enforce the cap by evicting the oldest strikes (Map preserves
+        // insertion order — walk keys instead of copying all of them).
+        while (strikes.size > MAX_STRIKES) {
+          const oid = strikes.keys().next().value;
+          if (oid === undefined) break;
+          strikes.delete(oid);
+          ds.entities.removeById(`bolt-${oid}`);
         }
-        viewer.scene.requestRender();
+        requestRenderSoon();
       };
 
       ws.onerror = () => {
@@ -401,10 +429,13 @@ export function LightningLayer() {
         changed = true;
       }
 
-      // Trim the rate window to the last 60s and publish the readout.
+      // Trim the rate window to the last 60s and publish the readout — but only
+      // when it changed, so subscribers aren't notified once a second for nothing.
       const cutoff = now - 60_000;
       while (recent.length && recent[0] < cutoff) recent.shift();
-      useLightningStatus.getState().setStatus({ ratePerMin: recent.length });
+      if (useLightningStatus.getState().ratePerMin !== recent.length) {
+        useLightningStatus.getState().setStatus({ ratePerMin: recent.length });
+      }
 
       if (changed) viewer.scene.requestRender();
     };
@@ -415,6 +446,8 @@ export function LightningLayer() {
     return () => {
       cancelled = true;
       clearInterval(ticker);
+      offCamera();
+      if (renderTimer) clearTimeout(renderTimer);
       if (rafId != null) cancelAnimationFrame(rafId);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (socket) {

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { flyToLonLat } from '../../cesium/flyTo';
 import { MILES_TO_M } from '../../lib/geo';
+import { startVisiblePolling } from '../../lib/poll';
 import { usePanelStore } from '../../panels/panelStore';
 import type { PropertyHazards } from './proximityScan';
 import { useProximityStore } from './proximityStore';
@@ -22,9 +23,8 @@ export function ProximityWidget() {
   const openPanel = usePanelStore((s) => s.open);
 
   useEffect(() => {
-    scan();
-    const id = setInterval(() => scan(), REFRESH_MS);
-    return () => clearInterval(id);
+    const stop = startVisiblePolling(() => void scan(), REFRESH_MS);
+    return () => stop();
   }, [scan]);
 
   const affected = result?.properties ?? [];
