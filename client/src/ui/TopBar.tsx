@@ -468,30 +468,39 @@ export function TopBar() {
   return (
     <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col gap-2 pb-3 pl-safe pr-safe pt-safe md:flex-row md:items-start md:justify-between md:gap-4 md:pb-4">
       {/* Left: identity + camera controls + screensaver modes */}
-      <div className="flex flex-wrap items-center gap-2 md:gap-3">
-        <HamburgerButton />
-        <div className="pointer-events-auto flex items-center gap-2 rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 shadow-panel backdrop-blur-sm">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-accent-ok shadow-glow" />
-          <span className="font-mono text-[13px] font-semibold tracking-[0.2em] text-white/90">
-            {/* On the narrowest phones just "GSOC" keeps row one on one line. */}
-            GSOC<span className="text-accent max-[419px]:hidden">MONITOR</span>
-          </span>
+      <div className="flex flex-wrap items-center gap-2 md:gap-3 lg:flex-nowrap lg:items-start">
+        {/* On lg+ the docked sidebar (w-72) sits under this bar, so the brand
+            gets a slot spanning the sidebar's width: the badges after it then
+            start past the sidebar's right edge instead of straddling its
+            border. Slot = 18rem sidebar − 0.75rem bar padding, so with the
+            lg:gap-3 the first badge lands 0.75rem right of the edge. */}
+        <div className="contents lg:flex lg:w-[calc(18rem-0.75rem)] lg:shrink-0 lg:items-center">
+          <HamburgerButton />
+          <div className="pointer-events-auto flex items-center gap-2 rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 shadow-panel backdrop-blur-sm">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-accent-ok shadow-glow" />
+            <span className="font-mono text-[13px] font-semibold tracking-[0.2em] text-white/90">
+              {/* On the narrowest phones just "GSOC" keeps row one on one line. */}
+              GSOC<span className="text-accent max-[419px]:hidden">MONITOR</span>
+            </span>
+          </div>
         </div>
-        <DeployStamp />
-        <LiveClock />
-        <TrackedCounter />
-        {/* Utility buttons: individual on md+, collapsed into ⋯ on mobile. */}
-        <MobileToolsMenu />
-        <div className="hidden md:contents">
-          <ResetCameraButton />
-          <FullscreenButton />
-          <MeasureButton />
-          <DashboardButton />
+        <div className="contents lg:flex lg:flex-wrap lg:items-center lg:gap-3">
+          <DeployStamp />
+          <LiveClock />
+          <TrackedCounter />
+          {/* Utility buttons: individual on md+, collapsed into ⋯ on mobile. */}
+          <MobileToolsMenu />
+          <div className="hidden md:contents">
+            <ResetCameraButton />
+            <FullscreenButton />
+            <MeasureButton />
+            <DashboardButton />
+          </div>
+          <CrisisButton />
+          <UserMenu />
+          {/* Screensaver modes — desktop only; mobile gets them in the drawer. */}
+          <ScreensaverControls className="hidden md:flex" />
         </div>
-        <CrisisButton />
-        <UserMenu />
-        {/* Screensaver modes — desktop only; mobile gets them in the drawer. */}
-        <ScreensaverControls className="hidden md:flex" />
       </div>
       {/* Right: widgets + search, with the info button tucked under the search */}
       <div ref={rightRef} className="flex w-full flex-col items-end gap-2 md:w-auto">
