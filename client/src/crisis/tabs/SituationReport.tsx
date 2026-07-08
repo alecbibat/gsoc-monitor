@@ -310,8 +310,10 @@ function MapLayersSection() {
                   onClick={() => updateDrawLayer(layer.id, { visible: !layer.visible })}
                   className={`text-[11px] transition ${layer.visible ? 'text-white/55 hover:text-white/80' : 'text-white/20 hover:text-white/40'}`}
                   title={layer.visible ? 'Hide' : 'Show'}
+                  aria-label={layer.visible ? `Hide layer ${layer.name}` : `Show layer ${layer.name}`}
+                  aria-pressed={layer.visible}
                 >
-                  {layer.visible ? '👁' : '🚫'}
+                  <span aria-hidden="true">{layer.visible ? '👁' : '🚫'}</span>
                 </button>
                 <button
                   onClick={() => setCoordLayerId((id) => id === layer.id ? null : layer.id)}
@@ -334,8 +336,9 @@ function MapLayersSection() {
                   onClick={() => { if (confirm(`Remove layer "${layer.name}"?`)) removeDrawLayer(layer.id); }}
                   className="text-[11px] text-white/25 transition hover:text-red-400/70"
                   title="Delete layer"
+                  aria-label={`Delete layer ${layer.name}`}
                 >
-                  ✕
+                  <span aria-hidden="true">✕</span>
                 </button>
               </div>
               {coordLayerId === layer.id && (

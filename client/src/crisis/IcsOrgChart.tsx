@@ -188,7 +188,7 @@ function NodeCard({
     setDragOver(false);
     const memberId = e.dataTransfer.getData('personnel-id');
     const member = personnel.find((p) => p.id === memberId);
-    if (member) assignRole(role.id, member.name, { title: member.title, phone: member.phone, email: member.email });
+    if (member) assignRole(role.id, member.name, { title: member.title, phone: member.phone, email: member.email }, member.id);
   };
 
   const handleRemove = (e: React.MouseEvent) => {
