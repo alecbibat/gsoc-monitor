@@ -29,6 +29,8 @@ interface Props {
     course: number | null;
     navStatus: number | null;
     destination: string | null;
+    etaUtc?: number | null;
+    etaText?: string | null;
     lastSeenSec: number;
   };
 }
@@ -102,6 +104,18 @@ export function ShipDetails({ payload }: Props) {
 
         <dt className="text-white/40">Destination</dt>
         <dd className="truncate">{payload.destination?.trim() || '—'}</dd>
+
+        <dt className="text-white/40">ETA</dt>
+        <dd>
+          {payload.etaUtc != null
+            ? `${new Date(payload.etaUtc).toLocaleString(undefined, {
+                month: 'short',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+              })} (local)`
+            : payload.etaText || '—'}
+        </dd>
 
         <dt className="text-white/40">Position</dt>
         <dd className="font-mono text-[12px]">

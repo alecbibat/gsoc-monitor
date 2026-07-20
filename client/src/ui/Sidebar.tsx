@@ -32,6 +32,7 @@ import { useCesiumViewer } from '../cesium/CesiumContext';
 import { flyToLonLat } from '../cesium/flyTo';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
 import { FLEET_ROSTER, fleetColor } from '../layers/ships/fleet';
+import { FleetSnapshotButton } from '../layers/ships/FleetSnapshotButton';
 import { api } from '../api/client';
 import { LayerToggle } from './LayerToggle';
 import { Section } from './Section';
@@ -803,6 +804,7 @@ export function Sidebar() {
 
           {/* Windstar fleet — same list, fly to a ship's live position */}
           <CollapsibleSubgroup icon="🚢" name="Windstar Ships" count={FLEET_ROSTER.length}>
+            <FleetSnapshotButton variant="sidebar" />
             {FLEET_ROSTER.map((s) => {
               const live = shipsStatus.ships.find((x) => x.mmsi === s.mmsi);
               return (
