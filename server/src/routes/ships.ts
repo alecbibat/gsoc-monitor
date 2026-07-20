@@ -54,6 +54,7 @@ interface VesselData {
   destination: string | null;
   etaUtc: number | null;    // parsed ETA, epoch ms UTC
   etaText: string | null;   // provider's raw ETA string (kept when unparseable)
+  etaAt: number | null;     // when the ETA was last actually reported by a source
   updatedAt: number;
 }
 
@@ -66,6 +67,7 @@ interface StaticInfo {
   destination: string | null;
   etaUtc: number | null;
   etaText: string | null;
+  etaAt: number | null;
 }
 
 // --- ETA parsing -------------------------------------------------------------
@@ -102,9 +104,16 @@ const MONTHS: Record<string, number> = {
 // ("07-22 06:00", "Jul 22, 06:00", "22 Jul 06:00", ISO datetimes). All are
 // treated as UTC per AIS convention. Returns epoch ms or null.
 export function parseEtaText(raw: string | null | undefined): number | null {
-  if (!raw) return null;
+  if (typeof raw !== 'string' || !raw) return null;
   const s = raw.trim();
   if (!s) return null;
+
+  // Bare epoch (some providers send seconds or milliseconds since 1970).
+  if (/^\d{10}$/.test(s) || /^\d{13}$/.test(s)) {
+    const t = Number(s) * (s.length === 10 ? 1000 : 1);
+    if (t > Date.UTC(2000, 0, 1) && t < Date.UTC(2100, 0, 1)) return t;
+    return null;
+  }
 
   // ISO-ish "2026-07-22 06:00" / "2026-07-22T06:00[:00Z]"
   let m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
@@ -131,6 +140,48 @@ export function parseEtaText(raw: string | null | undefined): number | null {
   return null;
 }
 
+// The ETA triple travels as a unit so a parsed time is never paired with a
+// raw string from a different report.
+interface EtaFields {
+  etaUtc: number | null;
+  etaText: string | null;
+  etaAt: number | null;
+}
+const NO_ETA: EtaFields = { etaUtc: null, etaText: null, etaAt: null };
+
+// Carry a previously seen ETA forward only while it's plausibly still current:
+// drop it once the parsed time is well past, or once no source has repeated it
+// for a day (e.g. the ship arrived and the provider stopped sending one).
+function carriedEta(existing: EtaFields | undefined, now: number): EtaFields {
+  if (!existing || (existing.etaUtc === null && existing.etaText === null)) return NO_ETA;
+  if (existing.etaUtc !== null && existing.etaUtc < now - 12 * 3600_000) return NO_ETA;
+  if (existing.etaAt !== null && existing.etaAt < now - 24 * 3600_000) return NO_ETA;
+  return { etaUtc: existing.etaUtc, etaText: existing.etaText, etaAt: existing.etaAt };
+}
+
+// Of two ETA observations, keep the more recently reported one (then expire).
+function freshestEta(a: EtaFields | undefined, b: EtaFields | undefined, now: number): EtaFields {
+  const aHas = a && (a.etaUtc !== null || a.etaText !== null);
+  const bHas = b && (b.etaUtc !== null || b.etaText !== null);
+  if (aHas && bHas) {
+    return carriedEta((a.etaAt ?? 0) >= (b.etaAt ?? 0) ? a : b, now);
+  }
+  return carriedEta(aHas ? a : bHas ? b : undefined, now);
+}
+
+// First usable ETA-ish value among the given keys — skips null/empty-string
+// sentinels (which pickField would return, masking a usable fallback key) and
+// coerces numbers so a numeric epoch can't crash string parsing downstream.
+function pickEtaText(o: Record<string, unknown>, ...keys: string[]): string | null {
+  for (const k of keys) {
+    const v = o[k];
+    if (typeof v !== 'string' && typeof v !== 'number') continue;
+    const s = String(v).trim();
+    if (s) return s;
+  }
+  return null;
+}
+
 const vessels = new Map<string, VesselData>();
 const staticCache = new Map<string, StaticInfo>();
 
@@ -154,6 +205,7 @@ for (const s of FLEET) {
     destination: null,
     etaUtc: null,
     etaText: null,
+    etaAt: null,
   });
 }
 
@@ -245,7 +297,12 @@ function loadSnapshot(): void {
     for (const v of snap.tracked ?? []) {
       if (v.mmsi && FLEET_MMSIS.includes(v.mmsi)) {
         // Snapshots written before the ETA fields existed lack them.
-        tracked.set(v.mmsi, { ...v, etaUtc: v.etaUtc ?? null, etaText: v.etaText ?? null });
+        tracked.set(v.mmsi, {
+          ...v,
+          etaUtc: v.etaUtc ?? null,
+          etaText: v.etaText ?? null,
+          etaAt: v.etaAt ?? null,
+        });
         allowedMmsis.add(v.mmsi);
       }
     }
@@ -313,8 +370,15 @@ function handleMessage(raw: string) {
     const known = allowedMmsis.has(mmsi);
     if (!known && vessels.size >= VESSEL_CAP && !vessels.has(mmsi)) return;
 
-    const existing = vessels.get(mmsi) ?? tracked.get(mmsi);
+    // Freshest of the firehose shadow copy and the tracked map — a paid-provider
+    // poll only updates `tracked`, and its newer destination/ETA must not be
+    // reverted by the next live position report reading the stale shadow.
+    const shadow = vessels.get(mmsi);
+    const kept = tracked.get(mmsi);
+    const existing =
+      shadow && kept ? (shadow.updatedAt >= kept.updatedAt ? shadow : kept) : shadow ?? kept;
     const sd = staticCache.get(mmsi);
+    const eta = freshestEta(sd, existing, now);
 
     const record: VesselData = {
       mmsi,
@@ -338,8 +402,7 @@ function handleMessage(raw: string) {
           ? pr.NavigationalStatus
           : existing?.navStatus ?? null,
       destination: sd?.destination ?? existing?.destination ?? null,
-      etaUtc: sd?.etaUtc ?? existing?.etaUtc ?? null,
-      etaText: sd?.etaText ?? existing?.etaText ?? null,
+      ...eta,
       updatedAt: now,
     };
 
@@ -354,14 +417,16 @@ function handleMessage(raw: string) {
     const sd = msg.Message?.ShipStaticData ?? {};
     const imo = typeof sd.ImoNumber === 'number' && sd.ImoNumber > 0 ? sd.ImoNumber : null;
     const eta = sd.Eta ?? {};
+    const etaUtc = etaFromAisFields(eta.Month, eta.Day, eta.Hour, eta.Minute);
     const info: StaticInfo = {
       imo,
       name: (sd.Name as string | undefined)?.trim() || null,
       callsign: (sd.CallSign as string | undefined)?.trim() || null,
       shipType: typeof sd.Type === 'number' ? sd.Type : null,
       destination: (sd.Destination as string | undefined)?.trim() || null,
-      etaUtc: etaFromAisFields(eta.Month, eta.Day, eta.Hour, eta.Minute),
+      etaUtc,
       etaText: null,
+      etaAt: etaUtc !== null ? now : null,
     };
     staticCache.set(mmsi, info);
 
@@ -375,8 +440,7 @@ function handleMessage(raw: string) {
         callsign: info.callsign || existing.callsign,
         shipType: info.shipType ?? existing.shipType,
         destination: info.destination || existing.destination,
-        etaUtc: info.etaUtc ?? existing.etaUtc,
-        etaText: info.etaText ?? existing.etaText,
+        ...freshestEta(info, existing, now),
       };
       vessels.set(mmsi, enriched);
       // Now that static data may have revealed an allowlisted IMO, promote it
@@ -517,7 +581,7 @@ async function fetchVesselFinder(key: string): Promise<PaidPosition[]> {
       headingDeg: pnum(pickField(ais, 'HEADING', 'heading')),
       navStatus: pnum(pickField(ais, 'NAVSTAT', 'navstat')),
       destination: (pickField<string>(ais, 'DESTINATION', 'destination') ?? null) || null,
-      etaText: (pickField<string>(ais, 'ETA_PREDICTED', 'ETA', 'eta') ?? null) || null,
+      etaText: pickEtaText(ais, 'ETA_PREDICTED', 'ETA', 'eta'),
       name: (pickField<string>(ais, 'NAME', 'name') ?? null) || null,
       t: Number.isNaN(t) ? Date.now() : t,
     };
@@ -697,10 +761,7 @@ async function fetchMyShipTracking(key: string): Promise<PaidPosition[]> {
       headingDeg: pnum(pickField(v, 'heading', 'true_heading', 'HEADING')),
       navStatus: pnum(pickField(v, 'nav_status', 'navstat', 'status')),
       destination: (pickField<string>(v, 'destination', 'dest') ?? null) || null,
-      etaText: ((): string | null => {
-        const e = pickField(v, 'eta_UTC', 'eta_utc', 'eta', 'ETA');
-        return e != null ? String(e) : null;
-      })(),
+      etaText: pickEtaText(v, 'eta_UTC', 'eta_utc', 'eta', 'ETA'),
       name: (pickField<string>(v, 'name', 'vessel_name', 'shipname') ?? null) || null,
       t: Number.isNaN(t) ? Date.now() : t,
     };
@@ -716,7 +777,9 @@ function applyPaidPosition(r: PaidPosition) {
   if (!mmsi) return;
   const now = Number.isFinite(r.t) ? r.t : Date.now();
   const existing = tracked.get(mmsi);
-  const etaUtc = parseEtaText(r.etaText);
+  const eta: EtaFields = r.etaText
+    ? { etaUtc: parseEtaText(r.etaText), etaText: r.etaText, etaAt: now }
+    : carriedEta(existing, Date.now());
   const record: VesselData = {
     mmsi,
     imo: ship?.imo ?? r.imo ?? existing?.imo ?? null,
@@ -730,12 +793,14 @@ function applyPaidPosition(r: PaidPosition) {
     course: r.courseDeg != null && r.courseDeg < 360 ? r.courseDeg : existing?.course ?? null,
     navStatus: r.navStatus ?? existing?.navStatus ?? null,
     destination: r.destination ?? existing?.destination ?? null,
-    etaUtc: etaUtc ?? (r.etaText ? null : existing?.etaUtc ?? null),
-    etaText: r.etaText ?? existing?.etaText ?? null,
+    ...eta,
     updatedAt: now,
   };
   allowedMmsis.add(mmsi);
   tracked.set(mmsi, record);
+  // Keep the firehose shadow copy in step so the next live position report
+  // merges against this data instead of an older snapshot of the ship.
+  if (vessels.has(mmsi)) vessels.set(mmsi, record);
   recordHistory(mmsi, r.lat, r.lon, now);
 }
 

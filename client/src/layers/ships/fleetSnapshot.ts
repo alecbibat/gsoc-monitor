@@ -15,7 +15,7 @@ import { landRings } from './worldLand';
 // Data assembly
 // ---------------------------------------------------------------------------
 
-export type StatusKind = 'docked' | 'anchored' | 'underway' | 'unknown';
+export type StatusKind = 'docked' | 'anchored' | 'underway' | 'alert' | 'unknown';
 
 export interface SnapshotRow {
   roster: FleetRosterShip;
@@ -23,7 +23,20 @@ export interface SnapshotRow {
   place: string | null; // reverse-geocoded context ("Papeete, French Polynesia")
 }
 
+// Abnormal AIS statuses must never be dressed up as routine by the speed
+// heuristic — a digest that shows an aground ship as "In port" is worse than
+// no digest.
+const ALERT_STATUS: Record<number, string> = {
+  2: 'Not under command',
+  3: 'Restricted maneuv.',
+  4: 'Constrained',
+  6: 'Aground',
+};
+
 export function statusOf(s: ShipState): { kind: StatusKind; label: string } {
+  if (s.navStatus != null && ALERT_STATUS[s.navStatus]) {
+    return { kind: 'alert', label: ALERT_STATUS[s.navStatus] };
+  }
   if (s.navStatus === 5) return { kind: 'docked', label: 'Docked' };
   if (s.navStatus === 1) return { kind: 'anchored', label: 'At anchor' };
   if (s.navStatus === 0) return { kind: 'underway', label: 'Underway' };
@@ -34,6 +47,14 @@ export function statusOf(s: ShipState): { kind: StatusKind; label: string } {
       : { kind: 'docked', label: 'In port' };
   }
   return { kind: 'unknown', label: 'Last known' };
+}
+
+// AbortSignal.timeout with a fallback for engines that predate it (pre-2022).
+function timeoutSignal(ms: number): AbortSignal {
+  if (typeof AbortSignal.timeout === 'function') return AbortSignal.timeout(ms);
+  const c = new AbortController();
+  setTimeout(() => c.abort(), ms);
+  return c.signal;
 }
 
 // Reverse geocode one position via BigDataCloud (free, keyless — same service
@@ -81,7 +102,13 @@ async function placeName(lat: number, lon: number, signal: AbortSignal): Promise
 }
 
 async function assembleRows(): Promise<SnapshotRow[]> {
-  const data = await api.ships();
+  // Bounded wait so a wedged server can't pin the button in "Rendering…".
+  const data = await Promise.race([
+    api.ships(),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Ship feed timed out')), 20_000)
+    ),
+  ]);
   if (data.source === 'no-key') {
     throw new Error('No ship position source configured on the server');
   }
@@ -93,11 +120,7 @@ async function assembleRows(): Promise<SnapshotRow[]> {
   await Promise.allSettled(
     rows.map(async (row) => {
       if (!row.ship) return;
-      row.place = await placeName(
-        row.ship.latitude,
-        row.ship.longitude,
-        AbortSignal.timeout(7_000)
-      );
+      row.place = await placeName(row.ship.latitude, row.ship.longitude, timeoutSignal(7_000));
     })
   );
   return rows;
@@ -219,10 +242,18 @@ function fitWindow(
     latLo -= grow / 2;
     latSpan = idealLat;
   } else {
-    const growLon = latSpan / aspect - lonSpan;
-    lonMin -= growLon / 2;
-    lonSpan = Math.min(360, lonSpan + growLon);
-    latSpan = lonSpan * aspect;
+    const grown = latSpan / aspect;
+    if (grown <= 360) {
+      lonMin -= (grown - lonSpan) / 2;
+      lonSpan = grown;
+      latSpan = lonSpan * aspect;
+    } else {
+      // Can't widen past the full globe — keep the fleet's latitude extent and
+      // accept a vertically stretched projection rather than cropping the
+      // northernmost ship off the panel.
+      lonMin -= (360 - lonSpan) / 2;
+      lonSpan = 360;
+    }
   }
 
   // Keep the window on the globe vertically.
@@ -346,8 +377,11 @@ export function renderFleetSnapshot(rows: SnapshotRow[], generatedAt: number): H
   ctx.fillRect(0, 0, W, H);
 
   // ---- header ---------------------------------------------------------------
-  const underway = live.filter((r) => statusOf(r.ship).kind === 'underway').length;
-  const inPort = live.length - underway;
+  const kinds = live.map((r) => statusOf(r.ship).kind);
+  const underway = kinds.filter((k) => k === 'underway').length;
+  const inPort = kinds.filter((k) => k === 'docked' || k === 'anchored').length;
+  const alerts = kinds.filter((k) => k === 'alert').length;
+  const unknown = kinds.filter((k) => k === 'unknown').length;
   ctx.fillStyle = C.ink;
   ctx.font = `700 23px ${SANS}`;
   ctx.fillText('Windstar Fleet — Daily Position Snapshot', PAD, 40);
@@ -357,6 +391,8 @@ export function renderFleetSnapshot(rows: SnapshotRow[], generatedAt: number): H
     `${live.length} of ${rows.length} ships reporting`,
     `${underway} underway`,
     `${inPort} in port / at anchor`,
+    ...(alerts > 0 ? [`${alerts} status alert`] : []),
+    ...(unknown > 0 ? [`${unknown} last-known only`] : []),
   ].join('   ·   ');
   ctx.fillText(summary, PAD, 70);
 
@@ -733,7 +769,11 @@ function drawTable(
     ctx.font = `700 9.5px ${SANS}`;
     const pillText = st.label.toUpperCase();
     const pillW = ctx.measureText(pillText).width + 16;
-    const pillColor = st.kind === 'underway' ? C.accent : st.kind === 'unknown' ? C.warn : '#52e3a4';
+    const pillColor =
+      st.kind === 'alert' ? '#ff5d5d'
+      : st.kind === 'underway' ? C.accent
+      : st.kind === 'unknown' ? C.warn
+      : '#52e3a4';
     roundedRect(ctx, colX[1] + 10, mid - 9, pillW, 18, 9);
     ctx.fillStyle = `${pillColor}1f`;
     ctx.fill();
@@ -765,7 +805,8 @@ function drawTable(
     const dest = s.destination?.trim() ? prettyDestination(s.destination.trim()) : '—';
     ctx.fillText(ellipsize(ctx, dest, cols[5].w - 20), colX[5] + 10, mid);
 
-    // ETA — UTC on the first line, Denver on the second.
+    // ETA — UTC on the first line, Denver on the second. An expired parsed ETA
+    // suppresses the raw-text fallback too (it's the same stale ETA, year-less).
     if (s.etaUtc != null && s.etaUtc > now - 12 * 3600_000) {
       ctx.fillStyle = C.ink;
       ctx.font = `400 12px ${SANS}`;
@@ -773,7 +814,7 @@ function drawTable(
       ctx.fillStyle = C.ink3;
       ctx.font = `400 10.5px ${SANS}`;
       ctx.fillText(denverFmt.format(s.etaUtc), colX[6] + 10, mid + 9);
-    } else if (s.etaText) {
+    } else if (s.etaUtc == null && s.etaText) {
       ctx.fillStyle = C.ink2;
       ctx.font = `400 11.5px ${SANS}`;
       ctx.fillText(ellipsize(ctx, s.etaText, cols[6].w - 20), colX[6] + 10, mid);
