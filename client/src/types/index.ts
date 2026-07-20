@@ -297,6 +297,8 @@ export interface WindForecast {
   hourly: { time: string[]; speed: number[]; dir: number[]; gust: number[] };
   daily: { time: string[]; speedMax: number[]; gustMax: number[]; dirDominant: number[] };
   updated: number;
+  source?: string; // attribution, e.g. "NOAA GFS · Open-Meteo" or the met.no backup
+  fallback?: boolean; // served by the backup provider (approximate local times)
 }
 
 export interface RouteStep {
