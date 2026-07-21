@@ -160,6 +160,8 @@ export interface ShipState {
   course: number | null;
   navStatus: number | null;
   destination: string | null;
+  etaUtc?: number | null; // parsed AIS/provider ETA, epoch ms UTC
+  etaText?: string | null; // provider's raw ETA string when unparseable
   lastSeenSec: number;
   track?: ShipTrackPoint[];
 }

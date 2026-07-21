@@ -6,6 +6,7 @@ import { DashboardFeed } from './DashboardFeed';
 import { BriefingPanel } from './BriefingPanel';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { flyToBoundingBox, flyToLonLat } from '../cesium/flyTo';
+import { FleetSnapshotButton } from '../layers/ships/FleetSnapshotButton';
 import type { LocationGroup } from '../layers/locations/locations';
 
 const SCAN_MS = 75_000; // rescan cadence while the dashboard is open
@@ -92,12 +93,15 @@ export function DashboardView() {
             )}
           </div>
         </div>
-        <button
-          onClick={() => setOpen(false)}
-          className="ml-auto rounded-md border border-white/15 bg-white/5 px-3 py-1.5 text-[12px] font-semibold text-white/80 transition hover:bg-white/10"
-        >
-          ✕ Close
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          <FleetSnapshotButton variant="header" />
+          <button
+            onClick={() => setOpen(false)}
+            className="rounded-md border border-white/15 bg-white/5 px-3 py-1.5 text-[12px] font-semibold text-white/80 transition hover:bg-white/10"
+          >
+            ✕ Close
+          </button>
+        </div>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-5 lg:flex-row">

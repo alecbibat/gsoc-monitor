@@ -29,6 +29,8 @@ interface Props {
     course: number | null;
     navStatus: number | null;
     destination: string | null;
+    etaUtc?: number | null;
+    etaText?: string | null;
     lastSeenSec: number;
   };
 }
@@ -102,6 +104,22 @@ export function ShipDetails({ payload }: Props) {
 
         <dt className="text-white/40">Destination</dt>
         <dd className="truncate">{payload.destination?.trim() || '—'}</dd>
+
+        <dt className="text-white/40">ETA</dt>
+        <dd>
+          {/* An expired parsed ETA also suppresses the raw text — it's the
+              same stale ETA, just year-less and more misleading. */}
+          {payload.etaUtc != null && payload.etaUtc > Date.now() - 12 * 3600_000
+            ? `${new Date(payload.etaUtc).toLocaleString(undefined, {
+                month: 'short',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+              })} (local)`
+            : payload.etaUtc == null && payload.etaText
+              ? payload.etaText
+              : '—'}
+        </dd>
 
         <dt className="text-white/40">Position</dt>
         <dd className="font-mono text-[12px]">
