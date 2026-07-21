@@ -74,7 +74,18 @@ export const useNewsStore = create<NewsState>()(
 
       setData: (items, updated) =>
         set((s) => {
+          // isNew() only ever compares against ids from recent fetches — keep
+          // the union of the previous set intersected with a hard cap instead
+          // of accumulating every id ever seen across a 24/7 session.
           const newIds = new Set([...s.seenIds, ...items.map((i) => i.id)]);
+          if (newIds.size > 1000) {
+            const excess = newIds.size - 1000;
+            let i = 0;
+            for (const id of newIds) {
+              if (i++ >= excess) break;
+              newIds.delete(id); // oldest insertion order first
+            }
+          }
           return { items, updated, loading: false, error: null, seenIds: newIds };
         }),
       setLoading: (loading) => set({ loading }),

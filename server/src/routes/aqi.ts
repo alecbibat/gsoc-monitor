@@ -140,8 +140,13 @@ async function fetchAirNow(): Promise<AqiStation[]> {
       paramMap = new Map<string, AirNowEntry>();
       byStation.set(key, paramMap);
     }
+    // Compare full timestamps: HourObserved alone is hour-of-day (0–23), so
+    // around each station's local midnight yesterday's hour-23 entry would beat
+    // today's hour-0 and pin stale readings for up to 3 hours.
     const existing = paramMap.get(e.ParameterName);
-    if (!existing || e.HourObserved > existing.HourObserved) {
+    const obsKey = (x: AirNowEntry) =>
+      Date.parse(`${x.DateObserved.trim()}T${String(x.HourObserved).padStart(2, '0')}:00:00Z`) || 0;
+    if (!existing || obsKey(e) > obsKey(existing)) {
       paramMap.set(e.ParameterName, e);
     }
   }

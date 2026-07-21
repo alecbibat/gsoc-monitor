@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { useAuthStore } from './authStore';
-import { AdminPanel } from './AdminPanel';
+
+// Admin-only, opened from the menu — no reason to ship it to everyone eagerly.
+const AdminPanel = lazy(() => import('./AdminPanel').then((m) => ({ default: m.AdminPanel })));
 
 export function UserMenu() {
   const user = useAuthStore((s) => s.user);
@@ -74,7 +76,11 @@ export function UserMenu() {
         )}
       </div>
 
-      {showAdmin && <AdminPanel onClose={() => setShowAdmin(false)} />}
+      {showAdmin && (
+        <Suspense fallback={null}>
+          <AdminPanel onClose={() => setShowAdmin(false)} />
+        </Suspense>
+      )}
     </>
   );
 }

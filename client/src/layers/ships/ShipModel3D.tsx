@@ -202,11 +202,6 @@ export function shipWireframeSegments(variant: 'star' | 'wind', masts = 4): numb
   return out;
 }
 
-// Wind Surf is the fleet's only 5-masted vessel; the rest carry 4.
-export function mastCountForShip(name?: string): number {
-  return name && /surf/i.test(name) ? 5 : 4;
-}
-
 interface Props {
   variant: 'star' | 'wind';
   color: string;

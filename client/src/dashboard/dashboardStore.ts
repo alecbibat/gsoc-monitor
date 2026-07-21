@@ -37,6 +37,18 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       fresh.push({ ...ev, at: ev.at > 0 ? ev.at : now });
     }
     fresh.sort((a, b) => b.at - a.at); // newest first
+    // The dedup set otherwise grows for the life of the page while the feed it
+    // protects is capped at FEED_CAP. Trim from the oldest insertions, but keep
+    // well more than one scan's worth so events that just fell off the cap
+    // aren't re-announced as new.
+    if (seen.size > 5000) {
+      const excess = seen.size - 5000;
+      let i = 0;
+      for (const id of seen) {
+        if (i++ >= excess) break;
+        seen.delete(id);
+      }
+    }
     set({
       groups: scan.groups,
       updated: scan.updated,

@@ -155,13 +155,22 @@ async function fetchRivers(): Promise<RiversResponse> {
 // this in-memory snapshot; a background loop keeps it fresh, and a failed
 // refresh simply keeps serving the last good value.
 let latest: RiversResponse | null = null;
+// The snapshot only changes on refresh but is served to every polling client —
+// serialize it once per refresh instead of running a multi-MB JSON.stringify
+// per request on the event loop.
+let latestBody: Buffer | null = null;
 let refreshing = false;
+// Skip the ~13 MB upstream pull while nobody is looking at the layer; the
+// warming path below revives it within one cycle when a viewer returns.
+let lastRequestedAt = 0;
+const IDLE_AFTER_MS = 2 * BULK_TTL_MS;
 
 async function refreshRivers(): Promise<void> {
   if (refreshing) return; // coalesce — one slow pull at a time
   refreshing = true;
   try {
     latest = await fetchRivers();
+    latestBody = Buffer.from(JSON.stringify(latest));
   } catch (err) {
     console.error(
       '[rivers] refresh failed (serving last good):',
@@ -174,7 +183,10 @@ async function refreshRivers(): Promise<void> {
 
 export function initRiversStream(): void {
   void refreshRivers();
-  setInterval(() => void refreshRivers(), BULK_TTL_MS);
+  setInterval(() => {
+    if (Date.now() - lastRequestedAt > IDLE_AFTER_MS && latest) return; // idle — pause the pull
+    void refreshRivers();
+  }, BULK_TTL_MS);
 }
 
 const EMPTY_COUNTS: Record<FloodCat, number> = {
@@ -188,8 +200,12 @@ const EMPTY_COUNTS: Record<FloodCat, number> = {
 };
 
 router.get('/', (_req, res) => {
-  if (latest) {
-    res.json(latest);
+  lastRequestedAt = Date.now();
+  if (latest && latestBody) {
+    // Coming back from an idle pause the snapshot may be stale — serve it now,
+    // refresh behind the response.
+    if (Date.now() - latest.updated > IDLE_AFTER_MS) void refreshRivers();
+    res.type('application/json').send(latestBody);
     return;
   }
   // Snapshot not ready yet (cold start / just-deployed). Kick a background

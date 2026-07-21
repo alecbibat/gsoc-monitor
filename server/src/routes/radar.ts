@@ -15,6 +15,7 @@ router.get('/', async (_req, res) => {
       if (!upstream.ok) throw new Error(`RainViewer error: ${upstream.status}`);
       return upstream.json();
     }, { staleOnError: true });
+    res.set('Cache-Control', 'public, max-age=60');
     res.json(data);
   } catch (err) {
     res.status(502).json({ error: 'Failed to fetch radar manifest', detail: String(err) });

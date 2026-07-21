@@ -28,6 +28,7 @@ router.get('/:code', async (req, res) => {
       if (!r.ok) throw new Error(`NPS boundary service: ${r.status}`);
       return r.json();
     });
+    res.set('Cache-Control', 'public, max-age=86400');
     res.json(data);
   } catch (err) {
     console.error(`[park] NPS boundary fetch failed for ${code}:`, err);

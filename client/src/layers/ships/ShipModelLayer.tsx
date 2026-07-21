@@ -2,7 +2,7 @@ import * as Cesium from 'cesium';
 import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useScreensaverStore } from '../../screensaver/screensaverStore';
-import { shipWireframeSegments, mastCountForShip } from './ShipModel3D';
+import { mastCountForShip } from './shipMeta';
 import { fleetColor, FLEET_ROSTER } from './fleet';
 
 // Metres per model unit. The hull spans ~9 units bow-to-stern; SCALE=54 yields
@@ -34,47 +34,57 @@ export function ShipModelLayer() {
   useEffect(() => {
     if (!viewer || !isShipFocus || !cls || lon == null || lat == null) return;
     const v = viewer;
+    let cancelled = false;
 
     const fleet = mmsi ? FLEET_ROSTER.find((f) => f.mmsi === mmsi) : undefined;
     const variant = cls === 'STAR' ? 'star' : 'wind';
-    const seg = shipWireframeSegments(variant, mastCountForShip(fleet?.name));
     const color = Cesium.Color.fromCssColorString(fleetColor(cls));
 
-    // East-North-Up frame at the ship, then rotate model axes into it:
-    //   model +X (bow) → heading direction, +Z (starboard) → heading+90°, +Y → up
-    const enu = Cesium.Transforms.eastNorthUpToFixedFrame(Cesium.Cartesian3.fromDegrees(lon, lat, 0));
-    const hRad = Cesium.Math.toRadians(heading);
-    const sinH = Math.sin(hRad), cosH = Math.cos(hRad);
-    const toWorld = (px: number, py: number, pz: number) => {
-      const east  = (px * sinH + pz * cosH) * SCALE;
-      const north = (px * cosH - pz * sinH) * SCALE;
-      const up    = py * SCALE;
-      return Cesium.Matrix4.multiplyByPoint(enu, new Cesium.Cartesian3(east, north, up), new Cesium.Cartesian3());
-    };
+    // The segment geometry comes from the Three.js-backed module; import it on
+    // demand so `three` stays out of the entry chunk. Building the entities was
+    // already deferred to this effect, so the extra tick is invisible.
+    import('./ShipModel3D').then(({ shipWireframeSegments }) => {
+      if (cancelled) return;
+      const seg = shipWireframeSegments(variant, mastCountForShip(fleet?.name));
 
-    const coll = new Cesium.PolylineCollection();
-    const material = Cesium.Material.fromType('Color', { color });
-    for (let i = 0; i + 5 < seg.length; i += 6) {
-      coll.add({
-        positions: [toWorld(seg[i], seg[i + 1], seg[i + 2]), toWorld(seg[i + 3], seg[i + 4], seg[i + 5])],
-        width: 2,
-        material,
-      });
-    }
-    v.scene.primitives.add(coll);
-    collRef.current = coll;
+      // East-North-Up frame at the ship, then rotate model axes into it:
+      //   model +X (bow) → heading direction, +Z (starboard) → heading+90°, +Y → up
+      const enu = Cesium.Transforms.eastNorthUpToFixedFrame(Cesium.Cartesian3.fromDegrees(lon, lat, 0));
+      const hRad = Cesium.Math.toRadians(heading);
+      const sinH = Math.sin(hRad), cosH = Math.cos(hRad);
+      const toWorld = (px: number, py: number, pz: number) => {
+        const east  = (px * sinH + pz * cosH) * SCALE;
+        const north = (px * cosH - pz * sinH) * SCALE;
+        const up    = py * SCALE;
+        return Cesium.Matrix4.multiplyByPoint(enu, new Cesium.Cartesian3(east, north, up), new Cesium.Cartesian3());
+      };
 
-    // Hide the flat ship icon while the model is shown.
-    const dsArr = v.dataSources.getByName('ships');
-    const ent = mmsi ? dsArr[0]?.entities.getById(`ship-${mmsi}`) : undefined;
-    if (ent?.billboard) {
-      const prev = ent.billboard.show;
-      ent.billboard.show = new Cesium.ConstantProperty(false);
-      restoreRef.current = () => { if (ent.billboard) ent.billboard.show = prev ?? new Cesium.ConstantProperty(true); };
-    }
+      const coll = new Cesium.PolylineCollection();
+      const material = Cesium.Material.fromType('Color', { color });
+      for (let i = 0; i + 5 < seg.length; i += 6) {
+        coll.add({
+          positions: [toWorld(seg[i], seg[i + 1], seg[i + 2]), toWorld(seg[i + 3], seg[i + 4], seg[i + 5])],
+          width: 2,
+          material,
+        });
+      }
+      v.scene.primitives.add(coll);
+      collRef.current = coll;
 
-    v.scene.requestRender();
+      // Hide the flat ship icon while the model is shown.
+      const dsArr = v.dataSources.getByName('ships');
+      const ent = mmsi ? dsArr[0]?.entities.getById(`ship-${mmsi}`) : undefined;
+      if (ent?.billboard) {
+        const prev = ent.billboard.show;
+        ent.billboard.show = new Cesium.ConstantProperty(false);
+        restoreRef.current = () => { if (ent.billboard) ent.billboard.show = prev ?? new Cesium.ConstantProperty(true); };
+      }
+
+      v.scene.requestRender();
+    });
+
     return () => {
+      cancelled = true;
       if (collRef.current) { v.scene.primitives.remove(collRef.current); collRef.current = null; }
       if (restoreRef.current) { restoreRef.current(); restoreRef.current = null; }
       v.scene.requestRender();

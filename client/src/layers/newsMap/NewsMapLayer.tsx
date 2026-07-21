@@ -5,6 +5,7 @@ import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { api } from '../../api/client';
 import { haversineMeters, MILES_TO_M } from '../../lib/geo';
+import { startVisiblePolling } from '../../lib/poll';
 import { LOCATION_GROUPS } from '../locations/locations';
 import { useNewsMapStore } from './newsMapStore';
 import type { NewsMapEvent } from '../../types';
@@ -99,11 +100,10 @@ export function NewsMapLayer() {
       }
     };
 
-    load();
-    const interval = setInterval(load, 10 * 60_000);
+    const stopPolling = startVisiblePolling(() => void load(), 10 * 60_000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopPolling();
     };
   }, [viewer, active]);
 

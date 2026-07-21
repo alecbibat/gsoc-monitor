@@ -2,6 +2,7 @@ import { useEffect, useCallback, type ReactNode } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { flyToLonLat } from '../../cesium/flyTo';
 import { MILES_TO_M } from '../../lib/geo';
+import { startVisiblePolling } from '../../lib/poll';
 import { useProximityStore } from './proximityStore';
 import { HazardRows } from './HazardRows';
 import { expiresText, fmtMiles, quakeColor, timeAgo } from './format';
@@ -39,9 +40,8 @@ export function PropertyDetail({ payload }: { payload: PropertyDetailPayload }) 
   // Keep this pop-out live on its own interval — the shared store's throttle
   // dedupes against the main widget, so this is cheap even with both open.
   useEffect(() => {
-    scan();
-    const id = setInterval(() => scan(), REFRESH_MS);
-    return () => clearInterval(id);
+    const stop = startVisiblePolling(() => void scan(), REFRESH_MS);
+    return () => stop();
   }, [scan]);
 
   const hazards = result?.properties.find((p) => p.key === payload.key) ?? null;

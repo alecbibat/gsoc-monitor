@@ -4,6 +4,8 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
 import { attachPanelData } from '../../cesium/entityPanelLink';
+import { startVisiblePolling } from '../../lib/poll';
+import { useEarthquakesStatus } from './earthquakesStore';
 import type { EarthquakeFeature } from '../../types';
 
 // Concentric seismic-ring SVG billboard — 3 ripple rings + epicenter dot,
@@ -49,12 +51,21 @@ function eqIconSize(mag: number): number {
   return MAG_COLORS[magTier(mag)].size;
 }
 
+// Poll cadence scales with the feed window: the hour feed churns minute to
+// minute, the day/week feeds far more slowly.
+const PERIOD_POLL_MS: Record<'hour' | 'day' | 'week', number> = {
+  hour: 60_000,
+  day: 5 * 60_000,
+  week: 15 * 60_000,
+};
+
 export function EarthquakeLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.earthquakes);
   const magnitude = useLayersStore((s) => s.earthquakeMagnitude);
   const period = useLayersStore((s) => s.earthquakePeriod);
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
+  const lastSigRef = useRef<string>('');
 
   useEffect(() => {
     if (!viewer) return;
@@ -73,6 +84,7 @@ export function EarthquakeLayer() {
 
     if (!active) {
       ds.entities.removeAll();
+      lastSigRef.current = '';
       viewer.scene.requestRender();
       return;
     }
@@ -83,8 +95,14 @@ export function EarthquakeLayer() {
       try {
         const data = await api.earthquakes(magnitude, period);
         if (cancelled) return;
+        const features = data.features as unknown as EarthquakeFeature[];
+        useEarthquakesStatus.getState().setStatus({ count: features.length, error: null });
+        // Skip the teardown/redraw when the feature set is unchanged.
+        const sig = features.map((f) => f.id).join('|');
+        if (sig === lastSigRef.current) return;
+        lastSigRef.current = sig;
         ds.entities.removeAll();
-        for (const feature of data.features as unknown as EarthquakeFeature[]) {
+        for (const feature of features) {
           const [lon, lat, depthKm] = feature.geometry.coordinates;
           const mag = feature.properties.mag ?? 0;
           const sz = eqIconSize(mag);
@@ -119,14 +137,16 @@ export function EarthquakeLayer() {
         viewer.scene.requestRender();
       } catch (err) {
         console.error('Failed to load earthquakes', err);
+        if (!cancelled) {
+          useEarthquakesStatus.getState().setStatus({ error: 'Earthquake feed unavailable' });
+        }
       }
     }
 
-    load();
-    const interval = setInterval(load, 60_000);
+    const stopPolling = startVisiblePolling(() => void load(), PERIOD_POLL_MS[period]);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopPolling();
     };
   }, [viewer, active, magnitude, period]);
 

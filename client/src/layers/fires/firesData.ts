@@ -220,10 +220,13 @@ export interface EnvelopeResult {
 // Fetch + parse one ArcGIS envelope. Returns features (possibly empty) on
 // success, or null with an error string on a hard failure.
 export async function fetchEnvelope(layerId: number, envelope: string): Promise<EnvelopeResult> {
+  // Only the attributes parseHotspot reads — outFields=* roughly doubles the
+  // payload for no benefit.
+  const OUT_FIELDS = 'frp,bright_ti4,confidence,satellite,daynight,acq_date,acq_time';
   const base =
     `${SERVICE}/${layerId}/query?where=1%3D1` +
     `&geometry=${encodeURIComponent(envelope)}&geometryType=esriGeometryEnvelope` +
-    `&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&outSR=4326` +
+    `&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=${OUT_FIELDS}&outSR=4326` +
     `&resultRecordCount=${MAX_FIRES}&f=geojson`;
   // Prefer the strongest fires first (matters only when we hit the cap), but
   // don't let a schema surprise on that field break the layer — fall back to

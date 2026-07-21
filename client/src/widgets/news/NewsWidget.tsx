@@ -3,6 +3,7 @@ import { api } from '../../api/client';
 import type { NewsItem } from '../../types';
 import { useNewsStore, type CategoryFilter, type SeverityFilter } from './newsStore';
 import { useScreensaverStore } from '../../screensaver/screensaverStore';
+import { startVisiblePolling } from '../../lib/poll';
 
 const REFRESH_MS = 5 * 60_000;
 const PARK_REFRESH_MS = 10 * 60_000;
@@ -139,9 +140,8 @@ export function NewsWidget() {
         if (!cancelled) setError(String(e));
       }
     };
-    fetchNews();
-    const id = setInterval(fetchNews, REFRESH_MS);
-    return () => { cancelled = true; clearInterval(id); };
+    const stop = startVisiblePolling(() => void fetchNews(), REFRESH_MS);
+    return () => { cancelled = true; stop(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screensaverActive, screensaverMode, customSources]);
 
@@ -158,9 +158,8 @@ export function NewsWidget() {
         if (!cancelled) setParkError(String(e));
       }
     };
-    fetchPark();
-    const id = setInterval(fetchPark, PARK_REFRESH_MS);
-    return () => { cancelled = true; clearInterval(id); };
+    const stop = startVisiblePolling(() => void fetchPark(), PARK_REFRESH_MS);
+    return () => { cancelled = true; stop(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newsMode]);
 

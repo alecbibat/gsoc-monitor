@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react';
-import { shipWireframeSegments } from './ShipModel3D';
 
 // 2D-canvas rendering of the ship wireframe for the pins-screensaver focus card.
 //
@@ -38,86 +37,97 @@ export function ShipWireframe2D({ variant, color, masts = 4, width = 310, height
     canvas.height = height * dpr;
     ctx.scale(dpr, dpr);
 
-    // Flat [x,y,z, …]; each consecutive vertex pair is one line segment.
-    const seg = shipWireframeSegments(variant, masts);
-    const vertCount = seg.length / 3;
-
-    // Framing: centre vertically, fit the horizontal spin radius + vertical span.
-    let minY = Infinity;
-    let maxY = -Infinity;
-    let horizR = 0;
-    for (let i = 0; i < vertCount; i++) {
-      const x = seg[i * 3];
-      const y = seg[i * 3 + 1];
-      const z = seg[i * 3 + 2];
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-      const r = Math.hypot(x, z);
-      if (r > horizR) horizR = r;
-    }
-    const centerY = (minY + maxY) / 2;
-    const vertHalf = (maxY - minY) / 2 || 1;
-
-    // Perspective framing mirroring ShipModel3D's PerspectiveCamera(fov = 35).
-    const fov = 35;
-    const aspect = width / height;
-    const vtan = Math.tan(((fov * Math.PI) / 180) / 2);
-    const margin = 1.18;
-    const distH = horizR * margin * Math.sqrt(1 + 1 / (vtan * aspect) ** 2);
-    const distV = (vertHalf * margin) / vtan;
-    const dist = Math.max(distH, distV);
-    const focal = height / 2 / vtan; // pixels
-    const cx = width / 2;
-    const cy = height / 2;
-
     let raf = 0;
-    let last = performance.now();
-    let angle = 0;
+    let cancelled = false;
 
-    const render = () => {
-      const now = performance.now();
-      angle += ((now - last) / 1000) * 0.65; // match ShipModel3D spin speed
-      last = now;
-      const sin = Math.sin(angle);
-      const cos = Math.cos(angle);
+    // The segment geometry is built once by Three.js, so the ShipModel3D module
+    // (and `three` with it) loads on demand here rather than riding in the
+    // entry chunk. Segments are cached per variant, so repeat mounts draw on
+    // the first frame after an instant resolve.
+    import('./ShipModel3D').then(({ shipWireframeSegments }) => {
+      if (cancelled) return;
 
-      ctx.clearRect(0, 0, width, height);
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = color;
-      ctx.shadowColor = color;
-      ctx.shadowBlur = 6;
-      ctx.beginPath();
-      for (let s = 0; s + 1 < vertCount; s += 2) {
-        const a = s * 3;
-        const b = (s + 1) * 3;
+      // Flat [x,y,z, …]; each consecutive vertex pair is one line segment.
+      const seg = shipWireframeSegments(variant, masts);
+      const vertCount = seg.length / 3;
 
-        const ax0 = seg[a];
-        const ay0 = seg[a + 1];
-        const az0 = seg[a + 2];
-        const arx = ax0 * cos + az0 * sin;
-        const arz = -ax0 * sin + az0 * cos;
-        const adenom = dist - arz;
-        const apx = cx + (arx * focal) / adenom;
-        const apy = cy - ((ay0 - centerY) * focal) / adenom;
-
-        const bx0 = seg[b];
-        const by0 = seg[b + 1];
-        const bz0 = seg[b + 2];
-        const brx = bx0 * cos + bz0 * sin;
-        const brz = -bx0 * sin + bz0 * cos;
-        const bdenom = dist - brz;
-        const bpx = cx + (brx * focal) / bdenom;
-        const bpy = cy - ((by0 - centerY) * focal) / bdenom;
-
-        ctx.moveTo(apx, apy);
-        ctx.lineTo(bpx, bpy);
+      // Framing: centre vertically, fit the horizontal spin radius + vertical span.
+      let minY = Infinity;
+      let maxY = -Infinity;
+      let horizR = 0;
+      for (let i = 0; i < vertCount; i++) {
+        const x = seg[i * 3];
+        const y = seg[i * 3 + 1];
+        const z = seg[i * 3 + 2];
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        const r = Math.hypot(x, z);
+        if (r > horizR) horizR = r;
       }
-      ctx.stroke();
-      raf = requestAnimationFrame(render);
-    };
-    render();
+      const centerY = (minY + maxY) / 2;
+      const vertHalf = (maxY - minY) / 2 || 1;
+
+      // Perspective framing mirroring ShipModel3D's PerspectiveCamera(fov = 35).
+      const fov = 35;
+      const aspect = width / height;
+      const vtan = Math.tan(((fov * Math.PI) / 180) / 2);
+      const margin = 1.18;
+      const distH = horizR * margin * Math.sqrt(1 + 1 / (vtan * aspect) ** 2);
+      const distV = (vertHalf * margin) / vtan;
+      const dist = Math.max(distH, distV);
+      const focal = height / 2 / vtan; // pixels
+      const cx = width / 2;
+      const cy = height / 2;
+
+      let last = performance.now();
+      let angle = 0;
+
+      const render = () => {
+        const now = performance.now();
+        angle += ((now - last) / 1000) * 0.65; // match ShipModel3D spin speed
+        last = now;
+        const sin = Math.sin(angle);
+        const cos = Math.cos(angle);
+
+        ctx.clearRect(0, 0, width, height);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = color;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        for (let s = 0; s + 1 < vertCount; s += 2) {
+          const a = s * 3;
+          const b = (s + 1) * 3;
+
+          const ax0 = seg[a];
+          const ay0 = seg[a + 1];
+          const az0 = seg[a + 2];
+          const arx = ax0 * cos + az0 * sin;
+          const arz = -ax0 * sin + az0 * cos;
+          const adenom = dist - arz;
+          const apx = cx + (arx * focal) / adenom;
+          const apy = cy - ((ay0 - centerY) * focal) / adenom;
+
+          const bx0 = seg[b];
+          const by0 = seg[b + 1];
+          const bz0 = seg[b + 2];
+          const brx = bx0 * cos + bz0 * sin;
+          const brz = -bx0 * sin + bz0 * cos;
+          const bdenom = dist - brz;
+          const bpx = cx + (brx * focal) / bdenom;
+          const bpy = cy - ((by0 - centerY) * focal) / bdenom;
+
+          ctx.moveTo(apx, apy);
+          ctx.lineTo(bpx, bpy);
+        }
+        ctx.stroke();
+        raf = requestAnimationFrame(render);
+      };
+      render();
+    });
 
     return () => {
+      cancelled = true;
       cancelAnimationFrame(raf);
     };
   }, [variant, color, masts, width, height]);

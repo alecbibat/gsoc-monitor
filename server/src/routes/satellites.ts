@@ -81,6 +81,7 @@ router.get('/', async (req, res) => {
       if (satellites.length === 0) throw new Error('No satellites parsed');
       return { group, satellites, updated: Date.now() };
     }, { staleOnError: true });
+    res.set('Cache-Control', 'public, max-age=3600');
     res.json(data);
   } catch (err) {
     res.status(502).json({ error: 'Failed to fetch satellite data', detail: String(err) });

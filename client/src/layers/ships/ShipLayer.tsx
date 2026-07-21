@@ -4,6 +4,7 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
 import { attachPanelData } from '../../cesium/entityPanelLink';
+import { startVisiblePolling } from '../../lib/poll';
 import { useShipsStatus } from './shipsStore';
 
 function shipColor(type: number | null): string {
@@ -36,6 +37,13 @@ function cachedIcon(color: string, favorite: boolean): string {
 // How far ahead to project the dead-reckoning "future path".
 const FUTURE_HOURS = 6;
 
+// Fade ships sitting at a stale last-known position so it's clear they aren't
+// reporting live (e.g. out of coastal AIS range).
+function shipAlpha(lastSeenSec: number): number {
+  const ageMin = lastSeenSec / 60;
+  return ageMin < 20 ? 1 : ageMin < 120 ? 0.6 : 0.4;
+}
+
 // Great-circle point a given distance along a fixed initial bearing from a
 // start point. Projecting at increasing distances traces the great circle, so
 // this yields a smooth predicted-track arc.
@@ -65,6 +73,7 @@ export function ShipLayer() {
   const favorites = useLayersStore((s) => s.shipFavorites);
   const showPaths = useLayersStore((s) => s.shipPaths);
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
+  const lastSigRef = useRef<string>('');
 
   useEffect(() => {
     if (!viewer) return;
@@ -83,6 +92,7 @@ export function ShipLayer() {
 
     if (!active) {
       ds.entities.removeAll();
+      lastSigRef.current = '';
       viewer.scene.requestRender();
       return;
     }
@@ -99,8 +109,6 @@ export function ShipLayer() {
           return;
         }
 
-        ds.entities.removeAll();
-
         // Publish the full fleet (pre-filter) so the sidebar roster can fly to
         // any ship regardless of the favorites-only globe filter.
         useShipsStatus.getState().setShips(data.ships);
@@ -109,15 +117,41 @@ export function ShipLayer() {
           ? data.ships.filter((s) => favorites.includes(s.mmsi))
           : data.ships;
 
+        const setStatus = () =>
+          useShipsStatus.getState().setStatus({
+            count: visible.length,
+            total: data.total ?? 7,
+            error: null,
+            noKey: false,
+            connected: data.connected ?? true,
+            streaming: data.streaming ?? false,
+            messages: data.messages ?? 0,
+            matched: data.matched ?? 0,
+          });
+
+        // Skip the teardown/redraw when nothing that affects rendering changed.
+        const sig =
+          `${showPaths}|${favoritesOnly}|${favorites.join(',')}|` +
+          visible
+            .map(
+              (s) =>
+                `${s.mmsi}:${s.latitude}:${s.longitude}:${s.heading}:${s.course}:${shipAlpha(s.lastSeenSec)}`
+            )
+            .join('|');
+        if (sig === lastSigRef.current) {
+          setStatus();
+          return;
+        }
+        lastSigRef.current = sig;
+
+        ds.entities.removeAll();
+
         for (const ship of visible) {
           const isFavorite = favorites.includes(ship.mmsi);
           const color = shipColor(ship.shipType);
           const bearing = ship.heading ?? ship.course ?? 0;
 
-          // Fade ships sitting at a stale last-known position so it's clear
-          // they aren't reporting live (e.g. out of coastal AIS range).
-          const ageMin = ship.lastSeenSec / 60;
-          const alpha = ageMin < 20 ? 1 : ageMin < 120 ? 0.6 : 0.4;
+          const alpha = shipAlpha(ship.lastSeenSec);
 
           const entity = ds.entities.add({
             id: `ship-${ship.mmsi}`,
@@ -194,16 +228,7 @@ export function ShipLayer() {
           }
         }
 
-        useShipsStatus.getState().setStatus({
-          count: visible.length,
-          total: data.total ?? 7,
-          error: null,
-          noKey: false,
-          connected: data.connected ?? true,
-          streaming: data.streaming ?? false,
-          messages: data.messages ?? 0,
-          matched: data.matched ?? 0,
-        });
+        setStatus();
         viewer.scene.requestRender();
       } catch (err) {
         if (cancelled) return;
@@ -212,12 +237,11 @@ export function ShipLayer() {
       }
     };
 
-    load();
-    const interval = setInterval(load, 30_000);
+    const stopPolling = startVisiblePolling(() => void load(), 30_000);
 
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopPolling();
     };
   }, [viewer, active, favoritesOnly, favorites, showPaths]);
 

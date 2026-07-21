@@ -113,12 +113,16 @@ export const useLayersStore = create<LayersState>()(
       partialize: (state) => ({
         active: state.active,
         basemap: state.basemap,
+        flightFavoritesOnly: state.flightFavoritesOnly,
         flightFavorites: state.flightFavorites,
+        shipFavoritesOnly: state.shipFavoritesOnly,
         shipFavorites: state.shipFavorites,
         shipPaths: state.shipPaths,
         firesNearMiles: state.firesNearMiles,
         newsNearMiles: state.newsNearMiles,
         satelliteGroup: state.satelliteGroup,
+        earthquakeMagnitude: state.earthquakeMagnitude,
+        earthquakePeriod: state.earthquakePeriod,
       }),
       // The Google photorealistic 3D layer (earth3d) hits a metered API and its
       // UI control has been removed. Force it off on every hydration so a value

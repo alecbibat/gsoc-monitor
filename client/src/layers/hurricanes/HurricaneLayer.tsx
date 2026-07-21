@@ -86,6 +86,27 @@ interface ServiceLayer {
   name: string;
 }
 
+// Discover the sublayer layout once per app lifetime (it effectively never
+// changes) instead of on every poll. Memoised like getFireLayerId.
+let serviceLayersPromise: Promise<ServiceLayer[]> | null = null;
+function getServiceLayers(): Promise<ServiceLayer[]> {
+  if (!serviceLayersPromise) {
+    serviceLayersPromise = (async () => {
+      try {
+        const r = await fetch(`${SERVICE}?f=json`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const meta = (await r.json()) as { layers?: ServiceLayer[] };
+        return meta.layers?.length ? meta.layers : FALLBACK_LAYERS;
+      } catch (err) {
+        // Metadata is non-fatal: fall back to documented indices and keep going.
+        console.warn('NHC service metadata unavailable, using fallback layers', err);
+        return FALLBACK_LAYERS;
+      }
+    })();
+  }
+  return serviceLayersPromise;
+}
+
 /** First non-empty value among several candidate attribute names. */
 function pick<T = unknown>(
   props: Record<string, unknown> | undefined,
@@ -277,8 +298,12 @@ export function HurricaneLayer() {
       if (e?.point) e.point.pixelSize = new Cesium.ConstantProperty(FCST_DOT_HOVER);
       viewer.scene.requestRender();
     };
+    let lastPick = 0; // scene.pick is costly — throttle to ~16 picks/s
     const hoverHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
     hoverHandler.setInputAction((movement: Cesium.ScreenSpaceEventHandler.MotionEvent) => {
+      const now = performance.now();
+      if (now - lastPick < 60) return;
+      lastPick = now;
       const picked = viewer.scene.pick(movement.endPosition);
       const info = getForecast(picked?.id);
       if (info) {
@@ -333,17 +358,7 @@ export function HurricaneLayer() {
           return [];
         });
 
-      let layers: ServiceLayer[];
-      try {
-        const r = await fetch(`${SERVICE}?f=json`);
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const meta = (await r.json()) as { layers?: ServiceLayer[] };
-        layers = meta.layers?.length ? meta.layers : FALLBACK_LAYERS;
-      } catch (err) {
-        // Metadata is non-fatal: fall back to documented indices and keep going.
-        console.warn('NHC service metadata unavailable, using fallback layers', err);
-        layers = FALLBACK_LAYERS;
-      }
+      const layers = await getServiceLayers();
       if (cancelled) return;
 
       const coneId = findId(layers, 'cone');

@@ -63,7 +63,7 @@ function round3(n: number): number {
 // The proximity scan is the expensive part (13 FIRMS envelopes + NWS alerts +
 // USGS quakes + county polygons). Re-opening the dashboard used to re-fire the
 // whole thing; a short memo makes reopen instant and halves steady-state load.
-const SCAN_MEMO_MS = 60_000;
+const SCAN_MEMO_MS = 240_000;
 let scanMemo: { at: number; result: ScanResult } | null = null;
 async function scanProximityMemo(): Promise<ScanResult> {
   if (scanMemo && Date.now() - scanMemo.at < SCAN_MEMO_MS) return scanMemo.result;
@@ -84,7 +84,10 @@ interface StormPos {
 
 const NHC_SERVICE =
   'https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/Active_Hurricanes_v1/FeatureServer';
-const OBSERVED_POSITION_LAYER = 2;
+// Sublayer 1 = "Observed Position" (points). It previously pointed at 2, which
+// is "Forecast Track" (polylines) — every feature failed the Point check below
+// and the storm watch silently returned no storms.
+const OBSERVED_POSITION_LAYER = 1;
 
 const STORM_TYPE_LABEL: Record<string, string> = {
   HU: 'Hurricane',
@@ -99,8 +102,10 @@ const STORM_TYPE_LABEL: Record<string, string> = {
 async function fetchStormPositions(): Promise<StormPos[]> {
   const out: StormPos[] = [];
   try {
+    // Only the attributes the dedup below reads — outFields=* pulls the full
+    // ~17-field schema for every historical fix of every storm.
     const r = await fetch(
-      `${NHC_SERVICE}/${OBSERVED_POSITION_LAYER}/query?where=1%3D1&outFields=*&outSR=4326&f=geojson`,
+      `${NHC_SERVICE}/${OBSERVED_POSITION_LAYER}/query?where=1%3D1&outFields=OBJECTID,STORMID,STORMNAME,STORMTYPE&outSR=4326&f=geojson`,
       { signal: AbortSignal.timeout(12_000) }
     );
     if (r.ok) {

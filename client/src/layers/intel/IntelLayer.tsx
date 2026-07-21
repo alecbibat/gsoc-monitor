@@ -4,6 +4,7 @@ import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { api } from '../../api/client';
+import { startVisiblePolling } from '../../lib/poll';
 import { useIntelStore, CATEGORY_META } from './intelStore';
 import type { IntelItem } from '../../types';
 
@@ -68,11 +69,10 @@ export function IntelLayer() {
         useIntelStore.getState().setError('Intel feed unavailable');
       }
     };
-    load();
-    const interval = setInterval(load, REFRESH_MS);
+    const stopPolling = startVisiblePolling(() => void load(), REFRESH_MS);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopPolling();
     };
   }, [viewer, active]);
 

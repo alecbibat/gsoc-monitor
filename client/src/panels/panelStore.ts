@@ -102,9 +102,14 @@ export const usePanelStore = create<PanelsState>((set, get) => ({
   close: (id) => set({ panels: get().panels.filter((p) => p.id !== id) }),
   closeAll: () => set({ panels: [] }),
   bringToFront: (id) => {
-    const nextZ = get().topZ + 1;
+    // Every mousedown inside a panel lands here — skip the array rebuild (and
+    // the re-render of every open panel) when the target is already frontmost.
+    const { panels, topZ } = get();
+    const target = panels.find((p) => p.id === id);
+    if (!target || target.z === topZ) return;
+    const nextZ = topZ + 1;
     set({
-      panels: get().panels.map((p) => (p.id === id ? { ...p, z: nextZ } : p)),
+      panels: panels.map((p) => (p.id === id ? { ...p, z: nextZ } : p)),
       topZ: nextZ,
     });
   },

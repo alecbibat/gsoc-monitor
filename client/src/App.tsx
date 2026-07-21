@@ -34,6 +34,7 @@ import { SatelliteLayer } from './layers/satellites/SatelliteLayer';
 import { LocationsLayer } from './layers/locations/LocationsLayer';
 import { HurricaneTooltip } from './layers/hurricanes/HurricaneTooltip';
 import { TopBar } from './ui/TopBar';
+import { TitleBadge } from './ui/TitleBadge';
 import { Sidebar } from './ui/Sidebar';
 import { StarField } from './ui/StarField';
 import { PanelManager } from './panels/PanelManager';
@@ -61,12 +62,12 @@ import { FuelZoneController } from './fuelzone/FuelZoneController';
 import { FuelZoneOverlay } from './fuelzone/FuelZoneOverlay';
 import { ScreensaverToast } from './screensaver/ScreensaverToast';
 import { NewsTicker } from './widgets/news/NewsTicker';
-import { CrisisOverlay } from './crisis/CrisisOverlay';
 import { CrisisMapLayer } from './crisis/CrisisMapLayer';
 import { CrisisDrawController } from './crisis/CrisisDrawController';
 import { CrisisLayerPopup } from './crisis/CrisisLayerPopup';
 import { IncidentSync } from './crisis/IncidentSync';
-import { DashboardView } from './dashboard/DashboardView';
+import { useCrisisStore } from './crisis/crisisStore';
+import { useDashboardStore } from './dashboard/dashboardStore';
 import { AuthGate } from './auth/AuthGate';
 
 // Detect share link — renders a completely separate read-only view. Lazy so the
@@ -76,6 +77,37 @@ const shareToken = new URLSearchParams(window.location.search).get('share');
 const CrisisShareView = lazy(() =>
   import('./crisis/CrisisShareView').then((m) => ({ default: m.CrisisShareView }))
 );
+
+// The crisis overlay and status dashboard are full-screen views that render
+// nothing until the operator opens them, so their whole UI trees stay out of
+// the entry chunk. Both gates only subscribe to the (eager) stores; share-link
+// auto-publish keeps running in the always-mounted IncidentSync.
+const CrisisOverlay = lazy(() =>
+  import('./crisis/CrisisOverlay').then((m) => ({ default: m.CrisisOverlay }))
+);
+const DashboardView = lazy(() =>
+  import('./dashboard/DashboardView').then((m) => ({ default: m.DashboardView }))
+);
+
+function CrisisOverlayGate() {
+  const open = useCrisisStore((s) => s.open);
+  if (!open) return null;
+  return (
+    <Suspense fallback={null}>
+      <CrisisOverlay />
+    </Suspense>
+  );
+}
+
+function DashboardGate() {
+  const open = useDashboardStore((s) => s.open);
+  if (!open) return null;
+  return (
+    <Suspense fallback={null}>
+      <DashboardView />
+    </Suspense>
+  );
+}
 
 export default function App() {
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
@@ -137,6 +169,7 @@ export default function App() {
           <ShipModelLayer />
         </CesiumGlobe>
         <TopBar />
+        <TitleBadge />
         <Sidebar />
         <HurricaneTooltip />
         <PanelManager />
@@ -162,11 +195,11 @@ export default function App() {
         <HoverOverlay />
         <PickChooser />
         <NewsTicker />
-        <CrisisOverlay />
+        <CrisisOverlayGate />
         <CrisisDrawController />
         <CrisisLayerPopup />
         <IncidentSync />
-        <DashboardView />
+        <DashboardGate />
       </div>
     </CesiumContext.Provider>
     </AuthGate>

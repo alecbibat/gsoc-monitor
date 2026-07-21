@@ -57,6 +57,15 @@ function LiveClock() {
     second: '2-digit',
     hour12: false,
   });
+  // Ops coordination runs on UTC — show it alongside local so no one does
+  // timezone math while reading an advisory timestamp.
+  const utcTime = now.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    timeZone: 'UTC',
+  });
   const tzAbbr =
     new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' })
       .formatToParts(now)
@@ -78,6 +87,13 @@ function LiveClock() {
       </span>
       <span className="text-[10px] font-semibold uppercase tracking-wider text-white/35">
         {tzAbbr}
+      </span>
+      <span className="text-white/15">·</span>
+      <span className="font-mono text-[13px] font-semibold tabular-nums tracking-wider text-white/60">
+        {utcTime}
+      </span>
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-white/35">
+        UTC
       </span>
     </div>
   );
@@ -239,6 +255,55 @@ function FullscreenButton() {
   );
 }
 
+// One-click PNG capture of the globe for shift handoffs and incident emails.
+// preserveDrawingBuffer is off, so the canvas must be copied synchronously
+// right after a forced render — same pattern as the crisis layer thumbnails.
+function ScreenshotButton() {
+  const viewer = useCesiumViewer();
+  const capture = () => {
+    if (!viewer) return;
+    try {
+      viewer.render();
+      const src = viewer.canvas;
+      const c = document.createElement('canvas');
+      c.width = src.width;
+      c.height = src.height;
+      c.getContext('2d')!.drawImage(src, 0, 0);
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}Z`;
+      const a = document.createElement('a');
+      a.href = c.toDataURL('image/png');
+      a.download = `gsoc-${stamp}.png`;
+      a.click();
+    } catch {
+      /* capture unavailable (e.g. lost context) — button is best-effort */
+    }
+  };
+  return (
+    <button
+      onClick={capture}
+      disabled={!viewer}
+      className="pointer-events-auto flex items-center justify-center rounded-lg border border-white/10 bg-ink-900/80 p-2 text-white/40 shadow-panel backdrop-blur-sm transition-all hover:text-white/70 disabled:opacity-40"
+      title="Save a PNG of the current view"
+      aria-label="Screenshot"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+        <circle cx="12" cy="13" r="4" />
+      </svg>
+    </button>
+  );
+}
+
 function MeasureButton() {
   const active = useMeasureStore((s) => s.active);
   const toggle = useMeasureStore((s) => s.toggle);
@@ -387,6 +452,7 @@ function MobileToolsMenu() {
           >
             <ResetCameraButton />
             <FullscreenButton />
+            <ScreenshotButton />
             <MeasureButton />
             <DashboardButton />
           </div>
@@ -493,6 +559,7 @@ export function TopBar() {
           <div className="hidden md:contents">
             <ResetCameraButton />
             <FullscreenButton />
+            <ScreenshotButton />
             <MeasureButton />
             <DashboardButton />
           </div>

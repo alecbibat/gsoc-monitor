@@ -3,6 +3,7 @@ import { api } from '../../api/client';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { flyToLonLat } from '../../cesium/flyTo';
 import { useIntelStore, CATEGORY_META } from '../../layers/intel/intelStore';
+import { startVisiblePolling } from '../../lib/poll';
 import type { IntelCategory, IntelItem, WatchlistSource } from '../../types';
 
 const REFRESH_MS = 90_000;
@@ -124,9 +125,8 @@ export function IntelWidget() {
         if (!cancelled) useIntelStore.getState().setError('Intel feed unavailable');
       }
     };
-    load();
-    const id = setInterval(load, REFRESH_MS);
-    return () => { cancelled = true; clearInterval(id); };
+    const stop = startVisiblePolling(() => void load(), REFRESH_MS);
+    return () => { cancelled = true; stop(); };
   }, []);
 
   const loadSources = async () => {

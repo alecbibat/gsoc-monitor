@@ -104,8 +104,17 @@ async function fetchOutlook(): Promise<FireOutlookResponse> {
   const byCode = new Map<string, FireOutlookPsa>();
   const dates: (string | null)[] = Array(DAYS).fill(null);
 
+  // Day 0 carries the (throttled) geometry query and runs alone; days 1+ are
+  // attribute-only and safe to fetch concurrently — serially the miss path
+  // stacked 7 upstream RTTs and could ride past the platform's 30s timeout.
+  const day0 = await fetchDay(0, true);
+  const rest = await Promise.all(
+    Array.from({ length: DAYS - 1 }, (_, i) => fetchDay(i + 1, false))
+  );
+  const perDay = [day0, ...rest];
+
   for (let day = 0; day < DAYS; day++) {
-    const { items, date } = await fetchDay(day, day === 0);
+    const { items, date } = perDay[day];
     dates[day] = date;
     for (const it of items) {
       const code = it.props.nat_code;
@@ -136,6 +145,7 @@ router.get('/', async (_req, res) => {
     const data = await cache.getOrFetch<FireOutlookResponse>('fire-outlook', TTL_MS, fetchOutlook, {
       staleOnError: true,
     });
+    res.set('Cache-Control', 'public, max-age=3600');
     res.json(data);
   } catch (err) {
     console.error('Fire outlook route error', err);

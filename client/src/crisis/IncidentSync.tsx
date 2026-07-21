@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useAuthStore } from '../auth/authStore';
-import { useCrisisStore, type Incident } from './crisisStore';
+import { useCrisisStore, useActiveIncident, extractPublicState, type Incident } from './crisisStore';
 
 // ── Canonical serialization ───────────────────────────────────────────────────
 // The change-watcher and the live-sync merge both need to answer "is this
@@ -85,10 +85,48 @@ function flushPending() {
   pending.clear();
 }
 
+// Auto-push the active incident to all active share links on every change.
+// Lives here (always mounted) rather than in the crisis overlay, which is
+// lazy-loaded and only mounted while open — live share links must keep
+// updating even with the overlay closed.
+function useAutoPublish() {
+  const inc = useActiveIncident();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!inc) return;
+    const activeTokens = (inc.shareLinks ?? [])
+      .filter((l) => l.active)
+      .map((l) => l.token);
+    // Legacy fallback: if shareToken set but shareLinks not yet populated
+    if (activeTokens.length === 0 && inc.shareToken) activeTokens.push(inc.shareToken);
+    if (activeTokens.length === 0) return;
+
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      const body = JSON.stringify(extractPublicState(inc));
+      for (const token of activeTokens) {
+        fetch(`/api/crisis/share/${token}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        })
+          .then((res) => {
+            if (!res.ok) console.warn(`[crisis] live update failed (${res.status}) for share ${token}`);
+          })
+          .catch(console.error);
+      }
+    }, 1_500);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [inc]);
+}
+
 export function IncidentSync() {
   const user = useAuthStore((s) => s.user);
   const setIncidents = useCrisisStore((s) => s.setIncidents);
   const loaded = useRef(false);
+
+  useAutoPublish();
 
   // Load all incidents from the server on first auth.
   useEffect(() => {

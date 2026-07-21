@@ -208,12 +208,19 @@ export function initWindStream(): void {
   setInterval(() => void refreshWind(), TTL_MS);
 }
 
+// The grid only changes on refresh; cache the serialized body per (grid,
+// staleness) rather than spread-cloning + stringifying it for every client.
+let windBody: { grid: unknown; stale: boolean; body: Buffer } | null = null;
+
 router.get('/', (_req, res) => {
   const grid = latestGrid ?? WIND_FALLBACK;
   // "Fresh" only if we actually fetched a live grid within ~1.5 TTLs.
   const fresh = latestGrid != null && Date.now() - liveAt < TTL_MS * 1.5;
   if (!fresh) void refreshWind(); // nudge a background refresh, never block
-  res.json({ ...grid, stale: !fresh });
+  if (!windBody || windBody.grid !== grid || windBody.stale !== !fresh) {
+    windBody = { grid, stale: !fresh, body: Buffer.from(JSON.stringify({ ...grid, stale: !fresh })) };
+  }
+  res.type('application/json').send(windBody.body);
 });
 
 // --- Point forecast ---------------------------------------------------------

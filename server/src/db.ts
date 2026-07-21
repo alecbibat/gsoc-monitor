@@ -17,6 +17,12 @@ export const pool = new Pool({
   max: 10,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
+  // A query stalled by a network partition or a lock would otherwise hold its
+  // client until the kernel TCP timeout — ten of those exhausts the pool and
+  // deadlocks every DB-backed route. Bound server- and client-side.
+  statement_timeout: 15_000,
+  query_timeout: 20_000,
+  keepAlive: true,
 });
 
 pool.on('error', (err) => {

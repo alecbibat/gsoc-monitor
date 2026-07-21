@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import crypto from 'crypto';
 import { cache } from '../cache';
 
 // GDELT GKG GeoJSON API (v1) — geocoded global news. Returns one GeoJSON point
@@ -189,16 +190,23 @@ function readQuery(raw: unknown): string {
   return typeof raw === 'string' && raw.trim() ? raw.trim() : DEFAULT_QUERY;
 }
 
-// TIMESPAN is in minutes for the GKG API. Clamp to a sane 15min–24h window.
+// TIMESPAN is in minutes for the GKG API. Clamp to a sane 15min–24h window,
+// bucketed to a fixed set so cache keys stay low-cardinality (arbitrary values
+// would each earn their own GDELT fetch and cache entry).
+const TIMESPAN_BUCKETS = [15, 60, 180, 360, 720, 1440];
 function readTimespan(raw: unknown): number {
   const n = typeof raw === 'string' ? parseInt(raw, 10) : NaN;
-  return Number.isFinite(n) ? Math.min(1440, Math.max(15, n)) : DEFAULT_TIMESPAN_MIN;
+  const clamped = Number.isFinite(n) ? Math.min(1440, Math.max(15, n)) : DEFAULT_TIMESPAN_MIN;
+  return TIMESPAN_BUCKETS.find((b) => clamped <= b) ?? 1440;
 }
 
 router.get('/', async (req, res) => {
   const query = readQuery(req.query.query);
   const timespan = readTimespan(req.query.timespan);
-  const key = `news-map:gkg:${query}:${timespan}`;
+  // Hash free-form queries out of the key so a scripted loop of distinct
+  // queries can't bloat cache memory with long strings.
+  const qh = crypto.createHash('sha1').update(query).digest('hex').slice(0, 16);
+  const key = `news-map:gkg:${qh}:${timespan}`;
 
   try {
     const result = await cache.getOrFetch<Result>(

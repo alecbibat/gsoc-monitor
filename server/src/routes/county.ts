@@ -26,6 +26,7 @@ router.get('/:fips', async (req, res) => {
       if (!r.ok) throw new Error(`Esri county service: ${r.status}`);
       return r.json();
     });
+    res.set('Cache-Control', 'public, max-age=86400');
     res.json(data);
   } catch (err) {
     res.status(502).json({ error: String(err) });
