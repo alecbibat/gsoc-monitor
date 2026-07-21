@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GSOC Monitor — Capability Overview</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --ink-3: #898781;
+  --hairline: rgba(255, 255, 255, 0.10);
+  --grid: #2c2c2a;
+  --blue: #3987e5;
+  --aqua: #199e70;
+  --magenta: #d55181;
+  --yellow: #c98500;
+  --orange: #d95926;
+  --violet: #9085e9;
+  --red: #e66767;
+  --sans: "Liberation Sans", "DejaVu Sans", sans-serif;
+  --mono: "Liberation Mono", "DejaVu Sans Mono", monospace;
+}
+
+@page { size: letter; margin: 0; }
+
+html, body {
+  background: var(--page);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+  font-family: var(--sans);
+  color: var(--ink);
+  font-size: 10pt;
+  line-height: 1.45;
+}
+
+.page {
+  width: 8.5in;
+  height: 11in;
+  padding: 0.52in 0.62in 0.72in;
+  position: relative;
+  overflow: hidden;
+  page-break-after: always;
+  background: var(--page);
+}
+.page:last-child { page-break-after: auto; }
+
+.folio {
+  position: absolute;
+  left: 0.62in; right: 0.62in; bottom: 0.3in;
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-family: var(--mono);
+  font-size: 6.5pt;
+  letter-spacing: 0.14em;
+  color: var(--ink-3);
+  border-top: 1px solid var(--hairline);
+  padding-top: 6pt;
+}
+
+.kicker {
+  font-family: var(--mono);
+  font-size: 7.5pt;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--accent, var(--blue));
+  margin-bottom: 4pt;
+}
+h2.section-title {
+  font-size: 21pt;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin-bottom: 4pt;
+}
+.section-rule {
+  height: 2px; border: 0; margin: 8pt 0 11pt;
+  background: linear-gradient(90deg, var(--accent, var(--blue)), rgba(0,0,0,0) 70%);
+}
+.lede {
+  font-size: 10.8pt;
+  color: var(--ink-2);
+  margin-bottom: 13pt;
+  max-width: 6.9in;
+}
+
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 9pt; margin-bottom: 13pt; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--accent, var(--blue));
+  border-radius: 4pt;
+  padding: 9.5pt 11pt;
+}
+.card h4 { font-size: 10.2pt; font-weight: 700; margin-bottom: 3.5pt; }
+.card p { font-size: 8.9pt; color: var(--ink-2); line-height: 1.48; }
+
+.list-title {
+  font-family: var(--mono); font-size: 6.8pt; letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--ink-3); margin: 2pt 0 6pt;
+}
+.feat-cols { column-count: 2; column-gap: 18pt; }
+.feat { break-inside: avoid; margin-bottom: 8pt; font-size: 9.1pt; color: var(--ink-2); line-height: 1.5; }
+.feat b { color: var(--ink); font-weight: 700; }
+
+.tech-strip {
+  position: absolute; left: 0.62in; right: 0.62in; bottom: 0.62in;
+  font-family: var(--mono); font-size: 6.6pt; line-height: 1.55;
+  color: var(--ink-3);
+  border-top: 1px dashed var(--grid);
+  padding-top: 5pt;
+}
+.tech-strip .t { color: var(--accent, var(--blue)); letter-spacing: 0.14em; }
+
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8pt; }
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 4pt;
+  padding: 9pt 11pt 8pt;
+  text-align: left;
+}
+.stat .v { font-size: 19pt; font-weight: 600; line-height: 1.1; }
+.stat .l { font-size: 7.4pt; color: var(--ink-3); margin-top: 2.5pt; letter-spacing: 0.02em; }
+
+table.sources { width: 100%; border-collapse: collapse; font-size: 8pt; }
+table.sources th {
+  text-align: left; font-family: var(--mono); font-size: 6.8pt; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--ink-3); font-weight: 400;
+  border-bottom: 1px solid var(--grid); padding: 2.5pt 5pt 4pt 0;
+}
+table.sources td {
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  padding: 3.6pt 5pt 3.6pt 0; vertical-align: top; color: var(--ink-2);
+}
+table.sources td.name { color: var(--ink); font-weight: 700; }
+.chip {
+  display: inline-block; font-family: var(--mono); font-size: 6.2pt; letter-spacing: 0.05em;
+  padding: 0.5pt 4pt; border-radius: 6pt; border: 1px solid var(--hairline);
+  color: var(--ink-2); white-space: nowrap;
+}
+.chip.free { color: #7ac88f; border-color: rgba(122,200,143,0.35); }
+.chip.key  { color: #e5b567; border-color: rgba(229,181,103,0.35); }
+
+/* section accent scopes */
+.acc-blue    { --accent: var(--blue); }
+.acc-yellow  { --accent: var(--yellow); }
+.acc-orange  { --accent: var(--orange); }
+.acc-red     { --accent: var(--red); }
+.acc-aqua    { --accent: var(--aqua); }
+.acc-magenta { --accent: var(--magenta); }
+.acc-violet  { --accent: var(--violet); }
+
+/* ---- cover ---- */
+.cover { display: flex; flex-direction: column; }
+.cover .brand {
+  font-family: var(--mono); font-size: 8pt; letter-spacing: 0.3em; color: var(--ink-3);
+  display: flex; justify-content: space-between;
+}
+.cover .globe-wrap { text-align: center; margin: 0.28in 0 0.1in; }
+.cover h1 {
+  font-size: 42pt; font-weight: 700; letter-spacing: 0.045em; text-align: center;
+  line-height: 1.02; margin-top: 0.12in;
+}
+.cover h1 .thin { font-weight: 400; color: var(--ink-2); }
+.cover .tagline {
+  text-align: center; font-family: var(--mono); font-size: 9pt; letter-spacing: 0.26em;
+  color: var(--blue); text-transform: uppercase; margin-top: 7pt;
+}
+.cover .sub {
+  text-align: center; color: var(--ink-2); font-size: 10.5pt; max-width: 6.2in;
+  margin: 12pt auto 0;
+}
+.cover .stats { margin-top: 0.32in; }
+
+/* ---- architecture diagram ---- */
+.arch { display: flex; align-items: stretch; gap: 6pt; margin: 4pt 0 12pt; }
+.arch .node {
+  flex: 1; background: var(--surface); border: 1px solid var(--hairline); border-radius: 4pt;
+  padding: 7pt 9pt;
+}
+.arch .node h5 { font-family: var(--mono); font-size: 7pt; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 3pt; }
+.arch .node p { font-size: 7.6pt; color: var(--ink-2); line-height: 1.4; }
+.arch .arrow { align-self: center; color: var(--ink-3); font-size: 13pt; }
+
+.tax { display: flex; flex-wrap: wrap; gap: 4pt; margin-bottom: 11pt; }
+.tax span {
+  font-family: var(--mono); font-size: 7.2pt; letter-spacing: 0.08em;
+  border: 1px solid var(--hairline); border-radius: 8pt; padding: 2pt 7pt; color: var(--ink-2);
+}
+.tax span i { font-style: normal; margin-right: 3pt; }
+
+h3.sub-head { font-size: 11pt; font-weight: 700; margin: 10pt 0 6pt; }
+h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
+
+.toc {
+  margin-top: auto;
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 6pt 10pt;
+  padding-top: 14pt; border-top: 1px solid var(--hairline);
+  margin-bottom: 0.32in;
+}
+.toc div { font-size: 8pt; color: var(--ink-2); }
+.toc div .n { font-family: var(--mono); font-size: 7pt; display: block; margin-bottom: 1pt; }
+</style>
+</head>
+<body>
+
+<!-- ================= PAGE 1 · COVER ================= -->
+<section class="page cover acc-blue">
+  <div class="brand"><span>ALEC BIBAT / GSOC-MONITOR</span><span>CAPABILITY OVERVIEW · JULY 2026</span></div>
+  <div class="globe-wrap">
+    <svg viewBox="0 0 440 440" width="330" height="330" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="sphere" cx="38%" cy="32%" r="75%">
+          <stop offset="0%" stop-color="#1c2331"/>
+          <stop offset="55%" stop-color="#12161f"/>
+          <stop offset="100%" stop-color="#0d0d0d"/>
+        </radialGradient>
+        <linearGradient id="term" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="#0d0d0d" stop-opacity="0"/>
+          <stop offset="70%" stop-color="#0d0d0d" stop-opacity="0"/>
+          <stop offset="100%" stop-color="#0d0d0d" stop-opacity="0.75"/>
+        </linearGradient>
+        <filter id="glow" x="-150%" y="-150%" width="400%" height="400%">
+          <feGaussianBlur stdDeviation="4"/>
+        </filter>
+      </defs>
+      <circle cx="220" cy="220" r="185" fill="url(#sphere)" stroke="#2c2c2a" stroke-width="1"/>
+      <g stroke="#3a4150" stroke-width="0.7" fill="none" opacity="0.55">
+        <ellipse cx="220" cy="220" rx="185" ry="185"/>
+        <ellipse cx="220" cy="220" rx="150" ry="185"/>
+        <ellipse cx="220" cy="220" rx="100" ry="185"/>
+        <ellipse cx="220" cy="220" rx="45"  ry="185"/>
+        <line x1="220" y1="35" x2="220" y2="405"/>
+        <ellipse cx="220" cy="220" rx="185" ry="45"/>
+        <ellipse cx="220" cy="220" rx="185" ry="100"/>
+        <ellipse cx="220" cy="220" rx="185" ry="150"/>
+        <line x1="35" y1="220" x2="405" y2="220"/>
+      </g>
+      <g fill="none" stroke-width="1.1" opacity="0.8">
+        <path d="M 130 150 Q 210 90 305 175" stroke="#3987e5"/>
+        <path d="M 155 300 Q 240 240 330 265" stroke="#199e70"/>
+        <path d="M 305 175 Q 260 250 155 300" stroke="#9085e9" opacity="0.6"/>
+      </g>
+      <g>
+        <circle cx="130" cy="150" r="7" fill="#3987e5" opacity="0.35" filter="url(#glow)"/><circle cx="130" cy="150" r="3" fill="#3987e5"/>
+        <circle cx="305" cy="175" r="7" fill="#e66767" opacity="0.4" filter="url(#glow)"/><circle cx="305" cy="175" r="3" fill="#e66767"/>
+        <circle cx="155" cy="300" r="7" fill="#d95926" opacity="0.4" filter="url(#glow)"/><circle cx="155" cy="300" r="3" fill="#d95926"/>
+        <circle cx="330" cy="265" r="7" fill="#199e70" opacity="0.4" filter="url(#glow)"/><circle cx="330" cy="265" r="3" fill="#199e70"/>
+        <circle cx="250" cy="110" r="6" fill="#c98500" opacity="0.4" filter="url(#glow)"/><circle cx="250" cy="110" r="2.5" fill="#c98500"/>
+        <circle cx="195" cy="355" r="6" fill="#d55181" opacity="0.35" filter="url(#glow)"/><circle cx="195" cy="355" r="2.5" fill="#d55181"/>
+        <circle cx="90"  cy="235" r="6" fill="#9085e9" opacity="0.35" filter="url(#glow)"/><circle cx="90" cy="235" r="2.5" fill="#9085e9"/>
+      </g>
+      <g transform="rotate(-24 220 220)">
+        <ellipse cx="220" cy="220" rx="212" ry="64" fill="none" stroke="#898781" stroke-width="0.8" stroke-dasharray="3 4" opacity="0.7"/>
+        <circle cx="432" cy="220" r="3.4" fill="#fff"/>
+        <circle cx="432" cy="220" r="8" fill="#fff" opacity="0.25" filter="url(#glow)"/>
+      </g>
+      <circle cx="220" cy="220" r="185" fill="url(#term)"/>
+    </svg>
+  </div>
+  <h1>GSOC <span class="thin">MONITOR</span></h1>
+  <div class="tagline">One globe · every signal</div>
+  <p class="sub">A real-time 3D operations console for Global Security Operations — live weather, wildfire, seismic, and infrastructure hazards, a tracked fleet of aircraft, ships, and satellites, open-source intelligence, and a full incident-command suite, fused onto a single CesiumJS globe.</p>
+  <div class="stats">
+    <div class="stat"><div class="v">25+</div><div class="l">live map layers, each toggleable with its own controls</div></div>
+    <div class="stat"><div class="v">46</div><div class="l">external data feeds — government, satellite, community &amp; commercial</div></div>
+    <div class="stat"><div class="v">29</div><div class="l">server proxy routes with caching &amp; graceful degradation</div></div>
+    <div class="stat"><div class="v">39K</div><div class="l">lines of TypeScript — React + CesiumJS + Node/Express + Postgres</div></div>
+  </div>
+  <div class="toc">
+    <div><span class="n" style="color:var(--blue)">01</span>The platform</div>
+    <div><span class="n" style="color:var(--blue)">02</span>Weather</div>
+    <div><span class="n" style="color:var(--yellow)">03</span>Severe weather</div>
+    <div><span class="n" style="color:var(--orange)">04</span>Wildfire intelligence</div>
+    <div><span class="n" style="color:var(--aqua)">05</span>Tracking</div>
+    <div><span class="n" style="color:var(--red)">06</span>Hazards &amp; properties</div>
+    <div><span class="n" style="color:var(--magenta)">07</span>Open-source intel</div>
+    <div><span class="n" style="color:var(--violet)">08</span>Crisis operations</div>
+    <div><span class="n" style="color:var(--blue)">09</span>Ambient &amp; platform</div>
+    <div><span class="n" style="color:var(--blue)">10</span>Data sources</div>
+  </div>
+  <div class="folio"><span>GSOC MONITOR — CAPABILITY OVERVIEW</span><span>07.2026</span></div>
+</section>
+
+<!-- ================= PAGE 2 · AT A GLANCE ================= -->
+<section class="page acc-blue">
+  <div class="kicker">01 · The platform</div>
+  <h2 class="section-title">A mission-control shell around a living globe</h2>
+  <hr class="section-rule">
+  <p class="lede">GSOC Monitor renders a sun-lit, atmosphere-shaded Earth on a procedural starfield and lets an operator stack live data on top of it — from precipitation radar to police scanners. Everything is real-time, everything is clickable, and every layer explains where its data comes from.</p>
+
+  <div class="arch">
+    <div class="node"><h5 style="color:var(--aqua)">46 external feeds</h5><p>NOAA · NWS · USGS · NASA FIRMS · NIFC · LANDFIRE · CelesTrak · adsb.fi · AISStream · Blitzortung · Vaisala Xweather · GDELT · NPS · Bluesky · PulsePoint · Socrata · 18 utility outage feeds…</p></div>
+    <div class="arrow">&#8594;</div>
+    <div class="node"><h5 style="color:var(--yellow)">Node/Express + Postgres</h5><p>29 proxy routes with TTL caches that serve last-known-good data when upstreams fail; background collectors for lightning, ships, rivers, wind &amp; OSINT; keys held server-side.</p></div>
+    <div class="arrow">&#8594;</div>
+    <div class="node"><h5 style="color:var(--blue)">React + CesiumJS client</h5><p>25+ layers on a 3D globe, dockable panels, dashboards, crisis tools, and screensaver tours — adaptive from ops wall display down to a phone.</p></div>
+  </div>
+
+  <div class="tax">
+    <span>BASE MAP</span><span>WEATHER</span><span>FIRE &amp; SMOKE</span><span>HAZARDS &amp; ALERTS</span><span>OPEN-SOURCE INTEL</span><span>TRACKING</span><span>LOCATIONS</span><span>CRISIS OPS</span><span>DASHBOARD</span><span>SCREENSAVER</span>
+  </div>
+
+  <div class="cards">
+    <div class="card"><h4>Click anything, get a panel</h4><p>Every feature on the globe — a quake, an alert polygon, a ship, a satellite, a river gauge — opens a draggable, resizable detail panel; 20 panel kinds, color-accented by category, with snap-to-dock zones. Where several features overlap, a picker lists everything under the cursor.</p></div>
+    <div class="card"><h4>Layer console with live status</h4><p>A sectioned sidebar toggles every layer and shows a live one-line status straight from its store — "412 strikes/min · live", "3 active systems", "7/7 ships tracked" — plus inline controls: magnitude chips, satellite groups, flood-stage filters, proximity radii. All state persists across reloads.</p></div>
+    <div class="card"><h4>Provenance built in</h4><p>An "i" button documents every active layer: who provides the data, how it is gathered, and why it can be trusted, with a canonical link — USGS to Vaisala. The trust story travels with the map.</p></div>
+    <div class="card"><h4>Kiosk-grade self-recovery</h4><p>Built for unattended wall displays: dual GPU watchdogs detect WebGL context loss or silent frame stalls, classify the GPU, rebuild the viewer up to 4 times behind a "Restarting graphics…" overlay, and auto-reload with a bounded budget so broken hardware can't loop forever.</p></div>
+  </div>
+
+  <div class="feat-cols">
+    <p class="feat"><b>Four basemaps.</b> Dark, Light, a custom night-tuned "Dark Sat" satellite mode, and topographic — with place labels that fade smoothly by camera altitude.</p>
+    <p class="feat"><b>Re-engineered camera.</b> Zoom, rotate, and tilt split into distinct gestures; a wheel notch feels identical at street scale and globe scale; bounded 150&nbsp;m–45,000&nbsp;km.</p>
+    <p class="feat"><b>Global search.</b> Address, place, or raw lat/lon — geocoded through a cached server proxy, flying to a point or framing a region.</p>
+    <p class="feat"><b>Live HUD.</b> Clock, "deployed X ago" build stamp, and an all-layers tracked-item counter with a rolling sparkline.</p>
+    <p class="feat"><b>3D buildings &amp; terrain.</b> OSM building footprints with real heights over Cesium World Terrain, height-gradient styled for the dark palette.</p>
+    <p class="feat"><b>Time zones.</b> ~120 UTC-offset-tinted zone polygons; click any zone for a live-ticking world clock.</p>
+    <p class="feat"><b>Mobile-adaptive.</b> Panels become a swipeable bottom sheet, the sidebar an off-canvas drawer; safe-area aware, PWA-ready.</p>
+    <p class="feat"><b>Performance-tiered.</b> A one-time GPU probe classifies software/virtual/integrated GPUs and tunes resolution, antialiasing, and terrain detail to match.</p>
+  </div>
+
+  <div class="tech-strip"><span class="t">UNDER THE HOOD ·</span> Cesium request-render mode — frames only on change, near-zero idle GPU · one global drill-pick handler across 25+ layers · zustand stores with versioned localStorage migrations · Vite-baked deploy timestamp</div>
+  <div class="folio"><span>GSOC MONITOR — CAPABILITY OVERVIEW</span><span>07.2026 · 02</span></div>
+</section>
+
+<!-- ================= PAGE 3 · WEATHER ================= -->
+<section class="page acc-blue">
+  <div class="kicker">02 · Weather</div>
+  <h2 class="section-title">The full live-weather picture</h2>
+  <hr class="section-rule">
+  <p class="lede">Animated radar with forecast playback, an interactive global wind field you can probe with the mouse, every active NWS alert as a polygon, dual-source air quality, smoke plumes, forecast rainfall, and ~12,700 river flood gauges — each backed by a named feed with its own refresh cadence.</p>
+
+  <div class="cards">
+    <div class="card"><h4>Radar &amp; satellite loop with a forecast scrubber</h4><p>RainViewer frames play across a 30/60/120-minute history window and continue into nowcast forecast frames. A draggable timeline has a hatched "forecast" zone, a "now" divider, and a live readout ("2:40 PM · +20 min"); modes for radar, IR satellite, or both; four color palettes; frames cross-fade at ~500 ms.</p></div>
+    <div class="card"><h4>Live global wind particles</h4><p>7,000 particles advect through a bilinearly-interpolated GFS wind grid at ~30 fps, dragging fading trails and colored by speed — trade winds, westerlies, and the jet read as flowing streamlines. Hydrates instantly from a local cache; refreshes every 30 minutes.</p></div>
+    <div class="card"><h4>Wind probe, pins &amp; point forecasts</h4><p>Hover anywhere for a live arrow and compass HUD (mph/kt/m/s); right-click drops persistent wind pins; click a pin for a 48-hour hourly wind-and-gust chart with direction arrows plus a 7-day outlook, computed in the location's own timezone.</p></div>
+    <div class="card"><h4>Every NWS alert, resolved to real shapes</h4><p>All active National Weather Service alerts refresh every 60 s, colored semantically by hazard family with severity draw-order. Storm-based warnings use their precise polygons; county-based alerts that ship without geometry are resolved to county shapes via FIPS codes. Click for the full official text.</p></div>
+  </div>
+
+  <div class="cards">
+    <div class="card"><h4>12,700 river gauges with hydrographs</h4><p>NOAA NWPS gauges in seven flood tiers with severity filters and a "forecast to worsen" highlight. Click a gauge for stage vs. flood thresholds, forecast crest, a 14-day interactive hydrograph, NWS impact statements, and record crests.</p></div>
+    <div class="card"><h4>Dual-source air quality on one scale</h4><p>Official EPA AirNow monitors render as numbered AQI badges beside thousands of PurpleAir community sensors — raw PM2.5 corrected server-side with the EPA Barkjohn equation and 2024 AQI breakpoints so both sources agree. Click any station for pollutant-by-pollutant detail.</p></div>
+  </div>
+
+  <div class="feat-cols">
+    <p class="feat"><b>Wind streamlines.</b> A camera-adaptive field of glowing flow lines with true-tangent arrowheads — density and length re-grid at every zoom, from full globe to street level.</p>
+    <p class="feat"><b>Smoke plumes.</b> NOAA HMS analyst-drawn polygons in three densities, with observing satellite and observation window per plume.</p>
+    <p class="feat"><b>Forecast rainfall.</b> NOAA WPC QPF accumulation overlay (24 h to 5-day windows) with the exact 18-stop official color ramp.</p>
+    <p class="feat"><b>Never blank.</b> The wind layer falls back live feed → Postgres snapshot → baked-in grid, flagging stale data with a HISTORICAL badge.</p>
+  </div>
+
+  <div class="tech-strip"><span class="t">UNDER THE HOOD ·</span> 13 MB river snapshot refreshed off the request path — the API answers instantly · stale-on-error TTL caches degrade outages to slightly-old data, never a 502 · county-geometry fallback for zone alerts · shared refcounted wind-grid loader</div>
+  <div class="folio"><span>GSOC MONITOR — CAPABILITY OVERVIEW</span><span>07.2026 · 03</span></div>
+</section>
+
+<!-- ================= PAGE 4 · SEVERE WEATHER ================= -->
+<section class="page acc-yellow">
+  <div class="kicker">03 · Severe weather</div>
+  <h2 class="section-title">Lightning, hail &amp; hurricanes</h2>
+  <hr class="section-rule">
+  <p class="lede">Live global lightning with cinematic strike animations and a replayable 24-hour history, commercial Vaisala-grade lightning and storm-cell overlays with 7-day time travel, and worldwide tropical-cyclone tracking with no ocean-basin blind spots.</p>
+
+  <div class="cards">
+    <div class="card"><h4>Real lightning, seconds after it strikes</h4><p>The browser connects straight to the Blitzortung community network: each detected strike plays a jagged bolt descending from 120 km in 150 ms, a red impact flash, then a glowing crosshair that ages white → yellow → orange → red over 10 minutes — up to 2,500 on screen, with a live strikes-per-minute ticker.</p></div>
+    <div class="card"><h4>24-hour strike history, deploy-proof</h4><p>Sidebar chips replay the last 1/6/12/24 hours as an age-tinted point cloud of up to 20,000 strikes. Behind it, the server runs a 24/7 collector whose ring buffer is persisted to Postgres in gzip-packed 5-minute chunks — the history survives restarts and deploys.</p></div>
+    <div class="card"><h4>Hurricanes with true cyclonic spin</h4><p>Every active tropical cyclone is a rotating three-arm spiral glyph — counter-clockwise north of the equator, clockwise south — tinted by Saffir-Simpson category, with cone of uncertainty, observed and forecast tracks, and hoverable forecast points showing winds in mph and knots.</p></div>
+    <div class="card"><h4>Global formation watch</h4><p>NHC 7-day outlook areas render as risk-tinted polygons with formation-odds bars — and for the basins NHC doesn't cover, the server parses JTWC's plain-text advisories into mapped invest areas with Low/Medium/High potential. West Pacific typhoons are not a blind spot.</p></div>
+  </div>
+
+  <div class="feat-cols">
+    <p class="feat"><b>Lightning Pro (Vaisala NLDN/GLD360).</b> Commercial-grade strike rasters — cloud-to-ground, all pulses, or NOAA 8 km density — with 5/15-minute windows and time-travel chips back 7 days, served through a key-holding proxy.</p>
+    <p class="feat"><b>Hail &amp; storm cells.</b> NEXRAD-derived cells with motion tracks and forecast cones, filterable to hail / rotating / tornadic / major; 3-minute updates and the same 7-day replay.</p>
+    <p class="feat"><b>Graceful key-gating.</b> Without Xweather credentials the pro layers degrade to a setup hint — never a dead toggle.</p>
+    <p class="feat"><b>Efficient at scale.</b> Strike fields idle at zero GPU cost between updates; impact flashes animate alpha only, replacing per-frame re-tessellation.</p>
+    <p class="feat"><b>Storm detail on click.</b> A cyclone's panel shows sustained winds, gusts, minimum central pressure, position, basin, advisory time, and a link to NHC; forecast dots enlarge on hover with a +72h-style tooltip.</p>
+    <p class="feat"><b>Formation summary.</b> The sidebar rolls the world up to one line: "2 active systems · 3 areas to watch."</p>
+  </div>
+
+  <div class="tech-strip"><span class="t">UNDER THE HOOD ·</span> speaks Blitzortung's undocumented wire protocol (LZW frame decoder, relay rotation) · 3M-slot typed-array ring buffer spans 24 h at ~200 strikes/sec · metered Xweather tiles cached by valid-time with an LRU ceiling · regex parser for JTWC's hard-wrapped bulletins</div>
+  <div class="folio"><span>GSOC MONITOR — CAPABILITY OVERVIEW</span><span>07.2026 · 04</span></div>
+</section>
+
+<!-- ================= PAGE 5 · FIRE ================= -->
+<section class="page acc-orange">
+  <div class="kicker">04 · Wildfire intelligence</div>
+  <h2 class="section-title">Five interlocking fire layers</h2>
+  <hr class="section-rule">
+  <p class="lede">Detection, response, forecast, fuels, and analysis: live satellite hotspots, named incidents with the full response picture, the official 7-day fire-potential outlook, a 30-meter fuel-model raster, and a draw-your-own-zone fire-risk analyzer.</p>
+
+  <div class="cards">
+    <div class="card"><h4>Satellite hotspots with science-grounded assessment</h4><p>VIIRS thermal detections from the past 24 h, sized by Fire Radiative Power. Clicking one yields a 5-level flaming-vs-smoldering call derived from FRP and I-4 brightness temperature — including explicit "sensor maxed" saturation handling — with confidence, satellite, and pass time in local timezone.</p></div>
+    <div class="card"><h4>Named fires with the response picture</h4><p>NIFC/WFIGS interagency incidents as containment-tinted markers with acreage labels and perimeter polygons for fires over 100 acres. Panels show acres, an animated containment bar, assigned personnel, complexity, cause, and an InciWeb link — the same system of record the responding agencies use.</p></div>
+    <div class="card"><h4>Draw a zone, get a fire-behavior score</h4><p>Draw a circle or free-form polygon on the globe and the app runs a zonal histogram against the 30 m LANDFIRE raster: exact per-pixel fuel inventory, burnable percentage, and a 0–100 Fire Behavior Potential score with spread-rate and flame-length categories and plain-English drivers, from published Scott &amp; Burgan fire science.</p></div>
+    <div class="card"><h4>The official 7-day outlook</h4><p>~234 Predictive Service Areas in the NWCG palette — Critical and Ignition zones over fuel-dryness shading — with a 7-day picker that switches instantly. The server shrinks ~45 MB/day of government polygons to ~270 KB.</p></div>
+  </div>
+
+  <div class="feat-cols">
+    <p class="feat"><b>LANDFIRE fuels overlay.</b> All 40 Scott &amp; Burgan fuel models at 30 m across CONUS in the official colormap, with a 7-group legend and hover blurbs.</p>
+    <p class="feat"><b>Near-pins filter.</b> Restrict hotspots to 5–200 miles of the tracked properties with haversine precision; the sidebar shows a live count.</p>
+    <p class="feat"><b>What you draw is what you analyze.</b> The same geodesic ring geometry drives both the on-globe outline and the raster query.</p>
+    <p class="feat"><b>Zero-key data paths.</b> FIRMS, WFIGS, and LANDFIRE stream browser-side from open government services — no API keys, no backend load.</p>
+    <p class="feat"><b>Perimeters, biggest first.</b> Up to 500 fire perimeters and 800 incidents of 5+ acres render simultaneously, with acreage labels that auto-hide when zoomed out.</p>
+    <p class="feat"><b>A drawing UX that guides you.</b> Live radius readout while dragging circles, rubber-band polygon preview, dashed close-the-ring hint, Undo/Finish/Esc — and committed zones stay pinned for side-by-side comparison.</p>
+    <p class="feat"><b>Instant day switching.</b> All seven outlook days arrive in one payload, so flipping between them never refetches.</p>
+    <p class="feat"><b>Smoke + fire together.</b> Pairs with the NOAA HMS smoke layer and AQI stations for the full fire-air-quality picture on one screen.</p>
+  </div>
+
+  <div class="tech-strip"><span class="t">UNDER THE HOOD ·</span> exact histogram-bin → fuel-code decode verified against ground truth · Douglas-Peucker polygon simplification server-side · visibility-aware polling (wall display polls, background tab costs nothing) · per-tier SVG billboards cached as data URIs</div>
+  <div class="folio"><span>GSOC MONITOR — CAPABILITY OVERVIEW</span><span>07.2026 · 05</span></div>
+</section>
+
+<!-- ================= PAGE 6 · TRACKING ================= -->
+<section class="page acc-aqua">
+  <div class="kicker">05 · Tracking</div>
+  <h2 class="section-title">Flights, ships &amp; satellites</h2>
+  <hr class="section-rule">
+  <p class="lede">Worldwide tracking of a named aircraft fleet, the seven-ship Windstar cruise fleet, and up to 2,500 satellites — with real orbital mechanics, dead-reckoned ship tracks, and hand-modeled rotating 3D wireframes.</p>
+
+  <div class="cards">
+    <div class="card"><h4>A multi-source fleet position engine</h4><p>The seven Windstar vessels are tracked by MMSI/IMO through a layered pipeline: a live AIS WebSocket, supplemented by VesselFinder or MyShipTracking APIs, or a satellite-AIS-carrying CruiseMapper fallback — whichever reported most recently wins. Positions and 72-hour breadcrumb histories survive restarts, and a debug endpoint diagnoses exactly which source is delivering.</p></div>
+    <div class="card"><h4>Real orbital mechanics, in the browser</h4><p>Space stations, brightest, GPS, weather, and Starlink groups — every position computed by SGP4 propagation of CelesTrak TLEs, with comet trails, correct far-side occlusion, and adaptive tick rates that keep 800+ Starlink satellites smooth.</p></div>
+    <div class="card"><h4>Click a satellite, trace its orbit</h4><p>One click draws the full orbital ring — near half in front of the globe, far half occluded, recomputed as Earth rotates — while the panel re-propagates every second: live position, altitude, speed, period, inclination, apogee/perigee, NORAD ID.</p></div>
+    <div class="card"><h4>Hand-modeled rotating ship wireframes</h4><p>Each vessel's card features a slowly rotating 3D wireframe of its actual class — the Star-class yacht's terraced stern decks, the Wind-class schooner's raked masts and sails (Wind Surf correctly gets five) — plus class badges and a full specs grid. The same geometry renders in WebGL, on 2D canvas, and full-size on the ocean.</p></div>
+  </div>
+
+  <div class="feat-cols">
+    <p class="feat"><b>Live aircraft.</b> Tracked tail numbers worldwide via ADS-B, drawn at true altitude and heading; landed jets persist as dimmed last-seen markers instead of vanishing.</p>
+    <p class="feat"><b>Predicted ship tracks.</b> Breadcrumb trails plus a 6-hour dead-reckoned great-circle projection ending in a predicted-position dot.</p>
+    <p class="feat"><b>Fleet roster fly-to.</b> Click any vessel in the sidebar to enable the layer and fly to its live position; favorites, paths, and groups persist.</p>
+    <p class="feat"><b>One-click "Track the ISS."</b> Enables the layer, switches groups, flies to a 5,000 km framing against the curve of the Earth, and opens live telemetry.</p>
+    <p class="feat"><b>Age-aware rendering.</b> Ship icons fade with AIS report age and show an amber "last known position" banner beyond coastal coverage.</p>
+    <p class="feat"><b>Status at a glance.</b> "2 of 3 tails tracked" · "7/7 ships · live feed" · "2,410 satellites · live" — right in the sidebar.</p>
+    <p class="feat"><b>Flight telemetry.</b> Panels show altitude, ground speed, heading, vertical rate, squawk, and ICAO24 — with a star-to-favorite button.</p>
+    <p class="feat"><b>Type-coded ships.</b> Hull icons tint by AIS ship type — cargo cyan, tanker orange, passenger green — rotated to true heading, gold-ringed when favorited.</p>
+  </div>
+
+  <div class="tech-strip"><span class="t">UNDER THE HOOD ·</span> client-side SGP4 for 2,500 satellites (satellite.js) · Cloudflare-aware scraper with three-strategy coordinate parsing · great-circle dead reckoning in spherical trig · one wireframe geometry, three renderers — WebGL, 2D canvas, Cesium polylines</div>
+  <div class="folio"><span>GSOC MONITOR — CAPABILITY OVERVIEW</span><span>07.2026 · 06</span></div>
+</section>
+
+<!-- ================= PAGE 7 · HAZARDS & PROPERTY ================= -->
+<section class="page acc-red">
+  <div class="kicker">06 · Hazards &amp; the property portfolio</div>
+  <h2 class="section-title">Multi-hazard monitoring around real assets</h2>
+  <hr class="section-rule">
+  <p class="lede">Thirty company properties across 13 groups — national-park lodges, offices, a cruise fleet, a cog railway — cross-referenced live against earthquakes, fires, weather alerts, and power outages, with one-click emergency routing and exportable incident reports.</p>
+
+  <div class="cards">
+    <div class="card"><h4>18-feed power-outage aggregation</h4><p>One toggle lights up live outages across ~19 states from three families of public feeds — state-EM ArcGIS services, the KUBRA Storm Center data behind major utilities' own maps (Oncor, Georgia Power, Evergy…), and NISC co-ops. Each outage carries customers affected, elapsed time, restoration ETA ("overdue 30m" turns red), and cause. No API keys; each source fails independently.</p></div>
+    <div class="card"><h4>One-click emergency briefing</h4><p>Click a property pin and the app builds a live safety briefing: road distance and drive time to the nearest police and fire stations, A/B/C options for the 3 nearest hospitals and hotels, and turn-by-turn routes drawn on the globe as animated pulse lines via a custom GLSL shader — with Google Maps handoff and share links.</p></div>
+    <div class="card"><h4>Property watch proximity scanner</h4><p>Cross-references all 30 properties against FIRMS fire detections, active NWS alerts (true point-in-polygon tests), and USGS earthquakes at a 50/100/200-mile radius — listing only properties with something nearby, ranked worst-first, with countdown-to-expiry alert chips. Pops out into independently-refreshing dockable windows.</p></div>
+    <div class="card"><h4>Downloadable PNG hazard report</h4><p>Any property panel exports a polished report card — gradient header, live watch status, color-barred alert cards, fire rows with distance and radiative power, quake rows with magnitude badges, or a green all-clear — rendered on a 2× retina canvas, dated, and ready to paste into an incident channel.</p></div>
+  </div>
+
+  <div class="feat-cols">
+    <p class="feat"><b>Earthquakes.</b> USGS live feed as seismic-ripple markers with magnitude/period filter chips; panels show depth, felt reports, tsunami flag, and a link to the event page.</p>
+    <p class="feat"><b>Property pins.</b> Canvas-drawn teardrop pins, terrain-clamped so they sit correctly on mountainsides, in 13 group colors.</p>
+    <p class="feat"><b>Measure tools.</b> Click-to-draw geodesic distance and spherical-excess area with dual metric/imperial readouts — real ellipsoid math, not flat-earth approximations.</p>
+    <p class="feat"><b>Nearest sister properties.</b> Road-routed distances to the three closest properties, each with a "Fly there" button.</p>
+    <p class="feat"><b>Live lightning ticker.</b> Global strikes-per-minute with a pulsing LIVE badge and rolling sparkline, inside the property watch widget.</p>
+    <p class="feat"><b>Data-quality curation.</b> Two live-tested outage feeds were excluded for stale phantom records — correctness over raw coverage.</p>
+  </div>
+
+  <div class="tech-strip"><span class="t">UNDER THE HOOD ·</span> reverse-engineered KUBRA quadkey tile descent with loss-proof cluster fallback · Overpass + OSRM routing with progressive 5→280 km search radii · single throttled scanner shared across every open panel · background-rebuild pattern: the outage API always answers instantly</div>
+  <div class="folio"><span>GSOC MONITOR — CAPABILITY OVERVIEW</span><span>07.2026 · 07</span></div>
+</section>
+
+<!-- ================= PAGE 8 · OSINT ================= -->
+<section class="page acc-magenta">
+  <div class="kicker">07 · Open-source intelligence</div>
+  <h2 class="section-title">A build-your-own OSINT operation</h2>
+  <hr class="section-rule">
+  <p class="lede">Police and fire scanners, city crime data, social media, world news, and park alerts — continuously ingested, auto-classified, geolocated, and pinned live onto the globe, extensible by the whole team through a shared watchlist.</p>
+
+  <div class="cards">
+    <div class="card"><h4>Seven source types, one live feed</h4><p>Every 90 seconds the intel engine fans out across RSS/Atom feeds, Google News topic searches, Bluesky accounts and keyword searches, PulsePoint fire/EMS dispatch, California CHP incidents, and Socrata city crime datasets — normalizing everything into one stream, auto-classified by severity (info/watch/urgent) and category (scanner, crime, crash, fire, weather, news, social).</p></div>
+    <div class="card"><h4>Team-shared source watchlist</h4><p>Any signed-in teammate adds sources through a plain-language form — "News topic", "Bluesky keyword", "Scanner (PulsePoint)", "Crime dataset" — and they flow into everyone's feed within ~90 seconds. Sources persist in Postgres, pause/delete per row, and can be pinned to a place so their stories land on the map.</p></div>
+    <div class="card"><h4>News on the map, tinted by sentiment</h4><p>The GDELT layer plots worldwide geocoded coverage of security-relevant events — protests, evacuations, shootings, hazmat — grouped into pins that grow with article count and shift indigo → red as average tone drops. Cards show a hero image, sentiment, and article links; a scope control filters to within 100–500 miles of the property pins.</p></div>
+    <div class="card"><h4>Automatic headline geolocation</h4><p>Items arriving without coordinates are geocoded server-side from their place text — with a 30-day cache, a strict per-cycle budget honoring Nominatim's 1-request/second policy, and a miss-blacklist so an unresolvable headline never burns budget twice.</p></div>
+  </div>
+
+  <div class="feat-cols">
+    <p class="feat"><b>Intel pins.</b> Category-tinted teardrops — scanner blue, crime pink, fire red — with urgent items enlarged and warning-ringed so structure fires read at a glance.</p>
+    <p class="feat"><b>Breaking-news widget.</b> BBC, Guardian, Sky, NPR, and Al Jazeera merged, severity-scored, gazetteer-geolocated, with NEW badges and custom user feeds.</p>
+    <p class="feat"><b>Bottom-edge ticker.</b> A severity-dotted marquee of headlines whenever the news panel is closed, toggling between world news and National Park news.</p>
+    <p class="feat"><b>Park intelligence.</b> Official NPS alerts and news for six tracked parks, severity-mapped (Danger → critical), plus official boundary polygons.</p>
+    <p class="feat"><b>Click-to-fly feed.</b> Clicking a geolocated intel item flies the camera to it at 120 km; degraded sources surface as an amber warning strip, not silence.</p>
+  </div>
+
+  <div class="tech-strip"><span class="t">UNDER THE HOOD ·</span> in-Node AES-256-CBC decryption of PulsePoint's encrypted CAD payload · SSRF defense-in-depth on team-added sources · Promise.allSettled fan-out — one dead source never breaks the feed · shared GDELT cache keeps all clients under the 1-req/5s limit</div>
+  <div class="folio"><span>GSOC MONITOR — CAPABILITY OVERVIEW</span><span>07.2026 · 08</span></div>
+</section>
+
+<!-- ================= PAGE 9 · CRISIS OPS ================= -->
+<section class="page acc-violet">
+  <div class="kicker">08 · Crisis operations</div>
+  <h2 class="section-title">Incident command &amp; the ops dashboard</h2>
+  <hr class="section-rule">
+  <p class="lede">A full incident-command suite — FEMA ICS org charts, draw-on-the-globe zones, live public share links, and print-ready after-action reports — paired with an auto-scanning property dashboard that scores threats and writes its own shift briefing.</p>
+
+  <div class="cards">
+    <div class="card"><h4>ICS/NIMS org chart with drag-and-drop staffing</h4><p>Every incident starts with the standard FEMA structure pre-built — 21 roles from Incident Commander through the four General Staff sections. Drag people from a personnel pool onto roles, add custom sub-roles, collapse branches. Doctrine is enforced: one person, one command role at a time, with timestamped reassignment history.</p></div>
+    <div class="card"><h4>Draw incident zones on the live globe</h4><p>Fire perimeters, flood zones, staging areas, exclusion zones, and search grids drawn by clicking vertices on the 3D globe with live preview — or imported by pasting coordinates in decimal, DMS, or WKT with automatic lon/lat detection. Finished shapes clamp to terrain with distance-fading labels and get snapshot thumbnails for reports.</p></div>
+    <div class="card"><h4>Live public share links</h4><p>One click publishes a read-only situation report at a token URL — no login — that updates itself in real time over Server-Sent Events as the GSOC edits: org chart, action log, and map, ~1.5 s behind live. Personnel contact details are stripped before publishing; revoking a link instantly closes every open viewer.</p></div>
+    <div class="card"><h4>The dashboard writes its own briefing</h4><p>The property status board condenses each 75-second scan into a signals payload and has Claude compose a 12-word headline plus a grounded operational narrative — with prompt-injection hardening, a deterministic fallback when no key is configured, and response caching so multiple wall displays share one model call.</p></div>
+  </div>
+
+  <div class="feat-cols">
+    <p class="feat"><b>Shared incident workspace.</b> Cards with pulsing status dots, live staff/action/layer counts; every edit auto-saves to Postgres on a 1.5 s debounce — the whole GSOC sees one picture.</p>
+    <p class="feat"><b>Actions &amp; events log.</b> An editable chronology with a timeline view; attached photos are browser-compressed and uploaded to Cloudinary, appearing in share pages and reports.</p>
+    <p class="feat"><b>After-action PDF.</b> Stood-down incidents generate a print-ready report: summary, full org chart, complete log with photos, map, and per-layer thumbnails.</p>
+    <p class="feat"><b>Explainable 0–100 threat score.</b> Weighted, human-readable contributions — worst alert severity, fire within 10 miles, outage scale — with the top three reasons in the tooltip.</p>
+    <p class="feat"><b>Live event feed.</b> Only genuinely-new events surface — including tropical systems approaching a property or vessel, and a maritime anomaly flag when a ship's AIS goes silent over 6 hours. Click to fly.</p>
+    <p class="feat"><b>Split-screen editing.</b> The situation report edits beside the live, interactive globe — drawn layers stay visible while you type.</p>
+    <p class="feat"><b>Ten incident types.</b> Wildfire, hurricane, chemical/HazMat, mass-casualty, cyber, active threat, and more — with a three-state status selector and archive lifecycle (admin-gated deletion).</p>
+    <p class="feat"><b>Property status board.</b> One card per property group, re-scanned every 75 seconds: alerts with expiry countdowns, live temperature and wind, forecast rain, AQI, nearest fire, quake, news, and outage — click to fly there.</p>
+  </div>
+
+  <div class="tech-strip"><span class="t">UNDER THE HOOD ·</span> Postgres JSONB incidents with debounced store-diff sync · SSE fan-out with snapshot-on-connect and push revocation · multi-format coordinate parser with per-line errors · single batched Open-Meteo call covers every property group</div>
+  <div class="folio"><span>GSOC MONITOR — CAPABILITY OVERVIEW</span><span>07.2026 · 09</span></div>
+</section>
+
+<!-- ================= PAGE 10 · AMBIENT + PLATFORM ================= -->
+<section class="page acc-blue">
+  <div class="kicker">09 · Ambient modes &amp; platform</div>
+  <h2 class="section-title">Self-driving tours, war-room login, resilient core</h2>
+  <hr class="section-rule">
+  <p class="lede">When nobody is touching it, the globe flies itself: cinematic tours of properties, parks, live hazards, and the ISS — narrated, if you like. Underneath, an invite-only auth layer and a platform engineered to stay up through database and upstream outages.</p>
+
+  <div class="cards">
+    <div class="card"><h4>Pins tour: cinematic property &amp; fleet fly-around</h4><p>The camera visits every property and live cruise ship in a shuffled queue, performing a slow 32-second orbit around each — properties get a glowing terrain-clamped "loot beam" in their group color; ships get an expanding sonar shockwave, a rotating wireframe card, live hazard rows, and a reverse-geocoded minimap.</p></div>
+    <div class="card"><h4>ISS live chase cam</h4><p>The camera locks onto the International Space Station's real position — propagated by SGP4 every frame — and slowly circles at 2,600 km while the Earth wheels past underneath, with live lat/lon, altitude, and NORAD designation updating every second.</p></div>
+    <div class="card"><h4>A login screen that's a production</h4><p>A holographic SVG wireframe globe with pulsing meridians, lightning, and satellites riding orbit paths over a twinkling starfield — plus a hidden Asteroids-style ship you can actually fly with the arrow keys, and a "Virtual War Room" status panel with a live downlink sparkline.</p></div>
+    <div class="card"><h4>Built to stay up</h4><p>The schema self-migrates at boot inside a transaction and retries with backoff — a database outage degrades only DB-backed routes while the globe stays live. TTL caches serve last-known-good data when upstreams fail; lightning history, wind grids, incidents, and the watchlist all survive dyno restarts in Postgres.</p></div>
+  </div>
+
+  <div class="feat-cols">
+    <p class="feat"><b>Global tour.</b> Slow rotation punctuated by fly-downs to curated geopolitical landmarks, live M5+ quakes, and active alerts — with breaking-news locations injected mid-tour.</p>
+    <p class="feat"><b>Parks tour.</b> National parks with animated glowing boundaries and rotating trivia; Hover mode orbits any clicked point, terrain-sampled to clear obstructions.</p>
+    <p class="feat"><b>Voice narration.</b> A Web Speech narrator that scores available voices to find the best neural option and announces each stop.</p>
+    <p class="feat"><b>Invite-only signup.</b> Rotating 8-character codes (no ambiguous characters), bcrypt cost-12 passwords, 30-day JWTs in httpOnly cookies; first user becomes admin.</p>
+    <p class="feat"><b>Admin panel.</b> One-click code rotation, full team roster with roles, and member removal — enforced server-side on every route.</p>
+    <p class="feat"><b>One-dyno deploy.</b> Ships to Heroku as a single Node process serving the built client, with Postgres as the only add-on; nearly all feeds are free.</p>
+    <p class="feat"><b>Focus cards while touring.</b> A bottom card tracks each orbited property's live hazards, a credits-roll rail scrolls every property's status, and a corner minimap reverse-geocodes the view.</p>
+    <p class="feat"><b>Chrome that gets out of the way.</b> All UI auto-hides while a tour runs and returns — with your open panels — the moment it stops.</p>
+  </div>
+
+  <div class="tech-strip"><span class="t">UNDER THE HOOD ·</span> per-frame SGP4 for the chase cam · terrain-aware cinematography (25-point obstruction sampling, 500 m clearance) · zero-WebGL login globe (SVG + SMIL) and slippy-tile minimap — no second GL context · port binds before migrations: boot never blocks</div>
+  <div class="folio"><span>GSOC MONITOR — CAPABILITY OVERVIEW</span><span>07.2026 · 10</span></div>
+</section>
+
+<!-- ================= PAGE 11 · DATA SOURCES ================= -->
+<section class="page acc-blue">
+  <div class="kicker">10 · Appendix</div>
+  <h2 class="section-title">Every data source, on the record</h2>
+  <hr class="section-rule">
+  <p class="lede" style="margin-bottom:9pt">All 46 external feeds. The overwhelming majority are free public services; the few keyed or paid feeds degrade gracefully when unconfigured.</p>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:14pt;">
+    <table class="sources">
+      <tr><th>Source</th><th>Provides</th><th></th></tr>
+      <tr><td class="name">USGS Earthquakes</td><td>Real-time seismic events</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">NWS api.weather.gov</td><td>Active alerts with geometry</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">RainViewer</td><td>Radar mosaic + nowcast tiles</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">NOAA NWPS</td><td>~12,700 river gauges + hydrographs</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">NOAA WPC</td><td>Forecast precipitation (QPF)</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">NOAA HMS</td><td>Satellite smoke plumes</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">NOAA NHC</td><td>Hurricane tracks, cones, outlooks</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">US Navy JTWC</td><td>Invests in non-NHC basins</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">Open-Meteo (GFS)</td><td>Global wind grid + forecasts</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">EPA AirNow</td><td>Official AQI monitors</td><td><span class="chip key">key</span></td></tr>
+      <tr><td class="name">PurpleAir</td><td>Community PM2.5 sensors</td><td><span class="chip key">key</span></td></tr>
+      <tr><td class="name">Blitzortung.org</td><td>Live lightning strikes</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">Xweather / Vaisala</td><td>NLDN lightning + storm cells</td><td><span class="chip key">paid</span></td></tr>
+      <tr><td class="name">NASA FIRMS</td><td>VIIRS fire hotspots</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">NIFC / WFIGS</td><td>Named fires + perimeters</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">NWCG Predictive Services</td><td>7-day fire potential</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">USGS LANDFIRE</td><td>30 m fuel-model raster</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">18 utility outage feeds</td><td>Per-outage detail, ~19 states</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">adsb.fi</td><td>ADS-B aircraft positions</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">AISStream.io</td><td>Live AIS ship stream</td><td><span class="chip key">key</span></td></tr>
+      <tr><td class="name">VesselFinder</td><td>By-IMO fleet positions</td><td><span class="chip key">paid</span></td></tr>
+      <tr><td class="name">MyShipTracking</td><td>Alternate fleet positions</td><td><span class="chip key">paid</span></td></tr>
+      <tr><td class="name">CruiseMapper</td><td>Satellite-AIS fallback</td><td><span class="chip free">free</span></td></tr>
+    </table>
+    <table class="sources">
+      <tr><th>Source</th><th>Provides</th><th></th></tr>
+      <tr><td class="name">CelesTrak</td><td>Satellite TLE element sets</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">GDELT Project</td><td>Geocoded global news</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">News RSS × 5+</td><td>BBC, Guardian, Sky, NPR, Al Jazeera</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">Google News RSS</td><td>Topic-search intel</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">Bluesky API</td><td>Social feeds + keyword search</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">PulsePoint</td><td>Fire/EMS dispatch (CAD)</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">CHP CAD feed</td><td>California highway incidents</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">Socrata portals</td><td>City open crime data</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">NPS Data API</td><td>Park alerts + news</td><td><span class="chip key">key</span></td></tr>
+      <tr><td class="name">NPS boundaries</td><td>Park polygons</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">Esri USA Counties</td><td>County shapes by FIPS</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">Nominatim (OSM)</td><td>Geocoding</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">Overpass API</td><td>Hospitals, police, fire POIs</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">OSRM</td><td>Turn-by-turn road routing</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">BigDataCloud</td><td>Reverse geocoding</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">Anthropic Claude</td><td>AI duty-officer briefing</td><td><span class="chip key">paid</span></td></tr>
+      <tr><td class="name">Cloudinary</td><td>Incident photo hosting</td><td><span class="chip key">key</span></td></tr>
+      <tr><td class="name">CARTO basemaps</td><td>Dark/light tiles</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">Esri World Imagery</td><td>Satellite basemap</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">OpenTopoMap</td><td>Topographic basemap</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">Cesium ion</td><td>Terrain + OSM buildings</td><td><span class="chip key">key</span></td></tr>
+      <tr><td class="name">Google 3D Tiles</td><td>Photorealistic cities (wired)</td><td><span class="chip key">paid</span></td></tr>
+      <tr><td class="name">Natural Earth</td><td>Time-zone boundaries</td><td><span class="chip free">free</span></td></tr>
+    </table>
+  </div>
+
+  <div class="tech-strip"><span class="t">EXTENDING ·</span> the architecture is built for new layers: add a LayerId, a layer component, a panel registration, a proxy route, and a sidebar toggle — hurricanes, lightning, FIRMS, ships, and satellites all shipped this way after Phase 1</div>
+  <div class="folio"><span>GSOC MONITOR — CAPABILITY OVERVIEW</span><span>07.2026 · 11</span></div>
+</section>
+
+</body>
+</html>
