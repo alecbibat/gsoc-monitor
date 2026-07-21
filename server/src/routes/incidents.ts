@@ -5,6 +5,41 @@ import { requireAuth } from '../middleware/auth';
 const router = Router();
 router.use(requireAuth);
 
+// ── Live sync ───────────────────────────────────────────────────────────────
+// Incidents are a shared team workspace, so every editor needs to see other
+// responders' changes as they happen — not just on their next page load. Each
+// connected editor holds an SSE stream here; whenever an incident is upserted or
+// deleted we fan the change out to all of them. Combined with the client's
+// skip-if-locally-dirty merge, this collapses the window in which two people can
+// unknowingly overwrite each other from "until someone reloads" to ~1 second.
+const sseClients = new Set<Response>();
+
+function broadcast(event: 'upsert' | 'delete', data: unknown) {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const client of sseClients) {
+    try { client.write(payload); } catch { /* disconnected — cleaned up on close */ }
+  }
+}
+
+// GET /api/incidents/events — SSE stream of live incident changes (auth required).
+router.get('/events', (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+  res.write('event: connected\ndata: {}\n\n');
+
+  const ping = setInterval(() => {
+    try { res.write(': ping\n\n'); } catch { clearInterval(ping); }
+  }, 25_000);
+
+  sseClients.add(res);
+  req.on('close', () => {
+    clearInterval(ping);
+    sseClients.delete(res);
+  });
+});
+
 // All incidents are shared across the team workspace.
 router.get('/', async (_req, res: Response) => {
   const { rows } = await pool.query(
@@ -24,6 +59,7 @@ router.post('/', async (req: Request, res: Response) => {
      RETURNING data`,
     [incident.id, JSON.stringify(incident)]
   );
+  broadcast('upsert', row.data);
   res.json(row.data);
 });
 
@@ -34,6 +70,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     [JSON.stringify({ ...req.body, id: req.params.id }), req.params.id]
   );
   if (!row) { res.status(404).json({ error: 'Incident not found' }); return; }
+  broadcast('upsert', row.data);
   res.json(row.data);
 });
 
@@ -51,6 +88,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
     }
   }
   await pool.query('DELETE FROM incidents WHERE id = $1', [req.params.id]);
+  broadcast('delete', { id: req.params.id });
   // Leave share_links rows in place — active ones stay accessible to current viewers
   // until they expire or are explicitly revoked.
   res.json({ ok: true });

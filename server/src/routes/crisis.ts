@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { pool } from '../db';
+import { requireAuth } from '../middleware/auth';
 
 const router = Router();
 
@@ -8,9 +9,16 @@ const router = Router();
 const sseClients = new Map<string, Set<Response>>();
 
 // ── Routes ────────────────────────────────────────────────────────────────────
+//
+// Read paths (GET snapshot + GET events) are intentionally public so anyone with
+// a share link can view the incident without an account. Every WRITE path —
+// creating, updating, or revoking a link — requires auth: the share token alone
+// must never be a write credential, or any viewer could overwrite the public
+// situation report. Editors always call these from an authenticated session, so
+// the same-origin auth cookie is sent automatically.
 
 // POST /api/crisis/publish — create a new share link, returns token + url
-router.post('/publish', async (req: Request, res: Response) => {
+router.post('/publish', requireAuth, async (req: Request, res: Response) => {
   const snapshot = req.body;
   if (!snapshot || typeof snapshot !== 'object') {
     res.status(400).json({ error: 'Body must be a JSON object' }); return;
@@ -26,7 +34,7 @@ router.post('/publish', async (req: Request, res: Response) => {
 });
 
 // PATCH /api/crisis/share/:token — push updated snapshot, notify SSE clients
-router.patch('/share/:token', async (req: Request, res: Response) => {
+router.patch('/share/:token', requireAuth, async (req: Request, res: Response) => {
   const { token } = req.params;
   const { rows: [row] } = await pool.query(
     'SELECT snapshot FROM share_links WHERE token = $1 AND active = TRUE',
@@ -59,7 +67,7 @@ router.get('/share/:token', async (req: Request, res: Response) => {
 });
 
 // DELETE /api/crisis/share/:token — revoke a share link
-router.delete('/share/:token', async (req: Request, res: Response) => {
+router.delete('/share/:token', requireAuth, async (req: Request, res: Response) => {
   const { rows: [row] } = await pool.query(
     'SELECT 1 FROM share_links WHERE token = $1',
     [req.params.token]

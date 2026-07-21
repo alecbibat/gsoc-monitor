@@ -10,6 +10,10 @@ export type IncidentType =
 export type CrisisTab = 'situation-report';
 export type ActionEntryType = 'action' | 'event';
 
+// Live save status, surfaced in the incident header. Transient UI state only —
+// it is never persisted or pushed to the server.
+export type SyncState = 'idle' | 'saving' | 'saved' | 'error';
+
 export interface IcsRole {
   id: string;
   title: string;
@@ -38,6 +42,11 @@ export interface PersonnelMember extends PersonnelDetails {
 export interface PersonnelAssignment extends PersonnelDetails {
   id: string;
   roleId: string;
+  // Link back to the personnel-pool member this assignment came from, when known.
+  // Identity is by id (not name) so two people who share a name don't collide and
+  // a later rename can't silently break the link. Manual name-only assignments
+  // leave this undefined and fall back to case-insensitive name matching.
+  personnelId?: string;
   name: string;
   startedAt: string;
   endedAt?: string;
@@ -71,7 +80,7 @@ export interface DrawLayer {
   color: string;
   visible: boolean;
   positions: DrawLayerPoint[];
-  thumbnail?: string;  // compressed JPEG data URL captured when drawing finishes
+  thumbnail?: string;  // Cloudinary URL of the map snapshot captured when drawing finishes
   createdAt: string;
 }
 
@@ -155,8 +164,13 @@ export const DEFAULT_ROLES: IcsRole[] = [
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-let _seq = Date.now();
-const uid = () => `c-${++_seq}`;
+// Globally-unique IDs. Incidents are a shared workspace where several clients
+// mint IDs independently, so a per-tab counter could collide and make two
+// incidents (or roles/log entries) clobber each other on upsert. randomUUID is
+// collision-free across clients. Falls back to a random string on the rare
+// browser without crypto.randomUUID (non-secure context).
+const uid = () =>
+  `c-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
 
 function newIncident(): Incident {
   return {
@@ -204,6 +218,7 @@ interface CrisisState {
   activeDrawLayerId: string | null;
   pickedLayer: PickedLayer | null;
   incidents: Incident[];
+  syncState: SyncState;
 
   // Overlay
   toggle: () => void;
@@ -237,7 +252,7 @@ interface CrisisState {
   removePersonnelMember: (id: string) => void;
 
   // Assignments
-  assignRole: (roleId: string, name: string, details?: PersonnelDetails) => void;
+  assignRole: (roleId: string, name: string, details?: PersonnelDetails, personnelId?: string) => void;
   endAssignment: (id: string) => void;
 
   // Action log
@@ -254,6 +269,11 @@ interface CrisisState {
 
   // Server sync
   setIncidents: (incidents: Incident[]) => void;
+  setSyncState: (state: SyncState) => void;
+  // Apply a change pushed from another responder (live sync) without echoing it
+  // straight back to the server.
+  applyRemoteUpsert: (incident: Incident) => void;
+  applyRemoteDelete: (id: string) => void;
 }
 
 // Select the currently-open incident (or null in list view).
@@ -289,6 +309,7 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
       activeDrawLayerId: null,
       pickedLayer: null,
       incidents: [],
+      syncState: 'idle',
 
       toggle: () => set((s) => (s.open ? { open: false } : { open: true, activeIncidentId: null })),
       close: () => set({ open: false }),
@@ -399,16 +420,23 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
 
       resetRoles: () => set((s) => patchActive(s, (inc) => ({ ...inc, roles: DEFAULT_ROLES }))),
 
-      assignRole: (roleId, name, details) =>
+      assignRole: (roleId, name, details, personnelId) =>
         set((s) => patchActive(s, (inc) => {
           const now = new Date().toISOString();
           const role = inc.roles.find((r) => r.id === roleId);
           const endPrevious = !role?.isSupport;
+          // Match "the same person" by personnel id when we have one (so identical
+          // names don't collide and a rename can't break the link); otherwise fall
+          // back to case-insensitive name matching for manual, pool-less entries.
+          const samePerson = (a: PersonnelAssignment) =>
+            personnelId && a.personnelId
+              ? a.personnelId === personnelId
+              : a.name.toLowerCase() === name.toLowerCase();
           // End any other active assignment for this person across all roles
           // (one person cannot hold more than one role at a time).
           const assignments = inc.assignments.map((a) => {
             if (a.endedAt) return a;
-            if (a.name.toLowerCase() === name.toLowerCase() && a.roleId !== roleId) {
+            if (samePerson(a) && a.roleId !== roleId) {
               return { ...a, endedAt: now };
             }
             if (endPrevious && a.roleId === roleId) {
@@ -420,7 +448,7 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
             ...inc,
             assignments: [
               ...assignments,
-              { id: uid(), roleId, name, ...details, startedAt: now },
+              { id: uid(), roleId, personnelId, name, ...details, startedAt: now },
             ],
           };
         })),
@@ -474,6 +502,27 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
       setPickedLayer: (pickedLayer) => set({ pickedLayer }),
 
       setIncidents: (incidents) => set({ incidents }),
+      setSyncState: (syncState) => set({ syncState }),
+
+      applyRemoteUpsert: (incident) =>
+        set((s) => {
+          const exists = s.incidents.some((i) => i.id === incident.id);
+          return {
+            incidents: exists
+              ? s.incidents.map((i) => (i.id === incident.id ? incident : i))
+              : [...s.incidents, incident],
+          };
+        }),
+
+      applyRemoteDelete: (id) =>
+        set((s) => ({
+          incidents: s.incidents.filter((i) => i.id !== id),
+          activeIncidentId: s.activeIncidentId === id ? null : s.activeIncidentId,
+          activeDrawLayerId:
+            s.incidents.find((i) => i.id === id)?.drawLayers.some((l) => l.id === s.activeDrawLayerId)
+              ? null
+              : s.activeDrawLayerId,
+        })),
 }));
 
 // ── Share helper ──────────────────────────────────────────────────────────────
