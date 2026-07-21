@@ -36,13 +36,14 @@ const BATCH = 500;
 async function fetchJsonWithRetry(
   url: string,
   attempts = 3,
-  timeoutMs = 8_000
+  timeoutMs = 8_000,
+  headers?: Record<string, string>
 ): Promise<unknown> {
   let lastErr: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-      if (!res.ok) throw new Error(`Open-Meteo HTTP ${res.status}`);
+      const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers });
+      if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).host}`);
       return await res.json();
     } catch (err) {
       lastErr = err;
@@ -217,9 +218,14 @@ router.get('/', (_req, res) => {
 
 // --- Point forecast ---------------------------------------------------------
 // A per-point wind forecast for a dropped wind probe: hourly speed/direction/
-// gusts for the week ahead plus a daily rollup. Sourced from the same NOAA GFS
-// model as the animated grid, via Open-Meteo. Speeds stay in m/s; the client
-// converts for display.
+// gusts for the week ahead plus a daily rollup. Primary source is the same NOAA
+// GFS model as the animated grid, via Open-Meteo — but the grid refresh samples
+// thousands of points from this dyno's IP, which can exhaust Open-Meteo's
+// per-IP quota and leave every probe 502ing with nothing cached to fall back
+// on. MET Norway's locationforecast (global, keyless, a completely separate
+// host/quota) is the fallback provider, so a probe still gets a real forecast
+// while Open-Meteo is rate-limiting us. Speeds stay in m/s; the client converts
+// for display.
 
 const FORECAST_TTL_MS = 30 * 60 * 1000;
 
@@ -233,6 +239,8 @@ export interface WindForecast {
   hourly: { time: string[]; speed: number[]; dir: number[]; gust: number[] };
   daily: { time: string[]; speedMax: number[]; gustMax: number[]; dirDominant: number[] };
   updated: number;
+  source: string; // human-readable attribution for the panel footer
+  fallback?: boolean; // true when served by the backup provider (met.no)
 }
 
 interface OmForecast {
@@ -255,13 +263,16 @@ interface OmForecast {
   };
 }
 
-async function fetchForecast(lat: number, lon: number): Promise<WindForecast> {
+async function fetchForecastOpenMeteo(lat: number, lon: number): Promise<WindForecast> {
   const url =
     `https://api.open-meteo.com/v1/gfs?latitude=${lat}&longitude=${lon}` +
     `&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
     `&daily=wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant` +
     `&wind_speed_unit=ms&forecast_days=7&timezone=auto`;
-  const d = (await fetchJsonWithRetry(url)) as OmForecast;
+  // Only 2 quick attempts here (not the default 3): when Open-Meteo is
+  // rate-limiting this IP the answer is an instant 429 anyway, and the met.no
+  // fallback still has to fit in the same ~30s response window.
+  const d = (await fetchJsonWithRetry(url, 2, 6_000)) as OmForecast;
   const h = d.hourly;
   const dy = d.daily;
   if (!h || !dy) throw new Error('Open-Meteo: missing forecast fields');
@@ -284,7 +295,146 @@ async function fetchForecast(lat: number, lon: number): Promise<WindForecast> {
       dirDominant: dy.wind_direction_10m_dominant,
     },
     updated: Date.now(),
+    source: 'NOAA GFS · Open-Meteo',
   };
+}
+
+// --- Backup provider: MET Norway locationforecast ---------------------------
+// Global coverage, no API key (just a descriptive User-Agent, per their terms).
+// The timeseries is hourly for roughly the first 2½ days, then 6-hourly out to
+// ~9 days — hourly entries feed the chart, and the daily rollup is computed
+// from the whole series. met.no gives no timezone, so local time is
+// approximated from longitude (15°/hour) and labeled as such in the UI.
+
+interface MetNoSeries {
+  time: string; // UTC ISO
+  data?: {
+    instant?: {
+      details?: {
+        wind_speed?: number;
+        wind_from_direction?: number;
+        wind_speed_of_gust?: number;
+      };
+    };
+  };
+}
+
+interface MetNoForecast {
+  properties?: { timeseries?: MetNoSeries[] };
+}
+
+async function fetchForecastMetNo(lat: number, lon: number): Promise<WindForecast> {
+  const url =
+    `https://api.met.no/weatherapi/locationforecast/2.0/complete` +
+    `?lat=${lat}&lon=${lon}`;
+  const d = (await fetchJsonWithRetry(url, 2, 6_000, {
+    'user-agent': 'gsoc-monitor/0.1 github.com/alecbibat/gsoc-monitor',
+  })) as MetNoForecast;
+
+  const series = d.properties?.timeseries ?? [];
+  const pts: Array<{ ms: number; speed: number; dir: number; gust: number }> = [];
+  for (const s of series) {
+    const det = s.data?.instant?.details;
+    const ms = Date.parse(s.time);
+    if (!det || !Number.isFinite(ms)) continue;
+    const { wind_speed: speed, wind_from_direction: dir, wind_speed_of_gust: gust } = det;
+    if (typeof speed !== 'number' || typeof dir !== 'number') continue;
+    // Long-range entries drop the gust field; treat gust = sustained there.
+    pts.push({ ms, speed, dir, gust: typeof gust === 'number' ? gust : speed });
+  }
+  if (pts.length === 0) throw new Error('met.no: empty timeseries');
+  pts.sort((a, b) => a.ms - b.ms);
+
+  const offsetSeconds = Math.round(lon / 15) * 3600;
+  const offsetH = offsetSeconds / 3600;
+  const toLocalIso = (ms: number) =>
+    new Date(ms + offsetSeconds * 1000).toISOString().slice(0, 16);
+
+  // Hourly window: consecutive hourly-spaced entries from the start of the
+  // series. Stop at the first gap so the chart's per-bar spacing stays honest.
+  const hourly: WindForecast['hourly'] = { time: [], speed: [], dir: [], gust: [] };
+  for (let i = 0; i < pts.length; i++) {
+    if (i > 0 && pts[i].ms - pts[i - 1].ms > 3_600_000) break;
+    hourly.time.push(toLocalIso(pts[i].ms));
+    hourly.speed.push(pts[i].speed);
+    hourly.dir.push(pts[i].dir);
+    hourly.gust.push(pts[i].gust);
+  }
+
+  // Daily rollup over the full series (including the 6-hourly tail): max
+  // sustained/gust per local calendar day, plus a speed-weighted mean "from"
+  // vector as the dominant direction — same semantics as Open-Meteo's
+  // wind_direction_10m_dominant.
+  const byDay = new Map<string, { speedMax: number; gustMax: number; x: number; y: number }>();
+  for (const p of pts) {
+    const day = toLocalIso(p.ms).slice(0, 10);
+    let d0 = byDay.get(day);
+    if (!d0) {
+      d0 = { speedMax: 0, gustMax: 0, x: 0, y: 0 };
+      byDay.set(day, d0);
+    }
+    d0.speedMax = Math.max(d0.speedMax, p.speed);
+    d0.gustMax = Math.max(d0.gustMax, p.gust);
+    const r = (p.dir * Math.PI) / 180;
+    d0.x += p.speed * Math.sin(r);
+    d0.y += p.speed * Math.cos(r);
+  }
+  const daily: WindForecast['daily'] = { time: [], speedMax: [], gustMax: [], dirDominant: [] };
+  for (const [day, v] of byDay) {
+    if (daily.time.length >= 7) break;
+    daily.time.push(day);
+    daily.speedMax.push(v.speedMax);
+    daily.gustMax.push(v.gustMax);
+    daily.dirDominant.push(((Math.atan2(v.x, v.y) * 180) / Math.PI + 360) % 360);
+  }
+
+  return {
+    latitude: lat,
+    longitude: lon,
+    timezone: `UTC${offsetH >= 0 ? '+' : ''}${offsetH}`,
+    timezoneAbbr: 'approx',
+    utcOffsetSeconds: offsetSeconds,
+    hourly,
+    daily,
+    updated: Date.now(),
+    source: 'MET Norway · locationforecast',
+    fallback: true,
+  };
+}
+
+// Provider selection with a simple circuit breaker: after an Open-Meteo
+// failure, later probes skip straight to met.no for a few minutes instead of
+// re-paying the failed attempts — but if met.no itself breaks during that
+// window, Open-Meteo still gets a last-resort try (and a success resets the
+// breaker).
+const OM_COOLDOWN_MS = 10 * 60 * 1000;
+let omFailedAt = 0;
+
+async function fetchForecast(lat: number, lon: number): Promise<WindForecast> {
+  const omCooling = Date.now() - omFailedAt < OM_COOLDOWN_MS;
+  if (!omCooling) {
+    try {
+      return await fetchForecastOpenMeteo(lat, lon);
+    } catch (err) {
+      omFailedAt = Date.now();
+      console.warn(
+        '[wind] Open-Meteo forecast failed, falling back to met.no:',
+        err instanceof Error ? err.message : err
+      );
+    }
+    return fetchForecastMetNo(lat, lon);
+  }
+  try {
+    return await fetchForecastMetNo(lat, lon);
+  } catch (err) {
+    console.warn(
+      '[wind] met.no forecast failed during Open-Meteo cooldown, retrying Open-Meteo:',
+      err instanceof Error ? err.message : err
+    );
+    const fc = await fetchForecastOpenMeteo(lat, lon);
+    omFailedAt = 0;
+    return fc;
+  }
 }
 
 router.get('/forecast', async (req, res) => {

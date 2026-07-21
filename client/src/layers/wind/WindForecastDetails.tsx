@@ -233,8 +233,8 @@ export function WindForecastDetails({ payload }: { payload: Payload }) {
     return (
       <div className="space-y-3 rounded-lg bg-white/5 px-3 py-4 text-[13px] leading-relaxed text-white/60">
         <p>
-          {err}. The forecast feed (NOAA GFS via Open-Meteo) didn’t respond — it can be briefly
-          rate-limited or slow to wake.
+          {err}. Neither forecast feed (NOAA GFS via Open-Meteo, nor the MET Norway backup)
+          responded — both can be briefly rate-limited or slow to wake.
         </p>
         <button
           onClick={() => setReloadKey((k) => k + 1)}
@@ -290,6 +290,14 @@ export function WindForecastDetails({ payload }: { payload: Payload }) {
           </div>
         </div>
       </div>
+
+      {/* Backup-feed notice */}
+      {fc.fallback && (
+        <div className="rounded-lg border border-sky-400/25 bg-sky-400/[0.07] px-3 py-2 text-[12px] leading-snug text-white/55">
+          Primary feed (Open-Meteo) is unavailable — forecast from the MET Norway backup feed.
+          Local times are approximate.
+        </div>
+      )}
 
       {/* Peak gust callout */}
       {win.peak && (
@@ -360,7 +368,7 @@ export function WindForecastDetails({ payload }: { payload: Payload }) {
           {fc.timezone} ({fc.timezoneAbbr})
         </dd>
         <dt className="text-white/40">Source</dt>
-        <dd className="text-white/70">NOAA GFS · Open-Meteo</dd>
+        <dd className="text-white/70">{fc.source ?? 'NOAA GFS · Open-Meteo'}</dd>
       </dl>
     </div>
   );
