@@ -255,12 +255,20 @@ export function WindForecastDetails({ payload }: { payload: Payload }) {
   }
 
   const u = WIND_UNIT_LABEL[unit];
-  // Always use the pin's captured grid values for speed/direction so the card
-  // matches the on-globe arrow (both come from the same GFS bilinear sample).
-  // Gust comes from the forecast API since the static grid has no gust data.
-  const nowSpeed = formatSpeed(payload.speedMps, unit);
-  const nowGust = win.hours[0] ? formatSpeed(win.hours[0].gustMps, unit) : null;
-  const nowColor = speedColorHex(payload.speedMps);
+  // Speed, gust, and color all come from the point forecast's current hour so the
+  // headline stays internally consistent: gust is always ≥ sustained, and the big
+  // number agrees with the hourly chart's first bar and the peak-gust callout
+  // below. (Previously the sustained speed/color were read from the coarse 5°
+  // animation grid while gust came from the point forecast — two independent
+  // models sampled at different instants — so the headline could read *higher*
+  // than its own gust, which is physically impossible, and the gust readout would
+  // silently vanish whenever that happened.) Direction stays pinned to the
+  // captured grid sample (payload.fromDeg / .cardinal, used by the arrow and the
+  // "from" label below) so the card's arrow still matches the on-globe pin.
+  const now = win.hours[0];
+  const nowSpeed = now ? formatSpeed(now.speedMps, unit) : formatSpeed(payload.speedMps, unit);
+  const nowGust = now ? formatSpeed(now.gustMps, unit) : null;
+  const nowColor = now ? speedColorHex(now.speedMps) : speedColorHex(payload.speedMps);
 
   // Chart scale in the display unit, off the windowed gust peak.
   const maxGustDisp = win.hours.reduce((m, h) => Math.max(m, convertSpeed(h.gustMps, unit)), 0);
