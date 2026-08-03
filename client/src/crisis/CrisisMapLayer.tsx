@@ -14,7 +14,9 @@ function centroid(layer: DrawLayer): { lon: number; lat: number } {
   return { lon: sum.lon / n, lat: sum.lat / n };
 }
 
-function addLayerEntities(ds: Cesium.CustomDataSource, layer: DrawLayer) {
+// Exported for CrisisShareGlobe, which renders the same drawn layers on the
+// public share page's standalone viewer.
+export function addLayerEntities(ds: Cesium.CustomDataSource, layer: DrawLayer) {
   if (layer.positions.length === 0) return;
   const color = Cesium.Color.fromCssColorString(layer.color);
   const positions = layer.positions.map((p) => Cesium.Cartesian3.fromDegrees(p.lon, p.lat));
