@@ -44,7 +44,13 @@ function ShareLinksPanel() {
         body: JSON.stringify(extractPublicState(inc)),
       });
       if (res.status === 413) throw new Error('Incident is too large to share (too many images/attachments).');
-      if (!res.ok) throw new Error('Could not create link — please try again.');
+      if (!res.ok) {
+        // Surface the server's reason — a bare "try again" hides whether this
+        // is an auth lapse (401), a server fault (500/503), or something else.
+        let detail = '';
+        try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not JSON */ }
+        throw new Error(`Could not create link (${res.status}${detail ? `: ${detail}` : ''}) — please try again.`);
+      }
       const { token, url, password } = await res.json() as { token: string; url: string; password?: string };
       const fullUrl = `${window.location.origin}${url}`;
       addShareLink(token, fullUrl, password);

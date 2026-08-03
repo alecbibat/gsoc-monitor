@@ -33,6 +33,21 @@ function viewKeyOk(passwordHash: string | null, req: Request): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+// Self-heal for a dyno serving new code before the boot migration has managed
+// to add the column (migrations run in the background and are allowed to fail
+// without taking the process down): retry once after adding it in place.
+const UNDEFINED_COLUMN = '42703';
+async function withPasswordColumn<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if ((err as { code?: string }).code !== UNDEFINED_COLUMN) throw err;
+    console.warn('[crisis] share_links.password_hash missing — adding it now');
+    await pool.query('ALTER TABLE share_links ADD COLUMN IF NOT EXISTS password_hash TEXT');
+    return run();
+  }
+}
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 //
 // Read paths (GET snapshot + GET events) are intentionally public so anyone with
@@ -54,11 +69,11 @@ router.post('/publish', requireAuth, wrap(async (req: Request, res: Response) =>
   // stored. The editor keeps it on the incident's ShareLink entry (auth-only
   // data) so the Share Links popup can re-surface it.
   const password = generatePassword();
-  await pool.query(
+  await withPasswordColumn(() => pool.query(
     `INSERT INTO share_links (token, incident_id, snapshot, password_hash)
      VALUES ($1, $2, $3, $4)`,
     [token, incidentId ?? null, JSON.stringify(snapshot), sha256Hex(password)]
-  );
+  ));
   res.json({ token, url: `/?share=${token}`, password });
 }, 'crisis'));
 
@@ -90,10 +105,10 @@ router.patch('/share/:token', requireAuth, wrap(async (req: Request, res: Respon
 // GET /api/crisis/share/:token — return current state snapshot (no account
 // needed, but password-protected links require the ?k= view key)
 router.get('/share/:token', wrap(async (req: Request, res: Response) => {
-  const { rows: [row] } = await pool.query(
+  const { rows: [row] } = await withPasswordColumn(() => pool.query(
     'SELECT snapshot, password_hash FROM share_links WHERE token = $1 AND active = TRUE',
     [req.params.token]
-  );
+  ));
   if (!row) { res.status(404).json({ error: 'Not found' }); return; }
   if (!viewKeyOk(row.password_hash, req)) {
     res.status(401).json({ error: 'Password required', passwordRequired: true }); return;
@@ -124,10 +139,10 @@ router.delete('/share/:token', requireAuth, wrap(async (req: Request, res: Respo
 // needed, but password-protected links require the ?k= view key)
 router.get('/share/:token/events', wrap(async (req: Request, res: Response) => {
   const { token } = req.params;
-  const { rows: [row] } = await pool.query(
+  const { rows: [row] } = await withPasswordColumn(() => pool.query(
     'SELECT snapshot, password_hash FROM share_links WHERE token = $1 AND active = TRUE',
     [token]
-  );
+  ));
   if (!row) { res.status(404).end(); return; }
   if (!viewKeyOk(row.password_hash, req)) { res.status(401).end(); return; }
 
