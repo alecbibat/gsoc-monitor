@@ -104,7 +104,7 @@ function ShareLinksPanel() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-1.5 w-96 rounded-lg border border-white/15 bg-ink-900 shadow-2xl">
+        <div className="absolute right-0 top-full z-50 mt-1.5 w-96 max-w-[calc(100vw-2rem)] rounded-lg border border-white/15 bg-ink-900 shadow-2xl">
           <div className="border-b border-white/10 px-3.5 py-2.5 flex items-center justify-between">
             <span className="text-[11px] font-bold uppercase tracking-wider text-white/70">Share Links</span>
             <button onClick={() => setOpen(false)} className="text-white/40 hover:text-white/80 text-[12px]">✕</button>
@@ -116,7 +116,7 @@ function ShareLinksPanel() {
                 No links created yet — create one below
               </p>
             ) : (
-              <div className="divide-y divide-white/8">
+              <div className="divide-y divide-white/10">
                 {[...shareLinks].reverse().map((link) => (
                   <div key={link.token} className={`px-3.5 py-2.5 ${link.active ? '' : 'opacity-40'}`}>
                     <div className="flex items-center gap-1.5 mb-1">
@@ -126,7 +126,7 @@ function ShareLinksPanel() {
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <code className="min-w-0 flex-1 truncate rounded bg-white/8 px-1.5 py-1 text-[11px] text-white/70">
+                      <code className="min-w-0 flex-1 truncate rounded bg-white/10 px-1.5 py-1 text-[11px] text-white/70">
                         {link.url}
                       </code>
                       {link.active && (
@@ -147,7 +147,7 @@ function ShareLinksPanel() {
                         </>
                       )}
                     </div>
-                    {link.password && (
+                    {link.active && link.password && (
                       <div className="mt-1.5 flex items-center gap-1.5">
                         <span className="shrink-0 text-[10px] uppercase tracking-wider text-white/45">Password</span>
                         <button

@@ -7,6 +7,7 @@ import { IcsOrgChart } from '../IcsOrgChart';
 import { ActionLog } from '../ActionLog';
 import { parseCoords } from '../parseCoords';
 import { SHARE_LIVE_LAYER_GROUPS } from '../shareLiveLayers';
+import { LOCATION_GROUPS } from '../../layers/locations/locations';
 
 const STATUS_STYLES: Record<IncidentStatus, string> = {
   active:    'border-red-500/50 bg-red-500/15 text-red-400',
@@ -360,7 +361,10 @@ function MapLayersSection() {
 function LiveLayersSection() {
   const inc = useActiveIncident();
   const toggleLiveLayer = useCrisisStore((s) => s.toggleLiveLayer);
+  const toggleExtraLocationGroup = useCrisisStore((s) => s.toggleExtraLocationGroup);
   const selected = new Set(inc?.liveLayers ?? []);
+  const primaryGroupId = inc?.locationGroupId ?? null;
+  const extraGroups = new Set(inc?.extraLocationGroups ?? []);
 
   return (
     <section>
@@ -405,9 +409,42 @@ function LiveLayersSection() {
             </div>
           </div>
         ))}
+        <div>
+          <p className="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-white/30">Property Pins</p>
+          <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-3">
+            {LOCATION_GROUPS.map((g) => {
+              const isPrimary = g.id === primaryGroupId;
+              const on = isPrimary || extraGroups.has(g.id);
+              return (
+                <button
+                  key={g.id}
+                  onClick={() => { if (!isPrimary) toggleExtraLocationGroup(g.id); }}
+                  disabled={isPrimary}
+                  aria-pressed={on}
+                  title={isPrimary ? 'Incident property — set in Incident Information' : 'Also show this group’s pins on the share map'}
+                  className={`rounded border px-2.5 py-1.5 text-left transition ${
+                    on
+                      ? 'border-accent/40 bg-accent/15'
+                      : 'border-white/10 bg-white/5 hover:border-white/20'
+                  } ${isPrimary ? 'cursor-default' : ''}`}
+                >
+                  <span className={`block text-[11px] leading-tight ${on ? 'text-accent' : 'text-white/70'}`}>
+                    {g.icon} {g.name}
+                  </span>
+                  <span className="mt-0.5 block text-[8px] leading-tight text-white/30">
+                    {isPrimary ? 'Incident property' : `${g.locations.length} location${g.locations.length === 1 ? '' : 's'}`}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <p className="text-[9px] leading-relaxed text-white/25">
           Selected layers render on a live interactive globe on every active share link for this
-          incident, alongside the drawn map layers above. Changes apply to viewers within seconds.
+          incident, alongside the drawn map layers above. The incident property and any additional
+          groups appear as pins and scope the shared Property Watch. Changes apply to viewers
+          within seconds.
         </p>
       </div>
     </section>
@@ -467,6 +504,20 @@ export function SituationReport() {
 
             <FieldRow label="Location">
               <TextInput value={inc.incidentLocation} onChange={(v) => update({ incidentLocation: v })} placeholder="Affected area or address" />
+            </FieldRow>
+
+            <FieldRow label="Property">
+              <select
+                className="flex-1 rounded border border-white/10 bg-ink-900 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25"
+                value={inc.locationGroupId ?? ''}
+                onChange={(e) => update({ locationGroupId: e.target.value || null })}
+                title="Property group affected by this incident — its pins appear on the share-link map and scope the shared Property Watch"
+              >
+                <option value="">None</option>
+                {LOCATION_GROUPS.map((g) => (
+                  <option key={g.id} value={g.id}>{g.icon} {g.name}</option>
+                ))}
+              </select>
             </FieldRow>
 
             <FieldRow label="Type">

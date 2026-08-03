@@ -115,6 +115,13 @@ export interface Incident {
   // (globe feeds like radar/hurricanes/wildfires — not the hand-drawn layers).
   // Optional because incidents persisted before this feature lack the key.
   liveLayers?: ShareLiveLayerId[];
+  // Primary property group (from LOCATION_GROUPS) — set in Incident
+  // Information. Drives the pins on the share map, the share page's Property
+  // Watch scope, and the viewer's "Zoom to Incident" target.
+  locationGroupId?: string | null;
+  // Additional property groups whose pins/watch info also appear on the share
+  // link, chosen in the Live Data Layers section.
+  extraLocationGroups?: string[];
   shareToken: string | null;  // legacy — kept for backwards compat with persisted data
   shareLinks: ShareLink[];    // all share links ever created for this incident
   archivedAt?: string | null; // set when the incident is stood down; null/absent = active
@@ -135,6 +142,8 @@ export interface CrisisPublicState {
   drawLayers: DrawLayer[];
   // Optional: snapshots published before this feature existed lack the key.
   liveLayers?: ShareLiveLayerId[];
+  locationGroupId?: string | null;
+  extraLocationGroups?: string[];
   publishedAt: string;
   lastUpdated: string;
 }
@@ -199,6 +208,8 @@ function newIncident(): Incident {
     actionLog: [],
     drawLayers: [],
     liveLayers: [],
+    locationGroupId: null,
+    extraLocationGroups: [],
     shareToken: null,
     shareLinks: [],
   };
@@ -214,6 +225,7 @@ interface CrisisFields {
   incidentType: IncidentType;
   incidentStatus: IncidentStatus;
   executiveSummary: string;
+  locationGroupId: string | null;
 }
 
 export interface PickedLayer {
@@ -273,6 +285,8 @@ interface CrisisState {
 
   // Live layers on the share map
   toggleLiveLayer: (id: ShareLiveLayerId) => void;
+  // Additional property-pin groups on the share map
+  toggleExtraLocationGroup: (id: string) => void;
 
   // Draw layers
   addDrawLayer: (layer: Omit<DrawLayer, 'id' | 'createdAt'>) => string;
@@ -497,6 +511,15 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
           };
         })),
 
+      toggleExtraLocationGroup: (id) =>
+        set((s) => patchActive(s, (inc) => {
+          const cur = inc.extraLocationGroups ?? [];
+          return {
+            ...inc,
+            extraLocationGroups: cur.includes(id) ? cur.filter((g) => g !== id) : [...cur, id],
+          };
+        })),
+
       addDrawLayer: (layer) => {
         const id = uid();
         set((s) => patchActive(s, (inc) => ({
@@ -572,10 +595,12 @@ export function extractPublicState(inc: Incident, publishedAt?: string): CrisisP
     })),
     actionLog: inc.actionLog,
     drawLayers: inc.drawLayers,
-    // Always a concrete array, never undefined: JSON.stringify drops undefined
+    // Always concrete values, never undefined: JSON.stringify drops undefined
     // keys, and the server's PATCH shallow-merge would then keep the snapshot's
-    // OLD liveLayers forever — viewers could never see layers removed.
+    // OLD values forever — viewers could never see layers/groups removed.
     liveLayers: inc.liveLayers ?? [],
+    locationGroupId: inc.locationGroupId ?? null,
+    extraLocationGroups: inc.extraLocationGroups ?? [],
     publishedAt: publishedAt ?? new Date().toISOString(),
     lastUpdated: new Date().toISOString(),
   };

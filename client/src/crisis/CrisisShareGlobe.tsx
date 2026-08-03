@@ -3,8 +3,9 @@ import * as Cesium from 'cesium';
 import { CesiumContext, useCesiumViewer } from '../cesium/CesiumContext';
 import { CesiumGlobe } from '../cesium/CesiumGlobe';
 import { useLayersStore } from '../store/layersStore';
-import { BasemapSwitcher } from '../ui/BasemapSwitcher';
-import { LOCATION_GROUPS, type LocationGroup } from '../layers/locations/locations';
+import { BASEMAPS } from '../cesium/basemaps';
+import type { BasemapId } from '../types';
+import type { LocationGroup } from '../layers/locations/locations';
 import { makePinIcon } from '../layers/locations/pinIcon';
 import { resetCamera } from '../cesium/flyTo';
 import { addLayerEntities } from './CrisisMapLayer';
@@ -132,12 +133,12 @@ function ShareDrawLayers({ layers }: { layers: DrawLayer[] }) {
   return null;
 }
 
-// Pins for the property group the viewer picked in the map controls — the same
-// markers the operator's locations layer draws, minus its internal detail
-// panels.
-function SharePinsLayer({ group }: { group: LocationGroup | null }) {
+// Pins for the property groups the incident team prescribed — the same markers
+// the operator's locations layer draws, minus its internal detail panels.
+function SharePinsLayer({ groups }: { groups: LocationGroup[] }) {
   const viewer = useCesiumViewer();
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
+  const sig = groups.map((g) => g.id).join(',');
 
   useEffect(() => {
     if (!viewer) return;
@@ -154,7 +155,7 @@ function SharePinsLayer({ group }: { group: LocationGroup | null }) {
     const ds = dsRef.current;
     if (!viewer || !ds) return;
     ds.entities.removeAll();
-    if (group) {
+    for (const group of groups) {
       const pin = makePinIcon(group.color);
       for (const loc of group.locations) {
         ds.entities.add({
@@ -184,14 +185,15 @@ function SharePinsLayer({ group }: { group: LocationGroup | null }) {
       }
     }
     viewer.scene.requestRender();
-  }, [viewer, group]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewer, sig]);
 
   return null;
 }
 
-// Fly to the centre of a property group's pins, zoomed to fit their spread.
-function zoomToGroup(viewer: Cesium.Viewer, group: LocationGroup): void {
-  const locs = group.locations;
+// Fly to the centre of a set of property pins, zoomed to fit their spread.
+function zoomToPins(viewer: Cesium.Viewer, groups: LocationGroup[]): void {
+  const locs = groups.flatMap((g) => g.locations);
   if (locs.length === 0) return;
   const avgLat = locs.reduce((s, l) => s + l.lat, 0) / locs.length;
   const avgLon = locs.reduce((s, l) => s + l.lon, 0) / locs.length;
@@ -208,6 +210,8 @@ function zoomToGroup(viewer: Cesium.Viewer, group: LocationGroup): void {
   });
 }
 
+const BASEMAP_ORDER: BasemapId[] = ['dark', 'light', 'satellite', 'topo'];
+
 interface Props {
   liveLayers: ShareLiveLayerId[];
   // Live layers the recipient switched off via the legend chips (owned by the
@@ -216,12 +220,18 @@ interface Props {
   onToggleLive: (id: ShareLiveLayerId) => void;
   onResetLayers: () => void;
   drawLayers: DrawLayer[];
+  // Property groups prescribed by the incident team (primary first).
+  pinGroups: LocationGroup[];
+  primaryGroupId: string | null;
 }
 
-export function CrisisShareGlobe({ liveLayers, offLive, onToggleLive, onResetLayers, drawLayers }: Props) {
+export function CrisisShareGlobe({
+  liveLayers, offLive, onToggleLive, onResetLayers, drawLayers, pinGroups, primaryGroupId,
+}: Props) {
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
-  const [groupId, setGroupId] = useState<string>('');
-  const group = LOCATION_GROUPS.find((g) => g.id === groupId) ?? null;
+  const [controlsOpen, setControlsOpen] = useState(true);
+  const basemap = useLayersStore((s) => s.basemap);
+  const setBasemap = useLayersStore((s) => s.setBasemap);
 
   const enabled = liveLayers.filter((id) => !offLive.has(id));
   const live = new Set<ShareLiveLayerId>(enabled);
@@ -248,15 +258,16 @@ export function CrisisShareGlobe({ liveLayers, offLive, onToggleLive, onResetLay
 
   const handleZoomToIncident = () => {
     if (!viewer) return;
-    // The selected property group defines the incident area; without one,
-    // fall back to the drawn layers' extent.
-    if (group) zoomToGroup(viewer, group);
+    // The incident's own property group is the incident location; fall back to
+    // all prescribed pins, then to the drawn layers' extent.
+    const primary = pinGroups.filter((g) => g.id === primaryGroupId);
+    if (primary.length > 0) zoomToPins(viewer, primary);
+    else if (pinGroups.length > 0) zoomToPins(viewer, pinGroups);
     else frameDrawnExtent(viewer, drawLayers, true);
   };
 
   const handleReset = () => {
     onResetLayers();
-    setGroupId('');
     useLayersStore.getState().setBasemap('dark');
     // drawLayers may carry viewer-side hides; Reset restores them all, so
     // frame everything the incident team has visible.
@@ -267,7 +278,7 @@ export function CrisisShareGlobe({ liveLayers, offLive, onToggleLive, onResetLay
     <div>
       <CesiumContext.Provider value={viewer}>
       <div
-        className="relative h-[72vh] min-h-[440px] w-full overflow-hidden rounded-lg border border-white/8"
+        className="relative h-[72vh] min-h-[440px] w-full overflow-hidden rounded-lg border border-white/10"
         // The non-none transform makes this box the containing block for
         // position:fixed descendants (hurricane tooltip, pick chooser), so
         // their canvas-based coordinates line up with the embedded globe
@@ -295,48 +306,68 @@ export function CrisisShareGlobe({ liveLayers, offLive, onToggleLive, onResetLay
             {live.has('newsMap') && <NewsMapLayer />}
             {live.has('intel') && <IntelLayer />}
             <ShareDrawLayers layers={drawLayers} />
-            <SharePinsLayer group={group} />
+            <SharePinsLayer groups={pinGroups} />
             {live.has('radar') && <RadarTimeline />}
           </CesiumGlobe>
           {live.has('hurricanes') && <HurricaneTooltip />}
 
-          {/* Compact map controls: map style, property pins, camera shortcuts.
-              Layer on/off toggles live below the frame (legend chips + the
-              Map Layers list), not here. */}
-          <div className="absolute right-3 top-3 z-20 w-56 space-y-2.5 rounded-lg border border-white/15 bg-ink-900/95 px-3 py-2.5 shadow-2xl backdrop-blur-sm">
-            <div>
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-white/45">Map type</p>
-              <BasemapSwitcher />
-            </div>
-            <div>
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-white/45">Property pins</p>
-              <select
-                value={groupId}
-                onChange={(e) => setGroupId(e.target.value)}
-                className="w-full rounded border border-white/12 bg-ink-900 px-2 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25"
-              >
-                <option value="">None</option>
-                {LOCATION_GROUPS.map((g) => (
-                  <option key={g.id} value={g.id}>{g.icon} {g.name}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex gap-1.5">
-              <button
-                onClick={handleZoomToIncident}
-                className="flex-1 rounded border border-accent/35 bg-accent/12 px-2 py-1.5 text-[11px] font-medium text-accent transition hover:bg-accent/20"
-                title={group ? `Zoom to the centre of ${group.name}` : 'Zoom to the drawn incident area'}
-              >
-                Zoom to Incident
-              </button>
-              <button
-                onClick={handleReset}
-                className="rounded border border-white/15 px-2.5 py-1.5 text-[11px] text-white/60 transition hover:border-white/30 hover:text-white"
-                title="Restore layers, map type and camera"
-              >
-                Reset
-              </button>
-            </div>
+          {/* Compact map controls: map style + camera shortcuts. Layer on/off
+              toggles live below the frame (legend chips + the Map Layers
+              list); property pins are prescribed by the incident team. */}
+          <div className="absolute right-3 top-3 z-20 w-56 overflow-hidden rounded-lg border border-white/15 bg-ink-900/95 shadow-2xl backdrop-blur-sm">
+            <button
+              onClick={() => setControlsOpen((v) => !v)}
+              className="flex w-full items-center justify-between px-3 py-2 text-left"
+            >
+              <span className="text-[11px] font-bold uppercase tracking-wider text-white/70">Map Controls</span>
+              <span className="text-[11px] text-white/40">{controlsOpen ? '▾' : '▸'}</span>
+            </button>
+            {controlsOpen && (
+              <div className="space-y-2.5 border-t border-white/10 px-3 py-2.5">
+                <div>
+                  <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-white/45">Map type</p>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {BASEMAP_ORDER.map((id) => (
+                      <button
+                        key={id}
+                        onClick={() => setBasemap(id)}
+                        className={`rounded-md px-1.5 py-1.5 text-[11px] font-medium transition ${
+                          basemap === id
+                            ? 'bg-accent/20 text-accent ring-1 ring-accent/40'
+                            : 'bg-white/5 text-white/55 hover:bg-white/10'
+                        }`}
+                      >
+                        {BASEMAPS[id].label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {pinGroups.length > 0 && (
+                  <div>
+                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/45">Property pins</p>
+                    <p className="text-[11px] leading-snug text-white/60">
+                      {pinGroups.map((g) => `${g.icon} ${g.name}`).join(' · ')}
+                    </p>
+                  </div>
+                )}
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={handleZoomToIncident}
+                    className="flex-1 rounded border border-accent/35 bg-accent/10 px-2 py-1.5 text-[11px] font-medium text-accent transition hover:bg-accent/20"
+                    title="Zoom to the incident property pins (or the drawn incident area)"
+                  >
+                    Zoom to Incident
+                  </button>
+                  <button
+                    onClick={handleReset}
+                    className="rounded border border-white/15 px-2.5 py-1.5 text-[11px] text-white/60 transition hover:border-white/30 hover:text-white"
+                    title="Restore layers, map type and camera"
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           <PickChooser />
@@ -364,7 +395,7 @@ export function CrisisShareGlobe({ liveLayers, offLive, onToggleLive, onResetLay
               className={`rounded-full border px-2 py-0.5 text-[10px] transition ${
                 off
                   ? 'border-white/10 text-white/30 hover:border-white/25 hover:text-white/55'
-                  : 'border-accent/25 bg-accent/8 text-accent/80 hover:border-accent/50'
+                  : 'border-accent/25 bg-accent/10 text-accent/80 hover:border-accent/50'
               }`}
             >
               {shareLiveLayerLabel(id)}

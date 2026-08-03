@@ -1,17 +1,18 @@
 import { useEffect } from 'react';
 import { startVisiblePolling } from '../lib/poll';
+import type { LocationGroup } from '../layers/locations/locations';
 import { useProximityStore } from '../widgets/proximity/proximityStore';
 import { HazardRows } from '../widgets/proximity/HazardRows';
 import { timeAgo } from '../widgets/proximity/format';
 
 // Read-only Property Watch card for the share page: the same live hazard scan
-// the operator's Watch tab runs (NASA FIRMS fires, NWS alerts, USGS quakes
-// cross-referenced against every tracked property), minus the operator-only
-// interactions (fly-to, pop-out, radius switching). Auto-refreshes on the same
-// cadence as the widget.
+// the operator's Watch tab runs (NASA FIRMS fires, NWS alerts, USGS quakes),
+// scoped to the property groups the incident team prescribed — nothing outside
+// those groups is exposed to share viewers. Auto-refreshes on the widget's
+// cadence.
 const REFRESH_MS = 5 * 60_000;
 
-export function ShareWatchCard() {
+export function ShareWatchCard({ groups }: { groups: LocationGroup[] }) {
   const result = useProximityStore((s) => s.result);
   const loading = useProximityStore((s) => s.loading);
   const radiusMi = useProximityStore((s) => s.radiusMi);
@@ -22,7 +23,9 @@ export function ShareWatchCard() {
     return () => stop();
   }, [scan]);
 
-  const affected = result?.properties ?? [];
+  const groupIds = new Set(groups.map((g) => g.id));
+  const monitoredCount = groups.reduce((n, g) => n + g.locations.length, 0);
+  const affected = (result?.properties ?? []).filter((p) => groupIds.has(p.group.id));
   const downFeeds = result
     ? ([
         result.fireError ? 'fires' : null,
@@ -33,7 +36,7 @@ export function ShareWatchCard() {
   const allDown = downFeeds.length === 3;
 
   return (
-    <div className="space-y-3 rounded-lg border border-white/8 bg-ink-950/60 px-4 py-3.5">
+    <div className="space-y-3 rounded-lg border border-white/10 bg-ink-950/60 px-4 py-3.5">
       {/* Status line */}
       <div className="flex items-center justify-between text-[12px]">
         {loading && !result ? (
@@ -61,14 +64,15 @@ export function ShareWatchCard() {
           {affected.length === 0 ? (
             <span className="flex items-center gap-2">
               <span aria-hidden>✓</span>
-              All clear — {result.scannedCount} properties monitored
+              All clear — {monitoredCount} propert{monitoredCount === 1 ? 'y' : 'ies'} monitored
+              ({groups.map((g) => g.name).join(' · ')})
             </span>
           ) : (
             <span className="flex items-center gap-2">
               <span aria-hidden>⚠</span>
               <span>
-                <strong className="font-bold">{affected.length}</strong> of {result.scannedCount}{' '}
-                properties with active hazards
+                <strong className="font-bold">{affected.length}</strong> of {monitoredCount}{' '}
+                monitored properties with active hazards
               </span>
             </span>
           )}
@@ -87,7 +91,7 @@ export function ShareWatchCard() {
       {affected.length > 0 && (
         <div className="space-y-1.5">
           {affected.map((p) => (
-            <div key={p.key} className="rounded-lg border border-white/8 bg-white/5 px-3 py-2.5">
+            <div key={p.key} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">
               <div className="flex items-center gap-2">
                 <span aria-hidden className="text-[14px]">{p.group.icon}</span>
                 <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-white/90">
@@ -102,9 +106,9 @@ export function ShareWatchCard() {
       )}
 
       {/* Footnote */}
-      <p className="border-t border-white/8 pt-2 text-[11px] leading-snug text-white/35">
-        Cross-references {result?.scannedCount ? `all ${result.scannedCount}` : 'all'} monitored
-        properties against NASA FIRMS active-fire detections (past 24 h), live NWS alerts, and USGS
+      <p className="border-t border-white/10 pt-2 text-[11px] leading-snug text-white/35">
+        Cross-references the incident team&rsquo;s {monitoredCount} selected propert{monitoredCount === 1 ? 'y' : 'ies'}{' '}
+        against NASA FIRMS active-fire detections (past 24 h), live NWS alerts, and USGS
         earthquakes (M2.5+, past 7 days) within {radiusMi} miles. Refreshes automatically.
       </p>
     </div>

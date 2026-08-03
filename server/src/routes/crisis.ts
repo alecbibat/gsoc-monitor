@@ -11,11 +11,13 @@ const sseClients = new Map<string, Set<Response>>();
 
 // ── Viewer password gate ──────────────────────────────────────────────────────
 //
-// Every new share link gets a generated password. The DB stores only its
-// SHA-256; viewers exchange the password for that same hex digest client-side
-// and pass it as ?k= on the two public read paths (a query param because
-// EventSource cannot send headers). Legacy links with no password_hash stay
-// open so existing shared URLs keep working.
+// Every new share link gets a generated password. Viewers send its SHA-256 hex
+// as the ?k= wire key on the two public read paths (a query param because
+// EventSource cannot send headers). The DB stores sha256(wire key) — a hash OF
+// the credential, never the credential itself — so a database read (backup,
+// dump, injection elsewhere) yields nothing directly replayable into ?k=.
+// Legacy links with no password_hash stay open so existing shared URLs keep
+// working.
 
 const PW_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no O/0/I/1 — visually unambiguous
 function generatePassword(len = 10): string {
@@ -24,13 +26,20 @@ function generatePassword(len = 10): string {
 
 const sha256Hex = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
 
+const hashEquals = (aHex: string, bHex: string): boolean => {
+  const a = Buffer.from(aHex.toLowerCase(), 'utf8');
+  const b = Buffer.from(bHex.toLowerCase(), 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
+};
+
 function viewKeyOk(passwordHash: string | null, req: Request): boolean {
   if (!passwordHash) return true;
   const key = req.query.k;
   if (typeof key !== 'string') return false;
-  const a = Buffer.from(key.toLowerCase(), 'utf8');
-  const b = Buffer.from(passwordHash.toLowerCase(), 'utf8');
-  return a.length === b.length && timingSafeEqual(a, b);
+  // Current scheme: stored value is sha256(wire key). Also accept the wire key
+  // matching the stored value directly — rows written by the brief first
+  // deployment stored the wire key itself, and those links are already shared.
+  return hashEquals(sha256Hex(key.toLowerCase()), passwordHash) || hashEquals(key, passwordHash);
 }
 
 // Self-heal for a dyno serving new code before the boot migration has managed
@@ -65,14 +74,16 @@ router.post('/publish', requireAuth, wrap(async (req: Request, res: Response) =>
   }
   const token = randomUUID();
   const incidentId: string | undefined = (snapshot as { incidentId?: string }).incidentId;
-  // The plaintext password is returned exactly once, here; only its hash is
-  // stored. The editor keeps it on the incident's ShareLink entry (auth-only
-  // data) so the Share Links popup can re-surface it.
+  // The plaintext password is returned once here, and the editor keeps it on
+  // the incident's ShareLink entry (auth-only data) so the Share Links popup
+  // can re-surface it. share_links itself stores sha256(sha256(password)) —
+  // sha256(password) is the wire key viewers send, so the stored value can
+  // verify a key without being usable as one.
   const password = generatePassword();
   await withPasswordColumn(() => pool.query(
     `INSERT INTO share_links (token, incident_id, snapshot, password_hash)
      VALUES ($1, $2, $3, $4)`,
-    [token, incidentId ?? null, JSON.stringify(snapshot), sha256Hex(password)]
+    [token, incidentId ?? null, JSON.stringify(snapshot), sha256Hex(sha256Hex(password))]
   ));
   res.json({ token, url: `/?share=${token}`, password });
 }, 'crisis'));

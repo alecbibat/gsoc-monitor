@@ -1,6 +1,7 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { CrisisPublicState, IcsRole, PersonnelAssignment } from './crisisStore';
 import type { ShareLiveLayerId } from './shareLiveLayers';
+import { LOCATION_GROUPS, type LocationGroup } from '../layers/locations/locations';
 import { CrisisShareMap } from './CrisisShareMap';
 import { ShareWatchCard } from './ShareWatchCard';
 import { isShareLiveLayerId } from './shareLiveLayers';
@@ -133,16 +134,18 @@ async function sha256Hex(text: string): Promise<string> {
 
 const keyStorageId = (token: string) => `gsoc-share-key:${token}`;
 
-function PasswordGate({ onSubmit, wrong, checking }: {
+const WRONG_PW_MSG = 'Incorrect password — check with the incident team and try again.';
+
+function PasswordGate({ onSubmit, error, checking }: {
   onSubmit: (password: string) => void;
-  wrong: boolean;
+  error: string | null;
   checking: boolean;
 }) {
   const [pw, setPw] = useState('');
   return (
     <div className="flex h-screen items-center justify-center bg-ink-950 px-6">
       <form
-        className="w-full max-w-sm rounded-xl border border-white/12 bg-ink-900 px-6 py-7 text-center shadow-2xl"
+        className="w-full max-w-sm rounded-xl border border-white/15 bg-ink-900 px-6 py-7 text-center shadow-2xl"
         onSubmit={(e) => { e.preventDefault(); if (pw.trim()) onSubmit(pw.trim()); }}
       >
         <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full border border-amber-400/30 bg-amber-400/10 text-[20px]">
@@ -158,10 +161,10 @@ function PasswordGate({ onSubmit, wrong, checking }: {
           value={pw}
           onChange={(e) => setPw(e.target.value)}
           placeholder="Password"
-          className="mt-4 w-full rounded border border-white/15 bg-white/8 px-3 py-2.5 text-center font-mono text-[14px] tracking-[0.2em] text-white/90 placeholder-white/25 outline-none transition focus:border-accent/50"
+          className="mt-4 w-full rounded border border-white/15 bg-white/10 px-3 py-2.5 text-center font-mono text-[14px] tracking-[0.2em] text-white/90 placeholder-white/25 outline-none transition focus:border-accent/50"
         />
-        {wrong && (
-          <p className="mt-2 text-[11px] text-red-400/90">Incorrect password — check with the incident team and try again.</p>
+        {error && (
+          <p className="mt-2 text-[11px] text-red-400/90">{error}</p>
         )}
         <button
           type="submit"
@@ -185,7 +188,7 @@ export function CrisisShareView({ token }: { token: string }) {
     () => sessionStorage.getItem(keyStorageId(token)),
   );
   const [locked, setLocked] = useState(false);
-  const [wrongPw, setWrongPw] = useState(false);
+  const [gateError, setGateError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   // Set once the snapshot fetch succeeds — gates the SSE stream so it never
   // spins 401s against a locked link.
@@ -195,6 +198,11 @@ export function CrisisShareView({ token }: { token: string }) {
   // so anything newly prescribed over SSE defaults to on.
   const [offLive, setOffLive] = useState<Set<ShareLiveLayerId>>(new Set());
   const [offDraw, setOffDraw] = useState<Set<string>>(new Set());
+
+  // Once the globe has mounted, keep it mounted even if a live prescription
+  // update empties the layer/pin lists — swapping a viewer down to the flat
+  // map mid-session would throw away their camera, basemap and pins.
+  const globeEverRef = useRef(false);
 
   const toggleLive = (id: ShareLiveLayerId) =>
     setOffLive((prev) => {
@@ -229,7 +237,7 @@ export function CrisisShareView({ token }: { token: string }) {
           // viewer actually typed one this session — a stale stored key or the
           // first keyless probe just shows the gate.
           setLocked(true);
-          setWrongPw(viewKey !== null && checking);
+          setGateError(viewKey !== null && checking ? WRONG_PW_MSG : null);
           setChecking(false);
           return;
         }
@@ -238,7 +246,7 @@ export function CrisisShareView({ token }: { token: string }) {
         if (cancelled) return;
         setData(d);
         setLocked(false);
-        setWrongPw(false);
+        setGateError(null);
         setChecking(false);
         setUnlocked(true);
         if (viewKey) sessionStorage.setItem(keyStorageId(token), viewKey);
@@ -260,18 +268,24 @@ export function CrisisShareView({ token }: { token: string }) {
   }, [token, viewKey, unlocked]);
 
   const handlePassword = (password: string) => {
+    // crypto.subtle only exists in secure contexts — on a plain-HTTP origin
+    // every attempt would otherwise dead-end as "incorrect password".
+    if (!globalThis.crypto?.subtle) {
+      setGateError('This protected report can only be unlocked over HTTPS — ask the incident team for an https:// link.');
+      return;
+    }
     setChecking(true);
-    setWrongPw(false);
+    setGateError(null);
     // Generated passwords are uppercase-only — accept lowercase entry (mobile
     // keyboards default to it) by normalizing before hashing.
     sha256Hex(password.toUpperCase())
       .then((hex) => {
         // Same wrong password twice: the fetch effect won't re-run (key
         // unchanged), so surface the error directly.
-        if (hex === viewKey) { setChecking(false); setWrongPw(true); return; }
+        if (hex === viewKey) { setChecking(false); setGateError(WRONG_PW_MSG); return; }
         setViewKey(hex);
       })
-      .catch(() => { setChecking(false); setWrongPw(true); });
+      .catch(() => { setChecking(false); setGateError('Could not verify the password in this browser — try a current browser over HTTPS.'); });
   };
 
   if (error) {
@@ -286,7 +300,7 @@ export function CrisisShareView({ token }: { token: string }) {
   }
 
   if (locked) {
-    return <PasswordGate onSubmit={handlePassword} wrong={wrongPw} checking={checking} />;
+    return <PasswordGate onSubmit={handlePassword} error={gateError} checking={checking} />;
   }
 
   if (!data) {
@@ -305,6 +319,17 @@ export function CrisisShareView({ token }: { token: string }) {
   // whole public page.
   const liveLayers = (Array.isArray(data.liveLayers) ? data.liveLayers : [])
     .filter((id) => isShareLiveLayerId(id));
+  // Property groups prescribed by the incident team: the incident's own group
+  // first, then any extras — deduped, and unknown ids (stale snapshots)
+  // dropped. These drive the share map pins and scope the Property Watch.
+  const groupIds = [data.locationGroupId, ...(Array.isArray(data.extraLocationGroups) ? data.extraLocationGroups : [])]
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
+  const pinGroups = [...new Set(groupIds)]
+    .map((id) => LOCATION_GROUPS.find((g) => g.id === id))
+    .filter((g): g is LocationGroup => g !== undefined);
+  const primaryGroupId = typeof data.locationGroupId === 'string' ? data.locationGroupId : null;
+  if (liveLayers.length > 0 || pinGroups.length > 0) globeEverRef.current = true;
+  const showGlobe = globeEverRef.current;
   const drawLayers = Array.isArray(data.drawLayers) ? data.drawLayers : [];
   // Viewer-side hides mask a layer's visible flag rather than replace it: a
   // layer the incident team hid can never be surfaced by a local toggle.
@@ -362,14 +387,17 @@ export function CrisisShareView({ token }: { token: string }) {
           </div>
         </div>
 
-        {/* Live property watch — same scan as the operator Watch tab */}
-        <div>
-          <div className="mb-3 flex items-baseline gap-3">
-            <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Property Watch</h2>
-            <span className="text-[11px] text-white/35">Hazards near monitored locations · updates live</span>
+        {/* Live property watch, scoped to the property groups the incident
+            team selected — no groups selected means nothing is shared here */}
+        {pinGroups.length > 0 && (
+          <div>
+            <div className="mb-3 flex items-baseline gap-3">
+              <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Property Watch</h2>
+              <span className="text-[11px] text-white/35">Hazards near the incident properties · updates live</span>
+            </div>
+            <ShareWatchCard groups={pinGroups} />
           </div>
-          <ShareWatchCard />
-        </div>
+        )}
 
         {/* Org chart */}
         {roots.length > 0 && (
@@ -421,17 +449,17 @@ export function CrisisShareView({ token }: { token: string }) {
             incident team, this is the full interactive globe streaming those
             feeds in real time; otherwise a light flat map of just the drawn
             layers, opened centred on their combined extent. */}
-        {liveLayers.length > 0 ? (
+        {showGlobe ? (
           <div>
             <div className="mb-3 flex items-baseline gap-3">
               <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Live Incident Map</h2>
               <span className="text-[11px] text-white/40">
-                Interactive globe · live data layers selected by the incident team
+                Interactive globe · live layers &amp; property pins selected by the incident team
               </span>
             </div>
             <Suspense
               fallback={
-                <div className="grid h-[72vh] min-h-[440px] w-full place-items-center rounded-lg border border-white/8 bg-ink-950/60">
+                <div className="grid h-[72vh] min-h-[440px] w-full place-items-center rounded-lg border border-white/10 bg-ink-950/60">
                   <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-accent" />
                 </div>
               }
@@ -442,6 +470,8 @@ export function CrisisShareView({ token }: { token: string }) {
                 onToggleLive={toggleLive}
                 onResetLayers={resetLayers}
                 drawLayers={maskedDrawLayers}
+                pinGroups={pinGroups}
+                primaryGroupId={primaryGroupId}
               />
             </Suspense>
           </div>
@@ -471,8 +501,8 @@ export function CrisisShareView({ token }: { token: string }) {
                     aria-pressed={shown}
                     className={`block w-full overflow-hidden rounded-lg border text-left transition ${
                       shown
-                        ? 'border-white/12 bg-ink-950/60 hover:border-white/25'
-                        : 'border-white/8 bg-ink-950/60 opacity-50 hover:opacity-70'
+                        ? 'border-white/15 bg-ink-950/60 hover:border-white/25'
+                        : 'border-white/10 bg-ink-950/60 opacity-50 hover:opacity-70'
                     } ${teamHidden ? 'cursor-not-allowed hover:opacity-50' : ''}`}
                   >
                     {(layer as { thumbnail?: string }).thumbnail && (
@@ -490,9 +520,9 @@ export function CrisisShareView({ token }: { token: string }) {
                       <span
                         className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest ${
                           teamHidden
-                            ? 'border-white/12 text-white/30'
+                            ? 'border-white/15 text-white/30'
                             : shown
-                              ? 'border-accent/30 bg-accent/8 text-accent/80'
+                              ? 'border-accent/30 bg-accent/10 text-accent/80'
                               : 'border-white/15 text-white/40'
                         }`}
                       >
