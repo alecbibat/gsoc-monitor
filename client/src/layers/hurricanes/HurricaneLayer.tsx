@@ -74,8 +74,8 @@ const SERVICE =
 // documented ordering as a fallback in case the metadata request fails.
 const FALLBACK_LAYERS: Array<{ id: number; name: string }> = [
   { id: 0, name: 'Forecast Position' },
-  { id: 1, name: 'Forecast Track' },
-  { id: 2, name: 'Observed Position' },
+  { id: 1, name: 'Observed Position' },
+  { id: 2, name: 'Forecast Track' },
   { id: 3, name: 'Observed Track' },
   { id: 4, name: 'Forecast Error Cone' },
   { id: 5, name: 'Watches and Warnings' },
@@ -146,10 +146,18 @@ function pointCoord(geom: GeoJSON.Geometry | null | undefined): [number, number]
   return null;
 }
 
+// The service's sublayers don't share one identifier: observed fixes carry
+// STORMID (lowercase ATCF style) while forecast points and cones carry only
+// STORMNAME, which used to split one storm across two aggregation keys and
+// draw two markers. BASIN + STORMNUM exist on every sublayer — and survive a
+// mid-lifecycle rename ("Nine" → "Imelda") — so prefer them as the key, and
+// normalise the fallback chain's casing.
 function stormKey(props: Record<string, unknown> | undefined): string {
-  return (
-    pick<string>(props, ['STORMID', 'stormId', 'STORMNAME', 'stormName', 'NAME']) ?? 'storm'
-  );
+  const basin = pick(props, ['BASIN', 'basin', 'Basin']);
+  const num = asNumber(pick(props, ['STORMNUM', 'stormNum', 'stormnum']));
+  if (basin != null && num != null) return `${String(basin).trim().toUpperCase()}${num}`;
+  const raw = pick(props, ['STORMID', 'stormId', 'STORMNAME', 'stormName', 'NAME']);
+  return raw == null ? 'STORM' : String(raw).trim().toUpperCase();
 }
 
 interface StormAgg {
@@ -452,7 +460,42 @@ export function HurricaneLayer() {
         s.advDate = pick<string>(p, ['ADVDATE', 'advDate', 'ADVISDATE']) ?? s.advDate;
       }
 
-      const named = [...storms.values()].filter((s) => s.lat != null && s.lon != null);
+      // Safety net: features missing BASIN/STORMNUM fall back to id- or
+      // name-derived keys, which can still split one physical storm across
+      // two aggregates (and previously drew two markers per storm). Regroup
+      // by storm name and fold each group down to a single canonical
+      // aggregate, re-pointing folded keys at it so later lookups resolve.
+      const byName = new Map<string, string[]>();
+      for (const [key, s] of storms) {
+        const nameKey = (s.name?.trim() || key).toUpperCase();
+        const group = byName.get(nameKey);
+        if (group) group.push(key);
+        else byName.set(nameKey, [key]);
+      }
+      for (const keys of byName.values()) {
+        if (keys.length < 2) continue;
+        const group = keys.map((k) => storms.get(k)!);
+        // Prefer the entry backed by an observed fix, else any with a position.
+        const primary = group.reduce((best, s) =>
+          s.obsRank > best.obsRank || (best.lat == null && s.lat != null) ? s : best
+        );
+        for (let i = 0; i < group.length; i++) {
+          const s = group[i];
+          // Never fold two independently-observed entries together — distinct
+          // active storms shouldn't share a name, but stay safe if they do.
+          if (s === primary || s.obsRank !== -Infinity) continue;
+          primary.name ??= s.name;
+          primary.type ??= s.type;
+          primary.windKt ??= s.windKt;
+          primary.gustKt ??= s.gustKt;
+          primary.pressureMb ??= s.pressureMb;
+          primary.basin ??= s.basin;
+          primary.advDate ??= s.advDate;
+          storms.set(keys[i], primary);
+        }
+      }
+
+      const named = [...new Set(storms.values())].filter((s) => s.lat != null && s.lon != null);
       const distList = (disturbances ?? []).filter((f) => ringParts(f.geometry).length > 0);
 
       // Skip the teardown/redraw when nothing meaningful changed.
