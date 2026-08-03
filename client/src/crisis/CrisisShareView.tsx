@@ -1,6 +1,14 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import type { CrisisPublicState, IcsRole, PersonnelAssignment } from './crisisStore';
 import { CrisisShareMap } from './CrisisShareMap';
+import { isShareLiveLayerId } from './shareLiveLayers';
+
+// The live globe (Cesium + every layer component) is only loaded when the
+// incident actually prescribes live layers; plain share links keep the light
+// Leaflet map.
+const CrisisShareGlobe = lazy(() =>
+  import('./CrisisShareGlobe').then((m) => ({ default: m.CrisisShareGlobe }))
+);
 
 const STATUS_BADGE: Record<string, { dot: string; badge: string }> = {
   active:    { dot: '#ef4444', badge: 'text-red-400 bg-red-500/15 border-red-500/40' },
@@ -162,6 +170,14 @@ export function CrisisShareView({ token }: { token: string }) {
 
   const { dot, badge } = STATUS_BADGE[data.incidentStatus] ?? STATUS_BADGE.active;
   const roots = data.roles.filter((r) => r.parentId === null);
+  // Live layers prescribed by the incident team; drop ids this build no longer
+  // knows (snapshots outlive deploys). Array.isArray guards because share
+  // snapshots are stored as opaque JSON — a malformed one must not blank the
+  // whole public page.
+  const liveLayers = (Array.isArray(data.liveLayers) ? data.liveLayers : [])
+    .filter((id) => isShareLiveLayerId(id));
+  const drawLayers = Array.isArray(data.drawLayers) ? data.drawLayers : [];
+  const drawnLayers = drawLayers.filter((l) => l.positions.length > 0);
 
   return (
     <div className="min-h-screen bg-ink-950 text-white">
@@ -258,14 +274,34 @@ export function CrisisShareView({ token }: { token: string }) {
           </div>
         )}
 
-        {/* Interactive incident map — only the layers on this incident,
-            opened centred on their combined extent. */}
-        {data.drawLayers && data.drawLayers.some((l) => l.positions.length > 0) && (
+        {/* Interactive incident map. With live layers prescribed by the
+            incident team, this is the full interactive globe streaming those
+            feeds in real time; otherwise a light flat map of just the drawn
+            layers, opened centred on their combined extent. */}
+        {liveLayers.length > 0 ? (
+          <div>
+            <div className="mb-3 flex items-baseline gap-3">
+              <h2 className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/30">Live Incident Map</h2>
+              <span className="text-[9px] text-white/25">
+                Interactive globe · live data layers selected by the incident team
+              </span>
+            </div>
+            <Suspense
+              fallback={
+                <div className="grid h-[72vh] min-h-[440px] w-full place-items-center rounded-lg border border-white/8 bg-ink-950/60">
+                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-accent" />
+                </div>
+              }
+            >
+              <CrisisShareGlobe liveLayers={liveLayers} drawLayers={drawLayers} />
+            </Suspense>
+          </div>
+        ) : drawnLayers.length > 0 ? (
           <div>
             <h2 className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-white/30">Incident Map</h2>
-            <CrisisShareMap layers={data.drawLayers.filter((l) => l.positions.length > 0)} />
+            <CrisisShareMap layers={drawnLayers} />
           </div>
-        )}
+        ) : null}
 
         {/* Map layers list (read-only) */}
         {data.drawLayers && data.drawLayers.length > 0 && (

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { ShareLiveLayerId } from './shareLiveLayers';
 
 // ── Domain types ─────────────────────────────────────────────────────────────
 
@@ -107,6 +108,10 @@ export interface Incident {
   personnel: PersonnelMember[];
   actionLog: ActionLogEntry[];
   drawLayers: DrawLayer[];
+  // Live data layers prescribed for this incident's public share-link map
+  // (globe feeds like radar/hurricanes/wildfires — not the hand-drawn layers).
+  // Optional because incidents persisted before this feature lack the key.
+  liveLayers?: ShareLiveLayerId[];
   shareToken: string | null;  // legacy — kept for backwards compat with persisted data
   shareLinks: ShareLink[];    // all share links ever created for this incident
   archivedAt?: string | null; // set when the incident is stood down; null/absent = active
@@ -125,6 +130,8 @@ export interface CrisisPublicState {
   assignments: PersonnelAssignment[];
   actionLog: ActionLogEntry[];
   drawLayers: DrawLayer[];
+  // Optional: snapshots published before this feature existed lack the key.
+  liveLayers?: ShareLiveLayerId[];
   publishedAt: string;
   lastUpdated: string;
 }
@@ -188,6 +195,7 @@ function newIncident(): Incident {
     personnel: [],
     actionLog: [],
     drawLayers: [],
+    liveLayers: [],
     shareToken: null,
     shareLinks: [],
   };
@@ -259,6 +267,9 @@ interface CrisisState {
   addActionEntry: (type?: ActionEntryType) => void;
   updateActionEntry: (id: string, patch: Partial<Pick<ActionLogEntry, 'description' | 'attachmentName' | 'attachmentData' | 'entryType'>>) => void;
   removeActionEntry: (id: string) => void;
+
+  // Live layers on the share map
+  toggleLiveLayer: (id: ShareLiveLayerId) => void;
 
   // Draw layers
   addDrawLayer: (layer: Omit<DrawLayer, 'id' | 'createdAt'>) => string;
@@ -474,6 +485,15 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
       removeActionEntry: (id) =>
         set((s) => patchActive(s, (inc) => ({ ...inc, actionLog: inc.actionLog.filter((e) => e.id !== id) }))),
 
+      toggleLiveLayer: (id) =>
+        set((s) => patchActive(s, (inc) => {
+          const cur = inc.liveLayers ?? [];
+          return {
+            ...inc,
+            liveLayers: cur.includes(id) ? cur.filter((l) => l !== id) : [...cur, id],
+          };
+        })),
+
       addDrawLayer: (layer) => {
         const id = uid();
         set((s) => patchActive(s, (inc) => ({
@@ -549,6 +569,10 @@ export function extractPublicState(inc: Incident, publishedAt?: string): CrisisP
     })),
     actionLog: inc.actionLog,
     drawLayers: inc.drawLayers,
+    // Always a concrete array, never undefined: JSON.stringify drops undefined
+    // keys, and the server's PATCH shallow-merge would then keep the snapshot's
+    // OLD liveLayers forever — viewers could never see layers removed.
+    liveLayers: inc.liveLayers ?? [],
     publishedAt: publishedAt ?? new Date().toISOString(),
     lastUpdated: new Date().toISOString(),
   };

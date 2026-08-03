@@ -6,6 +6,7 @@ import {
 import { IcsOrgChart } from '../IcsOrgChart';
 import { ActionLog } from '../ActionLog';
 import { parseCoords } from '../parseCoords';
+import { SHARE_LIVE_LAYER_GROUPS } from '../shareLiveLayers';
 
 const STATUS_STYLES: Record<IncidentStatus, string> = {
   active:    'border-red-500/50 bg-red-500/15 text-red-400',
@@ -354,6 +355,65 @@ function MapLayersSection() {
   );
 }
 
+// ── Share-map live layers section ─────────────────────────────────────────────
+
+function LiveLayersSection() {
+  const inc = useActiveIncident();
+  const toggleLiveLayer = useCrisisStore((s) => s.toggleLiveLayer);
+  const selected = new Set(inc?.liveLayers ?? []);
+
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-3">
+        <h3 className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/35">Live Data Layers</h3>
+        <span className="text-[9px] text-white/25">
+          Shown on the interactive share-link map — viewers see them update in real time
+        </span>
+        {selected.size > 0 && (
+          <span className="ml-auto flex items-center gap-1.5 rounded-full border border-green-500/30 bg-green-500/8 px-2 py-0.5 text-[9px] text-green-400/80">
+            <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
+            {selected.size} live
+          </span>
+        )}
+      </div>
+
+      <div className="space-y-3.5 rounded-lg border border-white/8 bg-ink-950/60 p-3">
+        {SHARE_LIVE_LAYER_GROUPS.map((group) => (
+          <div key={group.name}>
+            <p className="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-white/30">{group.name}</p>
+            <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-3">
+              {group.layers.map((l) => {
+                const on = selected.has(l.id);
+                return (
+                  <button
+                    key={l.id}
+                    onClick={() => toggleLiveLayer(l.id)}
+                    aria-pressed={on}
+                    className={`rounded border px-2.5 py-1.5 text-left transition ${
+                      on
+                        ? 'border-accent/40 bg-accent/12'
+                        : 'border-white/10 bg-white/4 hover:border-white/22'
+                    }`}
+                  >
+                    <span className={`block text-[11px] leading-tight ${on ? 'text-accent' : 'text-white/70'}`}>
+                      {l.label}
+                    </span>
+                    <span className="mt-0.5 block text-[8px] leading-tight text-white/30">{l.hint}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+        <p className="text-[9px] leading-relaxed text-white/25">
+          Selected layers render on a live interactive globe on every active share link for this
+          incident, alongside the drawn map layers above. Changes apply to viewers within seconds.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export function SituationReport() {
@@ -458,6 +518,9 @@ export function SituationReport() {
 
       {/* Map Layers */}
       <MapLayersSection />
+
+      {/* Live data layers for the share-link map */}
+      <LiveLayersSection />
 
     </div>
   );
