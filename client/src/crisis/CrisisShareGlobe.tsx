@@ -159,14 +159,15 @@ function SharePinsLayer({ groups }: { groups: LocationGroup[] }) {
       const pin = makePinIcon(group.color);
       for (const loc of group.locations) {
         ds.entities.add({
-          position: Cesium.Cartesian3.fromDegrees(loc.lon, loc.lat),
+          // Anchored on the ellipsoid surface with the DEFAULT depth test
+          // (no disableDepthTestDistance) — the globe then correctly occludes
+          // pins on its far side instead of letting them show through.
+          position: Cesium.Cartesian3.fromDegrees(loc.lon, loc.lat, 0),
           billboard: {
             image: pin.url,
             width: pin.width,
             height: pin.height,
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
           label: {
             text: loc.name,
@@ -177,8 +178,6 @@ function SharePinsLayer({ groups }: { groups: LocationGroup[] }) {
             style: Cesium.LabelStyle.FILL_AND_OUTLINE,
             verticalOrigin: Cesium.VerticalOrigin.TOP,
             pixelOffset: new Cesium.Cartesian2(0, 4),
-            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 2_500_000),
           },
         });

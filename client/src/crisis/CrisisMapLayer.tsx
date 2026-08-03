@@ -31,7 +31,8 @@ export function addLayerEntities(ds: Cesium.CustomDataSource, layer: DrawLayer) 
     outlineWidth: 3,
     style: Cesium.LabelStyle.FILL_AND_OUTLINE,
     pixelOffset: new Cesium.Cartesian2(0, layer.geometry === 'point' ? -16 : 0),
-    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    // Default depth test so labels on the far side of the planet are hidden
+    // behind the globe instead of showing through it.
     translucencyByDistance: new Cesium.NearFarScalar(5_000, 1.0, 8_000_000, 0.0),
     showBackground: layer.geometry !== 'point',
     backgroundColor: Cesium.Color.BLACK.withAlpha(0.4),
@@ -48,7 +49,7 @@ export function addLayerEntities(ds: Cesium.CustomDataSource, layer: DrawLayer) 
         color,
         outlineColor: Cesium.Color.WHITE,
         outlineWidth: 2,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        // Default depth test — far-side markers hide behind the globe.
       },
       label: labelGraphics,
     });
