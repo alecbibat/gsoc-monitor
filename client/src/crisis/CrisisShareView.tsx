@@ -242,7 +242,9 @@ export function CrisisShareView({ token }: { token: string }) {
   const handlePassword = (password: string) => {
     setChecking(true);
     setWrongPw(false);
-    sha256Hex(password)
+    // Generated passwords are uppercase-only — accept lowercase entry (mobile
+    // keyboards default to it) by normalizing before hashing.
+    sha256Hex(password.toUpperCase())
       .then((hex) => {
         // Same wrong password twice: the fetch effect won't re-run (key
         // unchanged), so surface the error directly.
