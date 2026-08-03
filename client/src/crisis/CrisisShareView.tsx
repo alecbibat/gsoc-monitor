@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import type { CrisisPublicState, IcsRole, PersonnelAssignment } from './crisisStore';
+import type { ShareLiveLayerId } from './shareLiveLayers';
 import { CrisisShareMap } from './CrisisShareMap';
 import { ShareWatchCard } from './ShareWatchCard';
 import { isShareLiveLayerId } from './shareLiveLayers';
@@ -189,6 +190,25 @@ export function CrisisShareView({ token }: { token: string }) {
   // Set once the snapshot fetch succeeds — gates the SSE stream so it never
   // spins 401s against a locked link.
   const [unlocked, setUnlocked] = useState(false);
+  // Layers this viewer switched off locally — live feeds via the legend chips
+  // under the globe, drawn layers via the Map Layers list. Kept as "off" sets
+  // so anything newly prescribed over SSE defaults to on.
+  const [offLive, setOffLive] = useState<Set<ShareLiveLayerId>>(new Set());
+  const [offDraw, setOffDraw] = useState<Set<string>>(new Set());
+
+  const toggleLive = (id: ShareLiveLayerId) =>
+    setOffLive((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  const toggleDraw = (id: string) =>
+    setOffDraw((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  const resetLayers = () => { setOffLive(new Set()); setOffDraw(new Set()); };
 
   // Global CSS sets overflow:hidden for the globe app. Override it here so the
   // read-only share page can scroll normally.
@@ -286,7 +306,12 @@ export function CrisisShareView({ token }: { token: string }) {
   const liveLayers = (Array.isArray(data.liveLayers) ? data.liveLayers : [])
     .filter((id) => isShareLiveLayerId(id));
   const drawLayers = Array.isArray(data.drawLayers) ? data.drawLayers : [];
-  const drawnLayers = drawLayers.filter((l) => l.positions.length > 0);
+  // Viewer-side hides mask a layer's visible flag rather than replace it: a
+  // layer the incident team hid can never be surfaced by a local toggle.
+  const maskedDrawLayers = drawLayers.map((l) =>
+    offDraw.has(l.id) ? { ...l, visible: false } : l
+  );
+  const drawnLayers = maskedDrawLayers.filter((l) => l.visible && l.positions.length > 0);
 
   return (
     <div className="min-h-screen bg-ink-950 text-white">
@@ -411,38 +436,72 @@ export function CrisisShareView({ token }: { token: string }) {
                 </div>
               }
             >
-              <CrisisShareGlobe liveLayers={liveLayers} drawLayers={drawLayers} />
+              <CrisisShareGlobe
+                liveLayers={liveLayers}
+                offLive={offLive}
+                onToggleLive={toggleLive}
+                onResetLayers={resetLayers}
+                drawLayers={maskedDrawLayers}
+              />
             </Suspense>
           </div>
-        ) : drawnLayers.length > 0 ? (
+        ) : drawLayers.some((l) => l.visible && l.positions.length > 0) ? (
           <div>
             <h2 className="mb-3 text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Incident Map</h2>
             <CrisisShareMap layers={drawnLayers} />
           </div>
         ) : null}
 
-        {/* Map layers list (read-only) */}
-        {data.drawLayers && data.drawLayers.length > 0 && (
+        {/* Map layers list — each card toggles that layer on the map above */}
+        {drawLayers.length > 0 && (
           <div>
-            <h2 className="mb-3 text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Map Layers</h2>
+            <div className="mb-3 flex items-baseline gap-3">
+              <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Map Layers</h2>
+              <span className="text-[11px] text-white/35">Click a layer to show or hide it on the map</span>
+            </div>
             <div className="space-y-3">
-              {data.drawLayers.map((layer) => (
-                <div key={layer.id} className="overflow-hidden rounded-lg border border-white/8 bg-ink-950/60">
-                  {(layer as { thumbnail?: string }).thumbnail && (
-                    <img
-                      src={(layer as { thumbnail?: string }).thumbnail}
-                      alt={`${layer.name} map view`}
-                      className="h-40 w-full object-cover"
-                    />
-                  )}
-                  <div className="flex items-center gap-2 px-3 py-2">
-                    <div className="h-3 w-3 shrink-0 rounded-full" style={{ background: layer.color }} />
-                    <span className="text-[12px] text-white/80">{layer.name}</span>
-                    <span className="text-[10px] text-white/40">{layer.type} · {layer.geometry}</span>
-                    <span className="ml-auto text-[10px] text-white/35">{layer.positions.length} points</span>
-                  </div>
-                </div>
-              ))}
+              {drawLayers.map((layer) => {
+                const teamHidden = !layer.visible;
+                const shown = layer.visible && !offDraw.has(layer.id);
+                return (
+                  <button
+                    key={layer.id}
+                    onClick={() => { if (!teamHidden) toggleDraw(layer.id); }}
+                    disabled={teamHidden}
+                    aria-pressed={shown}
+                    className={`block w-full overflow-hidden rounded-lg border text-left transition ${
+                      shown
+                        ? 'border-white/12 bg-ink-950/60 hover:border-white/25'
+                        : 'border-white/8 bg-ink-950/60 opacity-50 hover:opacity-70'
+                    } ${teamHidden ? 'cursor-not-allowed hover:opacity-50' : ''}`}
+                  >
+                    {(layer as { thumbnail?: string }).thumbnail && (
+                      <img
+                        src={(layer as { thumbnail?: string }).thumbnail}
+                        alt={`${layer.name} map view`}
+                        className="h-40 w-full object-cover"
+                      />
+                    )}
+                    <div className="flex items-center gap-2 px-3 py-2">
+                      <div className="h-3 w-3 shrink-0 rounded-full" style={{ background: layer.color, opacity: shown ? 1 : 0.4 }} />
+                      <span className="text-[12px] text-white/80">{layer.name}</span>
+                      <span className="text-[10px] text-white/40">{layer.type} · {layer.geometry}</span>
+                      <span className="ml-auto text-[10px] text-white/35">{layer.positions.length} points</span>
+                      <span
+                        className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest ${
+                          teamHidden
+                            ? 'border-white/12 text-white/30'
+                            : shown
+                              ? 'border-accent/30 bg-accent/8 text-accent/80'
+                              : 'border-white/15 text-white/40'
+                        }`}
+                      >
+                        {teamHidden ? 'Hidden by team' : shown ? 'On map' : 'Hidden'}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
