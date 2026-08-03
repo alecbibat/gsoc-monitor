@@ -38,7 +38,7 @@ export function CrisisLayerPopup() {
 
   return createPortal(
     <div
-      className="fixed z-[1500] overflow-hidden rounded-xl border border-white/15 bg-ink-950/96 shadow-2xl backdrop-blur-md"
+      className="fixed z-[1500] overflow-hidden rounded-xl border border-white/15 bg-ink-950/95 shadow-2xl backdrop-blur-md"
       style={{ left, top, width: POPUP_W }}
     >
       {/* Color bar */}

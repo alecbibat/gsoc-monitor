@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { randomUUID } from 'crypto';
+import { createHash, randomInt, randomUUID, timingSafeEqual } from 'crypto';
 import { pool } from '../db';
 import { requireAuth } from '../middleware/auth';
 import { wrap } from '../asyncWrap';
@@ -8,6 +8,30 @@ const router = Router();
 
 // SSE client connections are transient (per-process); share state lives in DB.
 const sseClients = new Map<string, Set<Response>>();
+
+// ── Viewer password gate ──────────────────────────────────────────────────────
+//
+// Every new share link gets a generated password. The DB stores only its
+// SHA-256; viewers exchange the password for that same hex digest client-side
+// and pass it as ?k= on the two public read paths (a query param because
+// EventSource cannot send headers). Legacy links with no password_hash stay
+// open so existing shared URLs keep working.
+
+const PW_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no O/0/I/1 — visually unambiguous
+function generatePassword(len = 10): string {
+  return Array.from({ length: len }, () => PW_ALPHA[randomInt(PW_ALPHA.length)]).join('');
+}
+
+const sha256Hex = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
+
+function viewKeyOk(passwordHash: string | null, req: Request): boolean {
+  if (!passwordHash) return true;
+  const key = req.query.k;
+  if (typeof key !== 'string') return false;
+  const a = Buffer.from(key.toLowerCase(), 'utf8');
+  const b = Buffer.from(passwordHash.toLowerCase(), 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 //
@@ -26,12 +50,16 @@ router.post('/publish', requireAuth, wrap(async (req: Request, res: Response) =>
   }
   const token = randomUUID();
   const incidentId: string | undefined = (snapshot as { incidentId?: string }).incidentId;
+  // The plaintext password is returned exactly once, here; only its hash is
+  // stored. The editor keeps it on the incident's ShareLink entry (auth-only
+  // data) so the Share Links popup can re-surface it.
+  const password = generatePassword();
   await pool.query(
-    `INSERT INTO share_links (token, incident_id, snapshot)
-     VALUES ($1, $2, $3)`,
-    [token, incidentId ?? null, JSON.stringify(snapshot)]
+    `INSERT INTO share_links (token, incident_id, snapshot, password_hash)
+     VALUES ($1, $2, $3, $4)`,
+    [token, incidentId ?? null, JSON.stringify(snapshot), sha256Hex(password)]
   );
-  res.json({ token, url: `/?share=${token}` });
+  res.json({ token, url: `/?share=${token}`, password });
 }, 'crisis'));
 
 // PATCH /api/crisis/share/:token — push updated snapshot, notify SSE clients
@@ -59,13 +87,17 @@ router.patch('/share/:token', requireAuth, wrap(async (req: Request, res: Respon
   res.json({ ok: true });
 }, 'crisis'));
 
-// GET /api/crisis/share/:token — return current state snapshot (no auth required)
+// GET /api/crisis/share/:token — return current state snapshot (no account
+// needed, but password-protected links require the ?k= view key)
 router.get('/share/:token', wrap(async (req: Request, res: Response) => {
   const { rows: [row] } = await pool.query(
-    'SELECT snapshot FROM share_links WHERE token = $1 AND active = TRUE',
+    'SELECT snapshot, password_hash FROM share_links WHERE token = $1 AND active = TRUE',
     [req.params.token]
   );
   if (!row) { res.status(404).json({ error: 'Not found' }); return; }
+  if (!viewKeyOk(row.password_hash, req)) {
+    res.status(401).json({ error: 'Password required', passwordRequired: true }); return;
+  }
   res.json(row.snapshot);
 }, 'crisis'));
 
@@ -88,17 +120,21 @@ router.delete('/share/:token', requireAuth, wrap(async (req: Request, res: Respo
   res.json({ ok: true });
 }, 'crisis'));
 
-// GET /api/crisis/share/:token/events — SSE stream for live updates (no auth required)
+// GET /api/crisis/share/:token/events — SSE stream for live updates (no account
+// needed, but password-protected links require the ?k= view key)
 router.get('/share/:token/events', wrap(async (req: Request, res: Response) => {
   const { token } = req.params;
   const { rows: [row] } = await pool.query(
-    'SELECT snapshot FROM share_links WHERE token = $1 AND active = TRUE',
+    'SELECT snapshot, password_hash FROM share_links WHERE token = $1 AND active = TRUE',
     [token]
   );
   if (!row) { res.status(404).end(); return; }
+  if (!viewKeyOk(row.password_hash, req)) { res.status(401).end(); return; }
 
   res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
+  // no-transform: stops compression middleware and intermediaries from
+  // buffering the stream — buffered SSE events only arrive on refresh.
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.flushHeaders();

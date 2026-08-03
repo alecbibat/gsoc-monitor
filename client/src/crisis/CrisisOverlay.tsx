@@ -27,6 +27,7 @@ function ShareLinksPanel() {
   const [open, setOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [copiedPwToken, setCopiedPwToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const shareLinks = inc?.shareLinks ?? [];
@@ -44,9 +45,9 @@ function ShareLinksPanel() {
       });
       if (res.status === 413) throw new Error('Incident is too large to share (too many images/attachments).');
       if (!res.ok) throw new Error('Could not create link — please try again.');
-      const { token, url } = await res.json() as { token: string; url: string };
+      const { token, url, password } = await res.json() as { token: string; url: string; password?: string };
       const fullUrl = `${window.location.origin}${url}`;
-      addShareLink(token, fullUrl);
+      addShareLink(token, fullUrl, password);
       setOpen(true);
     } catch (err) {
       console.error('[crisis] publish failed', err);
@@ -70,6 +71,13 @@ function ShareLinksPanel() {
     });
   };
 
+  const handleCopyPassword = (password: string, token: string) => {
+    navigator.clipboard.writeText(password).then(() => {
+      setCopiedPwToken(token);
+      setTimeout(() => setCopiedPwToken(null), 2000);
+    });
+  };
+
   return (
     <div className="relative">
       <button
@@ -90,42 +98,42 @@ function ShareLinksPanel() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-1.5 w-80 rounded-lg border border-white/12 bg-ink-900/98 shadow-2xl backdrop-blur-sm">
-          <div className="border-b border-white/8 px-3 py-2.5 flex items-center justify-between">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-white/40">Share Links</span>
-            <button onClick={() => setOpen(false)} className="text-white/25 hover:text-white/55 text-[11px]">✕</button>
+        <div className="absolute right-0 top-full z-50 mt-1.5 w-96 rounded-lg border border-white/15 bg-ink-900 shadow-2xl">
+          <div className="border-b border-white/10 px-3.5 py-2.5 flex items-center justify-between">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-white/70">Share Links</span>
+            <button onClick={() => setOpen(false)} className="text-white/40 hover:text-white/80 text-[12px]">✕</button>
           </div>
 
-          <div className="max-h-64 overflow-y-auto">
+          <div className="max-h-72 overflow-y-auto">
             {shareLinks.length === 0 ? (
-              <p className="px-3 py-4 text-center text-[10px] text-white/30">
+              <p className="px-3 py-4 text-center text-[12px] text-white/50">
                 No links created yet — create one below
               </p>
             ) : (
-              <div className="divide-y divide-white/6">
+              <div className="divide-y divide-white/8">
                 {[...shareLinks].reverse().map((link) => (
-                  <div key={link.token} className={`px-3 py-2.5 ${link.active ? '' : 'opacity-40'}`}>
+                  <div key={link.token} className={`px-3.5 py-2.5 ${link.active ? '' : 'opacity-40'}`}>
                     <div className="flex items-center gap-1.5 mb-1">
                       <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${link.active ? 'bg-green-500' : 'bg-white/20'}`} />
-                      <span className="text-[9px] text-white/35">
+                      <span className="text-[11px] text-white/60">
                         {link.active ? 'Active' : 'Revoked'} · {new Date(link.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <code className="min-w-0 flex-1 truncate rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-white/50">
+                      <code className="min-w-0 flex-1 truncate rounded bg-white/8 px-1.5 py-1 text-[11px] text-white/70">
                         {link.url}
                       </code>
                       {link.active && (
                         <>
                           <button
                             onClick={() => handleCopy(link.url, link.token)}
-                            className="shrink-0 rounded border border-white/10 px-2 py-0.5 text-[9px] text-white/45 transition hover:border-white/20 hover:text-white"
+                            className="shrink-0 rounded border border-white/15 px-2 py-1 text-[11px] text-white/65 transition hover:border-white/30 hover:text-white"
                           >
-                            {copiedToken === link.token ? '✓' : 'Copy'}
+                            {copiedToken === link.token ? '✓ Copied' : 'Copy'}
                           </button>
                           <button
                             onClick={() => handleDeactivate(link.token)}
-                            className="shrink-0 text-[9px] text-white/20 transition hover:text-red-400/70"
+                            className="shrink-0 text-[11px] text-white/35 transition hover:text-red-400/80"
                             title="Revoke this link"
                           >
                             Revoke
@@ -133,25 +141,40 @@ function ShareLinksPanel() {
                         </>
                       )}
                     </div>
+                    {link.password && (
+                      <div className="mt-1.5 flex items-center gap-1.5">
+                        <span className="shrink-0 text-[10px] uppercase tracking-wider text-white/45">Password</span>
+                        <button
+                          onClick={() => handleCopyPassword(link.password!, link.token)}
+                          title="Click to copy password"
+                          className="flex items-center gap-1.5 rounded border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 font-mono text-[12px] font-semibold tracking-[0.12em] text-amber-300 transition hover:border-amber-400/60 hover:bg-amber-400/20"
+                        >
+                          {link.password}
+                          <span className="text-[10px] font-sans font-normal tracking-normal text-amber-300/70">
+                            {copiedPwToken === link.token ? '✓ copied' : '⧉'}
+                          </span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
             )}
           </div>
 
-          <div className="border-t border-white/8 px-3 py-2.5">
+          <div className="border-t border-white/10 px-3.5 py-2.5">
             <button
               onClick={handleCreate}
               disabled={publishing}
-              className="w-full rounded bg-accent/15 py-1.5 text-[10px] text-accent transition hover:bg-accent/25 disabled:opacity-40"
+              className="w-full rounded bg-accent/15 py-2 text-[12px] font-medium text-accent transition hover:bg-accent/25 disabled:opacity-40"
             >
               {publishing ? 'Creating…' : '+ Create new link'}
             </button>
             {error ? (
-              <p className="mt-1.5 text-center text-[8px] text-red-400/80">{error}</p>
+              <p className="mt-1.5 text-center text-[10px] text-red-400/80">{error}</p>
             ) : (
-              <p className="mt-1.5 text-center text-[8px] text-white/20">
-                Links stay active until you revoke them
+              <p className="mt-1.5 text-center text-[10px] text-white/40">
+                Viewers need the link password · links stay active until revoked
               </p>
             )}
           </div>
@@ -213,7 +236,9 @@ function IncidentDetail() {
 
       {/* Right: opaque editing panel — kept under half-width so the globe's
           centre stays visible in the reserved segment on the left */}
-      <div className="pointer-events-auto flex h-full w-full flex-col border-l border-white/10 bg-ink-950/98 pb-safe shadow-2xl backdrop-blur-sm md:w-[46vw] md:min-w-[460px] md:max-w-[720px]">
+      {/* /95 (not /98): Tailwind's default opacity scale has no 98 step, so
+          bg-ink-950/98 silently compiled to no background at all. */}
+      <div className="pointer-events-auto flex h-full w-full flex-col border-l border-white/10 bg-ink-950/95 pb-safe shadow-2xl backdrop-blur-sm md:w-[46vw] md:min-w-[460px] md:max-w-[720px]">
         {/* Header */}
         <header className="flex shrink-0 items-center gap-3 border-b border-white/10 bg-ink-900/70 px-5 py-3">
           <button
@@ -355,7 +380,7 @@ function IncidentDetail() {
 function IncidentListShell() {
   const close = useCrisisStore((s) => s.close);
   return (
-    <div className="fixed inset-0 z-[2000] flex flex-col bg-ink-950/98 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[2000] flex flex-col bg-ink-950/95 backdrop-blur-sm">
       <header className="flex shrink-0 items-center gap-4 border-b border-white/10 bg-ink-900/70 px-6 py-3.5">
         <div className="flex items-center gap-2.5">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

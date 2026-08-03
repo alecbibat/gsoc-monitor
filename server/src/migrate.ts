@@ -48,6 +48,10 @@ export async function migrate() {
         created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
+      -- Viewer password gate for share links (SHA-256 hex of the password).
+      -- NULL = legacy link created before passwords existed — stays open.
+      ALTER TABLE share_links ADD COLUMN IF NOT EXISTS password_hash TEXT;
+
       -- Team-shared OSINT watchlist. Each row is one intel source (news site,
       -- Google-News topic, scanner agency, crime dataset, social account) the
       -- background ingest engine polls. Items themselves are never stored — they

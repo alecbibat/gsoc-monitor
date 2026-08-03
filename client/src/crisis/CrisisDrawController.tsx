@@ -206,7 +206,7 @@ export function CrisisDrawController() {
 
   return createPortal(
     <div className="fixed bottom-24 left-1/2 z-[3000] -translate-x-1/2">
-      <div className="flex items-center gap-2 rounded-lg border border-white/20 bg-ink-950/96 px-4 py-2.5 shadow-xl">
+      <div className="flex items-center gap-2 rounded-lg border border-white/20 bg-ink-950/95 px-4 py-2.5 shadow-xl">
         <div className="mr-1">
           <p className="text-[9px] font-bold uppercase tracking-wider text-white/35">
             Drawing {geometry}

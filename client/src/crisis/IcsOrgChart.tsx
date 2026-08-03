@@ -209,8 +209,8 @@ function NodeCard({
         selected ? 'ring-1 ring-accent/50' : 'hover:border-white/20'
       } ${dragOver ? 'ring-1 ring-accent/60' : ''}`}
       style={{
-        minWidth: role.parentId === null ? '180px' : '120px',
-        borderColor: selected ? 'rgba(99,179,237,0.5)' : dragOver ? 'rgba(99,179,237,0.4)' : `${role.color}45`,
+        minWidth: role.parentId === null ? '190px' : '132px',
+        borderColor: selected ? 'rgba(99,179,237,0.5)' : dragOver ? 'rgba(99,179,237,0.4)' : `${role.color}70`,
       }}
     >
       {/* Remove button — visible on hover when empty */}
@@ -224,14 +224,14 @@ function NodeCard({
         </button>
       )}
 
-      <div className="h-0.5 w-full rounded-t-md" style={{ background: role.color }} />
+      <div className="h-1 w-full rounded-t-md" style={{ background: role.color }} />
       <div className="px-2.5 py-2">
         {role.abbrev && (
-          <p className="mb-0.5 text-[8px] font-bold uppercase tracking-[0.14em]" style={{ color: role.color }}>
+          <p className="mb-0.5 text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: role.color }}>
             {role.abbrev}
           </p>
         )}
-        <p className={`font-semibold leading-tight text-white/90 ${role.parentId === null ? 'text-[12px]' : 'text-[10px]'}`}>
+        <p className={`font-bold leading-tight text-white/95 ${role.parentId === null ? 'text-[14px]' : 'text-[12px]'}`}>
           {role.title}
         </p>
 
@@ -239,27 +239,27 @@ function NodeCard({
           activeAssignments.length > 0 ? (
             <div className="mt-1 space-y-0.5">
               {activeAssignments.map((a) => (
-                <p key={a.id} className="text-[9px] text-white/45 leading-tight">{a.name}</p>
+                <p key={a.id} className="text-[11px] text-white/70 leading-tight">{a.name}</p>
               ))}
             </div>
           ) : (
-            <p className="mt-1 text-[9px] text-white/20">Drop to assign</p>
+            <p className="mt-1 text-[10px] text-white/30">Drop to assign</p>
           )
         ) : (
-          <p className="mt-1 text-[9px] text-white/40">
+          <p className="mt-1 text-[11px] text-white/70">
             {activeAssignments[0] ? activeAssignments[0].name : '—'}
           </p>
         )}
 
         {dragOver && (
-          <p className="mt-0.5 text-[8px] text-accent/70">Drop to assign</p>
+          <p className="mt-0.5 text-[9px] text-accent/70">Drop to assign</p>
         )}
       </div>
 
       {role.isSupport && (
         <div
-          className="flex items-center justify-center pb-1 text-[7px] font-bold uppercase tracking-widest"
-          style={{ color: role.color, opacity: 0.5 }}
+          className="flex items-center justify-center pb-1 text-[9px] font-bold uppercase tracking-widest"
+          style={{ color: role.color, opacity: 0.6 }}
         >
           support
         </div>
@@ -312,7 +312,7 @@ function RoleSubtree({
           <Stem h={14} dashed />
           <div className="mb-1 flex w-full items-center gap-2 px-2">
             <div className="h-px flex-1" style={{ background: WIRE_DASH }} />
-            <span className="shrink-0 text-[7px] font-bold uppercase tracking-[0.16em] text-white/25">
+            <span className="shrink-0 text-[9px] font-bold uppercase tracking-[0.16em] text-white/45">
               Command Staff — Advisory
             </span>
             <div className="h-px flex-1" style={{ background: WIRE_DASH }} />
@@ -329,7 +329,7 @@ function RoleSubtree({
       {commandKids.length > 0 && regularKids.length > 0 && (
         <div className="my-4 flex w-full items-center gap-3 px-1">
           <div className="h-px flex-1" style={{ background: WIRE }} />
-          <span className="shrink-0 text-[8px] font-bold uppercase tracking-[0.16em] text-white/28">
+          <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.16em] text-white/50">
             General Staff
           </span>
           <div className="h-px flex-1" style={{ background: WIRE }} />
@@ -340,7 +340,7 @@ function RoleSubtree({
       {depth > 0 && hasKids && (
         <button
           onClick={(e) => { e.stopPropagation(); setKidsCollapsed((v) => !v); }}
-          className="mt-2 flex items-center gap-1 rounded border border-white/10 bg-white/4 px-2 py-0.5 text-[8px] text-white/30 transition hover:border-white/20 hover:text-white/55"
+          className="mt-2 flex items-center gap-1 rounded border border-white/10 bg-white/4 px-2 py-0.5 text-[10px] text-white/45 transition hover:border-white/20 hover:text-white/70"
         >
           <span style={{ color: role.color }}>{kidsCollapsed ? '▼' : '▲'}</span>
           {kidsCollapsed ? `Expand (${regularKids.length + commandKids.length})` : 'Collapse'}

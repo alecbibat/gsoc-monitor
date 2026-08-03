@@ -213,8 +213,8 @@ function MapLayersSection() {
   return (
     <section>
       <div className="mb-3 flex items-center gap-3">
-        <h3 className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/35">Map Layers</h3>
-        <span className="text-[9px] text-white/25">Draw on the live map — layers stay visible while the incident is active</span>
+        <h3 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/65">Map Layers</h3>
+        <span className="text-[11px] text-white/40">Draw on the live map — layers stay visible while the incident is active</span>
         <button
           onClick={() => setCreating((v) => !v)}
           className="ml-auto rounded border border-white/12 px-2.5 py-1 text-[9px] text-white/45 transition hover:border-white/25 hover:text-white/70"
@@ -365,8 +365,8 @@ function LiveLayersSection() {
   return (
     <section>
       <div className="mb-3 flex items-center gap-3">
-        <h3 className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/35">Live Data Layers</h3>
-        <span className="text-[9px] text-white/25">
+        <h3 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/65">Live Data Layers</h3>
+        <span className="text-[11px] text-white/40">
           Shown on the interactive share-link map — viewers see them update in real time
         </span>
         {selected.size > 0 && (
@@ -429,7 +429,7 @@ export function SituationReport() {
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
 
         <section className="flex flex-col">
-          <h3 className="mb-2.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white/35">Executive Summary</h3>
+          <h3 className="mb-2.5 text-[13px] font-bold uppercase tracking-[0.14em] text-white/65">Executive Summary</h3>
           <textarea
             className="flex-1 resize-none rounded-lg border border-white/12 bg-white/8 px-3.5 py-3 text-[13px] leading-relaxed text-white/85 placeholder-white/30 outline-none transition focus:border-white/25 focus:bg-white/12"
             placeholder="Provide a concise summary of the incident, current situation, key impacts, and priority actions required. Update as conditions evolve."
@@ -440,7 +440,7 @@ export function SituationReport() {
         </section>
 
         <section>
-          <h3 className="mb-2.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white/35">Incident Information</h3>
+          <h3 className="mb-2.5 text-[13px] font-bold uppercase tracking-[0.14em] text-white/65">Incident Information</h3>
           <div className="space-y-2.5 rounded-lg border border-white/12 bg-white/8 p-4">
             <FieldRow label="Name">
               <TextInput value={inc.incidentName} onChange={(v) => update({ incidentName: v })} placeholder="e.g. Maui Wildfire Complex" />
@@ -505,8 +505,8 @@ export function SituationReport() {
       {/* ICS / NIMS Org Chart */}
       <section>
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/35">ICS / NIMS Organizational Structure</h3>
-          <span className="text-[9px] text-white/25">Click any role to assign personnel or edit</span>
+          <h3 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/65">ICS / NIMS Organizational Structure</h3>
+          <span className="text-[11px] text-white/40">Click any role to assign personnel or edit</span>
         </div>
         <div className="rounded-lg border border-white/8 bg-ink-950/60 px-6 py-5">
           <IcsOrgChart />

@@ -60,7 +60,7 @@ export function AdminPanel({ onClose }: { onClose: () => void }) {
 
   return createPortal(
     <div className="pointer-events-auto fixed inset-0 z-[4000] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-lg rounded-xl border border-white/12 bg-ink-900/98 shadow-2xl">
+      <div className="w-full max-w-lg rounded-xl border border-white/12 bg-ink-900 shadow-2xl">
         <div className="flex items-center justify-between border-b border-white/8 px-5 py-3.5">
           <span className="text-[12px] font-bold uppercase tracking-[0.15em] text-white/50">Admin</span>
           <button onClick={onClose} className="text-white/30 transition hover:text-white/60">✕</button>

@@ -228,7 +228,7 @@ export function ActionLog() {
     <section>
       {/* Header */}
       <div className="mb-3 flex items-center gap-3">
-        <h3 className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/30">
+        <h3 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/65">
           Actions &amp; Events Log
         </h3>
 

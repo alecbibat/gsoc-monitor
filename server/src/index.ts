@@ -75,7 +75,19 @@ function main() {
   // Gzip every response — the API ships large JSON payloads (lightning history,
   // outages, rivers, ships) that compress 5–10×, and the static client bundle
   // benefits too. Costs a little CPU on a mostly-idle dyno.
-  app.use(compression());
+  //
+  // EXCEPT server-sent event streams: gzip holds writes in the zlib buffer, so
+  // SSE events (crisis share updates, incident live sync) sat server-side and
+  // never reached the browser — viewers had to refresh to see changes.
+  app.use(
+    compression({
+      filter: (req, res) => {
+        const type = String(res.getHeader('Content-Type') ?? '');
+        if (type.includes('text/event-stream')) return false;
+        return compression.filter(req, res);
+      },
+    })
+  );
   app.use(cors());
   app.use(cookieParser());
   // Crisis share state embeds Cloudinary URLs after the migration (previously

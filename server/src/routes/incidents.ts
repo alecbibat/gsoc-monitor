@@ -25,7 +25,9 @@ function broadcast(event: 'upsert' | 'delete', data: unknown) {
 // GET /api/incidents/events — SSE stream of live incident changes (auth required).
 router.get('/events', (req: Request, res: Response) => {
   res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
+  // no-transform: stops compression middleware and intermediaries from
+  // buffering the stream — buffered SSE events only arrive on refresh.
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
   res.write('event: connected\ndata: {}\n\n');
