@@ -600,7 +600,7 @@ export function Sidebar() {
                 : iqairStatus.noKey
                   ? 'Set IQAIR_API_KEY (free at iqair.com)'
                   : iqairStatus.count > 0
-                    ? `${iqairStatus.count} cities · worst AQI ${iqairStatus.worstAqi} (${iqairStatus.worstCity})${iqairStatus.sweeping ? ' · updating…' : ''}`
+                    ? `${iqairStatus.count} cities${iqairStatus.worstAqi > 0 ? ` · worst AQI ${iqairStatus.worstAqi} (${iqairStatus.worstCity})` : ''}${iqairStatus.sweeping ? ' · updating…' : ''}`
                     : iqairStatus.sweeping
                       ? 'First sweep in progress — cities appear as they load'
                       : 'Major world cities · IQAir AirVisual'

@@ -56,8 +56,11 @@ interface HourPoint {
 function buildWindow(fc: AirQualityForecast): { hours: HourPoint[]; peak: HourPoint | null } {
   const { time, aqi } = fc.hourly;
   const nowPrefix = new Date(Date.now() + fc.utcOffsetSeconds * 1000).toISOString().slice(0, 13);
-  let start = time.findIndex((t) => t.slice(0, 13) >= nowPrefix);
-  if (start < 0) start = 0;
+  const start = time.findIndex((t) => t.slice(0, 13) >= nowPrefix);
+  // Entirely-past window: a long-degraded upstream can serve a stale cached
+  // forecast — render nothing rather than presenting old hours as upcoming
+  // (the staleness note below tells the user what happened).
+  if (start < 0) return { hours: [], peak: null };
 
   const hours: HourPoint[] = [];
   let peak: HourPoint | null = null;
@@ -292,6 +295,17 @@ export function IqairDetails({ payload }: Props) {
 
         {!err && fc && win && (
           <div className="space-y-3">
+            {/* Staleness notice — the server serves its last good forecast when
+                the upstream is down, which can be hours old. */}
+            {(win.hours.length === 0 || Date.now() - fc.updated > 6 * 3_600_000) && (
+              <div className="rounded-lg border border-sky-400/25 bg-sky-400/[0.07] px-3 py-2 text-[12px] leading-snug text-white/55">
+                {win.hours.length === 0
+                  ? 'This forecast has lapsed — the upstream feed appears degraded. '
+                  : ''}
+                Retrieved {timeAgo(fc.updated)}.
+              </div>
+            )}
+
             {/* Peak callout */}
             {win.peak && win.peak.aqi > 100 && (
               <div className="flex items-center gap-2 rounded-lg border border-amber-400/25 bg-amber-400/[0.07] px-3 py-2">

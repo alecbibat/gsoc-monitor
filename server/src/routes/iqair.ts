@@ -160,7 +160,9 @@ export interface IqairResponse {
 
 interface AvNearestCity {
   status?: string;
-  data?: {
+  // Success responses carry an object; error responses have been observed with
+  // either { data: { message: '...' } } or a bare string in data.
+  data?: string | {
     city?: string;
     state?: string;
     country?: string;
@@ -219,6 +221,7 @@ const citiesById = new Map<string, IqairCity>();
 let sweepCompletedAt = 0; // when the last full sweep finished (0 = never)
 let sweeping = false;
 let lastError: string | null = null;
+let snapshotLoadFailed = false; // Postgres unreadable at boot (vs. readable-but-empty)
 
 const SNAPSHOT_KEY = 'iqair-cities';
 
@@ -243,7 +246,13 @@ async function fetchNearestCity(
   } catch {
     /* non-JSON body — handled below via status */
   }
-  const reason = body?.data?.message ?? body?.status ?? `HTTP ${res.status}`;
+  const d = typeof body?.data === 'object' ? body.data : undefined;
+  // Error reason: data as a bare string, data.message, or the status field —
+  // the API has been observed using all three shapes. Missing the real reason
+  // matters: the sweep's abort check keys off it, and a dead key mistaken for
+  // a per-city blip means ~60 wasted calls per sweep.
+  const dataMsg = typeof body?.data === 'string' ? body.data : d?.message;
+  const reason = dataMsg ?? body?.status ?? `HTTP ${res.status}`;
 
   // Per-minute throttle: wait out the window once, then give up on this city.
   if (res.status === 429 || /too_many_requests/i.test(reason)) {
@@ -253,9 +262,7 @@ async function fetchNearestCity(
     }
     throw new Error('too_many_requests');
   }
-  if (!res.ok || body?.status !== 'success') throw new Error(reason);
-
-  const d = body.data;
+  if (!res.ok || body?.status !== 'success') throw new Error(`${reason} (HTTP ${res.status})`);
   const p = d?.current?.pollution;
   const aqius = num(p?.aqius);
   if (!d || !p || aqius == null) return null; // station exists but no current AQI
@@ -353,6 +360,7 @@ async function loadSnapshot(attempts = 5): Promise<void> {
       return;
     } catch (err) {
       if (attempt >= attempts) {
+        snapshotLoadFailed = true;
         console.warn(
           '[iqair] snapshot load failed — starting from an empty map:',
           err instanceof Error ? err.message : err
@@ -425,8 +433,17 @@ export function initIqairStream(): void {
     await loadSnapshot();
     // Resume the cadence where the snapshot left off: a restart right after a
     // sweep waits out the rest of the interval instead of re-spending ~64 calls.
+    // When the snapshot couldn't be READ at all (Postgres down/misconfigured),
+    // the restart guard is gone — a crash-looping process sweeping 5s after
+    // every boot would blow the 500/day cap in ~8 restarts. Back the first
+    // sweep off to 15 min in that case so a crash loop stays within budget.
     const sinceLast = Date.now() - sweepCompletedAt;
-    const delay = sweepCompletedAt > 0 ? Math.max(5_000, SWEEP_INTERVAL_MS - sinceLast) : 5_000;
+    const delay =
+      sweepCompletedAt > 0
+        ? Math.max(5_000, SWEEP_INTERVAL_MS - sinceLast)
+        : snapshotLoadFailed
+          ? 15 * 60_000
+          : 5_000;
     scheduleSweep(delay);
   })();
 }
