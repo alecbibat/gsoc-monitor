@@ -40,6 +40,7 @@ npm run dev:client
 | USGS Earthquakes | No key needed | Fully public. |
 | CelesTrak (satellites) | No key needed | Public TLE data; the server caches each group for 2h per CelesTrak's guidance. |
 | RainViewer | No key needed | Fully public tile CDN. |
+| IQAir AirVisual (world AQI) | Free key | `IQAIR_API_KEY` — free Community key from dashboard.iqair.com (10k calls/month). The server sweeps ~64 world cities every 6h (~7.7k calls/month) and snapshots to Postgres so deploys don't re-spend quota. Per-point forecasts come from Open-Meteo/CAMS (no key). |
 | Nominatim (geocoding) | No key needed | Uses OSM data; `NWS_USER_AGENT` string is also used here as User-Agent per their policy. |
 
 ## Deploy to Heroku

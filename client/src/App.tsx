@@ -17,6 +17,7 @@ import { OutageLayer } from './layers/outages/OutageLayer';
 import { SmokeLayer } from './layers/smoke/SmokeLayer';
 import { PrecipLayer } from './layers/precip/PrecipLayer';
 import { AqiLayer } from './layers/aqi/AqiLayer';
+import { IqairLayer } from './layers/iqair/IqairLayer';
 import { FuelLayer } from './layers/fuel/FuelLayer';
 import { WindLayer } from './layers/wind/WindLayer';
 import { WindArrowsLayer } from './layers/wind/WindArrowsLayer';
@@ -146,6 +147,7 @@ export default function App() {
           <FireOutlookLayer />
           <RiversLayer />
           <AqiLayer />
+          <IqairLayer />
           <FuelLayer />
           <WindLayer />
           <WindArrowsLayer />

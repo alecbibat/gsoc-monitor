@@ -99,6 +99,9 @@ export const api = {
     getJson<import('../types').RiverDetail>(`/api/rivers/${encodeURIComponent(lid)}`),
   windForecast: (lat: number, lon: number) =>
     getJson<import('../types').WindForecast>(`/api/wind/forecast?lat=${lat}&lon=${lon}`),
+  iqair: () => getJson<import('../types').IqairResponse>('/api/iqair'),
+  airQualityForecast: (lat: number, lon: number) =>
+    getJson<import('../types').AirQualityForecast>(`/api/iqair/forecast?lat=${lat}&lon=${lon}`),
 
   // OSINT intel engine: the public read-only feed + the team-shared watchlist CRUD.
   intel: () => getJson<import('../types').IntelResponse>('/api/intel'),

@@ -139,6 +139,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'iqair',
+    info: {
+      name: 'World Air Quality (IQAir)',
+      icon: '🌍',
+      source: 'IQAir AirVisual + Copernicus CAMS',
+      method:
+        'Current AQI for ~60 major world cities from the IQAir AirVisual API (station-based, US EPA scale, refreshed server-side every 6 hours within the free tier’s call budget). Clicking a city adds a 5-day air-quality forecast for that exact point from the Copernicus CAMS atmospheric model via Open-Meteo; keys on paid IQAir plans additionally show IQAir’s own per-city forecast.',
+      trust:
+        'IQAir aggregates government reference monitors and validated sensors worldwide — the network behind the widely cited AirVisual world AQI ranking. CAMS is the EU Copernicus programme’s operational atmosphere model; its forecast is model output, so treat it as guidance rather than measurement.',
+      url: 'https://www.iqair.com/air-quality-map',
+    },
+  },
+  {
     id: 'wind',
     info: {
       name: 'Wind',

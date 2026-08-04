@@ -11,7 +11,7 @@ import type { LayerId } from '../types';
 export type ShareLiveLayerId = Extract<
   LayerId,
   | 'radar' | 'precip' | 'hurricanes' | 'lightning' | 'wind' | 'windArrows'
-  | 'fires' | 'wildfires' | 'smoke' | 'aqi' | 'fireOutlook' | 'fuel'
+  | 'fires' | 'wildfires' | 'smoke' | 'aqi' | 'iqair' | 'fireOutlook' | 'fuel'
   | 'alerts' | 'earthquakes' | 'rivers' | 'outages'
   | 'newsMap' | 'intel'
 >;
@@ -46,6 +46,7 @@ export const SHARE_LIVE_LAYER_GROUPS: ShareLiveLayerGroup[] = [
       { id: 'wildfires',   label: 'Named Fires (NIFC)',     hint: 'Incidents + perimeters' },
       { id: 'smoke',       label: 'Smoke (NOAA HMS)',       hint: 'Satellite smoke plumes' },
       { id: 'aqi',         label: 'Air Quality',            hint: 'AirNow + PurpleAir · CONUS' },
+      { id: 'iqair',       label: 'World Air Quality',      hint: 'IQAir · major world cities' },
       { id: 'fireOutlook', label: '7-Day Fire Potential',   hint: 'NWCG outlook · CONUS' },
       { id: 'fuel',        label: 'Fuel Models (LANDFIRE)', hint: 'FBFM40 · CONUS' },
     ],

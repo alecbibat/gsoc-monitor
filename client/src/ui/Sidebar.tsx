@@ -11,6 +11,7 @@ import { useWildfiresStatus } from '../layers/wildfires/wildfiresStore';
 import { useOutagesStatus } from '../layers/outages/outagesStore';
 import { useSmokeStatus } from '../layers/smoke/smokeStore';
 import { useAqiStatus } from '../layers/aqi/aqiStore';
+import { useIqairStatus } from '../layers/iqair/iqairStore';
 import { useRiversStatus } from '../layers/rivers/riversStore';
 import { RIVER_FILTERS } from '../layers/rivers/riverMeta';
 import { useFuelStatus } from '../layers/fuel/fuelStore';
@@ -145,6 +146,16 @@ export function Sidebar() {
       showAirnow: s.showAirnow,
       showPurpleair: s.showPurpleair,
       toggleSource: s.toggleSource,
+      error: s.error,
+    }))
+  );
+  const iqairStatus = useIqairStatus(
+    useShallow((s) => ({
+      count: s.count,
+      worstAqi: s.worstAqi,
+      worstCity: s.worstCity,
+      noKey: s.noKey,
+      sweeping: s.sweeping,
       error: s.error,
     }))
   );
@@ -577,6 +588,28 @@ export function Sidebar() {
             <p className="pt-1.5 text-[10px] leading-relaxed text-white/30">
               Numbered badges = AirNow reference monitors · dots = PurpleAir
               (PM2.5, EPA-corrected)
+            </p>
+          </LayerToggle>
+          <LayerToggle
+            label="World Air Quality (IQAir)"
+            active={(active as Record<string, boolean>).iqair ?? false}
+            onToggle={() => toggleLayer('iqair')}
+            statusText={
+              iqairStatus.error
+                ? iqairStatus.error
+                : iqairStatus.noKey
+                  ? 'Set IQAIR_API_KEY (free at iqair.com)'
+                  : iqairStatus.count > 0
+                    ? `${iqairStatus.count} cities · worst AQI ${iqairStatus.worstAqi} (${iqairStatus.worstCity})${iqairStatus.sweeping ? ' · updating…' : ''}`
+                    : iqairStatus.sweeping
+                      ? 'First sweep in progress — cities appear as they load'
+                      : 'Major world cities · IQAir AirVisual'
+            }
+          >
+            <p className="pt-1.5 text-[10px] leading-relaxed text-white/30">
+              Square badges = city AQI (US EPA scale) from IQAir's global station
+              network · click a city for current conditions + a 5-day forecast at
+              that point
             </p>
           </LayerToggle>
           <LayerToggle

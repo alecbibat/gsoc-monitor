@@ -21,6 +21,7 @@ import satellitesRouter from './routes/satellites';
 import newsMapRouter from './routes/newsMap';
 import smokeRouter from './routes/smoke';
 import aqiRouter from './routes/aqi';
+import iqairRouter, { initIqairStream } from './routes/iqair';
 import windRouter, { initWindStream } from './routes/wind';
 import lightningRouter, { initLightningStream } from './routes/lightning';
 import riversRouter, { initRiversStream } from './routes/rivers';
@@ -133,6 +134,7 @@ function main() {
   app.use('/api/news-map', newsMapRouter);
   app.use('/api/smoke', smokeRouter);
   app.use('/api/aqi', aqiRouter);
+  app.use('/api/iqair', iqairRouter);
   app.use('/api/wind', windRouter);
   app.use('/api/lightning', lightningRouter);
   app.use('/api/rivers', riversRouter);
@@ -154,6 +156,9 @@ function main() {
   // Multi-state power-outage aggregator — rebuilt in the background so
   // /api/outages always answers instantly.
   initOutagesStream();
+  // IQAir world-city AQI: slow background sweep budgeted against the free
+  // community key's quota, snapshotted to Postgres across deploys.
+  initIqairStream();
   // Dataminr-style OSINT ingest: scanner/dispatch, crime, crashes, news and
   // social feeds normalized into one rolling buffer behind /api/intel.
   initIntelStream();

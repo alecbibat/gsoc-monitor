@@ -25,7 +25,8 @@ export type LayerId =
   | 'precip'
   | 'wildfires'
   | 'outages'
-  | 'intel';
+  | 'intel'
+  | 'iqair';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
@@ -267,6 +268,71 @@ export interface AqiResponse {
   purpleAirNoKey?: boolean;   // PurpleAir key missing
   counts?: { airnow: number; purpleair: number };
   error?: string;
+}
+
+// --- IQAir world-city AQI + per-point air-quality forecast -------------------
+
+// Hourly forecast entries passed through from a paid-tier IQAir key (the
+// community tier never sends them).
+export interface IqairForecastHour {
+  ts: string; // UTC ISO timestamp
+  aqius: number;
+  aqicn?: number;
+  tp?: number; // °C
+  hu?: number; // % RH
+  ws?: number; // m/s
+}
+
+export interface IqairCity {
+  id: string;
+  city: string;
+  state: string;
+  country: string;
+  lat: number;
+  lon: number;
+  aqi: number; // aqius — US EPA AQI scale
+  aqiCn: number | null;
+  categoryNum: number; // 1=Good … 6=Hazardous
+  categoryName: string;
+  mainPollutant: string; // e.g. 'PM2.5'
+  tempC: number | null;
+  humidity: number | null;
+  windMs: number | null;
+  windDeg: number | null;
+  observedAt: number | null; // epoch ms of the pollution reading
+  fetchedAt: number; // epoch ms when the server pulled it
+  forecasts?: IqairForecastHour[]; // paid-tier keys only
+}
+
+export interface IqairResponse {
+  cities: IqairCity[];
+  updated: number;
+  noKey?: boolean;
+  sweeping?: boolean; // background refresh sweep in progress
+  error?: string | null; // last sweep-aborting problem (quota/key), if any
+}
+
+// Per-point air-quality forecast (Copernicus CAMS via Open-Meteo). Hourly
+// arrays are parallel; time is local ISO (see utcOffsetSeconds). Values can be
+// null where a pollutant is missing; trailing all-null AQI hours are trimmed
+// server-side.
+export interface AirQualityForecast {
+  latitude: number;
+  longitude: number;
+  timezone: string;
+  timezoneAbbr: string;
+  utcOffsetSeconds: number;
+  hourly: {
+    time: string[];
+    aqi: (number | null)[];
+    pm25: (number | null)[];
+    pm10: (number | null)[];
+    o3: (number | null)[];
+    no2: (number | null)[];
+  };
+  daily: { time: string[]; aqiMax: number[]; aqiMean: number[] };
+  updated: number;
+  source: string;
 }
 
 // Global wind field sampled on a regular lat/lon grid. Row-major (row = latitude

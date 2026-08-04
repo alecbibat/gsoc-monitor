@@ -24,6 +24,7 @@ import { FireLayer } from '../layers/fires/FireLayer';
 import { WildfireLayer } from '../layers/wildfires/WildfireLayer';
 import { SmokeLayer } from '../layers/smoke/SmokeLayer';
 import { AqiLayer } from '../layers/aqi/AqiLayer';
+import { IqairLayer } from '../layers/iqair/IqairLayer';
 import { FireOutlookLayer } from '../layers/fireOutlook/FireOutlookLayer';
 import { FuelLayer } from '../layers/fuel/FuelLayer';
 import { AlertsLayer } from '../layers/alerts/AlertsLayer';
@@ -296,6 +297,7 @@ export function CrisisShareGlobe({
             {live.has('wildfires') && <WildfireLayer />}
             {live.has('smoke') && <SmokeLayer />}
             {live.has('aqi') && <AqiLayer />}
+            {live.has('iqair') && <IqairLayer />}
             {live.has('fireOutlook') && <FireOutlookLayer />}
             {live.has('fuel') && <FuelLayer />}
             {live.has('alerts') && <AlertsLayer />}

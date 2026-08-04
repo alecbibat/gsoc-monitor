@@ -63,6 +63,7 @@ const KIND_HEIGHTS: Partial<Record<PanelKind, number>> = {
   ships: 630,
   'wind-forecast': 560,
   rivers: 620,
+  iqair: 640,
 };
 
 export const usePanelStore = create<PanelsState>((set, get) => ({
