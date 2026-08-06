@@ -22,6 +22,7 @@ const STATUS_BADGE: Record<string, { dot: string; badge: string }> = {
 const TYPE_STYLES = {
   action: 'text-blue-300 bg-blue-400/15 border-blue-400/30',
   event:  'text-amber-300 bg-amber-400/15 border-amber-400/30',
+  info:   'text-cyan-300 bg-cyan-400/15 border-cyan-400/30',
 };
 
 function fmtTs(iso: string) {
@@ -198,6 +199,7 @@ export function CrisisShareView({ token }: { token: string }) {
   // so anything newly prescribed over SSE defaults to on.
   const [offLive, setOffLive] = useState<Set<ShareLiveLayerId>>(new Set());
   const [offDraw, setOffDraw] = useState<Set<string>>(new Set());
+  const [hideInfo, setHideInfo] = useState(false);
 
   // Once the globe has mounted, keep it mounted even if a live prescription
   // update empties the layer/pin lists — swapping a viewer down to the flat
@@ -414,11 +416,35 @@ export function CrisisShareView({ token }: { token: string }) {
         )}
 
         {/* Action log */}
-        {data.actionLog.length > 0 && (
+        {data.actionLog.length > 0 && (() => {
+          const infoCount = data.actionLog.filter((e) => e.entryType === 'info').length;
+          const visibleLog = hideInfo
+            ? data.actionLog.filter((e) => e.entryType !== 'info')
+            : data.actionLog;
+          return (
           <div>
-            <h2 className="mb-3 text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Actions &amp; Events Log</h2>
+            <div className="mb-3 flex items-center gap-3">
+              <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Actions &amp; Events Log</h2>
+              {infoCount > 0 && (
+                <button
+                  onClick={() => setHideInfo((h) => !h)}
+                  className={`rounded border px-2.5 py-1 text-[10px] transition ${
+                    hideInfo
+                      ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-300/80 hover:text-cyan-300'
+                      : 'border-white/10 text-white/35 hover:text-white/55'
+                  }`}
+                >
+                  {hideInfo ? `Show info (${infoCount})` : `Hide info (${infoCount})`}
+                </button>
+              )}
+            </div>
             <div className="divide-y divide-white/6 rounded-lg border border-white/8 bg-ink-950/60">
-              {[...data.actionLog]
+              {visibleLog.length === 0 && (
+                <p className="px-4 py-6 text-center text-[12px] text-white/30 italic">
+                  All entries are informational and currently hidden
+                </p>
+              )}
+              {[...visibleLog]
                 .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
                 .map((entry) => (
                   <div key={entry.id} className="flex items-start gap-3 px-4 py-3">
@@ -443,7 +469,8 @@ export function CrisisShareView({ token }: { token: string }) {
                 ))}
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* Interactive incident map. With live layers prescribed by the
             incident team, this is the full interactive globe streaming those

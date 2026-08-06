@@ -22,6 +22,7 @@ const STATUS_BADGE: Record<string, { dot: string; badge: string }> = {
 const ENTRY_STYLES = {
   action: 'text-blue-300 bg-blue-400/15 border-blue-400/30',
   event:  'text-amber-300 bg-amber-400/15 border-amber-400/30',
+  info:   'text-cyan-300 bg-cyan-400/15 border-cyan-400/30',
 };
 
 function fmtTs(iso: string) {

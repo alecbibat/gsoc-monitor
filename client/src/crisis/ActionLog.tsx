@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { useCrisisStore, selectActive, type ActionLogEntry } from './crisisStore';
+import { useCrisisStore, selectActive, type ActionEntryType, type ActionLogEntry } from './crisisStore';
 import { uploadImage } from '../lib/cloudinary';
 
 // Resize an image File to at most maxDim on the longest edge, return a JPEG data URL.
@@ -41,6 +41,19 @@ function pastedFileName(mime: string) {
 const TYPE_STYLES = {
   action: 'text-blue-300 bg-blue-400/15 border-blue-400/30',
   event:  'text-amber-300 bg-amber-400/15 border-amber-400/30',
+  info:   'text-cyan-300 bg-cyan-400/15 border-cyan-400/30',
+};
+
+const DOT_STYLES = {
+  action: 'border-blue-400 bg-blue-400/20',
+  event:  'border-amber-400 bg-amber-400/30',
+  info:   'border-cyan-400 bg-cyan-400/20',
+};
+
+const NEXT_TYPE: Record<ActionEntryType, ActionEntryType> = {
+  action: 'event',
+  event: 'info',
+  info: 'action',
 };
 
 function fmtTimestamp(iso: string) {
@@ -125,9 +138,7 @@ function LogRow({
       <td className="w-20 py-2 pl-2 pr-1">
         <button
           onClick={() =>
-            updateActionEntry(entry.id, {
-              entryType: entry.entryType === 'action' ? 'event' : 'action',
-            })
+            updateActionEntry(entry.id, { entryType: NEXT_TYPE[entry.entryType] })
           }
           className={`rounded-full border px-2 py-0.5 text-[8px] font-bold uppercase tracking-widest transition hover:opacity-80 ${TYPE_STYLES[entry.entryType]}`}
         >
@@ -238,11 +249,7 @@ function TimelineView({ entries }: { entries: ActionLogEntry[] }) {
           <div key={entry.id} className="relative flex gap-3">
             {/* Dot */}
             <div
-              className={`absolute -left-[23px] mt-0.5 h-3.5 w-3.5 rounded-full border-2 ${
-                entry.entryType === 'event'
-                  ? 'border-amber-400 bg-amber-400/30'
-                  : 'border-blue-400 bg-blue-400/20'
-              }`}
+              className={`absolute -left-[23px] mt-0.5 h-3.5 w-3.5 rounded-full border-2 ${DOT_STYLES[entry.entryType]}`}
             />
 
             {/* Content */}
@@ -280,10 +287,16 @@ export function ActionLog() {
   const actionLog = useCrisisStore((s) => selectActive(s)?.actionLog ?? []);
   const addActionEntry = useCrisisStore((s) => s.addActionEntry);
   const [view, setView] = useState<'table' | 'timeline'>('table');
+  const [hideInfo, setHideInfo] = useState(false);
   // Focus the new row's description so a Ctrl+V right after "+ Action/Event" lands in it.
   const [focusId, setFocusId] = useState<string | null>(null);
 
-  const handleAdd = (type: 'action' | 'event') => {
+  const infoCount = actionLog.filter((e) => e.entryType === 'info').length;
+  const visibleLog = hideInfo ? actionLog.filter((e) => e.entryType !== 'info') : actionLog;
+
+  const handleAdd = (type: ActionEntryType) => {
+    // A new info row must not be born hidden by the filter.
+    if (type === 'info') setHideInfo(false);
     setFocusId(addActionEntry(type));
     setView('table');
   };
@@ -296,8 +309,22 @@ export function ActionLog() {
           Actions &amp; Events Log
         </h3>
 
+        {/* Info filter */}
+        {infoCount > 0 && (
+          <button
+            onClick={() => setHideInfo((h) => !h)}
+            className={`ml-auto rounded border px-2.5 py-1 text-[9px] transition ${
+              hideInfo
+                ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-300/80 hover:text-cyan-300'
+                : 'border-white/10 text-white/30 hover:text-white/50'
+            }`}
+          >
+            {hideInfo ? `Show info (${infoCount})` : `Hide info (${infoCount})`}
+          </button>
+        )}
+
         {/* View toggle */}
-        <div className="ml-auto flex rounded border border-white/10 text-[9px]">
+        <div className={`flex rounded border border-white/10 text-[9px] ${infoCount > 0 ? '' : 'ml-auto'}`}>
           <button
             onClick={() => setView('table')}
             className={`rounded-l px-2.5 py-1 transition ${view === 'table' ? 'bg-white/10 text-white/70' : 'text-white/30 hover:text-white/50'}`}
@@ -326,6 +353,12 @@ export function ActionLog() {
           >
             + Event
           </button>
+          <button
+            onClick={() => handleAdd('info')}
+            className="rounded border border-cyan-400/25 bg-cyan-400/8 px-2.5 py-1 text-[9px] text-cyan-300/70 transition hover:border-cyan-400/40 hover:text-cyan-300"
+          >
+            + Info
+          </button>
         </div>
       </div>
 
@@ -333,9 +366,13 @@ export function ActionLog() {
       <div className="rounded-lg border border-white/8 bg-ink-950/60">
         {view === 'table' ? (
           <div className="overflow-x-auto">
-            {actionLog.length === 0 ? (
+            {visibleLog.length === 0 ? (
               <p className="py-8 text-center text-[11px] text-white/25">
-                No entries yet — click <strong>+ Action</strong> or <strong>+ Event</strong> to begin
+                {actionLog.length === 0 ? (
+                  <>No entries yet — click <strong>+ Action</strong>, <strong>+ Event</strong> or <strong>+ Info</strong> to begin</>
+                ) : (
+                  <>All entries are informational and currently hidden</>
+                )}
               </p>
             ) : (
               <table className="w-full">
@@ -349,7 +386,7 @@ export function ActionLog() {
                   </tr>
                 </thead>
                 <tbody>
-                  {actionLog.map((entry) => (
+                  {visibleLog.map((entry) => (
                     <LogRow
                       key={entry.id}
                       entry={entry}
@@ -363,7 +400,7 @@ export function ActionLog() {
           </div>
         ) : (
           <div className="px-4 py-4">
-            <TimelineView entries={actionLog} />
+            <TimelineView entries={visibleLog} />
           </div>
         )}
       </div>

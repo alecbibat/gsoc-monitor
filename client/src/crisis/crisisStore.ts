@@ -9,7 +9,7 @@ export type IncidentType =
   | 'chemical' | 'mass-casualty' | 'cyber' | 'security'
   | 'severe-weather' | 'other';
 export type CrisisTab = 'situation-report';
-export type ActionEntryType = 'action' | 'event';
+export type ActionEntryType = 'action' | 'event' | 'info';
 
 // Live save status, surfaced in the incident header. Transient UI state only —
 // it is never persisted or pushed to the server.
