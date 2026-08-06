@@ -68,6 +68,8 @@ function LogRow({
   const removeActionEntry = useCrisisStore((s) => s.removeActionEntry);
   const fileRef = useRef<HTMLInputElement>(null);
   const descRef = useRef<HTMLTextAreaElement>(null);
+  // Bumped per attach; stale async completions must not patch the row.
+  const uploadSeq = useRef(0);
 
   useEffect(() => {
     if (autoFocus) {
@@ -77,16 +79,19 @@ function LogRow({
   }, [autoFocus, onAutoFocused]);
 
   const attachFile = async (file: File, name = file.name || 'pasted-image.png') => {
+    const seq = ++uploadSeq.current;
     if (isImageFile(file)) {
       // Show the filename immediately so the user knows the upload started.
       updateActionEntry(entry.id, { attachmentName: name, attachmentData: undefined });
       try {
         const dataUrl = await compressImage(file);
         const url = await uploadImage(dataUrl);
+        if (uploadSeq.current !== seq) return;
         updateActionEntry(entry.id, { attachmentName: name, attachmentData: url });
       } catch {
-        // Upload failed — keep the name but leave attachmentData empty.
-        updateActionEntry(entry.id, { attachmentName: name });
+        if (uploadSeq.current !== seq) return;
+        // Upload failed — keep the name but clear any stale image.
+        updateActionEntry(entry.id, { attachmentName: name, attachmentData: undefined });
       }
     } else {
       updateActionEntry(entry.id, { attachmentName: name });
@@ -95,16 +100,25 @@ function LogRow({
 
   return (
     <tr
-      className="group border-b border-white/6 align-top"
+      className="group border-b border-white/6 align-top outline-none"
+      tabIndex={-1}
       onPaste={(e) => {
+        // Mirror the picker's gating: replacing an attachment requires ✕ first.
+        if (entry.attachmentName) return;
         const image = Array.from(e.clipboardData?.files ?? []).find((f) =>
           f.type.startsWith('image/')
         );
-        // Only intercept image-only pastes (Snipping Tool, copied screenshots).
-        // A paste that also carries text (e.g. spreadsheet cells) stays a text paste.
-        if (!image || e.clipboardData.getData('text/plain')) return;
+        if (!image) return;
+        // A paste that also carries text (e.g. spreadsheet cells) stays a text
+        // paste — unless the text is just the copied file's own name, which is
+        // how macOS Finder file copies arrive.
+        const text = e.clipboardData.getData('text/plain').trim();
+        if (text && text !== image.name) return;
         e.preventDefault();
-        void attachFile(image, pastedFileName(image.type));
+        // Bitmap pastes all arrive as "image.png" — stamp those; keep real filenames.
+        const name =
+          !image.name || image.name === 'image.png' ? pastedFileName(image.type) : image.name;
+        void attachFile(image, name);
       }}
     >
       {/* Type badge */}
