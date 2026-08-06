@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useCrisisStore, selectActive, type ActionLogEntry } from './crisisStore';
 import { uploadImage } from '../lib/cloudinary';
 
@@ -26,8 +26,16 @@ function compressImage(file: File, maxDim = 1200, quality = 0.82): Promise<strin
   });
 }
 
-function isImageFile(name?: string) {
-  return /\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(name ?? '');
+function isImageFile(file: File) {
+  // Pasted screenshots may lack a useful filename, so check the MIME type too.
+  return file.type.startsWith('image/') || /\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(file.name);
+}
+
+// Clipboard images all arrive named "image.png" — stamp them so rows stay distinguishable.
+function pastedFileName(mime: string) {
+  const ext = mime.split('/')[1]?.split('+')[0] || 'png';
+  const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-').replace('T', '_');
+  return `pasted-${stamp}.${ext}`;
 }
 
 const TYPE_STYLES = {
@@ -47,13 +55,58 @@ function fmtTimestamp(iso: string) {
 
 // ── Table row ─────────────────────────────────────────────────────────────────
 
-function LogRow({ entry }: { entry: ActionLogEntry }) {
+function LogRow({
+  entry,
+  autoFocus,
+  onAutoFocused,
+}: {
+  entry: ActionLogEntry;
+  autoFocus?: boolean;
+  onAutoFocused?: () => void;
+}) {
   const updateActionEntry = useCrisisStore((s) => s.updateActionEntry);
   const removeActionEntry = useCrisisStore((s) => s.removeActionEntry);
   const fileRef = useRef<HTMLInputElement>(null);
+  const descRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (autoFocus) {
+      descRef.current?.focus();
+      onAutoFocused?.();
+    }
+  }, [autoFocus, onAutoFocused]);
+
+  const attachFile = async (file: File, name = file.name || 'pasted-image.png') => {
+    if (isImageFile(file)) {
+      // Show the filename immediately so the user knows the upload started.
+      updateActionEntry(entry.id, { attachmentName: name, attachmentData: undefined });
+      try {
+        const dataUrl = await compressImage(file);
+        const url = await uploadImage(dataUrl);
+        updateActionEntry(entry.id, { attachmentName: name, attachmentData: url });
+      } catch {
+        // Upload failed — keep the name but leave attachmentData empty.
+        updateActionEntry(entry.id, { attachmentName: name });
+      }
+    } else {
+      updateActionEntry(entry.id, { attachmentName: name });
+    }
+  };
 
   return (
-    <tr className="group border-b border-white/6 align-top">
+    <tr
+      className="group border-b border-white/6 align-top"
+      onPaste={(e) => {
+        const image = Array.from(e.clipboardData?.files ?? []).find((f) =>
+          f.type.startsWith('image/')
+        );
+        // Only intercept image-only pastes (Snipping Tool, copied screenshots).
+        // A paste that also carries text (e.g. spreadsheet cells) stays a text paste.
+        if (!image || e.clipboardData.getData('text/plain')) return;
+        e.preventDefault();
+        void attachFile(image, pastedFileName(image.type));
+      }}
+    >
       {/* Type badge */}
       <td className="w-20 py-2 pl-2 pr-1">
         <button
@@ -76,8 +129,10 @@ function LogRow({ entry }: { entry: ActionLogEntry }) {
       {/* Description */}
       <td className="py-2 pr-3">
         <textarea
+          ref={descRef}
           className="w-full resize-none rounded bg-white/4 px-2 py-1 text-[11px] text-white/80 placeholder-white/20 outline-none transition focus:bg-white/6 focus:text-white/90"
           placeholder="Describe the action or event…"
+          title="Paste an image (Ctrl+V) to attach it to this row"
           rows={2}
           value={entry.description}
           onChange={(e) => updateActionEntry(entry.id, { description: e.target.value })}
@@ -94,20 +149,7 @@ function LogRow({ entry }: { entry: ActionLogEntry }) {
           onChange={async (e) => {
             const file = e.target.files?.[0];
             if (!file) return;
-            if (isImageFile(file.name)) {
-              // Show the filename immediately so the user knows the upload started.
-              updateActionEntry(entry.id, { attachmentName: file.name, attachmentData: undefined });
-              try {
-                const dataUrl = await compressImage(file);
-                const url = await uploadImage(dataUrl);
-                updateActionEntry(entry.id, { attachmentName: file.name, attachmentData: url });
-              } catch {
-                // Upload failed — keep the name but leave attachmentData empty.
-                updateActionEntry(entry.id, { attachmentName: file.name });
-              }
-            } else {
-              updateActionEntry(entry.id, { attachmentName: file.name });
-            }
+            await attachFile(file);
             e.target.value = '';
           }}
         />
@@ -133,9 +175,10 @@ function LogRow({ entry }: { entry: ActionLogEntry }) {
         ) : (
           <button
             onClick={() => fileRef.current?.click()}
+            title="Choose a file — or paste an image (Ctrl+V) with this row focused"
             className="text-[9px] text-white/25 transition hover:text-white/50"
           >
-            Attach image…
+            Attach image… <span className="text-white/15">/ Ctrl+V</span>
           </button>
         )}
       </td>
@@ -223,6 +266,13 @@ export function ActionLog() {
   const actionLog = useCrisisStore((s) => selectActive(s)?.actionLog ?? []);
   const addActionEntry = useCrisisStore((s) => s.addActionEntry);
   const [view, setView] = useState<'table' | 'timeline'>('table');
+  // Focus the new row's description so a Ctrl+V right after "+ Action/Event" lands in it.
+  const [focusId, setFocusId] = useState<string | null>(null);
+
+  const handleAdd = (type: 'action' | 'event') => {
+    setFocusId(addActionEntry(type));
+    setView('table');
+  };
 
   return (
     <section>
@@ -251,13 +301,13 @@ export function ActionLog() {
         {/* Add buttons */}
         <div className="flex gap-1.5">
           <button
-            onClick={() => { addActionEntry('action'); setView('table'); }}
+            onClick={() => handleAdd('action')}
             className="rounded border border-blue-400/25 bg-blue-400/8 px-2.5 py-1 text-[9px] text-blue-300/70 transition hover:border-blue-400/40 hover:text-blue-300"
           >
             + Action
           </button>
           <button
-            onClick={() => { addActionEntry('event'); setView('table'); }}
+            onClick={() => handleAdd('event')}
             className="rounded border border-amber-400/25 bg-amber-400/8 px-2.5 py-1 text-[9px] text-amber-300/70 transition hover:border-amber-400/40 hover:text-amber-300"
           >
             + Event
@@ -286,7 +336,12 @@ export function ActionLog() {
                 </thead>
                 <tbody>
                   {actionLog.map((entry) => (
-                    <LogRow key={entry.id} entry={entry} />
+                    <LogRow
+                      key={entry.id}
+                      entry={entry}
+                      autoFocus={entry.id === focusId}
+                      onAutoFocused={() => setFocusId(null)}
+                    />
                   ))}
                 </tbody>
               </table>

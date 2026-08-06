@@ -279,7 +279,7 @@ interface CrisisState {
   endAssignment: (id: string) => void;
 
   // Action log
-  addActionEntry: (type?: ActionEntryType) => void;
+  addActionEntry: (type?: ActionEntryType) => string;
   updateActionEntry: (id: string, patch: Partial<Pick<ActionLogEntry, 'description' | 'attachmentName' | 'attachmentData' | 'entryType'>>) => void;
   removeActionEntry: (id: string) => void;
 
@@ -487,11 +487,14 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
           assignments: inc.assignments.map((a) => (a.id === id ? { ...a, endedAt: new Date().toISOString() } : a)),
         }))),
 
-      addActionEntry: (type = 'action') =>
+      addActionEntry: (type = 'action') => {
+        const id = uid();
         set((s) => patchActive(s, (inc) => ({
           ...inc,
-          actionLog: [{ id: uid(), timestamp: new Date().toISOString(), description: '', entryType: type }, ...inc.actionLog],
-        }))),
+          actionLog: [{ id, timestamp: new Date().toISOString(), description: '', entryType: type }, ...inc.actionLog],
+        })));
+        return id;
+      },
 
       updateActionEntry: (id, patch) =>
         set((s) => patchActive(s, (inc) => ({
