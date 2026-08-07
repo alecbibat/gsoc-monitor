@@ -11,6 +11,9 @@ import { FLEET_ROSTER } from '../layers/ships/fleet';
 import { api } from '../api/client';
 import type { AqiStation, NewsMapEvent, OutagePoint, ShipState } from '../types';
 
+// Deliberately wider than the Property Watch default (25 mi): the dashboard is
+// a situational-awareness horizon, so a hazard 25–100 mi out can appear here
+// while the watch list stays clear.
 const RADIUS_MI = 100; // alerts/fires/quakes considered "near" a property
 const AQI_RADIUS_MI = 75;
 const NEWS_RADIUS_MI = 150;

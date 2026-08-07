@@ -20,7 +20,7 @@ function nearestPin(lat: number, lon: number): NearestPin | null {
 }
 
 // Card shown while hover-orbiting a custom point: the nearest tracked property
-// and its live hazards — the same HazardRows the Property Watch feed scrolls,
+// and its live hazards — the same HazardRows the Property Watch feed shows,
 // scoped to whichever pin is closest to the orbit centre.
 export function HoverFocusCard() {
   const active = useHoverStore((s) => s.active);
@@ -30,13 +30,15 @@ export function HoverFocusCard() {
   const scan = useProximityStore((s) => s.scan);
 
   // Keep the proximity scan fresh while the orbit is running (same cadence the
-  // pins screensaver uses); the throttled store dedupes concurrent consumers.
+  // pins screensaver uses); the throttled store dedupes concurrent consumers,
+  // so the entry scan is a no-op when a fresh result already exists but
+  // replaces one that predates the orbit starting.
   useEffect(() => {
     if (!active) return;
-    if (!result) void scan();
+    void scan();
     const id = setInterval(() => scan(), 5 * 60_000);
     return () => clearInterval(id);
-  }, [active, result, scan]);
+  }, [active, scan]);
 
   const nearest = useMemo(
     () => (point ? nearestPin(point.lat, point.lon) : null),

@@ -14,7 +14,7 @@ import { fmtMiles, quakeColor } from '../widgets/proximity/format';
 // all the way to the bottom edge so there's no dead gap.
 
 const COL_W = 240;     // matches the context minimap width
-const EDGE = 24;       // right-6 / bottom-6
+const RAIL_BOTTOM = 48; // matches the minimap's bottom-12 — clears the 36px news ticker
 const CTX_H = 130;     // PinsContextBox MAP_H
 const CTX_GAP = 12;
 const TOPBAR_H = 88;   // fallback floor before the right cluster is measured
@@ -93,13 +93,15 @@ export function ScreensaverWatchCards() {
   const affected = result?.properties ?? [];
   const sig = affected.map((p) => p.key).join(',');
 
-  // Keep scan fresh while we're the active consumer.
+  // Keep scan fresh while we're the active consumer. The store throttles
+  // repeat calls, so kicking one on entry never double-fetches — it only
+  // refreshes a result that predates the screensaver starting.
   useEffect(() => {
     if (!isPins) return;
-    if (!result) void scan();
+    void scan();
     const id = setInterval(() => scan(), 5 * 60_000);
     return () => clearInterval(id);
-  }, [isPins, result, scan]);
+  }, [isPins, scan]);
 
   // Fit-to-column pass: every card renders (so heights are always measurable),
   // then any card that doesn't fully fit is hidden and replaced by the pill.
@@ -134,21 +136,26 @@ export function ScreensaverWatchCards() {
         bottom = cards[0].offsetTop + cards[0].offsetHeight;
       }
       setVisible(fit);
-      setMoreTop(bottom + CARD_GAP);
+      // Keep the pill inside the clipped viewport — in the cramped one-card
+      // clamp path it would otherwise land past the bottom edge and vanish.
+      setMoreTop(Math.min(bottom + CARD_GAP, Math.max(0, avail - MORE_H)));
     };
 
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(vp);
+    // The list tracks card content height — catches reflows the viewport
+    // can't see, like a late web-font swap re-wrapping the chip text.
+    ro.observe(list);
     return () => ro.disconnect();
   }, [isPins, sig, result?.updated, poi, topRightBottom]);
 
   if (!isPins) return null;
 
   // The context minimap is only shown while a POI is focused. When it's hidden
-  // (zoomed out), reclaim its footprint so the column reaches the bottom edge.
+  // (zoomed out), reclaim its footprint so the column reaches the news ticker.
   const ctxVisible = poi !== null;
-  const bottom = ctxVisible ? EDGE + CTX_H + CTX_GAP : EDGE;
+  const bottom = ctxVisible ? RAIL_BOTTOM + CTX_H + CTX_GAP : RAIL_BOTTOM;
   // Start below the measured search/info cluster so the column never overlaps
   // them; fall back to the fixed floor until the first measurement lands.
   const top = Math.max(TOPBAR_H, topRightBottom + TOP_GAP);
@@ -177,10 +184,14 @@ export function ScreensaverWatchCards() {
 
       {/* Static property cards — worst-first, clipped to the column */}
       <div ref={viewportRef} className="relative min-h-0 flex-1 overflow-hidden">
-        {affected.length === 0 ? (
+        {result === null ? (
+          <div className="rounded-lg border border-white/10 bg-ink-900/85 px-3 py-2 text-[11px] text-white/40 shadow-lg backdrop-blur-sm">
+            Scanning properties…
+          </div>
+        ) : affected.length === 0 ? (
           <div className="rounded-lg border border-accent-ok/30 bg-accent-ok/10 px-3 py-2 text-[11px] text-accent-ok shadow-lg backdrop-blur-sm">
             <span className="mr-1" aria-hidden>✓</span>
-            All clear — {result?.scannedCount ?? 0} properties monitored
+            All clear — {result.scannedCount} properties monitored
           </div>
         ) : (
           <>

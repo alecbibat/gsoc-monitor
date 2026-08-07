@@ -450,7 +450,7 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
   <div class="cards">
     <div class="card"><h4>18-feed power-outage aggregation</h4><p>One toggle lights up live outages across ~19 states from three families of public feeds — state-EM ArcGIS services, the KUBRA Storm Center data behind major utilities' own maps (Oncor, Georgia Power, Evergy…), and NISC co-ops. Each outage carries customers affected, elapsed time, restoration ETA ("overdue 30m" turns red), and cause. No API keys; each source fails independently.</p></div>
     <div class="card"><h4>One-click emergency briefing</h4><p>Click a property pin and the app builds a live safety briefing: road distance and drive time to the nearest police and fire stations, A/B/C options for the 3 nearest hospitals and hotels, and turn-by-turn routes drawn on the globe as animated pulse lines via a custom GLSL shader — with Google Maps handoff and share links.</p></div>
-    <div class="card"><h4>Property watch proximity scanner</h4><p>Cross-references all 30 properties against FIRMS fire detections, active NWS alerts (true point-in-polygon tests), and USGS earthquakes at a 50/100/200-mile radius — listing only properties with something nearby, ranked worst-first, with countdown-to-expiry alert chips. Pops out into independently-refreshing dockable windows.</p></div>
+    <div class="card"><h4>Property watch proximity scanner</h4><p>Cross-references all 30 properties against FIRMS fire detections, active NWS alerts (true point-in-polygon tests), and USGS earthquakes at a 25/50/100-mile radius — listing only properties with something nearby, ranked worst-first, with countdown-to-expiry alert chips. Pops out into independently-refreshing dockable windows.</p></div>
     <div class="card"><h4>Downloadable PNG hazard report</h4><p>Any property panel exports a polished report card — gradient header, live watch status, color-barred alert cards, fire rows with distance and radiative power, quake rows with magnitude badges, or a green all-clear — rendered on a 2× retina canvas, dated, and ready to paste into an incident channel.</p></div>
   </div>
 
@@ -543,7 +543,7 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
     <p class="feat"><b>Invite-only signup.</b> Rotating 8-character codes (no ambiguous characters), bcrypt cost-12 passwords, 30-day JWTs in httpOnly cookies; first user becomes admin.</p>
     <p class="feat"><b>Admin panel.</b> One-click code rotation, full team roster with roles, and member removal — enforced server-side on every route.</p>
     <p class="feat"><b>One-dyno deploy.</b> Ships to Heroku as a single Node process serving the built client, with Postgres as the only add-on; nearly all feeds are free.</p>
-    <p class="feat"><b>Focus cards while touring.</b> A bottom card tracks each orbited property's live hazards, a credits-roll rail scrolls every property's status, and a corner minimap reverse-geocodes the view.</p>
+    <p class="feat"><b>Focus cards while touring.</b> A bottom card tracks each orbited property's live hazards, a fixed rail lists every affected property's status, and a corner minimap reverse-geocodes the view.</p>
     <p class="feat"><b>Chrome that gets out of the way.</b> All UI auto-hides while a tour runs and returns — with your open panels — the moment it stops.</p>
   </div>
 
