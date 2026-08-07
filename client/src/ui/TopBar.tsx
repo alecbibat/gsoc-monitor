@@ -8,6 +8,7 @@ import { resetCamera } from '../cesium/flyTo';
 import { useTrackedHistory } from './useTrackedHistory';
 import { useUiStore } from './uiStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
+import { PinsWatchGroups } from '../screensaver/PinsWatchGroups';
 import { useMeasureStore } from '../measure/measureStore';
 import { useCrisisStore } from '../crisis/crisisStore';
 import { useDashboardStore } from '../dashboard/dashboardStore';
@@ -571,18 +572,20 @@ export function TopBar() {
   const screensaverActive = useScreensaverStore((s) => s.active);
   const screensaverMode = useScreensaverStore((s) => s.mode);
 
-  // The pins tour strips the chrome down to the essentials: the Property
-  // Watch strip owns the top edge (see PinsWatchStrip), and all that remains
-  // below it are the tour controls (mute + mode dropdown), fullscreen, and a
-  // big clock card in the opposite corner.
+  // The pins tour strips the chrome down to the essentials: tour controls
+  // (mute + mode dropdown) and fullscreen on the left, the Property Watch
+  // group cards across the middle, and a big clock card on the right.
   if (screensaverActive && screensaverMode === 'pins') {
     return (
-      <div className="pointer-events-none absolute inset-x-0 top-12 z-20 flex items-start justify-between gap-4 px-4 pt-safe md:px-6">
-        <div className="flex items-center gap-2">
+      <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex items-start justify-between gap-3 px-4 pt-safe md:px-6">
+        <div className="flex shrink-0 items-center gap-2">
           <ScreensaverControls />
           <FullscreenButton />
         </div>
-        <ScreensaverClockCard />
+        <PinsWatchGroups />
+        <div className="shrink-0">
+          <ScreensaverClockCard />
+        </div>
       </div>
     );
   }

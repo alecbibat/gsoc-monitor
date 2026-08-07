@@ -22,7 +22,7 @@ function findGroup(poi: Poi): { group: LocationGroup; location: Location } | nul
 }
 
 // Bottom-centre card shown while orbiting a pin in the pins screensaver: the
-// same hazard summary the Property Watch strip shows along the top, scoped
+// same hazards the Property Watch group cards combine along the top, scoped
 // to the single property currently in focus.
 export function PinsFocusCard() {
   const active = useScreensaverStore((s) => s.active);
