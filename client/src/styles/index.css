@@ -144,3 +144,49 @@ body {
 .leaflet-tooltip.crisis-map-tip::before {
   display: none;
 }
+
+/* ── Pins screensaver: Property Watch cluster + overview sitrep ───────────────
+   Animation is additive signal (breathing severity, fire flicker, quake ping,
+   ledger rotation), so it only runs for viewers who allow motion; the static
+   colors carry the same information without it. */
+@media (prefers-reduced-motion: no-preference) {
+  .watch-halo {
+    animation: watch-breathe 2.8s ease-in-out infinite;
+  }
+  .watch-halo-fast {
+    animation-duration: 1.4s;
+  }
+  .watch-flicker {
+    animation: watch-flicker 0.9s steps(2) infinite;
+  }
+  .watch-ping {
+    animation: watch-ping 6s ease-out infinite;
+  }
+  .watch-pulse {
+    animation: watch-pulse 1.5s ease-in-out infinite;
+  }
+  .watch-ledger-in {
+    animation: watch-ledger-in 0.3s ease;
+  }
+}
+@keyframes watch-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.55; }
+  50% { transform: scale(1.14); opacity: 0.9; }
+}
+@keyframes watch-flicker {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+@keyframes watch-ping {
+  0%, 74% { transform: translate(-50%, -50%) scale(1); opacity: 0; }
+  76% { opacity: 0.8; }
+  100% { transform: translate(-50%, -50%) scale(8); opacity: 0; }
+}
+@keyframes watch-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+@keyframes watch-ledger-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
