@@ -4,17 +4,14 @@ import { useProximityStore } from '../widgets/proximity/proximityStore';
 import type { PropertyHazards } from '../widgets/proximity/proximityScan';
 import { quakeColor } from '../widgets/proximity/format';
 
-// Slim Property Watch strip pinned to the bottom edge during the pins
-// screensaver, in the slot the news ticker vacates (NewsTicker hides while a
-// screensaver runs). One chip per affected property — icon, name, and compact
-// hazard badges — laid out statically so the text is readable at a glance.
-// When the chips don't all fit across the screen they split into pages that
-// crossfade every few seconds, worst-first on page one; nothing ever scrolls.
+// Property Watch strip pinned to the top edge during the pins screensaver.
+// One chip per affected property — icon, name, and compact hazard badges,
+// worst-first. When the chips overflow the width they scroll as a seamless
+// marquee (the same pattern as the bottom news ticker, which keeps running in
+// its own slot); when they fit, the row just sits still. All-clear and
+// scanning states collapse to a single line.
 
-const CHIP_GAP = 8;     // gap-2 between chips
-const PAD_X = 24;       // px-3 on each side of the chip row
-const PAGE_MS = 10_000; // dwell per page when the chips don't all fit
-const INDICATOR_W = 44; // reserved for the "2/3" page counter
+const MARQUEE_PX_PER_S = 40; // scroll speed when the chips overflow
 
 // Compact badge strip: worst-alert dot (its NWS color) with a count, fire
 // count, and max quake magnitude. Details live in the bottom focus card.
@@ -49,9 +46,11 @@ function HazardBadges({ p }: { p: PropertyHazards }) {
   );
 }
 
+// Leading margin (not parent gap) spaces the chips so a duplicated marquee
+// copy loops seamlessly at the -50% translate point.
 function WatchChip({ p }: { p: PropertyHazards }) {
   return (
-    <div className="flex shrink-0 items-center gap-1.5 rounded border border-white/10 bg-white/5 px-2 py-1">
+    <div className="ml-2 flex shrink-0 items-center gap-1.5 rounded border border-white/10 bg-white/5 px-2 py-1">
       <span aria-hidden className="text-[11px] leading-none">{p.group.icon}</span>
       <span className="whitespace-nowrap text-[10px] font-semibold text-white/85">
         {p.location.name}
@@ -61,36 +60,16 @@ function WatchChip({ p }: { p: PropertyHazards }) {
   );
 }
 
-// Greedy left-to-right fill: how many chips fit per page at the given width.
-function paginate(widths: number[], avail: number): number[] {
-  const pages: number[] = [];
-  let used = 0;
-  let n = 0;
-  for (const w of widths) {
-    // Never leave a page empty — an oversized lone chip just clips.
-    if (n > 0 && used + CHIP_GAP + w > avail) {
-      pages.push(n);
-      n = 0;
-      used = 0;
-    }
-    used += n === 0 ? w : CHIP_GAP + w;
-    n++;
-  }
-  if (n > 0) pages.push(n);
-  return pages;
-}
-
-export function PinsWatchTicker() {
+export function PinsWatchStrip() {
   const active = useScreensaverStore((s) => s.active);
   const mode = useScreensaverStore((s) => s.mode);
   const result = useProximityStore((s) => s.result);
   const scan = useProximityStore((s) => s.scan);
 
   const areaRef = useRef<HTMLDivElement>(null);
-  const measureRef = useRef<HTMLDivElement>(null);
-  // Chips per page, worst-first. Empty until the first measurement.
-  const [counts, setCounts] = useState<number[]>([]);
-  const [page, setPage] = useState(0);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [rowW, setRowW] = useState(0);
+  const [marquee, setMarquee] = useState(false);
 
   const isPins = active && mode === 'pins';
   const affected = result?.properties ?? [];
@@ -106,26 +85,18 @@ export function PinsWatchTicker() {
     return () => clearInterval(id);
   }, [isPins, scan]);
 
-  // Fit pass: an invisible copy of the full chip row provides widths, and the
-  // visible page is derived from them — so re-paginating never disturbs the
-  // measurement. Runs before paint; a ResizeObserver re-runs it when the strip
-  // width or the chip content changes.
+  // Overflow check: an invisible copy of the chip row provides its natural
+  // width. Only an overflowing row animates — a fitting row stays static.
   useLayoutEffect(() => {
     if (!isPins) return;
-    const row = measureRef.current;
+    const row = rowRef.current;
     const area = areaRef.current;
     if (!row || !area) return;
 
     const measure = () => {
-      const widths = Array.from(row.children).map((c) => (c as HTMLElement).offsetWidth);
-      if (widths.length === 0) return;
-      const full = area.clientWidth - PAD_X;
-      let next = paginate(widths, full);
-      // Multiple pages need the page counter's slice of the width too.
-      if (next.length > 1) next = paginate(widths, full - INDICATOR_W);
-      setCounts((prev) =>
-        prev.length === next.length && prev.every((v, i) => v === next[i]) ? prev : next,
-      );
+      const w = row.offsetWidth;
+      setRowW(w);
+      setMarquee(w > area.clientWidth);
     };
 
     measure();
@@ -135,32 +106,14 @@ export function PinsWatchTicker() {
     return () => ro.disconnect();
   }, [isPins, sig, result?.updated]);
 
-  // Restart from the worst-first page whenever the affected set changes.
-  useEffect(() => {
-    setPage(0);
-  }, [sig]);
-
-  const pageCount = Math.max(1, counts.length);
-
-  // Rotate pages on a fixed dwell when there's more than one.
-  useEffect(() => {
-    if (!isPins || pageCount <= 1) return;
-    const id = setInterval(() => setPage((p) => p + 1), PAGE_MS);
-    return () => clearInterval(id);
-  }, [isPins, pageCount]);
-
   if (!isPins) return null;
 
-  const pi = page % pageCount;
-  let start = 0;
-  for (let i = 0; i < pi; i++) start += counts[i] ?? 0;
-  const pageChips = counts.length
-    ? affected.slice(start, start + (counts[pi] ?? 0))
-    : affected;
+  const durationS = Math.max(20, rowW / MARQUEE_PX_PER_S);
+  const chips = affected.map((p) => <WatchChip key={p.key} p={p} />);
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-10">
-      <div className="flex min-h-[2.25rem] items-center border-t border-white/10 bg-ink-900/85 pb-safe backdrop-blur-sm">
+    <div className="fixed left-0 right-0 top-0 z-10">
+      <div className="flex min-h-[2.25rem] items-center border-b border-white/10 bg-ink-900/85 pt-safe backdrop-blur-sm">
         {/* Label — amber while anything is affected, green when all clear */}
         <div
           className={`flex shrink-0 items-center gap-1.5 self-stretch border-r border-white/10 px-3 text-[10px] font-bold uppercase tracking-widest ${
@@ -178,7 +131,7 @@ export function PinsWatchTicker() {
           {affected.length > 0 && <span className="tabular-nums">· {affected.length}</span>}
         </div>
 
-        {/* Chip row */}
+        {/* Chip row — marquee only when it overflows */}
         <div ref={areaRef} className="relative min-w-0 flex-1 self-stretch overflow-hidden">
           {result === null ? (
             <div className="flex h-full items-center px-3 text-[10px] text-white/40">
@@ -191,31 +144,34 @@ export function PinsWatchTicker() {
             </div>
           ) : (
             <>
-              {/* Invisible measuring row — every chip, never paginated */}
+              {/* Invisible measuring row — one copy at natural width */}
               <div
-                ref={measureRef}
+                ref={rowRef}
                 aria-hidden
-                className="invisible absolute left-0 top-0 flex items-center gap-2"
+                className="invisible absolute left-0 top-0 flex w-max items-center"
               >
                 {affected.map((p) => (
                   <WatchChip key={p.key} p={p} />
                 ))}
               </div>
-              <div key={pi} className="animate-watch-page flex h-full items-center gap-2 px-3">
-                {pageChips.map((p) => (
-                  <WatchChip key={p.key} p={p} />
-                ))}
-              </div>
+              {marquee ? (
+                <div
+                  className="animate-marquee flex h-full w-max items-center"
+                  style={{ animationDuration: `${durationS}s` }}
+                >
+                  {chips}
+                  <div aria-hidden className="contents">
+                    {affected.map((p) => (
+                      <WatchChip key={`dup-${p.key}`} p={p} />
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex h-full items-center pr-3">{chips}</div>
+              )}
             </>
           )}
         </div>
-
-        {/* Page counter */}
-        {pageCount > 1 && (
-          <div className="shrink-0 px-2.5 text-[9px] font-semibold tabular-nums text-white/35">
-            {pi + 1}/{pageCount}
-          </div>
-        )}
       </div>
     </div>
   );

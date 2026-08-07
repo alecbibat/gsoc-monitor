@@ -107,20 +107,6 @@ body {
   animation-play-state: paused;
 }
 
-/* Page crossfade for the pins-screensaver Property Watch strip. */
-@keyframes watch-page {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-.animate-watch-page {
-  animation: watch-page 0.45s ease;
-}
-
 /* ── Leaflet dark theme (crisis share-view incident map) ─────────────────────
    Leaflet ships light-themed chrome; restyle it to match the dark report. */
 .leaflet-container {

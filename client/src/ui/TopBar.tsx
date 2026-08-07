@@ -100,6 +100,58 @@ function LiveClock() {
   );
 }
 
+// Wall-display clock card for the pins screensaver — the one piece of chrome
+// worth keeping big while the tour runs: local time large, UTC + date under it.
+function ScreensaverClockCard() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const time = now.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const utcTime = now.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    timeZone: 'UTC',
+  });
+  const tzAbbr =
+    new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' })
+      .formatToParts(now)
+      .find((p) => p.type === 'timeZoneName')?.value ?? '';
+  const date = now.toLocaleDateString([], {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+  });
+
+  return (
+    <div className="flex flex-col items-end gap-1 rounded-xl border border-white/10 bg-ink-900/80 px-4 py-2.5 shadow-panel backdrop-blur-sm">
+      <div className="flex items-baseline gap-1.5">
+        <span className="font-mono text-[26px] font-bold leading-none tabular-nums tracking-wider text-white/95">
+          {time}
+        </span>
+        <span className="text-[10px] font-semibold uppercase tracking-widest text-white/40">
+          {tzAbbr}
+        </span>
+      </div>
+      <div className="text-[10px] font-medium tracking-wide text-white/45">
+        <span className="font-mono font-semibold tabular-nums text-white/60">{utcTime}</span>{' '}
+        <span className="uppercase">UTC</span>
+        <span className="text-white/20"> · </span>
+        {date}
+      </div>
+    </div>
+  );
+}
+
 function formatDeploy(iso: string): { local: string; tz: string; rel: string; full: string } {
   const then = new Date(iso);
   // Local date + 24h time, e.g. "Jun 17, 22:09" — converted to the viewer's
@@ -513,11 +565,27 @@ function TrackedCounter() {
 
 export function TopBar() {
   // The widgets/search/info cluster isn't useful mid-tour, so it fades out
-  // while a screensaver runs — the pins watch rail reclaims that corner.
-  // visibility (not display) keeps its layout box, so the left cluster's
-  // badges can never wrap into the vacated space, and the search bar keeps
-  // its state for when the tour stops.
+  // while a screensaver runs. visibility (not display) keeps its layout box,
+  // so the left cluster's badges can never wrap into the vacated space, and
+  // the search bar keeps its state for when the tour stops.
   const screensaverActive = useScreensaverStore((s) => s.active);
+  const screensaverMode = useScreensaverStore((s) => s.mode);
+
+  // The pins tour strips the chrome down to the essentials: the Property
+  // Watch strip owns the top edge (see PinsWatchStrip), and all that remains
+  // below it are the tour controls (mute + mode dropdown), fullscreen, and a
+  // big clock card in the opposite corner.
+  if (screensaverActive && screensaverMode === 'pins') {
+    return (
+      <div className="pointer-events-none absolute inset-x-0 top-12 z-20 flex items-start justify-between gap-4 px-4 pt-safe md:px-6">
+        <div className="flex items-center gap-2">
+          <ScreensaverControls />
+          <FullscreenButton />
+        </div>
+        <ScreensaverClockCard />
+      </div>
+    );
+  }
 
   return (
     <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col gap-2 pb-3 pl-safe pr-safe pt-safe md:flex-row md:items-start md:justify-between md:gap-4 md:pb-4">

@@ -52,7 +52,7 @@ import { PinsFocusCard } from './screensaver/PinsFocusCard';
 import { ShipFocusCard } from './screensaver/ShipFocusCard';
 import { PinsLootBeam } from './screensaver/PinsLootBeam';
 import { PinsVoice } from './screensaver/PinsVoice';
-import { PinsWatchTicker } from './screensaver/PinsWatchTicker';
+import { PinsWatchStrip } from './screensaver/PinsWatchStrip';
 import { GoogleEarthLayer } from './layers/earth3d/GoogleEarthLayer';
 import { OsmBuildingsLayer } from './layers/osmBuildings/OsmBuildingsLayer';
 import { TimeZonesLayer } from './layers/timezones/TimeZonesLayer';
@@ -186,7 +186,7 @@ export default function App() {
         <PinsLootBeam />
         <PinsVoice />
         <ShipShockwave />
-        <PinsWatchTicker />
+        <PinsWatchStrip />
         <ScreensaverToast />
         <MeasureOverlay />
         <FuelZoneOverlay />
