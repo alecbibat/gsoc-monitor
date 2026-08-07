@@ -19,7 +19,7 @@ interface ProximityState {
 let inFlight: Promise<void> | null = null;
 
 export const useProximityStore = create<ProximityState>((set, get) => ({
-  radiusMi: 100,
+  radiusMi: 25,
   result: null,
   loading: false,
   lastScanAt: 0,

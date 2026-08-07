@@ -10,7 +10,7 @@ import { LightningTicker } from './LightningTicker';
 import { HazardRows } from './HazardRows';
 import { timeAgo } from './format';
 
-const RADII = [50, 100, 200] as const;
+const RADII = [25, 50, 100] as const;
 const REFRESH_MS = 5 * 60_000;
 
 export function ProximityWidget() {
