@@ -51,6 +51,7 @@ import { PinsContextBox } from './screensaver/PinsContextBox';
 import { PinsFocusCard } from './screensaver/PinsFocusCard';
 import { ShipFocusCard } from './screensaver/ShipFocusCard';
 import { PinsLootBeam } from './screensaver/PinsLootBeam';
+import { PinsOverviewSitrep } from './screensaver/PinsOverviewSitrep';
 import { PinsVoice } from './screensaver/PinsVoice';
 import { GoogleEarthLayer } from './layers/earth3d/GoogleEarthLayer';
 import { OsmBuildingsLayer } from './layers/osmBuildings/OsmBuildingsLayer';
@@ -183,6 +184,7 @@ export default function App() {
         <HoverFocusCard />
         <ShipFocusCard />
         <PinsLootBeam />
+        <PinsOverviewSitrep />
         <PinsVoice />
         <ShipShockwave />
         <ScreensaverToast />

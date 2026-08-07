@@ -8,7 +8,7 @@ import { resetCamera } from '../cesium/flyTo';
 import { useTrackedHistory } from './useTrackedHistory';
 import { useUiStore } from './uiStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
-import { PinsWatchGroups } from '../screensaver/PinsWatchGroups';
+import { PinsWatchCluster } from '../screensaver/PinsWatchCluster';
 import { useMeasureStore } from '../measure/measureStore';
 import { useCrisisStore } from '../crisis/crisisStore';
 import { useDashboardStore } from '../dashboard/dashboardStore';
@@ -149,6 +149,7 @@ function ScreensaverClockCard() {
         <span className="text-white/20"> · </span>
         {date}
       </div>
+      <PinsWatchCluster />
     </div>
   );
 }
@@ -573,8 +574,10 @@ export function TopBar() {
   const screensaverMode = useScreensaverStore((s) => s.mode);
 
   // The pins tour strips the chrome down to the essentials: tour controls
-  // (mute + mode dropdown) and fullscreen on the left, the Property Watch
-  // group cards across the middle, and a big clock card on the right.
+  // (mute + mode dropdown) and fullscreen on the left, and the clock card on
+  // the right, which carries the Property Watch instrument cluster (severity
+  // meter + rotating ledger). The centre stays clear — hazard geography is
+  // drawn on the globe itself between visits by PinsOverviewSitrep.
   if (screensaverActive && screensaverMode === 'pins') {
     return (
       <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex items-start justify-between gap-3 px-4 pt-safe md:px-6">
@@ -582,7 +585,6 @@ export function TopBar() {
           <ScreensaverControls />
           <FullscreenButton />
         </div>
-        <PinsWatchGroups />
         <div className="shrink-0">
           <ScreensaverClockCard />
         </div>
