@@ -5,36 +5,42 @@ import { useScreensaverStore } from './screensaverStore';
 
 const BEAM_H = 2600; // metres the shaft rises before the glow tapers out
 
-// Soft radial glow sprite (white; tinted per-pin via billboard color), built once.
-function radialGlowUrl(): string {
+// Glowing-orb sprite for the beacon's foot: white-hot centre melting into the
+// group colour, bloom fading to transparent. Colour is baked into the texture
+// (a white sprite tinted via billboard.color would lose the white core), so
+// it's rebuilt per focused pin — one small canvas per visit.
+function orbSpriteUrl(colorHex: string): string {
+  const cc = Cesium.Color.fromCssColorString(colorHex);
+  const rgba = (a: number) =>
+    `rgba(${Math.round(cc.red * 255)},${Math.round(cc.green * 255)},${Math.round(cc.blue * 255)},${a})`;
   const c = document.createElement('canvas');
   c.width = c.height = 128;
   const ctx = c.getContext('2d')!;
   const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
   g.addColorStop(0, 'rgba(255,255,255,1)');
-  g.addColorStop(0.35, 'rgba(255,255,255,0.5)');
-  g.addColorStop(1, 'rgba(255,255,255,0)');
+  g.addColorStop(0.16, 'rgba(255,255,255,0.95)');
+  g.addColorStop(0.3, rgba(0.9));
+  g.addColorStop(0.55, rgba(0.35));
+  g.addColorStop(1, rgba(0));
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 128, 128);
   return c.toDataURL();
 }
-const GLOW_URL = radialGlowUrl();
 
-// Halo ring sprite (white; tinted via material color) — a crisp ring with a
-// soft outer falloff, draped flat on the ground around the beacon's foot.
+// Halo ring sprite (white; tinted via material color): one crisp thin stroke
+// over a faint under-glow, draped flat on the ground around the beacon.
 function haloRingUrl(): string {
   const c = document.createElement('canvas');
-  c.width = c.height = 256;
+  c.width = c.height = 512;
   const ctx = c.getContext('2d')!;
-  for (const [r, w, a] of [
-    [112, 18, 0.25],
-    [112, 10, 0.55],
-    [112, 5, 1],
+  for (const [w, a] of [
+    [16, 0.18],
+    [5, 1],
   ] as const) {
     ctx.strokeStyle = `rgba(255,255,255,${a})`;
     ctx.lineWidth = w;
     ctx.beginPath();
-    ctx.arc(128, 128, r, 0, Math.PI * 2);
+    ctx.arc(256, 256, 240, 0, Math.PI * 2);
     ctx.stroke();
   }
   return c.toDataURL();
@@ -112,43 +118,31 @@ export function PinsLootBeam() {
         },
       });
 
-    // Beacon styling: a slim shaft that burns hottest right above the ground
-    // marker, matching the pin-and-beacon look of the approved mockups.
-    shaft(base, 0.34, 0.10, 1.8, 30, 0.42); // soft outer halo
-    shaft(core, 0.85, 0.12, 3.0, 9, 0.16); // bright inner core
+    // Beacon styling from the approved mockup: a thin shaft that burns
+    // hottest right above the orb at its foot.
+    shaft(base, 0.30, 0.10, 1.8, 16, 0.42); // soft outer halo
+    shaft(core, 0.85, 0.12, 3.0, 5.5, 0.14); // bright inner core
 
-    // Ground-clamped radial glow at the foot of the beam.
+    // The glowing orb at the beam's foot: white-hot centre, colored bloom.
+    // Depth test disabled so the beacon never loses its anchor into terrain.
     ds.entities.add({
       position: Cesium.Cartesian3.fromDegrees(lon, lat),
       billboard: {
-        image: GLOW_URL,
+        image: orbSpriteUrl(colorHex),
         heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-        width: 150,
-        height: 150,
+        width: 64,
+        height: 64,
         color: new Cesium.CallbackProperty(
-          () => base.withAlpha(Math.max(0, 0.55 + 0.14 * Math.sin(sec() * 2.4))),
+          () => Cesium.Color.WHITE.withAlpha(Math.max(0, 0.9 + 0.1 * Math.sin(sec() * 2.4))),
           false
         ),
-        scaleByDistance: new Cesium.NearFarScalar(800, 1.3, 40_000, 0.5),
-      },
-    });
-
-    // The pin itself: a white-ringed dot in the group color at the beam's
-    // foot, always visible so the beacon never loses its anchor point.
-    ds.entities.add({
-      position: Cesium.Cartesian3.fromDegrees(lon, lat),
-      point: {
-        pixelSize: 10,
-        color: base,
-        outlineColor: Cesium.Color.WHITE.withAlpha(0.9),
-        outlineWidth: 2,
-        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+        scaleByDistance: new Cesium.NearFarScalar(800, 1.4, 40_000, 0.6),
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
       },
     });
 
-    // Halo ring draped on the terrain around the base, breathing in sync
-    // with the ground glow.
+    // Thin halo ring draped on the terrain around the base, breathing in
+    // sync with the orb.
     ds.entities.add({
       position: Cesium.Cartesian3.fromDegrees(lon, lat),
       ellipse: {
@@ -158,7 +152,7 @@ export function PinsLootBeam() {
           image: RING_URL,
           transparent: true,
           color: new Cesium.CallbackProperty(
-            () => base.withAlpha(Math.max(0, 0.45 + 0.15 * Math.sin(sec() * 2.4))),
+            () => base.withAlpha(Math.max(0, 0.5 + 0.12 * Math.sin(sec() * 2.4))),
             false
           ),
         }),
