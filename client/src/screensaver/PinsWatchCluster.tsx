@@ -93,53 +93,54 @@ export function PinsWatchCluster() {
         })}
       </div>
 
-      {/* Ledger line — one group at a time, worst-first. */}
-      <div className="mt-1.5 flex h-[22px] items-center justify-end overflow-hidden">
+      {/* Ledger — one group at a time, worst-first. Every distinct NWS alert
+          gets its own chip; the clock tile grows rather than truncating to a
+          "+N", so the full picture for the named group is always readable. */}
+      <div className="mt-1.5 flex min-h-[22px] flex-col items-end justify-center">
         {shown ? (
-          <div
-            key={`${shown.group.id}-${idx}`}
-            className="watch-ledger-in flex items-center gap-1.5 whitespace-nowrap"
-          >
-            <span aria-hidden className="text-[12px] leading-none">{shown.group.icon}</span>
-            <span className="text-[11px] font-semibold text-white/85">{shown.group.name}</span>
-            <span className="text-[9px] tabular-nums text-white/35">
-              {shown.affectedCount}/{shown.group.locations.length}
-            </span>
-            {shown.fireCount > 0 && (
-              <span className="text-[10px] font-bold text-accent-warn">
-                <span aria-hidden>🔥</span>
-                {shown.fireCount}
+          <div key={`${shown.group.id}-${idx}`} className="watch-ledger-in">
+            <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+              <span aria-hidden className="text-[12px] leading-none">{shown.group.icon}</span>
+              <span className="text-[11px] font-semibold text-white/85">{shown.group.name}</span>
+              <span className="text-[9px] tabular-nums text-white/35">
+                {shown.affectedCount}/{shown.group.locations.length}
               </span>
-            )}
-            {shown.quakeCount > 0 && (
-              <span
-                className="text-[10px] font-bold"
-                style={{ color: quakeColor(shown.maxQuakeMag) }}
-              >
-                <span aria-hidden>◎</span>M{shown.maxQuakeMag.toFixed(1)}
-              </span>
-            )}
-            {shown.alerts.length > 0 && (
-              <span
-                className="flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-medium"
-                style={{
-                  color: shown.alerts[0].colorHex,
-                  borderColor: `${shown.alerts[0].colorHex}55`,
-                  background: `${shown.alerts[0].colorHex}14`,
-                }}
-              >
+              {shown.fireCount > 0 && (
+                <span className="text-[10px] font-bold text-accent-warn">
+                  <span aria-hidden>🔥</span>
+                  {shown.fireCount}
+                </span>
+              )}
+              {shown.quakeCount > 0 && (
                 <span
-                  className="h-1.5 w-1.5 shrink-0 rounded-full"
-                  style={{ background: shown.alerts[0].colorHex }}
-                />
-                {shown.alerts[0].event}
-                {shown.alerts[0].count > 1 && (
-                  <span className="text-white/40">×{shown.alerts[0].count}</span>
-                )}
-              </span>
-            )}
-            {shown.alerts.length > 1 && (
-              <span className="text-[9px] text-white/40">+{shown.alerts.length - 1}</span>
+                  className="text-[10px] font-bold"
+                  style={{ color: quakeColor(shown.maxQuakeMag) }}
+                >
+                  <span aria-hidden>◎</span>M{shown.maxQuakeMag.toFixed(1)}
+                </span>
+              )}
+            </div>
+            {shown.alerts.length > 0 && (
+              <div className="mt-1 flex flex-wrap justify-end gap-1">
+                {shown.alerts.map((a) => (
+                  <span
+                    key={a.event}
+                    className="flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-medium"
+                    style={{
+                      color: a.colorHex,
+                      borderColor: `${a.colorHex}55`,
+                      background: `${a.colorHex}14`,
+                    }}
+                  >
+                    <span
+                      className="h-1.5 w-1.5 shrink-0 rounded-full"
+                      style={{ background: a.colorHex }}
+                    />
+                    {a.event}
+                    {a.count > 1 && <span className="text-white/40">×{a.count}</span>}
+                  </span>
+                ))}
+              </div>
             )}
           </div>
         ) : result === null ? (
