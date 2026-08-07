@@ -5,9 +5,10 @@ import { useScreensaverStore } from '../../screensaver/screensaverStore';
 import { useNewsStore } from './newsStore';
 
 // A horizontally-scrolling headline ticker pinned to the bottom of the screen.
-// Shown while the Breaking News panel is closed, and kept alive during the pins
-// screensaver. Mode-aware: shows park news or world breaking news depending on
-// the newsMode toggle in the news store.
+// Shown while the Breaking News panel is closed and no screensaver is running —
+// during the pins screensaver its slot goes to the Property Watch strip
+// (PinsWatchTicker). Mode-aware: shows park news or world breaking news
+// depending on the newsMode toggle in the news store.
 const REFRESH_MS = 5 * 60_000;
 const PARK_REFRESH_MS = 10 * 60_000;
 
@@ -41,10 +42,8 @@ export function NewsTicker() {
   const newsPanelOpen = usePanelStore((s) => s.panels.some((p) => p.kind === 'news-feed'));
   const openPanel = usePanelStore((s) => s.open);
   const screensaverActive = useScreensaverStore((s) => s.active);
-  const screensaverMode = useScreensaverStore((s) => s.mode);
 
-  const inPins = screensaverActive && screensaverMode === 'pins';
-  const active = !newsPanelOpen && (!screensaverActive || inPins);
+  const active = !newsPanelOpen && !screensaverActive;
 
   // Breaking news fetch (active when ticker is visible and mode is breaking).
   useEffect(() => {
@@ -95,14 +94,9 @@ export function NewsTicker() {
   const dotMap = isPark ? PARK_SEVERITY_DOT : SEVERITY_DOT;
 
   return (
-    <div
-      className={`fixed bottom-0 left-0 right-0 z-10 ${
-        // Inset for the docked sidebar only when it's actually present (desktop,
-        // outside the screensaver). During the pins screensaver the sidebar is
-        // hidden, so span the full width — very left to very right.
-        screensaverActive ? '' : 'md:left-72'
-      }`}
-    >
+    // Inset for the docked sidebar, which is always present when the ticker
+    // shows (the ticker hides whenever a screensaver hides the sidebar).
+    <div className="fixed bottom-0 left-0 right-0 z-10 md:left-72">
       <div className="flex min-h-[2.25rem] items-center border-t border-white/10 bg-ink-900/85 pb-safe backdrop-blur-sm">
         {/* Label — click to open the news panel. */}
         <button
