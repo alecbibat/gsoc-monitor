@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SearchBar } from './SearchBar';
 import { WidgetLauncher } from '../widgets/WidgetLauncher';
 import { ScreensaverControls } from './ScreensaverControls';
@@ -7,6 +7,7 @@ import { useCesiumViewer } from '../cesium/CesiumContext';
 import { resetCamera } from '../cesium/flyTo';
 import { useTrackedHistory } from './useTrackedHistory';
 import { useUiStore } from './uiStore';
+import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { useMeasureStore } from '../measure/measureStore';
 import { useCrisisStore } from '../crisis/crisisStore';
 import { useDashboardStore } from '../dashboard/dashboardStore';
@@ -511,25 +512,12 @@ function TrackedCounter() {
 }
 
 export function TopBar() {
-  const rightRef = useRef<HTMLDivElement>(null);
-  const setTopRightBottom = useUiStore((s) => s.setTopRightBottom);
-
-  // Publish the bottom edge of the right-hand cluster (search + info button) so
-  // the pins-screensaver watch column can start below it instead of guessing a
-  // fixed offset that breaks when the cluster wraps to a second row.
-  useLayoutEffect(() => {
-    const el = rightRef.current;
-    if (!el) return;
-    const measure = () => setTopRightBottom(el.getBoundingClientRect().bottom);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    window.addEventListener('resize', measure);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', measure);
-    };
-  }, [setTopRightBottom]);
+  // The widgets/search/info cluster isn't useful mid-tour, so it fades out
+  // while a screensaver runs — the pins watch rail reclaims that corner.
+  // visibility (not display) keeps its layout box, so the left cluster's
+  // badges can never wrap into the vacated space, and the search bar keeps
+  // its state for when the tour stops.
+  const screensaverActive = useScreensaverStore((s) => s.active);
 
   return (
     <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col gap-2 pb-3 pl-safe pr-safe pt-safe md:flex-row md:items-start md:justify-between md:gap-4 md:pb-4">
@@ -570,7 +558,11 @@ export function TopBar() {
         </div>
       </div>
       {/* Right: widgets + search, with the info button tucked under the search */}
-      <div ref={rightRef} className="flex w-full flex-col items-end gap-2 md:w-auto">
+      <div
+        className={`flex w-full flex-col items-end gap-2 transition-[opacity,visibility] duration-500 md:w-auto ${
+          screensaverActive ? 'invisible opacity-0' : 'visible opacity-100'
+        }`}
+      >
         <div className="flex w-full flex-wrap items-center justify-end gap-2 md:gap-3">
           <WidgetLauncher />
           <div className="pointer-events-auto w-full sm:w-auto">
