@@ -142,13 +142,15 @@ export function WindProbeController() {
 
     pins.forEach((pin) => {
       const ent = ds.entities.add({
-        position: Cesium.Cartesian3.fromDegrees(pin.lon, pin.lat),
+        // Surface anchor + default depth test — dropped pins hide behind the
+        // globe when rotated to the far side (unlike the cursor-tracking hover
+        // arrow above, these persist after the camera moves).
+        position: Cesium.Cartesian3.fromDegrees(pin.lon, pin.lat, 0),
         billboard: {
           image: ARROW_DATA_URI,
           width: ARROW_PX,
           height: ARROW_PX,
           alignedAxis: flowAxis(pin.lon, pin.lat, pin.toDeg),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
         label: {
           text: `${pin.cardinal} · ${formatSpeed(pin.speedMps, unit)} ${WIND_UNIT_LABEL[unit]}`,
@@ -162,7 +164,6 @@ export function WindProbeController() {
           showBackground: true,
           backgroundColor: LABEL_BG,
           backgroundPadding: new Cesium.Cartesian2(7, 4),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
       // Left-click a pin → open its wind-forecast panel (the global click
