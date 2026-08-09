@@ -29,9 +29,10 @@ export function LocationsLayer() {
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
             // Clamp to terrain so pins sit on mountain surfaces (Yellowstone,
             // Grand Canyon, etc.) rather than appearing underground when World
-            // Terrain or OSM buildings + terrain are active.
+            // Terrain or OSM buildings + terrain are active. Default depth test
+            // (no disableDepthTestDistance) so pins on the far side of the
+            // planet hide behind the globe instead of showing through it.
             heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
             width: pin.width,
             height: pin.height,
             // Stay prominent when zoomed out: the old ramp shrank pins to 40%
@@ -59,7 +60,7 @@ export function LocationsLayer() {
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
             heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
             pixelOffset: new Cesium.Cartesian2(0, -54),
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            // Default depth test — far-side labels hide behind the globe.
             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 800_000),
             showBackground: true,
             backgroundColor: Cesium.Color.fromCssColorString('#0a0c10').withAlpha(0.7),

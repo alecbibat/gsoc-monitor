@@ -507,13 +507,14 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
     const pts: Cesium.Cartesian3[] = [Cesium.Cartesian3.fromDegrees(payload.lon, payload.lat)];
 
     ds.entities.add({
-      position: Cesium.Cartesian3.fromDegrees(payload.lon, payload.lat),
+      // Surface anchor + default depth test — the globe occludes these route
+      // markers when the user rotates the planet away from the location.
+      position: Cesium.Cartesian3.fromDegrees(payload.lon, payload.lat, 0),
       point: {
         pixelSize: 9,
         color: Cesium.Color.fromCssColorString(payload.color),
         outlineColor: Cesium.Color.WHITE,
         outlineWidth: 2,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
       },
     });
 
@@ -548,7 +549,7 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
       }
 
       ds.entities.add({
-        position: Cesium.Cartesian3.fromDegrees(leg.lon, leg.lat),
+        position: Cesium.Cartesian3.fromDegrees(leg.lon, leg.lat, 0),
         point: {
           pixelSize: new Cesium.CallbackProperty(
             () => 7 + 2.5 * (0.5 + 0.5 * Math.sin(Date.now() / 240)),
@@ -557,7 +558,6 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
           color,
           outlineColor: Cesium.Color.WHITE,
           outlineWidth: 2,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
         label: {
           text: `${meta.icon} ${leg.name}`,
@@ -568,7 +568,6 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
           backgroundPadding: new Cesium.Cartesian2(6, 4),
           pixelOffset: new Cesium.Cartesian2(0, -16),
           verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
           scale: 0.9,
         },
       });

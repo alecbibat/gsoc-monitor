@@ -134,13 +134,16 @@ export function CrisisDrawController() {
 
     points.forEach((p, i) => {
       ds.entities.add({
-        position: Cesium.Cartesian3.fromDegrees(p.lon, p.lat),
+        // Surface anchor + default depth test — placed vertices hide behind
+        // the globe if the operator rotates it mid-draw. (The cursor-tracking
+        // hover marker below stays always-on-top: pickEllipsoid only ever
+        // returns near-side positions, so it can't be on the far side.)
+        position: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, 0),
         point: {
           pixelSize: i === 0 ? 11 : 8,
           color: PREVIEW,
           outlineColor: Cesium.Color.WHITE,
           outlineWidth: 1.5,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
     });
