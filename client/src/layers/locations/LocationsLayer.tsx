@@ -23,16 +23,19 @@ export function LocationsLayer() {
 
       for (const loc of group.locations) {
         const entity = ds.entities.add({
-          position: Cesium.Cartesian3.fromDegrees(loc.lon, loc.lat),
+          // Anchored on the ellipsoid surface with the DEFAULT depth test — the
+          // same pattern as the share-globe pins (commit 1cff6ec). Clamping
+          // (heightReference: CLAMP_TO_GROUND) must NOT be used here: clamped
+          // billboards skip the globe-occlusion depth path whenever
+          // depthTestAgainstTerrain is false (which this app always is), so
+          // far-side pins rendered straight through the planet. Trade-off:
+          // while the OSM-buildings layer swaps in world terrain, pins anchor
+          // at ellipsoid height rather than the mountain surface — but terrain
+          // depth is cleared in that mode too, so they stay visible.
+          position: Cesium.Cartesian3.fromDegrees(loc.lon, loc.lat, 0),
           billboard: {
             image: pin.url,
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-            // Clamp to terrain so pins sit on mountain surfaces (Yellowstone,
-            // Grand Canyon, etc.) rather than appearing underground when World
-            // Terrain or OSM buildings + terrain are active. Default depth test
-            // (no disableDepthTestDistance) so pins on the far side of the
-            // planet hide behind the globe instead of showing through it.
-            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
             width: pin.width,
             height: pin.height,
             // Stay prominent when zoomed out: the old ramp shrank pins to 40%
@@ -58,9 +61,9 @@ export function LocationsLayer() {
             outlineWidth: 2,
             outlineColor: Cesium.Color.fromCssColorString('#0a0c10').withAlpha(0.9),
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
             pixelOffset: new Cesium.Cartesian2(0, -54),
-            // Default depth test — far-side labels hide behind the globe.
+            // Default depth test, no clamping — far-side labels hide behind
+            // the globe (see the billboard comment above).
             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 800_000),
             showBackground: true,
             backgroundColor: Cesium.Color.fromCssColorString('#0a0c10').withAlpha(0.7),
