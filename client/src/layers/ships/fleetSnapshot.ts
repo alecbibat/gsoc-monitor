@@ -1,7 +1,8 @@
 // Daily fleet-position snapshot: renders every tracked Windstar ship onto a
-// coastline map with a geocoded "where is it" label per ship, plus a table of
-// dock/transit status, destination and ETA — then copies the result to the
-// clipboard as a PNG for pasting straight into the daily digest email.
+// coastline map with a geocoded "where is it" label and nearest-major-city
+// context per ship, plus a table of dock/transit status, destination and ETA
+// — then copies the result to the clipboard as a PNG and downloads it, for
+// pasting straight into the daily digest email and filing in the archive.
 //
 // The renderer is pure canvas (no DOM, no tiles, no external requests at draw
 // time) so the image is identical regardless of globe state, and works even
@@ -10,6 +11,7 @@ import type { ShipState } from '../../types';
 import { api } from '../../api/client';
 import { FLEET_ROSTER, fleetColor, type FleetRosterShip } from './fleet';
 import { landRings } from './worldLand';
+import { nearestMajorCity, type NearestCity } from './majorCities';
 
 // ---------------------------------------------------------------------------
 // Data assembly
@@ -17,10 +19,18 @@ import { landRings } from './worldLand';
 
 export type StatusKind = 'docked' | 'anchored' | 'underway' | 'alert' | 'unknown';
 
+// Reverse-geocode result, tagged so consumers can tell "an actual town"
+// from weaker context (country-only hits, named water bodies).
+export type GeoPlace =
+  | { kind: 'locality'; text: string } // "Papeete, French Polynesia"
+  | { kind: 'area'; text: string } // country/subdivision only, no town nearby
+  | { kind: 'water'; text: string }; // "Tasman Sea"
+
 export interface SnapshotRow {
   roster: FleetRosterShip;
   ship: ShipState | null; // null = no position received yet
-  place: string | null; // reverse-geocoded context ("Papeete, French Polynesia")
+  place: GeoPlace | null; // reverse-geocoded context
+  near: NearestCity | null; // nearest major city + country (offline dataset)
 }
 
 // Abnormal AIS statuses must never be dressed up as routine by the speed
@@ -60,7 +70,7 @@ function timeoutSignal(ms: number): AbortSignal {
 // Reverse geocode one position via BigDataCloud (free, keyless — same service
 // the screensaver context boxes use). Falls back to the named water body over
 // open ocean; null on any failure.
-async function placeName(lat: number, lon: number, signal: AbortSignal): Promise<string | null> {
+async function placeName(lat: number, lon: number, signal: AbortSignal): Promise<GeoPlace | null> {
   try {
     const r = await fetch(
       `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`,
@@ -75,15 +85,15 @@ async function placeName(lat: number, lon: number, signal: AbortSignal): Promise
       countryName?: string;
       localityInfo?: { informative?: Array<{ name?: string; description?: string }> };
     };
+    const town = d.city || d.locality || '';
     const parts: string[] = [];
-    if (d.city) parts.push(d.city);
-    else if (d.locality) parts.push(d.locality);
+    if (town) parts.push(town);
     if (d.countryCode === 'US' || d.countryCode === 'CA') {
       if (d.principalSubdivisionCode) parts.push(d.principalSubdivisionCode);
     } else if (d.countryName) {
       parts.push(d.countryName);
     }
-    if (parts.length) return parts.join(', ');
+    if (parts.length) return { kind: town ? 'locality' : 'area', text: parts.join(', ') };
     // Open ocean: the informative list runs broad → specific, so scan backwards
     // for the most specific named water body.
     const inf = d.localityInfo?.informative;
@@ -91,7 +101,7 @@ async function placeName(lat: number, lon: number, signal: AbortSignal): Promise
       for (let i = inf.length - 1; i >= 0; i--) {
         const nm = inf[i]?.name;
         if (typeof nm === 'string' && /ocean|sea|gulf|bay|strait|channel|passage|sound/i.test(nm)) {
-          return nm;
+          return { kind: 'water', text: nm };
         }
       }
     }
@@ -112,11 +122,15 @@ async function assembleRows(): Promise<SnapshotRow[]> {
   if (data.source === 'no-key') {
     throw new Error('No ship position source configured on the server');
   }
-  const rows: SnapshotRow[] = FLEET_ROSTER.map((roster) => ({
-    roster,
-    ship: data.ships.find((s) => s.mmsi === roster.mmsi) ?? null,
-    place: null,
-  }));
+  const rows: SnapshotRow[] = FLEET_ROSTER.map((roster) => {
+    const ship = data.ships.find((s) => s.mmsi === roster.mmsi) ?? null;
+    return {
+      roster,
+      ship,
+      place: null,
+      near: ship ? nearestMajorCity(ship.latitude, ship.longitude) : null,
+    };
+  });
   await Promise.allSettled(
     rows.map(async (row) => {
       if (!row.ship) return;
@@ -133,12 +147,38 @@ async function assembleRows(): Promise<SnapshotRow[]> {
 const fmtCoord = (lat: number, lon: number): string =>
   `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? 'N' : 'S'}  ${Math.abs(lon).toFixed(2)}°${lon >= 0 ? 'E' : 'W'}`;
 
+// Accent-folded lowercase for "same place?" comparisons — the geocoder
+// returns ASCII spellings ("Reykjavik") while the city dataset keeps
+// diacritics ("Reykjavík").
+const fold = (s: string): string =>
+  s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
 const fmtAge = (sec: number): string => {
   if (sec < 90) return 'just now';
   if (sec < 5400) return `${Math.round(sec / 60)}m ago`;
   if (sec < 172800) return `${Math.round(sec / 3600)}h ago`;
   return `${Math.round(sec / 86400)}d ago`;
 };
+
+// Nearest-major-city context: bare "City, Country" when the ship is
+// essentially at the city, otherwise "142 nm NE of Suva, Fiji" (bearing is
+// city → ship, so "NE of" reads as the ship's offset from the city).
+const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+function fmtNearCity(near: NearestCity): string {
+  // City-states carry their own name as the region ("Monaco\tMonaco") —
+  // don't render the doubled "Monaco, Monaco".
+  const where =
+    near.city.name === near.city.region
+      ? near.city.name
+      : `${near.city.name}, ${near.city.region}`;
+  if (near.distNm <= 10) return where;
+  const d = near.distNm >= 100 ? Math.round(near.distNm / 5) * 5 : Math.round(near.distNm);
+  const dir = COMPASS[Math.round(near.bearingDeg / 45) % 8];
+  return `${d} nm ${dir} of ${where}`;
+}
 
 // AIS destinations arrive SHOUTING ("PAPEETE"); soften only all-caps strings.
 const prettyDestination = (s: string): string =>
@@ -482,7 +522,7 @@ export function renderFleetSnapshot(rows: SnapshotRow[], generatedAt: number): H
     ctx.stroke();
     const norm = ((lon + 540) % 360) - 180;
     // Leave the bottom-right corner to the map credit.
-    if (x < mapX + mapW - 150) {
+    if (x < mapX + mapW - 260) {
       ctx.fillStyle = 'rgba(255,255,255,0.25)';
       ctx.fillText(
         `${Math.abs(norm)}°${norm === 0 || Math.abs(norm) === 180 ? '' : norm > 0 ? 'E' : 'W'}`,
@@ -590,7 +630,13 @@ export function renderFleetSnapshot(rows: SnapshotRow[], generatedAt: number): H
     const color = fleetColor(m.row.roster.cls);
     const name = m.row.ship.name?.trim() || m.row.roster.name;
     const st = statusOf(m.row.ship);
-    const context = m.row.place ?? (st.kind === 'underway' ? 'At sea' : st.label);
+    // Chip context: the geocoded town when there is one, else the nearest
+    // major city ("142 nm NE of Suva, Fiji" beats a bare ocean name).
+    const context =
+      (m.row.place?.kind === 'locality' ? m.row.place.text : null) ??
+      (m.row.near ? fmtNearCity(m.row.near) : null) ??
+      m.row.place?.text ??
+      (st.kind === 'underway' ? 'At sea' : st.label);
     ctx.font = `600 12.5px ${SANS}`;
     const nameW = ctx.measureText(name).width;
     ctx.font = `400 10.5px ${SANS}`;
@@ -663,7 +709,7 @@ export function renderFleetSnapshot(rows: SnapshotRow[], generatedAt: number): H
   ctx.font = `400 8.5px ${SANS}`;
   ctx.fillStyle = 'rgba(255,255,255,0.22)';
   ctx.textAlign = 'right';
-  ctx.fillText('Coastline: Natural Earth', mapX + mapW - 10, mapY + MAP_H - 10);
+  ctx.fillText('Coastline: Natural Earth · Cities: GeoNames', mapX + mapW - 10, mapY + MAP_H - 10);
   ctx.textAlign = 'left';
   ctx.restore();
 
@@ -783,11 +829,34 @@ function drawTable(
     ctx.fillStyle = pillColor;
     ctx.fillText(pillText, colX[1] + 18, mid);
 
-    // Location.
+    // Location — geocoded place first, nearest major city beneath whenever it
+    // adds orientation (suppressed when it would just repeat the same city).
+    const near = row.near;
+    const nearText = near ? fmtNearCity(near) : null;
+    let locPrimary: string;
+    let locSecondary: string | null = null;
+    if (row.place) {
+      locPrimary = row.place.text;
+      const repeatsCity =
+        near != null &&
+        nearText != null &&
+        (fold(nearText) === fold(locPrimary) ||
+          (near.distNm <= 10 && fold(locPrimary).includes(fold(near.city.name))));
+      if (nearText && !repeatsCity) locSecondary = nearText;
+    } else {
+      locPrimary = nearText ?? (st.kind === 'underway' ? 'At sea' : '—');
+    }
     ctx.fillStyle = C.ink;
-    ctx.font = `400 12.5px ${SANS}`;
-    const locText = row.place ?? (st.kind === 'underway' ? 'At sea' : '—');
-    ctx.fillText(ellipsize(ctx, locText, cols[2].w - 20), colX[2] + 10, mid);
+    if (locSecondary) {
+      ctx.font = `400 12px ${SANS}`;
+      ctx.fillText(ellipsize(ctx, locPrimary, cols[2].w - 20), colX[2] + 10, mid - 8);
+      ctx.fillStyle = C.ink3;
+      ctx.font = `400 10.5px ${SANS}`;
+      ctx.fillText(ellipsize(ctx, locSecondary, cols[2].w - 20), colX[2] + 10, mid + 9);
+    } else {
+      ctx.font = `400 12.5px ${SANS}`;
+      ctx.fillText(ellipsize(ctx, locPrimary, cols[2].w - 20), colX[2] + 10, mid);
+    }
 
     // Position (mono).
     ctx.fillStyle = C.ink2;
@@ -833,7 +902,7 @@ function drawTable(
 }
 
 // ---------------------------------------------------------------------------
-// Orchestration: build → PNG blob → clipboard (download fallback)
+// Orchestration: build → PNG blob → clipboard copy + download
 // ---------------------------------------------------------------------------
 
 async function buildFleetSnapshotBlob(): Promise<Blob> {
@@ -845,6 +914,9 @@ async function buildFleetSnapshotBlob(): Promise<Blob> {
   return blob;
 }
 
+// Triggers a save of the blob. NOTE: a suppressed download is not web-visible
+// — a.click() returns normally even when the browser blocks automatic
+// downloads — so callers can only ever know the download was *started*.
 function downloadBlob(blob: Blob): void {
   const denverDate = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Denver',
@@ -856,26 +928,35 @@ function downloadBlob(blob: Blob): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = `windstar-fleet-${denverDate}.png`;
+  document.body.appendChild(a); // in-DOM anchor: Firefox won't honor a detached click
   a.click();
+  a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 export type SnapshotResult =
-  | { ok: true; method: 'clipboard' | 'download' }
+  | { ok: true; copied: boolean; downloadStarted: boolean }
   | { ok: false; error: string };
 
-// Call from a click handler. Passing the pending blob promise straight into
-// ClipboardItem keeps the user-gesture chain alive through the async render
-// (required by Safari, supported by Chromium ≥ 98); if the engine rejects
-// promise payloads we retry with the resolved blob, and if the clipboard is
-// unavailable altogether we download the PNG instead.
+// Call from a click handler. The snapshot is copied to the clipboard (for
+// pasting straight into the digest email) AND downloaded as a PNG (for the
+// records archive), each best-effort — one succeeding is still a success.
+// downloadStarted is exactly that: the browser gives no signal when it
+// silently suppresses an automatic download, so completion is unknowable.
+// Passing the pending blob promise straight into ClipboardItem keeps the
+// user-gesture chain alive through the async render (required by Safari,
+// supported by Chromium ≥ 98); if the engine rejects promise payloads we
+// retry with the resolved blob.
 export async function copyFleetSnapshot(): Promise<SnapshotResult> {
   const blobPromise = buildFleetSnapshotBlob();
+  const clipboardUsable =
+    Boolean(navigator.clipboard?.write) && typeof ClipboardItem !== 'undefined';
 
-  if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+  let copied = false;
+  if (clipboardUsable) {
     try {
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blobPromise })]);
-      return { ok: true, method: 'clipboard' };
+      copied = true;
     } catch {
       // Fall through — distinguish render failure from clipboard failure below.
     }
@@ -888,19 +969,25 @@ export async function copyFleetSnapshot(): Promise<SnapshotResult> {
     return { ok: false, error: err instanceof Error ? err.message : 'Snapshot render failed' };
   }
 
-  if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+  if (!copied && clipboardUsable) {
     try {
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-      return { ok: true, method: 'clipboard' };
+      copied = true;
     } catch {
       // Clipboard genuinely unavailable (permissions/insecure context).
     }
   }
 
+  let downloadStarted = false;
   try {
     downloadBlob(blob);
-    return { ok: true, method: 'download' };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : 'Could not save the image' };
+    downloadStarted = true;
+  } catch {
+    // Couldn't even start the download — a clipboard copy still counts.
   }
+
+  if (!copied && !downloadStarted) {
+    return { ok: false, error: 'Clipboard and download both unavailable' };
+  }
+  return { ok: true, copied, downloadStarted };
 }

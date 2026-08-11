@@ -5,11 +5,12 @@ import { useEffect, useRef, useState } from 'react';
 // stays inside the user-gesture window that the clipboard API needs.
 const loadSnapshotModule = () => import('./fleetSnapshot');
 
-type Phase = 'idle' | 'busy' | 'copied' | 'downloaded' | 'error';
+type Phase = 'idle' | 'busy' | 'both' | 'copied' | 'downloaded' | 'error';
 
-// One-click "fleet snapshot to clipboard" button for the daily digest. Two
-// skins: 'header' matches the dashboard header's bordered buttons, 'sidebar'
-// matches the accent quick-action style (like "Track the ISS").
+// One-click fleet-snapshot button for the daily digest — copies the PNG to
+// the clipboard and downloads it. Two skins: 'header' matches the dashboard
+// header's bordered buttons, 'sidebar' matches the accent quick-action style
+// (like "Track the ISS").
 export function FleetSnapshotButton({ variant }: { variant: 'header' | 'sidebar' }) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +35,7 @@ export function FleetSnapshotButton({ variant }: { variant: 'header' | 'sidebar'
         error: err instanceof Error ? err.message : 'Failed to load the snapshot renderer',
       }));
     if (result.ok) {
-      setPhase(result.method === 'clipboard' ? 'copied' : 'downloaded');
+      setPhase(result.copied ? (result.downloadStarted ? 'both' : 'copied') : 'downloaded');
     } else {
       setPhase('error');
       setError(result.error);
@@ -45,24 +46,28 @@ export function FleetSnapshotButton({ variant }: { variant: 'header' | 'sidebar'
   const label =
     phase === 'busy'
       ? 'Rendering snapshot…'
-      : phase === 'copied'
-        ? '✓ Copied — paste into your digest'
-        : phase === 'downloaded'
-          ? '✓ Saved PNG (clipboard unavailable)'
-          : phase === 'error'
-            ? `Failed: ${error ?? 'unknown error'}`
-            : variant === 'header'
-              ? '🚢 Copy fleet snapshot'
-              : '📸 Copy fleet snapshot';
+      : phase === 'both'
+        ? '✓ Copied & PNG downloaded'
+        : phase === 'copied'
+          ? "✓ Copied (download didn't start)"
+          : phase === 'downloaded'
+            ? '✓ PNG downloaded (clipboard unavailable)'
+            : phase === 'error'
+              ? `Failed: ${error ?? 'unknown error'}`
+              : variant === 'header'
+                ? '🚢 Copy fleet snapshot'
+                : '📸 Copy fleet snapshot';
+
+  const done = phase === 'both' || phase === 'copied' || phase === 'downloaded';
 
   if (variant === 'header') {
     return (
       <button
         onClick={run}
         disabled={phase === 'busy'}
-        title="Copy an image of all ship positions + status table to the clipboard"
+        title="Copy an image of all ship positions + status table to the clipboard and download it as a PNG"
         className={`rounded-md border px-3 py-1.5 text-[12px] font-semibold transition ${
-          phase === 'copied' || phase === 'downloaded'
+          done
             ? 'border-accent-ok/40 bg-accent-ok/10 text-accent-ok'
             : phase === 'error'
               ? 'border-accent-danger/40 bg-accent-danger/10 text-accent-danger'
@@ -78,9 +83,9 @@ export function FleetSnapshotButton({ variant }: { variant: 'header' | 'sidebar'
     <button
       onClick={run}
       disabled={phase === 'busy'}
-      title="Copy an image of all ship positions + status table to the clipboard"
+      title="Copy an image of all ship positions + status table to the clipboard and download it as a PNG"
       className={`mx-1 mt-1 flex w-[calc(100%-0.5rem)] items-center gap-2 rounded-md border px-2.5 py-1.5 text-left text-[12px] font-medium transition ${
-        phase === 'copied' || phase === 'downloaded'
+        done
           ? 'border-accent-ok/30 bg-accent-ok/10 text-accent-ok'
           : phase === 'error'
             ? 'border-accent-danger/30 bg-accent-danger/10 text-accent-danger'
