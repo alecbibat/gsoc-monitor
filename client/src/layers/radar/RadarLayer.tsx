@@ -126,7 +126,12 @@ export function RadarLayer() {
 
   // Rebuild the layer stack when the mode / frames / window / palette change.
   useEffect(() => {
-    if (!viewer) return;
+    // A WebGL context loss destroys the viewer before the context value flips
+    // to the rebuilt one, so a stale-but-destroyed viewer can reach both this
+    // body (via e.g. a manifest update) and the cleanup below. Touching a
+    // destroyed viewer's imageryLayers throws and would blank the whole app —
+    // exactly during the recovery path.
+    if (!viewer || viewer.isDestroyed()) return;
 
     if (!active || !host) {
       viewer.scene.requestRender();
@@ -187,8 +192,10 @@ export function RadarLayer() {
 
     return () => {
       cancelFade();
-      for (const l of [...cloudLayersRef.current, ...animLayersRef.current]) {
-        viewer.imageryLayers.remove(l, true);
+      if (!viewer.isDestroyed()) {
+        for (const l of [...cloudLayersRef.current, ...animLayersRef.current]) {
+          viewer.imageryLayers.remove(l, true);
+        }
       }
       cloudLayersRef.current = [];
       animLayersRef.current = [];
@@ -200,7 +207,7 @@ export function RadarLayer() {
 
   // Crossfade to the current frame whenever the index moves.
   useEffect(() => {
-    if (!viewer) return;
+    if (!viewer || viewer.isDestroyed()) return;
     const layers = animLayersRef.current;
     if (layers.length === 0) return;
     const to = Math.min(Math.max(0, currentIndex), layers.length - 1);
@@ -215,6 +222,10 @@ export function RadarLayer() {
     const fromCloud = cloudMapRef.current[from] ?? -1;
     const toCloud = cloudMapRef.current[to] ?? -1;
     const tick = () => {
+      if (viewer.isDestroyed()) {
+        fadeRafRef.current = null;
+        return;
+      }
       const t = Math.min(1, (performance.now() - t0) / FADE_MS);
       const e = easeInOut(t);
       const tgt = targets();
@@ -243,7 +254,7 @@ export function RadarLayer() {
   // Re-apply alphas when opacity moves (mid-fade the ticker reads the store
   // itself, so only the settled state needs a nudge).
   useEffect(() => {
-    if (!viewer) return;
+    if (!viewer || viewer.isDestroyed()) return;
     if (fadeRafRef.current == null && shownIndexRef.current != null) {
       applyInstant(shownIndexRef.current);
       viewer.scene.requestRender();
