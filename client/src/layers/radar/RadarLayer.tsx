@@ -9,11 +9,13 @@ import type { RadarFrame } from '../../types';
 import { useRadarStore, buildTimeline, nowIndex } from './radarStore';
 import { CLIENT_RECOLOR, makeCloudProvider, makeRadarProvider } from './RainViewerImagery';
 
-// Frame dwell during playback (ms), and the crossfade between frames. The
-// fade is what turns stepping through 10-minute snapshots into something that
-// reads as motion instead of a slideshow.
-const FRAME_MS = 500;
-const FADE_MS = 240;
+// Frame cadence during playback (ms). The dissolve occupies almost the whole
+// interval — the incoming frame fades in continuously on top of the held one
+// (zoom.earth's rolling dissolve), so playback reads as motion, not a
+// slideshow. The small gap below the cadence absorbs timer jitter so a
+// dissolve normally completes before the next tick supersedes it.
+const FRAME_MS = 800;
+const FADE_MS = 720;
 // Clouds sit dimmer than radar in combined mode so precipitation stays the
 // subject of the composition.
 const CLOUD_ALPHA = 0.7;
@@ -33,10 +35,6 @@ function nearestFrameIndex(frames: RadarFrame[], time: number, maxDeltaSec = 360
     }
   }
   return best;
-}
-
-function easeInOut(t: number): number {
-  return t * t * (3 - 2 * t);
 }
 
 export function RadarLayer() {
@@ -62,9 +60,11 @@ export function RadarLayer() {
   const cloudLayersRef = useRef<Cesium.ImageryLayer[]>([]);
   // timeline index → index into cloudLayersRef (-1 = no clouds for frame).
   const cloudMapRef = useRef<number[]>([]);
-  // Which timeline index is currently displayed, and the in-flight fade.
+  // Which timeline index is currently displayed, the in-flight fade, and the
+  // frame that fade is heading toward (used to finalize a superseded fade).
   const shownIndexRef = useRef<number | null>(null);
   const fadeRafRef = useRef<number | null>(null);
+  const fadeTargetRef = useRef<number | null>(null);
 
   // Fetch manifest periodically.
   useEffect(() => {
@@ -98,6 +98,7 @@ export function RadarLayer() {
       cancelAnimationFrame(fadeRafRef.current);
       fadeRafRef.current = null;
     }
+    fadeTargetRef.current = null;
   };
 
   // Target alphas for the current mode/opacity. With client recoloring the
@@ -207,21 +208,24 @@ export function RadarLayer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewer, active, host, frames, nowcastFrames, satelliteFrames, mode, windowMinutes, palette]);
 
-  // Crossfade to the current frame whenever the index moves.
+  // Dissolve to the current frame whenever the index moves.
   useEffect(() => {
     if (!viewer || viewer.isDestroyed()) return;
     const layers = animLayersRef.current;
     if (layers.length === 0) return;
     const to = Math.min(Math.max(0, currentIndex), layers.length - 1);
+    // A dissolve still in flight when the next index arrives finalizes to its
+    // own target first, so the new dissolve starts from what is (nearly) on
+    // screen instead of a stale origin.
+    if (fadeRafRef.current != null && fadeTargetRef.current != null) {
+      shownIndexRef.current = fadeTargetRef.current;
+    }
     const from = shownIndexRef.current;
-    const fadeInFlight = fadeRafRef.current != null;
     cancelFade();
-    // Crossfade only during playback, and only when the previous fade had
-    // time to finish. Scrubbing pauses playback and moves the index faster
-    // than FADE_MS — fading there would pin the drag-start frame on screen
-    // (the origin ref only advances when a fade completes) instead of showing
-    // the frames passing under the handle, so snap instantly.
-    if (from == null || from === to || fadeInFlight || !useRadarStore.getState().playing) {
+    // Dissolve only during playback. Scrubbing pauses playback and moves the
+    // index faster than any fade — snap instantly so the frame under the
+    // handle is always the one displayed.
+    if (from == null || from === to || !useRadarStore.getState().playing) {
       applyInstant(to);
       viewer.scene.requestRender();
       return;
@@ -229,22 +233,34 @@ export function RadarLayer() {
     const t0 = performance.now();
     const fromCloud = cloudMapRef.current[from] ?? -1;
     const toCloud = cloudMapRef.current[to] ?? -1;
+    // Layers are stacked in timeline order, so during forward playback the
+    // incoming frame sits ABOVE the held one: ramping it in on top never dips
+    // combined coverage (zoom.earth's rolling dissolve). On the loop wrap the
+    // incoming frame is below — hold it at target and fade the old one out to
+    // reveal it, which is equally dip-free at full opacity.
+    const forward = to > from;
+    fadeTargetRef.current = to;
     const tick = () => {
       if (viewer.isDestroyed()) {
         fadeRafRef.current = null;
         return;
       }
       const t = Math.min(1, (performance.now() - t0) / FADE_MS);
-      const e = easeInOut(t);
       const tgt = targets();
       layers.forEach((l, i) => {
-        l.alpha = i === to ? tgt.anim * e : i === from ? tgt.anim * (1 - e) : 0;
+        if (i === to) l.alpha = forward ? tgt.anim * t : tgt.anim;
+        else if (i === from) l.alpha = forward ? tgt.anim : tgt.anim * (1 - t);
+        else l.alpha = 0;
       });
       cloudLayersRef.current.forEach((l, i) => {
         if (fromCloud === toCloud) {
           l.alpha = i === toCloud ? tgt.cloud : 0;
+        } else if (i === toCloud) {
+          l.alpha = forward ? tgt.cloud * t : tgt.cloud;
+        } else if (i === fromCloud) {
+          l.alpha = forward ? tgt.cloud : tgt.cloud * (1 - t);
         } else {
-          l.alpha = i === toCloud ? tgt.cloud * e : i === fromCloud ? tgt.cloud * (1 - e) : 0;
+          l.alpha = 0;
         }
       });
       viewer.scene.requestRender();
@@ -252,7 +268,10 @@ export function RadarLayer() {
         fadeRafRef.current = requestAnimationFrame(tick);
       } else {
         fadeRafRef.current = null;
+        fadeTargetRef.current = null;
         shownIndexRef.current = to;
+        applyInstant(to);
+        viewer.scene.requestRender();
       }
     };
     fadeRafRef.current = requestAnimationFrame(tick);
