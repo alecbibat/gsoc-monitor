@@ -56,13 +56,11 @@ class RecoloringImageryProvider extends Cesium.UrlTemplateImageryProvider {
   }
 }
 
-// STOPGAP: production scheme-0 tiles do not match any public description of
-// their encoding (decoding them painted white fields, then confetti), and the
-// dev sandbox cannot reach rainviewer.com to calibrate. Until the /api/radar/
-// diag endpoint tells us what those tiles really contain, serve RainViewer's
-// server-colored tiles directly — the layer composition (labels on top,
-// crossfade, synced clouds) is unaffected. Flip back on once calibrated.
-export const CLIENT_RECOLOR = false;
+// Client recoloring inverts the palette RainViewer actually serves (the CDN
+// ignores the {color} path segment — see recolor.ts) and repaints through our
+// own gradients. Escape hatch: flipping this off falls back to the served
+// colors directly, keeping the rest of the composition.
+export const CLIENT_RECOLOR = true;
 
 // Server-side color scheme per palette while pass-through is active.
 const PASSTHROUGH_SCHEME: Record<RadarPaletteId, number> = {
@@ -90,9 +88,12 @@ export function makeRadarProvider(
   const lut = getRadarLut(palette);
   return new RecoloringImageryProvider(
     {
-      // color 0 = raw dBZ encoding; options 0_1 = no server smoothing (we do
-      // our own, seam-aware) and keep the snow bit populated.
-      url: `${host}${frame.path}/${TILE_SIZE}/{z}/{x}/{y}/0/0_1.png`,
+      // The CDN currently serves the same palette for every color id; request
+      // 2 (Universal Blue — the palette that matches what actually arrives,
+      // and what the inversion anchors expect) with server smoothing on and
+      // snow folded into the rain ramp, so if the parameter ever starts
+      // working again the bytes stay what the inverter is calibrated for.
+      url: `${host}${frame.path}/${TILE_SIZE}/{z}/{x}/{y}/2/1_0.png`,
       maximumLevel: RADAR_MAX_LEVEL,
       tileWidth: TILE_SIZE,
       tileHeight: TILE_SIZE,
