@@ -212,8 +212,14 @@ export function RadarLayer() {
     if (layers.length === 0) return;
     const to = Math.min(Math.max(0, currentIndex), layers.length - 1);
     const from = shownIndexRef.current;
+    const fadeInFlight = fadeRafRef.current != null;
     cancelFade();
-    if (from == null || from === to) {
+    // Crossfade only during playback, and only when the previous fade had
+    // time to finish. Scrubbing pauses playback and moves the index faster
+    // than FADE_MS — fading there would pin the drag-start frame on screen
+    // (the origin ref only advances when a fade completes) instead of showing
+    // the frames passing under the handle, so snap instantly.
+    if (from == null || from === to || fadeInFlight || !useRadarStore.getState().playing) {
       applyInstant(to);
       viewer.scene.requestRender();
       return;
