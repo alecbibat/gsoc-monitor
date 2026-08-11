@@ -14,18 +14,23 @@ type Stop = [number, number, number, number, number];
 const RAIN_STOPS: Record<RadarPaletteId, Stop[]> = {
   // zoom.earth-class default: blue → violet → magenta → red → orange →
   // white-hot yellow.
+  // Luminance stays high through the blue → violet → magenta transition:
+  // a dark valley between the bright blues and the bright hot cores reads as
+  // a scorched ring around every cell (and RainViewer's served palette steps
+  // straight from deep blue to yellow, so that transition band is spatially
+  // compressed to begin with — see recolor.ts).
   storm: [
     [2, 120, 175, 255, 0.0],
     [8, 100, 152, 250, 0.42],
     [16, 68, 122, 245, 0.62],
-    [24, 46, 88, 232, 0.74],
-    [30, 102, 58, 220, 0.82],
-    [35, 190, 48, 178, 0.88],
-    [40, 232, 48, 96, 0.92],
-    [45, 244, 96, 44, 0.94],
-    [50, 252, 158, 44, 0.96],
-    [55, 255, 214, 72, 0.98],
-    [62, 255, 245, 190, 0.99],
+    [24, 52, 96, 238, 0.74],
+    [30, 122, 88, 240, 0.8],
+    [35, 205, 72, 195, 0.86],
+    [40, 242, 64, 120, 0.9],
+    [45, 248, 100, 52, 0.93],
+    [50, 252, 160, 46, 0.96],
+    [55, 255, 215, 75, 0.98],
+    [62, 255, 246, 195, 0.99],
     [70, 255, 255, 255, 1.0],
   ],
   // Familiar meteorology greens → yellow → red, but with a translucent light

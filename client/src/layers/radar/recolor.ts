@@ -156,10 +156,11 @@ function getPaletteInversionLut(): Uint8Array {
 // which is the same trick zoom.earth leans on).
 export function radarBlurPx(level: number): number {
   if (!canvasFilterSupported()) return 0;
-  // Floor of 1px at every level: real reflectivity mosaics are speckled even
-  // when the data out-resolves the tile, and a light pass keeps the national
-  // view soft instead of grainy.
-  return Math.min(3.5, Math.max(1, 0.5 * 2 ** Math.max(0, level - 6)));
+  // Floor of 1.5px at every level: real mosaics are speckled at national zoom
+  // even where the data out-resolves the tile, and the served palette's hard
+  // blue→yellow step needs a few pixels of data-space diffusion or the
+  // moderate-to-heavy transition renders as an abrupt ring.
+  return Math.min(4, Math.max(1.5, 0.7 * 2 ** Math.max(0, level - 6)));
 }
 
 export function recolorRadarTile(img: SourceImage, lut: RadarLut, blurPx: number): HTMLCanvasElement {
