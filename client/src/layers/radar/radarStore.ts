@@ -58,9 +58,11 @@ export const useRadarStore = create<RadarState>((set) => ({
   frames: [],
   nowcastFrames: [],
   satelliteFrames: [],
-  // Radar over keyed satellite clouds — the zoom.earth composition — is the
-  // default; clear sky stays transparent so the basemap shows through.
-  mode: 'combined',
+  // Default to plain radar until the keyed-cloud rendering is calibrated
+  // against real RainViewer IR tiles (see CLIENT_RECOLOR in
+  // RainViewerImagery.ts); then 'combined' — radar over keyed clouds, the
+  // zoom.earth composition — becomes the default again.
+  mode: 'radar',
   // Default to the full ~2h window so the scrubber spans a satisfying range
   // (plus the forecast frames appended after "now").
   windowMinutes: 120,

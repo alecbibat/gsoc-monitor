@@ -56,11 +56,37 @@ class RecoloringImageryProvider extends Cesium.UrlTemplateImageryProvider {
   }
 }
 
+// STOPGAP: production scheme-0 tiles do not match any public description of
+// their encoding (decoding them painted white fields, then confetti), and the
+// dev sandbox cannot reach rainviewer.com to calibrate. Until the /api/radar/
+// diag endpoint tells us what those tiles really contain, serve RainViewer's
+// server-colored tiles directly — the layer composition (labels on top,
+// crossfade, synced clouds) is unaffected. Flip back on once calibrated.
+export const CLIENT_RECOLOR = false;
+
+// Server-side color scheme per palette while pass-through is active.
+const PASSTHROUGH_SCHEME: Record<RadarPaletteId, number> = {
+  storm: 4, // The Weather Channel — closest stock scheme to the zoom.earth ramp
+  classic: 4,
+  blue: 2, // Universal Blue
+  mono: 8, // Dark Sky
+};
+
 export function makeRadarProvider(
   host: string,
   frame: RadarFrame,
   palette: RadarPaletteId
 ): Cesium.ImageryProvider {
+  if (!CLIENT_RECOLOR) {
+    return new Cesium.UrlTemplateImageryProvider({
+      // Server-colored tiles with server-side smoothing, snow folded into the
+      // rain gradient.
+      url: `${host}${frame.path}/${TILE_SIZE}/{z}/{x}/{y}/${PASSTHROUGH_SCHEME[palette]}/1_0.png`,
+      maximumLevel: RADAR_MAX_LEVEL,
+      tileWidth: TILE_SIZE,
+      tileHeight: TILE_SIZE,
+    });
+  }
   const lut = getRadarLut(palette);
   return new RecoloringImageryProvider(
     {
