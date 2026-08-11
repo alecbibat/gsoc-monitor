@@ -41,7 +41,9 @@ const seen = new Set();
 for (const c of keep) {
   const region = regionOf(c);
   if (!region) continue;
-  const name = c.name.trim();
+  // Display name: GeoNames writes "Washington, D.C." — keep only the part
+  // before a comma so the rendered "name, region" never doubles up.
+  const name = c.name.split(',')[0].trim();
   if (!name || /[\t\n\\`]|\$\{/.test(name) || /[\t\n\\`]|\$\{/.test(region)) continue;
   const [lon, lat] = c.loc.coordinates;
   const key = `${name}|${region}`;

@@ -836,7 +836,7 @@ Pilsen	Czechia	49.75	13.38
 Prague	Czechia	50.09	14.42
 Ústí nad Labem	Czechia	50.66	14.03
 Zlín	Czechia	49.23	17.67
-Washington, D.C.	DC	38.90	-77.04
+Washington	DC	38.90	-77.04
 Dover	DE	39.16	-75.52
 Aalborg	Denmark	57.05	9.92
 Copenhagen	Denmark	55.68	12.57

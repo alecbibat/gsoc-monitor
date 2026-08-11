@@ -147,6 +147,15 @@ async function assembleRows(): Promise<SnapshotRow[]> {
 const fmtCoord = (lat: number, lon: number): string =>
   `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? 'N' : 'S'}  ${Math.abs(lon).toFixed(2)}°${lon >= 0 ? 'E' : 'W'}`;
 
+// Accent-folded lowercase for "same place?" comparisons — the geocoder
+// returns ASCII spellings ("Reykjavik") while the city dataset keeps
+// diacritics ("Reykjavík").
+const fold = (s: string): string =>
+  s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
 const fmtAge = (sec: number): string => {
   if (sec < 90) return 'just now';
   if (sec < 5400) return `${Math.round(sec / 60)}m ago`;
@@ -159,7 +168,12 @@ const fmtAge = (sec: number): string => {
 // city → ship, so "NE of" reads as the ship's offset from the city).
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 function fmtNearCity(near: NearestCity): string {
-  const where = `${near.city.name}, ${near.city.region}`;
+  // City-states carry their own name as the region ("Monaco\tMonaco") —
+  // don't render the doubled "Monaco, Monaco".
+  const where =
+    near.city.name === near.city.region
+      ? near.city.name
+      : `${near.city.name}, ${near.city.region}`;
   if (near.distNm <= 10) return where;
   const d = near.distNm >= 100 ? Math.round(near.distNm / 5) * 5 : Math.round(near.distNm);
   const dir = COMPASS[Math.round(near.bearingDeg / 45) % 8];
@@ -826,9 +840,8 @@ function drawTable(
       const repeatsCity =
         near != null &&
         nearText != null &&
-        (nearText.toLowerCase() === locPrimary.toLowerCase() ||
-          (near.distNm <= 10 &&
-            locPrimary.toLowerCase().includes(near.city.name.toLowerCase())));
+        (fold(nearText) === fold(locPrimary) ||
+          (near.distNm <= 10 && fold(locPrimary).includes(fold(near.city.name))));
       if (nearText && !repeatsCity) locSecondary = nearText;
     } else {
       locPrimary = nearText ?? (st.kind === 'underway' ? 'At sea' : '—');
@@ -901,6 +914,9 @@ async function buildFleetSnapshotBlob(): Promise<Blob> {
   return blob;
 }
 
+// Triggers a save of the blob. NOTE: a suppressed download is not web-visible
+// — a.click() returns normally even when the browser blocks automatic
+// downloads — so callers can only ever know the download was *started*.
 function downloadBlob(blob: Blob): void {
   const denverDate = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Denver',
@@ -912,17 +928,21 @@ function downloadBlob(blob: Blob): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = `windstar-fleet-${denverDate}.png`;
+  document.body.appendChild(a); // in-DOM anchor: Firefox won't honor a detached click
   a.click();
+  a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 export type SnapshotResult =
-  | { ok: true; copied: boolean; downloaded: boolean }
+  | { ok: true; copied: boolean; downloadStarted: boolean }
   | { ok: false; error: string };
 
 // Call from a click handler. The snapshot is copied to the clipboard (for
 // pasting straight into the digest email) AND downloaded as a PNG (for the
 // records archive), each best-effort — one succeeding is still a success.
+// downloadStarted is exactly that: the browser gives no signal when it
+// silently suppresses an automatic download, so completion is unknowable.
 // Passing the pending blob promise straight into ClipboardItem keeps the
 // user-gesture chain alive through the async render (required by Safari,
 // supported by Chromium ≥ 98); if the engine rejects promise payloads we
@@ -958,16 +978,16 @@ export async function copyFleetSnapshot(): Promise<SnapshotResult> {
     }
   }
 
-  let downloaded = false;
+  let downloadStarted = false;
   try {
     downloadBlob(blob);
-    downloaded = true;
+    downloadStarted = true;
   } catch {
-    // Download blocked — a successful clipboard copy still counts.
+    // Couldn't even start the download — a clipboard copy still counts.
   }
 
-  if (!copied && !downloaded) {
+  if (!copied && !downloadStarted) {
     return { ok: false, error: 'Clipboard and download both unavailable' };
   }
-  return { ok: true, copied, downloaded };
+  return { ok: true, copied, downloadStarted };
 }

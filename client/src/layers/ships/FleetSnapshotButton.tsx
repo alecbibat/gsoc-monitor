@@ -35,7 +35,7 @@ export function FleetSnapshotButton({ variant }: { variant: 'header' | 'sidebar'
         error: err instanceof Error ? err.message : 'Failed to load the snapshot renderer',
       }));
     if (result.ok) {
-      setPhase(result.copied ? (result.downloaded ? 'both' : 'copied') : 'downloaded');
+      setPhase(result.copied ? (result.downloadStarted ? 'both' : 'copied') : 'downloaded');
     } else {
       setPhase('error');
       setError(result.error);
@@ -49,7 +49,7 @@ export function FleetSnapshotButton({ variant }: { variant: 'header' | 'sidebar'
       : phase === 'both'
         ? '✓ Copied & PNG downloaded'
         : phase === 'copied'
-          ? '✓ Copied (download blocked)'
+          ? "✓ Copied (download didn't start)"
           : phase === 'downloaded'
             ? '✓ PNG downloaded (clipboard unavailable)'
             : phase === 'error'
