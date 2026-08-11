@@ -64,7 +64,10 @@ export function LogShowMore({ total, limit, onLimitChange }: {
       ))}
       {hidden > 0 && (
         <button
-          onClick={() => onLimitChange(total)}
+          // Infinity, not the momentary total: entries keep arriving (SSE on
+          // the share page, peers in the editor) and a frozen count would
+          // silently hide the oldest rows again.
+          onClick={() => onLimitChange(Infinity)}
           className="rounded border border-white/10 px-2.5 py-1 text-[10px] text-white/45 transition hover:border-white/25 hover:text-white/70"
         >
           Show all {total}
@@ -258,10 +261,20 @@ function SnakeCard({ entry, x, y, w, onOpen }: {
 function EntryDetailModal({ entry, onClose }: { entry: ActionLogEntry; onClose: () => void }) {
   const entryType = entryTypeOf(entry);
 
+  // Capture on document, with stopPropagation: fires after ImageLightbox's
+  // window-capture handler (an open lightbox stays on top and swallows the
+  // press) but before CrisisOverlay's window-bubble Escape listener — so one
+  // press closes only this modal instead of dumping the user out of the
+  // whole incident editor.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
   }, [onClose]);
 
   // Portalled to <body>: the crisis overlay uses backdrop-filter, which would
@@ -297,6 +310,7 @@ function EntryDetailModal({ entry, onClose }: { entry: ActionLogEntry; onClose: 
           <ZoomableImage
             src={entry.attachmentData}
             alt={entry.attachmentName}
+            wrapperClassName="w-full"
             className="mt-4 max-h-[50vh] w-full rounded-lg border border-white/10 object-contain"
           />
         )}

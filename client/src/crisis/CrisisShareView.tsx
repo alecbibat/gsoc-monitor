@@ -5,7 +5,7 @@ import { LOCATION_GROUPS, type LocationGroup } from '../layers/locations/locatio
 import { CrisisShareMap } from './CrisisShareMap';
 import { ShareWatchCard } from './ShareWatchCard';
 import { isShareLiveLayerId } from './shareLiveLayers';
-import { ZoomableImage } from './ImageLightbox';
+import { ImageLightbox, ZoomableImage } from './ImageLightbox';
 import { TYPE_STYLES, TimelineView, LogShowMore, DEFAULT_LOG_LIMIT } from './logViews';
 
 // The live globe (Cesium + every layer component) is only loaded when the
@@ -198,6 +198,9 @@ export function CrisisShareView({ token }: { token: string }) {
   const [hideInfo, setHideInfo] = useState(false);
   const [logView, setLogView] = useState<'list' | 'timeline'>('list');
   const [logLimit, setLogLimit] = useState(DEFAULT_LOG_LIMIT);
+  // Hoisted above the paginated log rows: an SSE update can slide a row out
+  // of the visible slice, and an open viewer must survive that unmount.
+  const [logLightbox, setLogLightbox] = useState<{ src: string; alt?: string } | null>(null);
 
   // Once the globe has mounted, keep it mounted even if a live prescription
   // update empties the layer/pin lists — swapping a viewer down to the flat
@@ -478,6 +481,10 @@ export function CrisisShareView({ token }: { token: string }) {
                             <ZoomableImage
                               src={(entry as { attachmentData?: string }).attachmentData!}
                               alt={entry.attachmentName}
+                              onOpen={() => setLogLightbox({
+                                src: (entry as { attachmentData?: string }).attachmentData!,
+                                alt: entry.attachmentName,
+                              })}
                               className="max-h-48 max-w-[220px] rounded border border-white/12 object-cover shadow-lg"
                             />
                           )}
@@ -590,6 +597,14 @@ export function CrisisShareView({ token }: { token: string }) {
         <p className="border-t border-white/6 pt-4 text-center text-[9px] text-white/20">
           Published {fmtTs(data.publishedAt)} · Updates automatically in real-time
         </p>
+
+        {logLightbox && (
+          <ImageLightbox
+            src={logLightbox.src}
+            alt={logLightbox.alt}
+            onClose={() => setLogLightbox(null)}
+          />
+        )}
       </main>
     </div>
   );

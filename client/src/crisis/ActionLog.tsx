@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useCrisisStore, selectActive, type ActionEntryType, type ActionLogEntry } from './crisisStore';
 import { uploadImage } from '../lib/cloudinary';
-import { ZoomableImage } from './ImageLightbox';
+import { ImageLightbox, ZoomableImage } from './ImageLightbox';
 import {
   TYPE_STYLES,
   TimelineView,
@@ -58,10 +58,14 @@ function LogRow({
   entry,
   autoFocus,
   onAutoFocused,
+  onOpenImage,
 }: {
   entry: ActionLogEntry;
   autoFocus?: boolean;
   onAutoFocused?: () => void;
+  // Lightbox state lives above the paginated list: a peer-sync prepend can
+  // slide this row out of the visible slice, and an open viewer must survive.
+  onOpenImage: (src: string, alt?: string) => void;
 }) {
   const updateActionEntry = useCrisisStore((s) => s.updateActionEntry);
   const removeActionEntry = useCrisisStore((s) => s.removeActionEntry);
@@ -170,6 +174,7 @@ function LogRow({
               <ZoomableImage
                 src={entry.attachmentData}
                 alt={entry.attachmentName}
+                onOpen={() => onOpenImage(entry.attachmentData!, entry.attachmentName)}
                 className="max-h-20 rounded border border-white/10 object-cover"
               />
             )}
@@ -218,6 +223,7 @@ export function ActionLog() {
   const [limit, setLimit] = useState(DEFAULT_LOG_LIMIT);
   // Focus the new row's description so a Ctrl+V right after "+ Action/Event" lands in it.
   const [focusId, setFocusId] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<{ src: string; alt?: string } | null>(null);
 
   const infoCount = actionLog.filter((e) => e.entryType === 'info').length;
   const visibleLog = hideInfo ? actionLog.filter((e) => e.entryType !== 'info') : actionLog;
@@ -323,6 +329,7 @@ export function ActionLog() {
                         entry={entry}
                         autoFocus={entry.id === focusId}
                         onAutoFocused={() => setFocusId(null)}
+                        onOpenImage={(src, alt) => setLightbox({ src, alt })}
                       />
                     ))}
                   </tbody>
@@ -337,6 +344,10 @@ export function ActionLog() {
           </div>
         )}
       </div>
+
+      {lightbox && (
+        <ImageLightbox src={lightbox.src} alt={lightbox.alt} onClose={() => setLightbox(null)} />
+      )}
     </section>
   );
 }

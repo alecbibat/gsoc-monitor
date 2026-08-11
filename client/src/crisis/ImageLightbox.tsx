@@ -13,6 +13,14 @@ interface View { scale: number; tx: number; ty: number }
 
 const RESET: View = { scale: 1, tx: 0, ty: 0 };
 
+// Ignore backdrop close-clicks this soon after mount: a double-click on a
+// thumbnail would otherwise open the viewer and instantly close it again.
+const OPEN_GRACE_MS = 300;
+// A backdrop click waits this long before closing so a double-click (reset
+// zoom) can cancel it — closing on the first click would let the second click
+// fall through onto whatever sits beneath the overlay.
+const CLOSE_DELAY_MS = 250;
+
 export function ImageLightbox({ src, alt, onClose }: {
   src: string;
   alt?: string;
@@ -23,8 +31,28 @@ export function ImageLightbox({ src, alt, onClose }: {
   // Live pointer positions — one entry per touching finger / pressed button.
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const pinch = useRef<{ dist: number; midX: number; midY: number } | null>(null);
-  // Set on any drag/pinch so the trailing click can't close the viewer.
+  // Set once the pointer strays from its down position so the trailing click
+  // can't close the viewer. Measured cumulatively from the origin: per-event
+  // deltas are coalesced to one per frame and stay tiny during a slow pan.
+  const downPos = useRef<{ x: number; y: number } | null>(null);
   const moved = useRef(false);
+  // Pointer capture retargets the trailing click to the frame, so remember
+  // where the press actually started to tell backdrop clicks from image clicks.
+  const downOnBackdrop = useRef(false);
+  const openedAt = useRef(performance.now());
+  const closeTimer = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (closeTimer.current !== null) clearTimeout(closeTimer.current);
+  }, []);
+
+  // Lock the page behind the overlay — the share page is a scrollable
+  // document, and Space/PageDown would otherwise scroll it under the viewer.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
 
   // Zoom about a point p (offset from frame centre), keeping the image pixel
   // under p stationary while the scale changes.
@@ -57,11 +85,12 @@ export function ImageLightbox({ src, alt, onClose }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Capture phase so an underlying modal's own Escape handler (a bubble
-  // listener on the same window) never sees this press.
+  // Capture phase on window so an underlying modal's Escape handler (document
+  // capture or window bubble) never sees this press while the viewer is open.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        e.preventDefault();
         e.stopPropagation();
         onClose();
       }
@@ -71,8 +100,15 @@ export function ImageLightbox({ src, alt, onClose }: {
   }, [onClose]);
 
   const onPointerDown = (e: React.PointerEvent) => {
+    // Capture so a mouse drag keeps panning when the cursor crosses the
+    // window edge instead of dying until the button is released.
+    try { frameRef.current?.setPointerCapture(e.pointerId); } catch { /* synthetic or stale pointer */ }
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pointers.current.size === 1) moved.current = false;
+    if (pointers.current.size === 1) {
+      moved.current = false;
+      downPos.current = { x: e.clientX, y: e.clientY };
+      downOnBackdrop.current = e.target === e.currentTarget;
+    }
     pinch.current = null;
   };
 
@@ -80,8 +116,8 @@ export function ImageLightbox({ src, alt, onClose }: {
     const pts = pointers.current;
     const prev = pts.get(e.pointerId);
     if (!prev) return;
-    // A mouse-up outside the window leaves a stale entry; drop it as soon as
-    // the button-less hover move arrives, or it would pan with no button down.
+    // Defense in depth: a mouse entry that somehow survived its pointerup
+    // must not pan on button-less hover moves.
     if (e.pointerType === 'mouse' && e.buttons === 0) {
       pts.delete(e.pointerId);
       return;
@@ -91,7 +127,8 @@ export function ImageLightbox({ src, alt, onClose }: {
     if (pts.size === 1) {
       const dx = e.clientX - prev.x;
       const dy = e.clientY - prev.y;
-      if (Math.abs(dx) + Math.abs(dy) > 2) moved.current = true;
+      const dp = downPos.current;
+      if (dp && Math.abs(e.clientX - dp.x) + Math.abs(e.clientY - dp.y) > 2) moved.current = true;
       setView((v) => (v.scale > 1 ? { ...v, tx: v.tx + dx, ty: v.ty + dy } : v));
     } else if (pts.size === 2) {
       moved.current = true;
@@ -120,15 +157,27 @@ export function ImageLightbox({ src, alt, onClose }: {
     <div
       ref={frameRef}
       className="fixed inset-0 z-[3300] flex select-none items-center justify-center overflow-hidden bg-black/85 backdrop-blur-sm"
-      style={{ touchAction: 'none', cursor: view.scale > 1 ? 'grab' : 'zoom-in' }}
+      style={{
+        touchAction: 'none',
+        WebkitTouchCallout: 'none',  // iOS long-press image sheet would abort the pan gesture
+        cursor: view.scale > 1 ? 'grab' : 'zoom-in',
+      }}
       onClick={(e) => {
         // The viewer lives in the React tree of whatever opened it (portal
         // events bubble through the React tree, not the DOM) — never let a
         // click fall through to an underlying modal's close-on-backdrop.
         e.stopPropagation();
-        if (e.target === e.currentTarget && !moved.current) onClose();
+        if (!downOnBackdrop.current || moved.current) return;
+        if (performance.now() - openedAt.current < OPEN_GRACE_MS) return;
+        if (e.detail > 1) return;  // second click of a double-click — handled there
+        if (closeTimer.current !== null) clearTimeout(closeTimer.current);
+        closeTimer.current = window.setTimeout(onClose, CLOSE_DELAY_MS);
       }}
       onDoubleClick={(e) => {
+        if (closeTimer.current !== null) {
+          clearTimeout(closeTimer.current);
+          closeTimer.current = null;
+        }
         const { px, py } = frameOffset(e.clientX, e.clientY);
         setView((v) => (v.scale > 1 ? RESET : zoomAt(v, px, py, 2.5)));
       }}
@@ -136,7 +185,6 @@ export function ImageLightbox({ src, alt, onClose }: {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerEnd}
       onPointerCancel={onPointerEnd}
-      onPointerLeave={onPointerEnd}
     >
       <img
         src={src}
@@ -149,6 +197,9 @@ export function ImageLightbox({ src, alt, onClose }: {
         }}
       />
       <button
+        // Keep the frame from capturing this pointer — capture would retarget
+        // the click to the frame and the button would never fire.
+        onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => { e.stopPropagation(); onClose(); }}
         className="absolute right-4 top-4 rounded-full border border-white/20 bg-black/50 px-2.5 py-1 text-[14px] text-white/70 transition hover:text-white"
         aria-label="Close image viewer"
@@ -167,24 +218,35 @@ export function ImageLightbox({ src, alt, onClose }: {
   );
 }
 
-// Thumbnail that opens itself in the lightbox when clicked.
-export function ZoomableImage({ src, alt, className }: {
+// Thumbnail that opens the image in the lightbox when clicked.
+export function ZoomableImage({ src, alt, className, wrapperClassName, onOpen }: {
   src: string;
   alt?: string;
   className?: string;
+  // Extra classes for the wrapping button — pass w-full when the thumbnail
+  // should span its container; buttons otherwise shrink-wrap to the image.
+  wrapperClassName?: string;
+  // When set, clicking reports to the parent instead of opening the built-in
+  // viewer — paginated lists hoist the lightbox above their rows so a row
+  // sliding out of the visible window doesn't unmount an open viewer.
+  onOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
     <>
       <button
         type="button"
-        onClick={(e) => { e.stopPropagation(); setOpen(true); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (onOpen) onOpen();
+          else setOpen(true);
+        }}
         title="Click to enlarge"
-        className="block cursor-zoom-in"
+        className={`block max-w-full cursor-zoom-in ${wrapperClassName ?? ''}`}
       >
         <img src={src} alt={alt} className={className} draggable={false} />
       </button>
-      {open && <ImageLightbox src={src} alt={alt} onClose={() => setOpen(false)} />}
+      {!onOpen && open && <ImageLightbox src={src} alt={alt} onClose={() => setOpen(false)} />}
     </>
   );
 }
