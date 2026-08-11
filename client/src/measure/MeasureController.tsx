@@ -88,13 +88,14 @@ export function MeasureController() {
     // Vertices.
     points.forEach((p, i) => {
       ds.entities.add({
-        position: Cesium.Cartesian3.fromDegrees(p.lon, p.lat),
+        // Surface anchor + default depth test — placed vertices hide behind
+        // the globe if the user rotates it mid-measurement.
+        position: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, 0),
         point: {
           pixelSize: i === 0 ? 11 : 9,
           color: VERTEX_COLOR,
           outlineColor: LINE_COLOR,
           outlineWidth: 2,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
     });

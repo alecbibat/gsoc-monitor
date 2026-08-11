@@ -561,12 +561,14 @@ export function HurricaneLayer() {
         const id = `disturbance-${pick(p, ['objectid', 'OBJECTID']) ?? `${clon},${clat}`}`;
         const ent = ds.entities.add({
           id,
-          position: Cesium.Cartesian3.fromDegrees(clon, clat),
+          // Anchored on the ellipsoid surface with the DEFAULT depth test (no
+          // disableDepthTestDistance) so the globe occludes far-side markers
+          // instead of letting them show through it.
+          position: Cesium.Cartesian3.fromDegrees(clon, clat, 0),
           billboard: {
             image: disturbanceIcon(color),
             width: 26,
             height: 26,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
           label: {
             text: prob7 ? `${prob7}` : 'watch',
@@ -577,7 +579,6 @@ export function HurricaneLayer() {
             style: Cesium.LabelStyle.FILL_AND_OUTLINE,
             verticalOrigin: Cesium.VerticalOrigin.TOP,
             pixelOffset: new Cesium.Cartesian2(0, 16),
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
         });
         attachPanelData(ent, {
@@ -609,7 +610,9 @@ export function HurricaneLayer() {
         const id = `invest-${inv.id}`;
         const ent = ds.entities.add({
           id,
-          position: Cesium.Cartesian3.fromDegrees(inv.lon, inv.lat),
+          // Surface anchor + default depth test — far-side markers hide behind
+          // the globe (same pattern as the GTWO areas above).
+          position: Cesium.Cartesian3.fromDegrees(inv.lon, inv.lat, 0),
           ellipse: {
             semiMajorAxis: 185_000, // ~100 NM
             semiMinorAxis: 185_000,
@@ -622,7 +625,6 @@ export function HurricaneLayer() {
             image: disturbanceIcon(color),
             width: 26,
             height: 26,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
           label: {
             text: inv.id,
@@ -633,7 +635,6 @@ export function HurricaneLayer() {
             style: Cesium.LabelStyle.FILL_AND_OUTLINE,
             verticalOrigin: Cesium.VerticalOrigin.TOP,
             pixelOffset: new Cesium.Cartesian2(0, 16),
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
         });
         attachPanelData(ent, {
@@ -726,13 +727,13 @@ export function HurricaneLayer() {
           color: cls.color,
         };
         const dot = ds.entities.add({
-          position: Cesium.Cartesian3.fromDegrees(coord[0], coord[1]),
+          position: Cesium.Cartesian3.fromDegrees(coord[0], coord[1], 0),
           point: {
             pixelSize: FCST_DOT_SIZE,
             color: Cesium.Color.fromCssColorString(cls.color).withAlpha(0.95),
             outlineColor: Cesium.Color.BLACK.withAlpha(0.6),
             outlineWidth: 1,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            // Default depth test — far-side forecast dots hide behind the globe.
           },
         });
         attachForecast(dot, info);
@@ -744,14 +745,15 @@ export function HurricaneLayer() {
         const id = `hurricane-${s.id}`;
         const entity = ds.entities.add({
           id,
-          position: Cesium.Cartesian3.fromDegrees(s.lon!, s.lat!),
+          // Surface anchor + default depth test — storms on the far side of the
+          // planet are occluded by the globe instead of showing through it.
+          position: Cesium.Cartesian3.fromDegrees(s.lon!, s.lat!, 0),
           billboard: {
             image: hurricaneIcon(info.color),
             width: 42,
             height: 42,
             // Swirl the eye — cyclonic sense depends on the hemisphere.
             rotation: new Cesium.CallbackProperty(() => spinAngle(s.lat! >= 0 ? 1 : -1), false),
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
           label: {
             text: s.name ?? s.id,
@@ -762,7 +764,6 @@ export function HurricaneLayer() {
             style: Cesium.LabelStyle.FILL_AND_OUTLINE,
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
             pixelOffset: new Cesium.Cartesian2(0, -26),
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
         });
         attachPanelData(entity, {

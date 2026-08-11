@@ -334,13 +334,14 @@ export function FuelZoneController() {
     if (mode === 'circle') {
       if (center) {
         ds.entities.add({
-          position: Cesium.Cartesian3.fromDegrees(center.lon, center.lat),
+          // Surface anchor + default depth test — the marker hides behind the
+          // globe if the user rotates it mid-draw.
+          position: Cesium.Cartesian3.fromDegrees(center.lon, center.lat, 0),
           point: {
             pixelSize: 8,
             color: CENTER_COLOR,
             outlineColor: LINE_COLOR,
             outlineWidth: 2,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
         });
         if (radiusM > 0) ds.entities.add(circleGraphics(center, radiusM));
@@ -395,13 +396,14 @@ export function FuelZoneController() {
       // Vertex markers; the first is enlarged as the "click here to close" target.
       vertices.forEach((p, i) => {
         ds.entities.add({
-          position: Cesium.Cartesian3.fromDegrees(p.lon, p.lat),
+          // Surface anchor + default depth test — far-side vertices hide
+          // behind the globe.
+          position: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, 0),
           point: {
             pixelSize: i === 0 ? 11 : 8,
             color: i === 0 ? LINE_COLOR : CENTER_COLOR,
             outlineColor: i === 0 ? CENTER_COLOR : LINE_COLOR,
             outlineWidth: 2,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
         });
       });

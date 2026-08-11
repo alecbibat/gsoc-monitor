@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SearchBar } from './SearchBar';
 import { WidgetLauncher } from '../widgets/WidgetLauncher';
 import { ScreensaverControls } from './ScreensaverControls';
@@ -7,6 +7,8 @@ import { useCesiumViewer } from '../cesium/CesiumContext';
 import { resetCamera } from '../cesium/flyTo';
 import { useTrackedHistory } from './useTrackedHistory';
 import { useUiStore } from './uiStore';
+import { useScreensaverStore } from '../screensaver/screensaverStore';
+import { PinsWatchCluster } from '../screensaver/PinsWatchCluster';
 import { useMeasureStore } from '../measure/measureStore';
 import { useCrisisStore } from '../crisis/crisisStore';
 import { useDashboardStore } from '../dashboard/dashboardStore';
@@ -95,6 +97,59 @@ function LiveClock() {
       <span className="text-[10px] font-semibold uppercase tracking-wider text-white/35">
         UTC
       </span>
+    </div>
+  );
+}
+
+// Wall-display clock card for the pins screensaver — the one piece of chrome
+// worth keeping big while the tour runs: local time large, UTC + date under it.
+function ScreensaverClockCard() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const time = now.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const utcTime = now.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    timeZone: 'UTC',
+  });
+  const tzAbbr =
+    new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' })
+      .formatToParts(now)
+      .find((p) => p.type === 'timeZoneName')?.value ?? '';
+  const date = now.toLocaleDateString([], {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+  });
+
+  return (
+    <div className="flex flex-col items-end gap-1 rounded-xl border border-white/10 bg-ink-900/80 px-4 py-2.5 shadow-panel backdrop-blur-sm">
+      <div className="flex items-baseline gap-1.5">
+        <span className="font-mono text-[26px] font-bold leading-none tabular-nums tracking-wider text-white/95">
+          {time}
+        </span>
+        <span className="text-[10px] font-semibold uppercase tracking-widest text-white/40">
+          {tzAbbr}
+        </span>
+      </div>
+      <div className="text-[10px] font-medium tracking-wide text-white/45">
+        <span className="font-mono font-semibold tabular-nums text-white/60">{utcTime}</span>{' '}
+        <span className="uppercase">UTC</span>
+        <span className="text-white/20"> · </span>
+        {date}
+      </div>
+      <PinsWatchCluster />
     </div>
   );
 }
@@ -511,25 +566,31 @@ function TrackedCounter() {
 }
 
 export function TopBar() {
-  const rightRef = useRef<HTMLDivElement>(null);
-  const setTopRightBottom = useUiStore((s) => s.setTopRightBottom);
+  // The widgets/search/info cluster isn't useful mid-tour, so it fades out
+  // while a screensaver runs. visibility (not display) keeps its layout box,
+  // so the left cluster's badges can never wrap into the vacated space, and
+  // the search bar keeps its state for when the tour stops.
+  const screensaverActive = useScreensaverStore((s) => s.active);
+  const screensaverMode = useScreensaverStore((s) => s.mode);
 
-  // Publish the bottom edge of the right-hand cluster (search + info button) so
-  // the pins-screensaver watch column can start below it instead of guessing a
-  // fixed offset that breaks when the cluster wraps to a second row.
-  useLayoutEffect(() => {
-    const el = rightRef.current;
-    if (!el) return;
-    const measure = () => setTopRightBottom(el.getBoundingClientRect().bottom);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    window.addEventListener('resize', measure);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', measure);
-    };
-  }, [setTopRightBottom]);
+  // The pins tour strips the chrome down to the essentials: tour controls
+  // (mute + mode dropdown) and fullscreen on the left, and the clock card on
+  // the right, which carries the Property Watch instrument cluster (severity
+  // meter + rotating ledger). The centre stays clear — hazard geography is
+  // drawn on the globe itself between visits by PinsOverviewSitrep.
+  if (screensaverActive && screensaverMode === 'pins') {
+    return (
+      <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex items-start justify-between gap-3 px-4 pt-safe md:px-6">
+        <div className="flex shrink-0 items-center gap-2">
+          <ScreensaverControls />
+          <FullscreenButton />
+        </div>
+        <div className="shrink-0">
+          <ScreensaverClockCard />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col gap-2 pb-3 pl-safe pr-safe pt-safe md:flex-row md:items-start md:justify-between md:gap-4 md:pb-4">
@@ -570,7 +631,11 @@ export function TopBar() {
         </div>
       </div>
       {/* Right: widgets + search, with the info button tucked under the search */}
-      <div ref={rightRef} className="flex w-full flex-col items-end gap-2 md:w-auto">
+      <div
+        className={`flex w-full flex-col items-end gap-2 transition-[opacity,visibility] duration-500 md:w-auto ${
+          screensaverActive ? 'invisible opacity-0' : 'visible opacity-100'
+        }`}
+      >
         <div className="flex w-full flex-wrap items-center justify-end gap-2 md:gap-3">
           <WidgetLauncher />
           <div className="pointer-events-auto w-full sm:w-auto">

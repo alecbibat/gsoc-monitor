@@ -91,12 +91,13 @@ export function WildfireLayer() {
         const acres = acresLabel(fire.acres);
         const ent = ds.entities.add({
           id,
-          position: Cesium.Cartesian3.fromDegrees(fire.lon, fire.lat),
+          // Surface anchor + default depth test — the globe occludes far-side
+          // fire markers instead of letting them show through it.
+          position: Cesium.Cartesian3.fromDegrees(fire.lon, fire.lat, 0),
           billboard: {
             image: fireMarkerIcon(color),
             width: 24,
             height: 24,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
             scaleByDistance: new Cesium.NearFarScalar(500_000, 1.15, 12_000_000, 0.6),
           },
           label: {
@@ -108,7 +109,6 @@ export function WildfireLayer() {
             style: Cesium.LabelStyle.FILL_AND_OUTLINE,
             verticalOrigin: Cesium.VerticalOrigin.TOP,
             pixelOffset: new Cesium.Cartesian2(0, 15),
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
             // Hide the name when zoomed way out; the markers still show.
             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 4_000_000),
           },

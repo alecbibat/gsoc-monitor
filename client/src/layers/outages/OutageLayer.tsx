@@ -81,12 +81,13 @@ export function OutageLayer() {
         const cust = custLabel(o.customers);
         const ent = ds.entities.add({
           id,
-          position: Cesium.Cartesian3.fromDegrees(o.lon, o.lat),
+          // Surface anchor + default depth test — the globe occludes far-side
+          // outage markers instead of letting them show through it.
+          position: Cesium.Cartesian3.fromDegrees(o.lon, o.lat, 0),
           billboard: {
             image: outageIcon(color),
             width: 22,
             height: 22,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
             scaleByDistance: new Cesium.NearFarScalar(300_000, 1.1, 8_000_000, 0.55),
           },
           label: {
@@ -98,7 +99,6 @@ export function OutageLayer() {
             style: Cesium.LabelStyle.FILL_AND_OUTLINE,
             verticalOrigin: Cesium.VerticalOrigin.TOP,
             pixelOffset: new Cesium.Cartesian2(0, 14),
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
             // Labels only when zoomed in (state-scale); markers always show.
             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 1_500_000),
           },

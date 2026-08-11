@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { RadarFrame } from '../../types';
+import type { RadarPaletteId } from './palettes';
 
 export type RadarMode = 'radar' | 'satellite' | 'combined';
 
@@ -21,7 +22,7 @@ interface RadarState {
   currentIndex: number;
   playing: boolean;
   opacity: number;
-  colorScheme: number;
+  palette: RadarPaletteId;
   setManifest: (
     host: string,
     frames: RadarFrame[],
@@ -33,7 +34,7 @@ interface RadarState {
   setCurrentIndex: (i: number) => void;
   setPlaying: (p: boolean) => void;
   setOpacity: (o: number) => void;
-  setColorScheme: (c: number) => void;
+  setPalette: (p: RadarPaletteId) => void;
 }
 
 // RainViewer republishes an identical manifest on most polls; comparing
@@ -57,17 +58,18 @@ export const useRadarStore = create<RadarState>((set) => ({
   frames: [],
   nowcastFrames: [],
   satelliteFrames: [],
-  // 'radar' shows just the precipitation, no busy infrared cloud base.
-  mode: 'radar',
+  // Radar over keyed satellite clouds — the zoom.earth composition — is the
+  // default; clear sky stays transparent so the basemap shows through.
+  mode: 'combined',
   // Default to the full ~2h window so the scrubber spans a satisfying range
   // (plus the forecast frames appended after "now").
   windowMinutes: 120,
   currentIndex: 0,
   playing: true,
-  opacity: 0.75,
-  // RainViewer color scheme 4 = "The Weather Channel": the clean green → yellow
-  // → orange → red → magenta gradient zoom.earth uses.
-  colorScheme: 4,
+  // Full layer opacity by default: translucency now lives in the palette
+  // per-pixel (light rain airy, cores solid), not in a flat layer fade.
+  opacity: 1,
+  palette: 'storm',
   setManifest: (host, frames, nowcastFrames, satelliteFrames) =>
     set((s) =>
       manifestSig(host, frames, nowcastFrames, satelliteFrames) ===
@@ -80,7 +82,7 @@ export const useRadarStore = create<RadarState>((set) => ({
   setCurrentIndex: (i) => set({ currentIndex: i }),
   setPlaying: (playing) => set({ playing }),
   setOpacity: (opacity) => set({ opacity }),
-  setColorScheme: (colorScheme) => set({ colorScheme }),
+  setPalette: (palette) => set({ palette }),
 }));
 
 export function framesInWindow(frames: RadarFrame[], windowMinutes: number): RadarFrame[] {

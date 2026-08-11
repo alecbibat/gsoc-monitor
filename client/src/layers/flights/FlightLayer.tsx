@@ -106,7 +106,8 @@ export function FlightLayer() {
               rotation: Cesium.Math.toRadians(-(flight.track ?? 0)),
               alignedAxis: Cesium.Cartesian3.UNIT_Z,
               color: Cesium.Color.WHITE.withAlpha(alpha),
-              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              // Default depth test — aircraft on the far side of the planet are
+              // occluded by the globe (same pattern as the satellite layer).
             },
             label: {
               text: flight.registration ?? flight.callsign ?? '',
@@ -118,7 +119,6 @@ export function FlightLayer() {
               outlineWidth: 3,
               style: Cesium.LabelStyle.FILL_AND_OUTLINE,
               pixelOffset: new Cesium.Cartesian2(0, -26),
-              disableDepthTestDistance: Number.POSITIVE_INFINITY,
               translucencyByDistance: new Cesium.NearFarScalar(1e6, 1, 4e7, 0),
             },
           });

@@ -6,8 +6,9 @@ import { useNewsStore } from './newsStore';
 
 // A horizontally-scrolling headline ticker pinned to the bottom of the screen.
 // Shown while the Breaking News panel is closed, and kept alive during the pins
-// screensaver. Mode-aware: shows park news or world breaking news depending on
-// the newsMode toggle in the news store.
+// screensaver (Property Watch lives in the clock card and on the globe there).
+// Mode-aware: shows park news or world breaking news depending on the newsMode
+// toggle in the news store.
 const REFRESH_MS = 5 * 60_000;
 const PARK_REFRESH_MS = 10 * 60_000;
 
