@@ -18,8 +18,9 @@ const RESET: View = { scale: 1, tx: 0, ty: 0 };
 const OPEN_GRACE_MS = 300;
 // A backdrop click waits this long before closing so a double-click (reset
 // zoom) can cancel it — closing on the first click would let the second click
-// fall through onto whatever sits beneath the overlay.
-const CLOSE_DELAY_MS = 250;
+// fall through onto whatever sits beneath the overlay. Must cover the
+// browser's full double-click pairing window (~500ms in Chromium/Windows).
+const CLOSE_DELAY_MS = 500;
 
 export function ImageLightbox({ src, alt, onClose }: {
   src: string;
@@ -178,8 +179,19 @@ export function ImageLightbox({ src, alt, onClose }: {
           clearTimeout(closeTimer.current);
           closeTimer.current = null;
         }
+        // Browsers pair clicks by time+position, not target: a thumbnail
+        // double-click's second half lands here on the fresh frame. Open at
+        // the fit view instead of zooming about the thumbnail's position.
+        if (performance.now() - openedAt.current < OPEN_GRACE_MS) return;
         const { px, py } = frameOffset(e.clientX, e.clientY);
-        setView((v) => (v.scale > 1 ? RESET : zoomAt(v, px, py, 2.5)));
+        setView((v) => {
+          if (v.scale > 1) return RESET;
+          // Zooming in about a backdrop point would anchor outside the image
+          // and shove it off-screen — a backdrop double-click only cancels
+          // the pending close.
+          if (downOnBackdrop.current) return v;
+          return zoomAt(v, px, py, 2.5);
+        });
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
