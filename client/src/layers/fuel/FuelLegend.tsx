@@ -1,8 +1,8 @@
 import { FUEL_GROUPS, rgbCss } from './fbfm40';
 
 // Compact legend for the FBFM40 raster, grouped by the seven coarse fuel groups
-// (40 individual models would be far too many swatches). Rendered inside the
-// sidebar fuel toggle while the layer is active.
+// (40 individual models would be far too many swatches). Shown as a floating
+// map card (see MapLegends) and under the share-link globe.
 export function FuelLegend() {
   return (
     <div className="pt-1.5">

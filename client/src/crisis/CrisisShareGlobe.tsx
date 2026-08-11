@@ -10,6 +10,7 @@ import { makePinIcon } from '../layers/locations/pinIcon';
 import { resetCamera } from '../cesium/flyTo';
 import { addLayerEntities } from './CrisisMapLayer';
 import { shareLiveLayerLabel, type ShareLiveLayerId } from './shareLiveLayers';
+import { LAYER_LEGENDS } from '../layers/layerLegends';
 import type { DrawLayer } from './crisisStore';
 import { RadarLayer } from '../layers/radar/RadarLayer';
 import { RadarTimeline } from '../layers/radar/RadarTimeline';
@@ -235,6 +236,9 @@ export function CrisisShareGlobe({
   const enabled = liveLayers.filter((id) => !offLive.has(id));
   const live = new Set<ShareLiveLayerId>(enabled);
   const sig = [...enabled].sort().join(',');
+  // Color keys for the currently-shown live layers, listed under the globe.
+  // Follows the chips: hiding a layer hides its legend too.
+  const legends = LAYER_LEGENDS.filter((l) => live.has(l.id as ShareLiveLayerId));
 
   // Apply the initial state during the first render — before any layer
   // component mounts — so nothing ever flashes the operator's persisted flags
@@ -405,6 +409,20 @@ export function CrisisShareGlobe({
           Click a chip to toggle · drag to explore · © CARTO © OpenStreetMap contributors
         </span>
       </div>
+
+      {/* Color keys for the shown live layers that need one. */}
+      {legends.length > 0 && (
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {legends.map(({ id, title, Legend }) => (
+            <div key={id} className="rounded-lg border border-white/10 bg-ink-950/60 px-3 pb-2.5 pt-2">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-white/45">
+                {title}
+              </div>
+              <Legend />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

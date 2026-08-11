@@ -292,7 +292,7 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
   <p class="lede">GSOC Monitor renders a sun-lit, atmosphere-shaded Earth on a procedural starfield and lets an operator stack live data on top of it — from precipitation radar to police scanners. Everything is real-time, everything is clickable, and every layer explains where its data comes from.</p>
 
   <div class="arch">
-    <div class="node"><h5 style="color:var(--aqua)">46 external feeds</h5><p>NOAA · NWS · USGS · NASA FIRMS · NIFC · LANDFIRE · CelesTrak · adsb.fi · AISStream · Blitzortung · Vaisala Xweather · GDELT · NPS · Bluesky · PulsePoint · Socrata · 18 utility outage feeds…</p></div>
+    <div class="node"><h5 style="color:var(--aqua)">45 external feeds</h5><p>NOAA · NWS · USGS · NASA FIRMS · NIFC · LANDFIRE · CelesTrak · adsb.fi · AISStream · Blitzortung · GDELT · NPS · Bluesky · PulsePoint · Socrata · 18 utility outage feeds…</p></div>
     <div class="arrow">&#8594;</div>
     <div class="node"><h5 style="color:var(--yellow)">Node/Express + Postgres</h5><p>29 proxy routes with TTL caches that serve last-known-good data when upstreams fail; background collectors for lightning, ships, rivers, wind &amp; OSINT; keys held server-side.</p></div>
     <div class="arrow">&#8594;</div>
@@ -306,7 +306,7 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
   <div class="cards">
     <div class="card"><h4>Click anything, get a panel</h4><p>Every feature on the globe — a quake, an alert polygon, a ship, a satellite, a river gauge — opens a draggable, resizable detail panel; 20 panel kinds, color-accented by category, with snap-to-dock zones. Where several features overlap, a picker lists everything under the cursor.</p></div>
     <div class="card"><h4>Layer console with live status</h4><p>A sectioned sidebar toggles every layer and shows a live one-line status straight from its store — "412 strikes/min · live", "3 active systems", "7/7 ships tracked" — plus inline controls: magnitude chips, satellite groups, flood-stage filters, proximity radii. All state persists across reloads.</p></div>
-    <div class="card"><h4>Provenance built in</h4><p>An "i" button documents every active layer: who provides the data, how it is gathered, and why it can be trusted, with a canonical link — USGS to Vaisala. The trust story travels with the map.</p></div>
+    <div class="card"><h4>Provenance built in</h4><p>An "i" button documents every active layer: who provides the data, how it is gathered, and why it can be trusted, with a canonical link — USGS to Blitzortung. The trust story travels with the map.</p></div>
     <div class="card"><h4>Kiosk-grade self-recovery</h4><p>Built for unattended wall displays: dual GPU watchdogs detect WebGL context loss or silent frame stalls, classify the GPU, rebuild the viewer up to 4 times behind a "Restarting graphics…" overlay, and auto-reload with a bounded budget so broken hardware can't loop forever.</p></div>
   </div>
 
@@ -358,9 +358,9 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
 <!-- ================= PAGE 4 · SEVERE WEATHER ================= -->
 <section class="page acc-yellow">
   <div class="kicker">03 · Severe weather</div>
-  <h2 class="section-title">Lightning, hail &amp; hurricanes</h2>
+  <h2 class="section-title">Lightning &amp; hurricanes</h2>
   <hr class="section-rule">
-  <p class="lede">Live global lightning with cinematic strike animations and a replayable 24-hour history, commercial Vaisala-grade lightning and storm-cell overlays with 7-day time travel, and worldwide tropical-cyclone tracking with no ocean-basin blind spots.</p>
+  <p class="lede">Live global lightning with cinematic strike animations and a replayable 24-hour history, and worldwide tropical-cyclone tracking with no ocean-basin blind spots.</p>
 
   <div class="cards">
     <div class="card"><h4>Real lightning, seconds after it strikes</h4><p>The browser connects straight to the Blitzortung community network: each detected strike plays a jagged bolt descending from 120 km in 150 ms, a red impact flash, then a glowing crosshair that ages white → yellow → orange → red over 10 minutes — up to 2,500 on screen, with a live strikes-per-minute ticker.</p></div>
@@ -370,15 +370,12 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
   </div>
 
   <div class="feat-cols">
-    <p class="feat"><b>Lightning Pro (Vaisala NLDN/GLD360).</b> Commercial-grade strike rasters — cloud-to-ground, all pulses, or NOAA 8 km density — with 5/15-minute windows and time-travel chips back 7 days, served through a key-holding proxy.</p>
-    <p class="feat"><b>Hail &amp; storm cells.</b> NEXRAD-derived cells with motion tracks and forecast cones, filterable to hail / rotating / tornadic / major; 3-minute updates and the same 7-day replay.</p>
-    <p class="feat"><b>Graceful key-gating.</b> Without Xweather credentials the pro layers degrade to a setup hint — never a dead toggle.</p>
     <p class="feat"><b>Efficient at scale.</b> Strike fields idle at zero GPU cost between updates; impact flashes animate alpha only, replacing per-frame re-tessellation.</p>
     <p class="feat"><b>Storm detail on click.</b> A cyclone's panel shows sustained winds, gusts, minimum central pressure, position, basin, advisory time, and a link to NHC; forecast dots enlarge on hover with a +72h-style tooltip.</p>
     <p class="feat"><b>Formation summary.</b> The sidebar rolls the world up to one line: "2 active systems · 3 areas to watch."</p>
   </div>
 
-  <div class="tech-strip"><span class="t">UNDER THE HOOD ·</span> speaks Blitzortung's undocumented wire protocol (LZW frame decoder, relay rotation) · 3M-slot typed-array ring buffer spans 24 h at ~200 strikes/sec · metered Xweather tiles cached by valid-time with an LRU ceiling · regex parser for JTWC's hard-wrapped bulletins</div>
+  <div class="tech-strip"><span class="t">UNDER THE HOOD ·</span> speaks Blitzortung's undocumented wire protocol (LZW frame decoder, relay rotation) · 3M-slot typed-array ring buffer spans 24 h at ~200 strikes/sec · regex parser for JTWC's hard-wrapped bulletins</div>
   <div class="folio"><span>GSOC MONITOR — CAPABILITY OVERVIEW</span><span>07.2026 · 04</span></div>
 </section>
 
@@ -573,7 +570,6 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
       <tr><td class="name">EPA AirNow</td><td>Official AQI monitors</td><td><span class="chip key">key</span></td></tr>
       <tr><td class="name">PurpleAir</td><td>Community PM2.5 sensors</td><td><span class="chip key">key</span></td></tr>
       <tr><td class="name">Blitzortung.org</td><td>Live lightning strikes</td><td><span class="chip free">free</span></td></tr>
-      <tr><td class="name">Xweather / Vaisala</td><td>NLDN lightning + storm cells</td><td><span class="chip key">paid</span></td></tr>
       <tr><td class="name">NASA FIRMS</td><td>VIIRS fire hotspots</td><td><span class="chip free">free</span></td></tr>
       <tr><td class="name">NIFC / WFIGS</td><td>Named fires + perimeters</td><td><span class="chip free">free</span></td></tr>
       <tr><td class="name">NWCG Predictive Services</td><td>7-day fire potential</td><td><span class="chip free">free</span></td></tr>

@@ -44,7 +44,8 @@ function Compass({ reading }: { reading: WindReading | null }) {
   );
 }
 
-// Fixed corner HUD for the wind point-probe. Visible whenever the wind layer is
+// Corner HUD card for the wind point-probe, rendered inside App's bottom-right
+// HUD stack (below any layer legend cards). Visible whenever the wind layer is
 // on: hover the globe for a live reading, right-click to pin one.
 export function WindReadout() {
   const active = useLayersStore((s) => s.active.wind);
@@ -64,72 +65,70 @@ export function WindReadout() {
   const others = (['mph', 'kt', 'ms'] as WindUnit[]).filter((u) => u !== unit);
 
   return (
-    <div className="pointer-events-none absolute bottom-24 right-4 z-30 w-[230px]">
-      <div className="pointer-events-auto rounded-xl border border-white/10 bg-ink-900/90 p-3 shadow-panel backdrop-blur-md">
-        <div className="mb-1.5 flex items-center justify-between">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
-            🌬 Wind probe
-            {ready && stale && (
-              <span className="ml-1.5 rounded bg-amber-400/15 px-1 py-0.5 text-[8px] font-bold text-amber-300/90">
-                HISTORICAL
-              </span>
-            )}
-          </span>
-          {pins.length > 0 && (
-            <button
-              onClick={clearPins}
-              className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white/45 transition hover:text-white"
-            >
-              Clear {pins.length}
-            </button>
+    <div className="pointer-events-auto shrink-0 rounded-xl border border-white/10 bg-ink-900/90 p-3 shadow-panel backdrop-blur-md">
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+          🌬 Wind probe
+          {ready && stale && (
+            <span className="ml-1.5 rounded bg-amber-400/15 px-1 py-0.5 text-[8px] font-bold text-amber-300/90">
+              HISTORICAL
+            </span>
           )}
-        </div>
-
-        {!ready ? (
-          <p className="py-2 text-center text-[12px] text-white/45">
-            {error ?? 'Reading wind field…'}
-          </p>
-        ) : (
-          <div className="flex items-center gap-3">
-            <Compass reading={hover} />
-            <div className="min-w-0 flex-1">
-              {hover ? (
-                <>
-                  {calm ? (
-                    <span className="font-mono text-[17px] font-bold text-white/80">Calm</span>
-                  ) : (
-                    <div className="flex items-baseline gap-1">
-                      <span className="font-mono text-[20px] font-bold tabular-nums text-white">
-                        {formatSpeed(hover.speedMps, unit)}
-                      </span>
-                      <span className="text-[11px] text-white/45">{WIND_UNIT_LABEL[unit]}</span>
-                    </div>
-                  )}
-                  <div className="mt-0.5 text-[12px] font-semibold text-white/80">
-                    from {hover.cardinal}
-                    <span className="ml-1 font-normal text-white/40">
-                      {Math.round(hover.fromDeg)}°
-                    </span>
-                  </div>
-                  {!calm && (
-                    <div className="text-[10px] text-white/35">
-                      {others.map((u) => `${formatSpeed(hover.speedMps, u)} ${WIND_UNIT_LABEL[u]}`).join(' · ')}
-                    </div>
-                  )}
-                </>
-              ) : (
-                <p className="text-[12px] leading-snug text-white/45">
-                  Hover the map for a live reading.
-                </p>
-              )}
-            </div>
-          </div>
+        </span>
+        {pins.length > 0 && (
+          <button
+            onClick={clearPins}
+            className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white/45 transition hover:text-white"
+          >
+            Clear {pins.length}
+          </button>
         )}
-
-        <p className="mt-2 border-t border-white/5 pt-1.5 text-[10px] text-white/30">
-          Right-click to pin · click a pin for its forecast
-        </p>
       </div>
+
+      {!ready ? (
+        <p className="py-2 text-center text-[12px] text-white/45">
+          {error ?? 'Reading wind field…'}
+        </p>
+      ) : (
+        <div className="flex items-center gap-3">
+          <Compass reading={hover} />
+          <div className="min-w-0 flex-1">
+            {hover ? (
+              <>
+                {calm ? (
+                  <span className="font-mono text-[17px] font-bold text-white/80">Calm</span>
+                ) : (
+                  <div className="flex items-baseline gap-1">
+                    <span className="font-mono text-[20px] font-bold tabular-nums text-white">
+                      {formatSpeed(hover.speedMps, unit)}
+                    </span>
+                    <span className="text-[11px] text-white/45">{WIND_UNIT_LABEL[unit]}</span>
+                  </div>
+                )}
+                <div className="mt-0.5 text-[12px] font-semibold text-white/80">
+                  from {hover.cardinal}
+                  <span className="ml-1 font-normal text-white/40">
+                    {Math.round(hover.fromDeg)}°
+                  </span>
+                </div>
+                {!calm && (
+                  <div className="text-[10px] text-white/35">
+                    {others.map((u) => `${formatSpeed(hover.speedMps, u)} ${WIND_UNIT_LABEL[u]}`).join(' · ')}
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="text-[12px] leading-snug text-white/45">
+                Hover the map for a live reading.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      <p className="mt-2 border-t border-white/5 pt-1.5 text-[10px] text-white/30">
+        Right-click to pin · click a pin for its forecast
+      </p>
     </div>
   );
 }
