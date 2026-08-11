@@ -128,8 +128,11 @@ export class MorphSheet {
       mat.uniforms.v1 = win.v1;
     }
     this.removePrimitives();
-    // Labels ride 40 m above the radar sheet so the translucent pass sorts
-    // them on top deterministically.
+    // Labels stay above the radar via insertion order (with OIT enabled the
+    // translucent commands are weighted-blended, and in the sorted fallback
+    // co-located spheres keep insertion order); the 40 m offset only breaks
+    // the exact co-planarity. If strict label-over-radar compositing ever
+    // matters, fold the label texture into the radar material instead.
     this.radarPrimitive = makePrimitive(rectangle, this.radarMaterial, 0);
     this.labelPrimitive = makePrimitive(rectangle, this.labelMaterial, 40);
     this.radarPrimitive.show = this.visible;
@@ -163,8 +166,10 @@ export class MorphSheet {
       return;
     }
     const u = this.labelMaterial.uniforms;
+    // Only imageA — with t=0 the mix never reads imageB, which stays the 1×1
+    // blank; assigning the label canvas to both would upload two full-size
+    // copies of the same texture.
     u.imageA = canvas;
-    u.imageB = canvas;
     u.t = 0;
     u.opacity = alpha;
     this.labelPrimitive.show = this.visible && alpha > 0.001;
@@ -193,17 +198,26 @@ export class MorphSheet {
   }
 
   private removePrimitives() {
+    const sceneAlive = !this.scene.isDestroyed();
     if (this.radarPrimitive) {
-      this.scene.primitives.remove(this.radarPrimitive);
+      if (sceneAlive) this.scene.primitives.remove(this.radarPrimitive);
       this.radarPrimitive = null;
     }
     if (this.labelPrimitive) {
-      this.scene.primitives.remove(this.labelPrimitive);
+      if (sceneAlive) this.scene.primitives.remove(this.labelPrimitive);
       this.labelPrimitive = null;
     }
   }
 
   destroy() {
     this.removePrimitives();
+    // Removing a primitive does NOT release its appearance's material —
+    // without an explicit destroy, imageA/imageB/flow textures (up to ~16MB
+    // of VRAM each) leak on every unmount, compounding on kiosks that toggle
+    // layers on a schedule. A destroyed scene has already released them.
+    if (!this.scene.isDestroyed()) {
+      this.radarMaterial.destroy();
+      this.labelMaterial.destroy();
+    }
   }
 }

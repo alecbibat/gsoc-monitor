@@ -45,7 +45,6 @@ export function planExtent(
   const south = Math.max(-1.4844, rect.south - padLat);
   const north = Math.min(1.4844, rect.north + padLat);
 
-  const lonFrac = (east - west) / (2 * Math.PI);
   for (let level = maxLevel; level >= 0; level--) {
     const n = 2 ** level;
     const x0 = Math.floor(((west + Math.PI) / (2 * Math.PI)) * n);
@@ -54,17 +53,44 @@ export function planExtent(
     const y1 = Math.min(n - 1, Math.floor(mercY(south) * n));
     const cols = x1 - x0 + 1;
     const rows = y1 - y0 + 1;
-    // Effective pixels once drawn at 256px/tile; shrink tilePx before
-    // dropping a whole level so resolution degrades gradually.
+    // Shrink tilePx before dropping a whole level so resolution degrades
+    // gradually.
     for (const tilePx of [512, 256, 128]) {
       if (cols * tilePx <= budgetPx && rows * tilePx <= budgetPx) {
-        return { west, south, east, north, level, x0, x1, y0, y1, tilePx };
+        return snapToTileRange(level, x0, x1, y0, y1, tilePx);
       }
     }
-    void lonFrac;
   }
   // Whole world at level 0.
-  return { west, south, east, north, level: 0, x0: 0, x1: 0, y0: 0, y1: 0, tilePx: 512 };
+  return snapToTileRange(0, 0, 0, 0, 0, 512);
+}
+
+// The sheet's rectangle must coincide EXACTLY with the mosaic's tile-range
+// bounds: the shader maps geometry st straight onto the mosaic (u linearly,
+// v through the mercator conversion), so any mismatch between the rectangle
+// and the canvas edges renders every echo shifted and stretched east-west.
+function snapToTileRange(
+  level: number,
+  x0: number,
+  x1: number,
+  y0: number,
+  y1: number,
+  tilePx: number
+): MosaicExtent {
+  const n = 2 ** level;
+  const invMercLat = (v: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * v)));
+  return {
+    west: (x0 / n) * 2 * Math.PI - Math.PI,
+    east: ((x1 + 1) / n) * 2 * Math.PI - Math.PI,
+    north: invMercLat(y0 / n),
+    south: invMercLat((y1 + 1) / n),
+    level,
+    x0,
+    x1,
+    y0,
+    y1,
+    tilePx,
+  };
 }
 
 // The mosaic's mercator-space window (fractions of the world, y from top).
