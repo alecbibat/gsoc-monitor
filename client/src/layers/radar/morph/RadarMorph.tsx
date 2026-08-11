@@ -106,6 +106,10 @@ export function RadarMorph() {
       return true;
     };
 
+    // Last state pushed to the sheet, so a paused morph doesn't force
+    // full-scene renders every rAF while nothing changes.
+    let lastApplied = { pair: -1, t: -1, opacity: -1, labels: -1 };
+
     const tick = (now: number) => {
       rafRef.current = null;
       if (disposed || viewer.isDestroyed()) return;
@@ -122,20 +126,32 @@ export function RadarMorph() {
       }
       const pair = Math.min(n - 2, Math.floor(positionRef.current));
       if (pair !== currentPairRef.current && !applyPair(pair)) {
-        // Pair not assembled (should not happen after full build) — hold.
-        rafRef.current = requestAnimationFrame(tick);
+        // Pair unavailable (build() validates all frames, so this means the
+        // data was invalidated under us) — hand back to the imagery dissolve
+        // rather than spinning on a frame that will never arrive.
+        deactivate();
         return;
       }
-      sheet.setT(positionRef.current - pair);
-      sheet.setOpacity(s.opacity);
-      sheet.setLabelAlpha(labelAlpha());
-      // Keep the timeline UI in sync with morph progress.
-      const idx = Math.round(positionRef.current);
-      if (idx !== s.currentIndex) {
-        selfIndexRef.current = idx;
-        s.setCurrentIndex(idx);
+      const t = +(positionRef.current - pair).toFixed(4);
+      const labels = labelAlpha();
+      const changed =
+        pair !== lastApplied.pair ||
+        t !== lastApplied.t ||
+        s.opacity !== lastApplied.opacity ||
+        labels !== lastApplied.labels;
+      if (changed) {
+        lastApplied = { pair, t, opacity: s.opacity, labels };
+        sheet.setT(t);
+        sheet.setOpacity(s.opacity);
+        sheet.setLabelAlpha(labels);
+        // Keep the timeline UI in sync with morph progress.
+        const idx = Math.min(n - 1, Math.round(positionRef.current));
+        if (idx !== s.currentIndex) {
+          selfIndexRef.current = idx;
+          s.setCurrentIndex(idx);
+        }
+        scene.requestRender();
       }
-      scene.requestRender();
       rafRef.current = requestAnimationFrame(tick);
     };
 
@@ -154,9 +170,16 @@ export function RadarMorph() {
         return;
       }
       const extent = planExtent(rect, MAX_LEVEL);
-      const key = extentKey(extent);
+      // The reuse key must capture everything baked into the mosaics: the
+      // geographic extent, the palette (applied at assembly), the tile host,
+      // and the identity of every frame — RainViewer publishes a new frame
+      // every ~10 minutes while the window keeps a constant LENGTH, so a
+      // count-based key would keep serving hour-old echoes forever.
+      const key =
+        `${extentKey(extent)}|${palette}|${host}|` +
+        timeline.map((t) => t.frame.path).join(',');
       let data = dataRef.current;
-      const reuse = data && data.extentKey === key && data.frameCount === timeline.length;
+      const reuse = data && data.extentKey === key;
       if (!reuse) {
         data = { extentKey: key, mosaics: [], flows: [], frameCount: timeline.length };
         // Assemble every frame's mosaic (tiles come from the browser cache
@@ -165,6 +188,12 @@ export function RadarMorph() {
           const m = await assembleRadarMosaic(host, timeline[i].frame.path, extent, palette);
           if (disposed || seq !== buildSeqRef.current) return;
           data.mosaics.push(m);
+        }
+        // The morph is all-or-nothing per extent: any missing frame would put
+        // the clock into a hole it can't cross, so fall back entirely.
+        if (data.mosaics.some((m) => !m)) {
+          deactivate();
+          return;
         }
         for (let i = 0; i < timeline.length - 1; i++) {
           const a = data.mosaics[i];
@@ -175,6 +204,10 @@ export function RadarMorph() {
           await new Promise((r) => setTimeout(r, 0));
         }
         if (disposed || seq !== buildSeqRef.current) return;
+        if (data.flows.some((f) => !f)) {
+          deactivate();
+          return;
+        }
         dataRef.current = data;
         sheet.setExtent(extent);
         const info = getLabelOverlayInfo();
@@ -207,6 +240,10 @@ export function RadarMorph() {
     const onMoveStart = () => {
       if (settleTimer) clearTimeout(settleTimer);
       settleTimer = null;
+      // Invalidate any in-flight build too — otherwise its tail re-shows the
+      // sheet (and suppresses the imagery fallback) while the camera is still
+      // moving.
+      buildSeqRef.current++;
       deactivate();
     };
     const onMoveEnd = () => {
@@ -297,8 +334,18 @@ export function RadarMorph() {
   useEffect(() => {
     return () => {
       dataRef.current = null;
+      if (import.meta.env.DEV) {
+        delete (window as unknown as Record<string, unknown>).__radarMorph;
+      }
       if (sheetRef.current) {
-        sheetRef.current.destroy();
+        // After a WebGL context loss the viewer (and its scene, primitives
+        // included) is already destroyed before this cleanup runs — removing
+        // primitives from a destroyed scene throws inside a React cleanup and
+        // would take down the app during the recovery path. The destroyed
+        // scene already released the sheet's GPU resources.
+        if (viewer && !viewer.isDestroyed()) {
+          sheetRef.current.destroy();
+        }
         sheetRef.current = null;
       }
     };
