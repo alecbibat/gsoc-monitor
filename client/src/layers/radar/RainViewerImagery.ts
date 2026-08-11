@@ -43,10 +43,14 @@ class RecoloringImageryProvider extends Cesium.UrlTemplateImageryProvider {
       try {
         return this.recolorTile(img as HTMLImageElement | ImageBitmap, level);
       } catch (err) {
-        // A tainted canvas or missing 2D context degrades to the raw tile
-        // rather than a dead layer.
-        console.warn('[radar] tile recolor failed — using raw tile', err);
-        return img;
+        // Raw scheme-0 tiles are dBZ-encoded grayscale — as UI they read as
+        // white/gray garbage — so a failed recolor degrades to an EMPTY tile,
+        // never the raw one.
+        console.error('[radar] tile recolor failed — dropping tile', err);
+        const blank = document.createElement('canvas');
+        blank.width = img.width;
+        blank.height = img.height;
+        return blank;
       }
     });
   }
