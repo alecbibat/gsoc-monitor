@@ -93,7 +93,10 @@ function padWithEdgeExtend(src: HTMLCanvasElement, w: number, h: number, p: numb
 // which is the same trick zoom.earth leans on).
 export function radarBlurPx(level: number): number {
   if (!canvasFilterSupported()) return 0;
-  return Math.min(3.5, 0.5 * 2 ** Math.max(0, level - 6));
+  // Floor of 1px at every level: real reflectivity mosaics are speckled even
+  // when the data out-resolves the tile, and a light pass keeps the national
+  // view soft instead of grainy.
+  return Math.min(3.5, Math.max(1, 0.5 * 2 ** Math.max(0, level - 6)));
 }
 
 export function recolorRadarTile(img: SourceImage, lut: RadarLut, blurPx: number): HTMLCanvasElement {
@@ -105,19 +108,26 @@ export function recolorRadarTile(img: SourceImage, lut: RadarLut, blurPx: number
   drawSourceUpright(src.ctx, img, h);
   const sd = src.ctx.getImageData(0, 0, w, h).data;
 
-  // Decode into an opaque field image: R = magnitude ×2 (dBZ+32 in 0..127),
-  // G = echo presence, B = snow presence. Opaque alpha keeps the blur a plain
-  // linear filter (no premultiplication distortion), and presence lets us
+  // Decode into an opaque field image: R = magnitude (2×(dBZ+32)), G = echo
+  // presence, B = snow presence. Opaque alpha keeps the blur a plain linear
+  // filter (no premultiplication distortion), and presence lets us
   // renormalize after the blur.
+  //
+  // Encoding note: real RainViewer scheme-0 tiles span the FULL grayscale
+  // range — pixel value = 2·(dBZ+32), i.e. dBZ = R/2 − 32 — which is already
+  // this pipeline's native magnitude format, so the byte passes through
+  // unchanged. Third-party docs describe a 7-bit value with bit 7 as a snow
+  // flag; decoding that way reads real tiles at double their intensity and
+  // painted ordinary rain showers as solid white ≥62 dBZ fields in
+  // production. Verified against live tiles, so no snow bit is available and
+  // snow renders through the rain ramp.
   const field = scratch('field', w, h);
   const fd = field.ctx.createImageData(w, h);
   const f = fd.data;
   for (let i = 0; i < sd.length; i += 4) {
     if (sd[i + 3] > 127) {
-      const raw = sd[i];
-      f[i] = (raw & 127) << 1;
+      f[i] = sd[i];
       f[i + 1] = 255;
-      f[i + 2] = raw & 128 ? 255 : 0;
     }
     f[i + 3] = 255;
   }
@@ -153,6 +163,8 @@ export function recolorRadarTile(img: SourceImage, lut: RadarLut, blurPx: number
     // the kernel, so edges feather in alpha without fading in intensity.
     let m = Math.round((bd[i] * 255) / presence) >> 1;
     if (m > 127) m = 127;
+    // Snow channel is currently never set (see the encoding note above), but
+    // the plumbing stays for when a reliable snow signal exists.
     const isSnow = bd[i + 2] * 2 > presence;
     const l = isSnow ? snow : rain;
     const a = l[m * 4 + 3];
