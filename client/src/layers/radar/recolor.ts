@@ -86,6 +86,69 @@ function padWithEdgeExtend(src: HTMLCanvasElement, w: number, h: number, p: numb
   return pad;
 }
 
+// RainViewer's tile CDN ignores the {color} path segment and serves one fixed
+// house palette for every scheme id (verified 2026-08 via the /api/radar/diag
+// endpoint: scheme 0, 2 and 4 requests returned byte-identical tiles) — a
+// blue ramp for light→moderate rain rising through yellow, orange and red,
+// with alpha-feathered edges. So instead of decoding a raw data product that
+// does not exist, we invert that served palette: each pixel's color is
+// matched to the nearest anchor on the ramp below, giving back an intensity
+// on this pipeline's internal magnitude scale (2·(dBZ+32)), which then flows
+// through the same blur + custom-palette LUT as before. Anchors beyond the
+// observed colors (orange → red → magenta) extend the ramp so extreme cores
+// keep grading instead of clipping; colors that drift off the ramp entirely
+// (if RainViewer ever changes palette) degrade to the nearest anchor's
+// intensity — never to noise.
+const PALETTE_ANCHORS: Array<[number, number, number, number]> = [
+  // [r, g, b, dBZ-equivalent]
+  [0, 60, 92, 3],
+  [0, 71, 104, 6],
+  [0, 78, 120, 10],
+  [0, 85, 136, 14],
+  [0, 98, 149, 19],
+  [0, 112, 163, 24],
+  [0, 127, 180, 29],
+  [255, 238, 0, 33],
+  [255, 210, 0, 38],
+  [255, 180, 0, 43],
+  [255, 150, 0, 47],
+  [255, 110, 0, 51],
+  [255, 60, 0, 55],
+  [230, 0, 0, 60],
+  [180, 0, 40, 64],
+  [255, 0, 255, 68],
+  [255, 255, 255, 70],
+];
+
+// Quantized RGB (5 bits/channel) → magnitude byte (2·(dBZ+32)). 32 KB, built
+// once on first use.
+let inversionLut: Uint8Array | null = null;
+function getPaletteInversionLut(): Uint8Array {
+  if (inversionLut) return inversionLut;
+  const lut = new Uint8Array(32 * 32 * 32);
+  for (let r = 0; r < 32; r++) {
+    for (let g = 0; g < 32; g++) {
+      for (let b = 0; b < 32; b++) {
+        const pr = r * 8 + 4;
+        const pg = g * 8 + 4;
+        const pb = b * 8 + 4;
+        let bestD = Infinity;
+        let bestDbz = 0;
+        for (const [ar, ag, ab, dbz] of PALETTE_ANCHORS) {
+          const d = (pr - ar) ** 2 + (pg - ag) ** 2 + (pb - ab) ** 2;
+          if (d < bestD) {
+            bestD = d;
+            bestDbz = dbz;
+          }
+        }
+        lut[(r << 10) | (g << 5) | b] = Math.min(255, Math.round(2 * (bestDbz + 32)));
+      }
+    }
+  }
+  inversionLut = lut;
+  return lut;
+}
+
 // How much data-space smoothing a tile needs. RainViewer's radar mosaic is
 // ~1 km resolution; past level ~6 the 512px tiles out-resolve the data and the
 // raw field turns blocky, so smoothing scales up with zoom (capped — beyond
@@ -108,26 +171,22 @@ export function recolorRadarTile(img: SourceImage, lut: RadarLut, blurPx: number
   drawSourceUpright(src.ctx, img, h);
   const sd = src.ctx.getImageData(0, 0, w, h).data;
 
-  // Decode into an opaque field image: R = magnitude (2×(dBZ+32)), G = echo
-  // presence, B = snow presence. Opaque alpha keeps the blur a plain linear
-  // filter (no premultiplication distortion), and presence lets us
-  // renormalize after the blur.
-  //
-  // Encoding note: real RainViewer scheme-0 tiles span the FULL grayscale
-  // range — pixel value = 2·(dBZ+32), i.e. dBZ = R/2 − 32 — which is already
-  // this pipeline's native magnitude format, so the byte passes through
-  // unchanged. Third-party docs describe a 7-bit value with bit 7 as a snow
-  // flag; decoding that way reads real tiles at double their intensity and
-  // painted ordinary rain showers as solid white ≥62 dBZ fields in
-  // production. Verified against live tiles, so no snow bit is available and
-  // snow renders through the rain ramp.
+  // Decode into an opaque field image: R = magnitude (2·(dBZ+32)) scaled by
+  // presence, G = presence (the tile's own alpha — RainViewer feathers echo
+  // edges with semi-transparent pixels, which flows straight into the
+  // normalized convolution below), B unused. Opaque alpha keeps the blur a
+  // plain linear filter (no premultiplication distortion).
+  const inv = getPaletteInversionLut();
   const field = scratch('field', w, h);
   const fd = field.ctx.createImageData(w, h);
   const f = fd.data;
   for (let i = 0; i < sd.length; i += 4) {
-    if (sd[i + 3] > 127) {
-      f[i] = sd[i];
-      f[i + 1] = 255;
+    const a = sd[i + 3];
+    if (a >= 8) {
+      const key =
+        ((sd[i] >> 3) << 10) | ((sd[i + 1] >> 3) << 5) | (sd[i + 2] >> 3);
+      f[i] = Math.round((inv[key] * a) / 255);
+      f[i + 1] = a;
     }
     f[i + 3] = 255;
   }
