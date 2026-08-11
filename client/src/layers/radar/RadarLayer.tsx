@@ -7,7 +7,7 @@ import { api } from '../../api/client';
 import { startVisiblePolling } from '../../lib/poll';
 import type { RadarFrame } from '../../types';
 import { useRadarStore, buildTimeline, nowIndex } from './radarStore';
-import { makeCloudProvider, makeRadarProvider } from './RainViewerImagery';
+import { CLIENT_RECOLOR, makeCloudProvider, makeRadarProvider } from './RainViewerImagery';
 
 // Frame dwell during playback (ms), and the crossfade between frames. The
 // fade is what turns stepping through 10-minute snapshots into something that
@@ -100,12 +100,14 @@ export function RadarLayer() {
     }
   };
 
-  // Target alphas for the current mode/opacity (per-pixel translucency lives
-  // in the palette; these only scale it).
+  // Target alphas for the current mode/opacity. With client recoloring the
+  // per-pixel translucency lives in the palette and the layer runs at full
+  // strength; pass-through server tiles are solid colors, so cap the layer
+  // alpha to keep the basemap readable underneath.
   const targets = () => {
     const s = useRadarStore.getState();
     return {
-      anim: s.opacity,
+      anim: s.opacity * (CLIENT_RECOLOR ? 1 : 0.8),
       cloud: s.opacity * CLOUD_ALPHA,
     };
   };
