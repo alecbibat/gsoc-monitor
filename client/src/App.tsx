@@ -20,14 +20,11 @@ import { AqiLayer } from './layers/aqi/AqiLayer';
 import { FuelLayer } from './layers/fuel/FuelLayer';
 import { WindLayer } from './layers/wind/WindLayer';
 import { WindArrowsLayer } from './layers/wind/WindArrowsLayer';
-import { XweatherLightningLayer } from './layers/xweather/XweatherLightningLayer';
-import { XweatherHailLayer } from './layers/xweather/XweatherHailLayer';
 import { WindProbeController } from './layers/wind/WindProbeController';
 import { WindReadout } from './layers/wind/WindReadout';
+import { MapLegends } from './ui/MapLegends';
 import { RadarTimeline } from './layers/radar/RadarTimeline';
 import { ShipLayer } from './layers/ships/ShipLayer';
-import { NewsMapLayer } from './layers/newsMap/NewsMapLayer';
-import { IntelLayer } from './layers/intel/IntelLayer';
 import { ShipModelLayer } from './layers/ships/ShipModelLayer';
 import { ShipShockwave } from './screensaver/ShipShockwave';
 import { SatelliteLayer } from './layers/satellites/SatelliteLayer';
@@ -149,8 +146,6 @@ export default function App() {
           <FuelLayer />
           <WindLayer />
           <WindArrowsLayer />
-          <XweatherLightningLayer />
-          <XweatherHailLayer />
           <WindProbeController />
           <LightningLayer />
           <LightningHistoryLayer />
@@ -158,8 +153,6 @@ export default function App() {
           <ShipLayer />
           <SatelliteLayer />
           <LocationsLayer />
-          <NewsMapLayer />
-          <IntelLayer />
           <TimeZonesLayer />
           <OsmBuildingsLayer />
           <GoogleEarthLayer />
@@ -190,7 +183,14 @@ export default function App() {
         <ScreensaverToast />
         <MeasureOverlay />
         <FuelZoneOverlay />
-        <WindReadout />
+        {/* Bottom-right HUD stack: legend cards for active layers, then the
+            wind probe readout anchored at the bottom of the stack. Max height
+            keeps the whole stack on-screen (short viewports): the legend list
+            shrinks and scrolls, the readout keeps its natural size. */}
+        <div className="pointer-events-none absolute bottom-24 right-4 z-30 flex max-h-[calc(100%-7rem)] w-[230px] flex-col gap-2">
+          <MapLegends />
+          <WindReadout />
+        </div>
         <RadarTimeline />
         <HoverOverlay />
         <PickChooser />

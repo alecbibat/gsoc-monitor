@@ -15,16 +15,11 @@ import { useRiversStatus } from '../layers/rivers/riversStore';
 import { RIVER_FILTERS } from '../layers/rivers/riverMeta';
 import { useFuelStatus } from '../layers/fuel/fuelStore';
 import { useWindStatus } from '../layers/wind/windStore';
-import { useXweatherStore } from '../layers/xweather/xweatherStore';
-import { XweatherControls, XweatherHailControls } from '../layers/xweather/XweatherControls';
 import { useWindProbeStore } from '../layers/wind/windProbeStore';
-import { FuelLegend } from '../layers/fuel/FuelLegend';
 import { useFuelZoneStore } from '../fuelzone/fuelZoneStore';
 import { useFireOutlookStore } from '../layers/fireOutlook/fireOutlookStore';
 import { FireOutlookControls } from '../layers/fireOutlook/FireOutlookControls';
 import { useShipsStatus } from '../layers/ships/shipsStore';
-import { useNewsMapStore } from '../layers/newsMap/newsMapStore';
-import { useIntelStore } from '../layers/intel/intelStore';
 import { useSatellitesStatus } from '../layers/satellites/satellitesStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { useHoverStore } from '../screensaver/hoverStore';
@@ -105,8 +100,6 @@ export function Sidebar() {
   const setShipPaths = useLayersStore((s) => s.setShipPaths);
   const firesNearMiles = useLayersStore((s) => s.firesNearMiles);
   const setFiresNearMiles = useLayersStore((s) => s.setFiresNearMiles);
-  const newsNearMiles = useLayersStore((s) => s.newsNearMiles);
-  const setNewsNearMiles = useLayersStore((s) => s.setNewsNearMiles);
   const satelliteGroup = useLayersStore((s) => s.satelliteGroup);
   const setSatelliteGroup = useLayersStore((s) => s.setSatelliteGroup);
   // Status stores are written on every poll tick (lightning on every websocket
@@ -173,7 +166,6 @@ export function Sidebar() {
       error: s.error,
     }))
   );
-  const xwConfigured = useXweatherStore((s) => s.configured);
   const windProbeEnabled = useWindProbeStore((s) => s.probeEnabled);
   const toggleWindProbe = useWindProbeStore((s) => s.toggleProbe);
   const fuelZoneActive = useFuelZoneStore((s) => s.active);
@@ -191,12 +183,6 @@ export function Sidebar() {
       error: s.error,
     }))
   );
-  const newsMapStatus = useNewsMapStore(
-    useShallow((s) => ({ count: s.count, total: s.total, error: s.error }))
-  );
-  const intelItems = useIntelStore((s) => s.items);
-  const intelSourceCount = useIntelStore((s) => s.sourceCount);
-  const intelErr = useIntelStore((s) => s.error);
   const satellitesStatus = useSatellitesStatus(
     useShallow((s) => ({
       count: s.count,
@@ -251,20 +237,6 @@ export function Sidebar() {
     }
     if (ship && viewer) flyToLonLat(viewer, ship.longitude, ship.latitude, 250_000);
     setSidebarOpen(false);
-  }
-
-  function newsMapStatusText() {
-    if (newsMapStatus.error) return newsMapStatus.error;
-    const scope = newsNearMiles > 0 ? `within ${newsNearMiles} mi of pins` : 'worldwide';
-    if (newsMapStatus.total === 0) return 'Awaiting geocoded news · 6h';
-    return `${newsMapStatus.count} events ${scope} · 6h`;
-  }
-
-  function intelStatusText() {
-    if (intelErr) return intelErr;
-    const mapped = intelItems.filter((i) => i.lat != null && i.lon != null).length;
-    if (intelItems.length === 0) return `Ingesting from ${intelSourceCount} source${intelSourceCount === 1 ? '' : 's'}…`;
-    return `${mapped} on map · ${intelItems.length} in feed`;
   }
 
   function satellitesStatusText() {
@@ -351,6 +323,98 @@ export function Sidebar() {
               it can be re-enabled later — there's just no UI control for it. */}
         </Section>
 
+        <Section title="Hazards & Alerts">
+          <LayerToggle
+            label="NWS Alerts"
+            active={active.alerts}
+            onToggle={() => toggleLayer('alerts')}
+            statusText={alertsStatus.error ?? `${alertsStatus.count} active alerts`}
+          />
+          <LayerToggle
+            label="Earthquakes (USGS)"
+            active={active.earthquakes}
+            onToggle={() => toggleLayer('earthquakes')}
+            statusText={earthquakesError ?? `${earthquakesCount} quakes · past ${earthquakePeriod}`}
+          >
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {MAGNITUDES.map((m) => (
+                <button
+                  key={m.value}
+                  onClick={() => setEarthquakeFilter({ magnitude: m.value })}
+                  className={`rounded px-1.5 py-1 text-[11px] font-medium transition ${
+                    earthquakeMagnitude === m.value
+                      ? 'bg-accent/20 text-accent'
+                      : 'bg-white/5 text-white/50 hover:bg-white/10'
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </LayerToggle>
+          <LayerToggle
+            label="Rivers & Floods (NWPS)"
+            active={(active as Record<string, boolean>).rivers ?? false}
+            onToggle={() => toggleLayer('rivers')}
+            statusText={
+              riversStatus.error
+                ? riversStatus.error
+                : riversStatus.counts
+                  ? `${
+                      riversStatus.counts.action +
+                      riversStatus.counts.minor +
+                      riversStatus.counts.moderate +
+                      riversStatus.counts.major
+                    } at/above action · ${riversStatus.total.toLocaleString()} shown`
+                  : riversStatus.loading
+                    ? 'Loading national gauges…'
+                    : 'NOAA river forecast gauges · live'
+            }
+          >
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {RIVER_FILTERS.map((f) => (
+                <button
+                  key={f.value}
+                  onClick={() => riversStatus.setFilter(f.value)}
+                  className={`rounded px-1.5 py-1 text-[11px] font-medium transition ${
+                    riversStatus.filter === f.value
+                      ? 'bg-accent/20 text-accent'
+                      : 'bg-white/5 text-white/50 hover:bg-white/10'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={riversStatus.toggleForecast}
+              className={`mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
+                riversStatus.showForecast
+                  ? 'bg-amber-400/20 text-amber-300'
+                  : 'bg-white/5 text-white/55 hover:bg-white/10'
+              }`}
+            >
+              <span>🔮</span>
+              {riversStatus.showForecast ? 'Showing forecast-to-flood' : 'Highlight forecast-to-flood'}
+            </button>
+            <p className="pt-1.5 text-[10px] leading-relaxed text-white/30">
+              Dot color = flood stage (cyan normal → purple major). Click a gauge
+              for levels, thresholds &amp; forecast.
+            </p>
+          </LayerToggle>
+          <LayerToggle
+            label="Power Outages (Multi-State)"
+            active={(active as Record<string, boolean>).outages ?? false}
+            onToggle={() => toggleLayer('outages')}
+            statusText={
+              outagesStatus.error ??
+              (outagesStatus.count > 0
+                ? `${outagesStatus.count} active · ${outagesStatus.customers.toLocaleString()} customers · ${outagesStatus.states} state${outagesStatus.states === 1 ? '' : 's'}`
+                : 'Utility, cause, restoration ETA · 18 feeds, ~19 states')
+            }
+          />
+        </Section>
+
         <Section title="Weather">
           <LayerToggle
             label="Precipitation Radar"
@@ -400,30 +464,6 @@ export function Sidebar() {
             }
           >
             <LightningControls />
-          </LayerToggle>
-          <LayerToggle
-            label="Lightning Pro (Xweather NLDN)"
-            active={(active as Record<string, boolean>).xweatherLightning ?? false}
-            onToggle={() => toggleLayer('xweatherLightning')}
-            statusText={
-              xwConfigured === false
-                ? 'Paid API — set XWEATHER_CLIENT_ID + SECRET'
-                : 'Vaisala strike map · 7-day history'
-            }
-          >
-            <XweatherControls />
-          </LayerToggle>
-          <LayerToggle
-            label="Hail & Storm Cells (Xweather)"
-            active={(active as Record<string, boolean>).xweatherHail ?? false}
-            onToggle={() => toggleLayer('xweatherHail')}
-            statusText={
-              xwConfigured === false
-                ? 'Paid API — set XWEATHER_CLIENT_ID + SECRET'
-                : 'Radar cells + tracks · hail, rotation, tornado'
-            }
-          >
-            <XweatherHailControls />
           </LayerToggle>
           <LayerToggle
             label="Wind (GFS)"
@@ -595,7 +635,6 @@ export function Sidebar() {
               fuelError ?? 'Scott & Burgan 40 fuel models · CONUS · 30 m'
             }
           >
-            <FuelLegend />
             <div className="mt-2">
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/30">
                 Analyze fuels in an area
@@ -626,134 +665,6 @@ export function Sidebar() {
               </div>
             </div>
           </LayerToggle>
-        </Section>
-
-        <Section title="Hazards & Alerts">
-          <LayerToggle
-            label="NWS Alerts"
-            active={active.alerts}
-            onToggle={() => toggleLayer('alerts')}
-            statusText={alertsStatus.error ?? `${alertsStatus.count} active alerts`}
-          />
-          <LayerToggle
-            label="Earthquakes (USGS)"
-            active={active.earthquakes}
-            onToggle={() => toggleLayer('earthquakes')}
-            statusText={earthquakesError ?? `${earthquakesCount} quakes · past ${earthquakePeriod}`}
-          >
-            <div className="flex flex-wrap gap-1.5 pt-1">
-              {MAGNITUDES.map((m) => (
-                <button
-                  key={m.value}
-                  onClick={() => setEarthquakeFilter({ magnitude: m.value })}
-                  className={`rounded px-1.5 py-1 text-[11px] font-medium transition ${
-                    earthquakeMagnitude === m.value
-                      ? 'bg-accent/20 text-accent'
-                      : 'bg-white/5 text-white/50 hover:bg-white/10'
-                  }`}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-          </LayerToggle>
-          <LayerToggle
-            label="Rivers & Floods (NWPS)"
-            active={(active as Record<string, boolean>).rivers ?? false}
-            onToggle={() => toggleLayer('rivers')}
-            statusText={
-              riversStatus.error
-                ? riversStatus.error
-                : riversStatus.counts
-                  ? `${
-                      riversStatus.counts.action +
-                      riversStatus.counts.minor +
-                      riversStatus.counts.moderate +
-                      riversStatus.counts.major
-                    } at/above action · ${riversStatus.total.toLocaleString()} shown`
-                  : riversStatus.loading
-                    ? 'Loading national gauges…'
-                    : 'NOAA river forecast gauges · live'
-            }
-          >
-            <div className="flex flex-wrap gap-1.5 pt-1">
-              {RIVER_FILTERS.map((f) => (
-                <button
-                  key={f.value}
-                  onClick={() => riversStatus.setFilter(f.value)}
-                  className={`rounded px-1.5 py-1 text-[11px] font-medium transition ${
-                    riversStatus.filter === f.value
-                      ? 'bg-accent/20 text-accent'
-                      : 'bg-white/5 text-white/50 hover:bg-white/10'
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={riversStatus.toggleForecast}
-              className={`mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold transition ${
-                riversStatus.showForecast
-                  ? 'bg-amber-400/20 text-amber-300'
-                  : 'bg-white/5 text-white/55 hover:bg-white/10'
-              }`}
-            >
-              <span>🔮</span>
-              {riversStatus.showForecast ? 'Showing forecast-to-flood' : 'Highlight forecast-to-flood'}
-            </button>
-            <p className="pt-1.5 text-[10px] leading-relaxed text-white/30">
-              Dot color = flood stage (cyan normal → purple major). Click a gauge
-              for levels, thresholds &amp; forecast.
-            </p>
-          </LayerToggle>
-          <LayerToggle
-            label="Power Outages (Multi-State)"
-            active={(active as Record<string, boolean>).outages ?? false}
-            onToggle={() => toggleLayer('outages')}
-            statusText={
-              outagesStatus.error ??
-              (outagesStatus.count > 0
-                ? `${outagesStatus.count} active · ${outagesStatus.customers.toLocaleString()} customers · ${outagesStatus.states} state${outagesStatus.states === 1 ? '' : 's'}`
-                : 'Utility, cause, restoration ETA · 18 feeds, ~19 states')
-            }
-          />
-        </Section>
-
-        <Section title="Open-Source Intel">
-          <LayerToggle
-            label="News (GDELT)"
-            active={(active as Record<string, boolean>).newsMap ?? false}
-            onToggle={() => toggleLayer('newsMap')}
-            statusText={newsMapStatusText()}
-          >
-            <div className="pt-1">
-              <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-white/30">
-                Scope
-              </div>
-              <div className="flex gap-1">
-                {([0, 100, 250, 500] as const).map((mi) => (
-                  <button
-                    key={mi}
-                    onClick={() => setNewsNearMiles(mi)}
-                    className={`flex-1 rounded px-1 py-1 text-[11px] font-medium transition ${
-                      newsNearMiles === mi
-                        ? 'bg-accent/20 text-accent'
-                        : 'bg-white/5 text-white/50 hover:bg-white/10'
-                    }`}
-                  >
-                    {mi === 0 ? 'Global' : `${mi} mi`}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </LayerToggle>
-          <LayerToggle
-            label="Intel (scanner · crime · social)"
-            active={(active as Record<string, boolean>).intel ?? false}
-            onToggle={() => toggleLayer('intel')}
-            statusText={intelStatusText()}
-          />
         </Section>
 
         <Section title="Tracking">

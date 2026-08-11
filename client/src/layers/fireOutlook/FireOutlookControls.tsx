@@ -1,5 +1,5 @@
 import { useFireOutlookStore } from './fireOutlookStore';
-import { OUTLOOK_LEGEND, fmtOutlookDate } from './fireOutlookMeta';
+import { fmtOutlookDate } from './fireOutlookMeta';
 
 export function FireOutlookControls() {
   const day = useFireOutlookStore((s) => s.day);
@@ -32,18 +32,8 @@ export function FireOutlookControls() {
           <div className="mt-1 text-center text-[11px] text-white/55">{fmtOutlookDate(dates[day])}</div>
         )}
       </div>
-
-      <div className="space-y-0.5">
-        {OUTLOOK_LEGEND.map((l) => (
-          <div key={l.label} className="flex items-center gap-1.5 text-[10px] text-white/45">
-            <span
-              className="h-2.5 w-2.5 shrink-0 rounded-[2px] ring-1 ring-white/10"
-              style={{ backgroundColor: l.hex }}
-            />
-            {l.label}
-          </div>
-        ))}
-      </div>
+      {/* The category color key lives on the map itself (FireOutlookLegend via
+          MapLegends). */}
     </div>
   );
 }

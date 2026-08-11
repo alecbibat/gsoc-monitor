@@ -57,8 +57,6 @@ export const useLayersStore = create<LayersState>()(
         newsMap: false,
         wind: false,
         windArrows: false,
-        xweatherLightning: false,
-        xweatherHail: false,
         rivers: false,
         fireOutlook: false,
         precip: false,
@@ -124,15 +122,24 @@ export const useLayersStore = create<LayersState>()(
         earthquakeMagnitude: state.earthquakeMagnitude,
         earthquakePeriod: state.earthquakePeriod,
       }),
-      // The Google photorealistic 3D layer (earth3d) hits a metered API and its
-      // UI control has been removed. Force it off on every hydration so a value
-      // persisted from before the control was pulled can never auto-activate it.
+      // Layers whose UI control has been removed are forced off on every
+      // hydration, so a value persisted from before the control was pulled can
+      // never auto-activate (earth3d: metered Google API) or wedge itself on
+      // with no toggle left to clear it (newsMap/intel: the Open-Source Intel
+      // menu group was removed; the share page still drives these flags itself
+      // via applyShareLayerFlags under its own storage key).
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<LayersState>;
         return {
           ...current,
           ...p,
-          active: { ...current.active, ...(p.active ?? {}), earth3d: false },
+          active: {
+            ...current.active,
+            ...(p.active ?? {}),
+            earth3d: false,
+            newsMap: false,
+            intel: false,
+          },
         } as LayersState;
       },
     }

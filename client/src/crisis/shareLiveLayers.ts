@@ -6,8 +6,8 @@ import type { LayerId } from '../types';
 // here is served by public, keyless read paths that anonymous share viewers can
 // hit safely. Excluded on purpose: internal tracking layers (flights, ships,
 // satellites, locations — company-specific assets), the metered/keyed layers
-// (earth3d, osmBuildings via Cesium ion terrain, xweatherLightning/xweatherHail
-// via the paid Vaisala proxy), and cosmetic layers (timezones).
+// (earth3d, osmBuildings via Cesium ion terrain), and cosmetic layers
+// (timezones).
 export type ShareLiveLayerId = Extract<
   LayerId,
   | 'radar' | 'precip' | 'hurricanes' | 'lightning' | 'wind' | 'windArrows'

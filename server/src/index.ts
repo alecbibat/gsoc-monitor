@@ -34,7 +34,6 @@ import adminRouter from './routes/admin';
 import incidentsRouter from './routes/incidents';
 import watchlistRouter from './routes/watchlist';
 import intelRouter from './routes/intel';
-import xweatherRouter from './routes/xweather';
 import { initIntelStream } from './intel/service';
 
 dotenv.config();
@@ -111,8 +110,6 @@ function main() {
   app.use('/api/watchlist', watchlistRouter);
   // Public read-only intel feed (the ingested Dataminr-style buffer)
   app.use('/api/intel', intelRouter);
-  // Xweather (Vaisala) lightning tile proxy — keeps the paid keys server-side.
-  app.use('/api/xweather', xweatherRouter);
 
   // Crisis share links (public — no auth for viewer access)
   app.use('/api/crisis', crisisRouter);
