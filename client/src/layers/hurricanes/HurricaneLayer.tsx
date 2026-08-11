@@ -203,7 +203,38 @@ function hurricaneIcon(color: string): string {
 // feed, open CORS, so it's fetched straight from the browser too.
 const GTWO =
   'https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/NHC_tropical_weather_summary/MapServer';
-const GTWO_REGION_LAYER = 3; // "Seven-Day: Potential Development Region" (polygons)
+// Documented id of "Seven-Day: Potential Development Region" — used only when
+// the service's layer directory can't be fetched.
+const GTWO_REGION_FALLBACK_LAYER = 3;
+
+// Discover every "Potential Development Region" sublayer by NAME rather than
+// hardcoding one id: the service carries BOTH the NHC basins (Atlantic /
+// E Pacific) and the Central Pacific Hurricane Center's outlook (Hawaii —
+// invests like 93C), and they live in separate sublayers that NOAA renumbers
+// when the service is reorganized. A single hardcoded id silently drops
+// whole basins.
+let gtwoLayersPromise: Promise<ServiceLayer[]> | null = null;
+function getGtwoRegionLayerIds(): Promise<number[]> {
+  if (!gtwoLayersPromise) {
+    gtwoLayersPromise = (async () => {
+      try {
+        const r = await fetch(`${GTWO}?f=json`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const meta = (await r.json()) as { layers?: ServiceLayer[] };
+        return meta.layers ?? [];
+      } catch (err) {
+        console.warn('GTWO service metadata unavailable, using fallback layer', err);
+        return [];
+      }
+    })();
+  }
+  return gtwoLayersPromise.then((layers) => {
+    const ids = layers
+      .filter((l) => /potential\s+development\s+region/i.test(l.name))
+      .map((l) => l.id);
+    return ids.length ? ids : [GTWO_REGION_FALLBACK_LAYER];
+  });
+}
 
 // NHC's formation-risk tiers → the warm yellow→orange→red ramp zoom.earth uses.
 const RISK_COLOR: Record<string, string> = {
@@ -388,8 +419,14 @@ export function HurricaneLayer() {
           queryLayer(fcstTrackId),
           queryLayer(obsPtId),
           queryLayer(fcstPtId),
-          queryGeo(
-            `${GTWO}/${GTWO_REGION_LAYER}/query?where=1%3D1&outFields=*&outSR=4326&returnGeometry=true&f=geojson`
+          getGtwoRegionLayerIds().then((ids) =>
+            Promise.all(
+              ids.map((id) =>
+                queryGeo(
+                  `${GTWO}/${id}/query?where=1%3D1&outFields=*&outSR=4326&returnGeometry=true&f=geojson`
+                )
+              )
+            ).then((results) => results.flat())
           ),
         ]);
       } catch (err) {
@@ -537,7 +574,7 @@ export function HurricaneLayer() {
 
       // 0) Areas of disturbance (GTWO 7-day formation outlook) — drawn first, as
       //    background context beneath any active storms.
-      for (const f of distList) {
+      for (const [distIdx, f] of distList.entries()) {
         const p = f.properties ?? undefined;
         const risk7 = pick<string>(p, ['risk7day', 'RISK7DAY']) ?? 'Low';
         const prob7 = pick<string>(p, ['prob7day', 'PROB7DAY']) ?? '';
@@ -556,9 +593,12 @@ export function HurricaneLayer() {
             },
           });
         }
-        // Marker + formation-odds label at the largest ring's centroid.
+        // Marker + formation-odds label at the largest ring's centroid. The
+        // list index disambiguates ids: features now come from several
+        // sublayers (one per basin), whose OBJECTIDs can collide — and adding
+        // a duplicate entity id throws.
         const [clon, clat] = ringCentroid(rings[0]);
-        const id = `disturbance-${pick(p, ['objectid', 'OBJECTID']) ?? `${clon},${clat}`}`;
+        const id = `disturbance-${distIdx}-${pick(p, ['objectid', 'OBJECTID']) ?? `${clon},${clat}`}`;
         const ent = ds.entities.add({
           id,
           // Anchored on the ellipsoid surface with the DEFAULT depth test (no
