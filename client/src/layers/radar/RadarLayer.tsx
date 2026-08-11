@@ -1,42 +1,42 @@
 import * as Cesium from 'cesium';
 import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
+import { addImageryBelowLabels } from '../../cesium/imageryOrder';
 import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
 import { startVisiblePolling } from '../../lib/poll';
 import type { RadarFrame } from '../../types';
 import { useRadarStore, buildTimeline, nowIndex } from './radarStore';
+import { makeCloudProvider, makeRadarProvider } from './RainViewerImagery';
 
-// 512px tiles render noticeably smoother than 256 at the same zoom.
-const TILE_SIZE = 512;
-// smooth=1 turns on RainViewer's server-side bilinear interpolation; snow=0
-// keeps everything in one clean reflectivity gradient instead of painting snow
-// in a separate blue/purple palette (which looks patchy).
-const RADAR_SMOOTH = 1;
-const RADAR_SNOW = 0;
-// Cap the radar overlay a few levels below the basemap. The underlying radar
-// data is coarse, so requesting native high-zoom tiles just yields blocky
-// pixels — letting Cesium smoothly upscale a level-9 tile looks far cleaner
-// (this is the trick zoom.earth uses).
-const RADAR_MAX_LEVEL = 9;
-const SAT_COLOR = 0; // Classic IR (white = cold/high clouds)
-const SAT_OPTIONS = '0';
-// Frame dwell during playback (ms). A touch quicker than real-time for a fluid
-// "play" feel without blowing past frames.
+// Frame dwell during playback (ms), and the crossfade between frames. The
+// fade is what turns stepping through 10-minute snapshots into something that
+// reads as motion instead of a slideshow.
 const FRAME_MS = 500;
+const FADE_MS = 240;
+// Clouds sit dimmer than radar in combined mode so precipitation stays the
+// subject of the composition.
+const CLOUD_ALPHA = 0.7;
 
-function makeRadarProvider(host: string, frame: { path: string }, colorScheme: number) {
-  return new Cesium.UrlTemplateImageryProvider({
-    url: `${host}${frame.path}/${TILE_SIZE}/{z}/{x}/{y}/${colorScheme}/${RADAR_SMOOTH}_${RADAR_SNOW}.png`,
-    maximumLevel: RADAR_MAX_LEVEL,
-  });
+// Index of the satellite frame nearest in time to `time`, or -1 when nothing
+// is within tolerance. Radar and IR frames are both ~10-minute cadences but
+// not perfectly aligned, so playback pairs each radar frame with its closest
+// cloud snapshot (nowcast frames just reuse the latest clouds).
+function nearestFrameIndex(frames: RadarFrame[], time: number, maxDeltaSec = 3600): number {
+  let best = -1;
+  let bestDelta = maxDeltaSec + 1;
+  for (let i = 0; i < frames.length; i++) {
+    const d = Math.abs(frames[i].time - time);
+    if (d < bestDelta) {
+      bestDelta = d;
+      best = i;
+    }
+  }
+  return best;
 }
 
-function makeSatProvider(host: string, frame: { path: string }) {
-  return new Cesium.UrlTemplateImageryProvider({
-    url: `${host}${frame.path}/${TILE_SIZE}/{z}/{x}/{y}/${SAT_COLOR}/${SAT_OPTIONS}.png`,
-    maximumLevel: 6,
-  });
+function easeInOut(t: number): number {
+  return t * t * (3 - 2 * t);
 }
 
 export function RadarLayer() {
@@ -51,13 +51,20 @@ export function RadarLayer() {
   const currentIndex = useRadarStore((s) => s.currentIndex);
   const opacity = useRadarStore((s) => s.opacity);
   const playing = useRadarStore((s) => s.playing);
-  const colorScheme = useRadarStore((s) => s.colorScheme);
+  const palette = useRadarStore((s) => s.palette);
   const setCurrentIndex = useRadarStore((s) => s.setCurrentIndex);
 
-  // One imagery layer per timeline frame; we cross-fade by toggling alpha.
+  // One imagery layer per timeline frame (radar, or clouds in satellite
+  // mode); playback crossfades their alphas.
   const animLayersRef = useRef<Cesium.ImageryLayer[]>([]);
-  // Static satellite base used only in 'combined' mode.
-  const baseLayersRef = useRef<Cesium.ImageryLayer[]>([]);
+  // Combined mode only: keyed-cloud layers under the radar, one per distinct
+  // satellite frame the timeline maps onto.
+  const cloudLayersRef = useRef<Cesium.ImageryLayer[]>([]);
+  // timeline index → index into cloudLayersRef (-1 = no clouds for frame).
+  const cloudMapRef = useRef<number[]>([]);
+  // Which timeline index is currently displayed, and the in-flight fade.
+  const shownIndexRef = useRef<number | null>(null);
+  const fadeRafRef = useRef<number | null>(null);
 
   // Fetch manifest periodically.
   useEffect(() => {
@@ -86,15 +93,40 @@ export function RadarLayer() {
     };
   }, [active]);
 
+  const cancelFade = () => {
+    if (fadeRafRef.current != null) {
+      cancelAnimationFrame(fadeRafRef.current);
+      fadeRafRef.current = null;
+    }
+  };
+
+  // Target alphas for the current mode/opacity (per-pixel translucency lives
+  // in the palette; these only scale it).
+  const targets = () => {
+    const s = useRadarStore.getState();
+    return {
+      anim: s.opacity,
+      cloud: s.opacity * CLOUD_ALPHA,
+    };
+  };
+
+  // Snap every layer to a frame with no fade (initial display, scrubbing
+  // resets, opacity changes).
+  const applyInstant = (idx: number) => {
+    const t = targets();
+    animLayersRef.current.forEach((l, i) => {
+      l.alpha = i === idx ? t.anim : 0;
+    });
+    const cloudIdx = cloudMapRef.current[idx] ?? -1;
+    cloudLayersRef.current.forEach((l, i) => {
+      l.alpha = i === cloudIdx ? t.cloud : 0;
+    });
+    shownIndexRef.current = idx;
+  };
+
   // Rebuild the layer stack when the mode / frames / window / palette change.
   useEffect(() => {
     if (!viewer) return;
-
-    for (const l of [...baseLayersRef.current, ...animLayersRef.current]) {
-      viewer.imageryLayers.remove(l, true);
-    }
-    baseLayersRef.current = [];
-    animLayersRef.current = [];
 
     if (!active || !host) {
       viewer.scene.requestRender();
@@ -113,43 +145,111 @@ export function RadarLayer() {
       return;
     }
 
-    // Combined mode: a subdued static satellite base under the animated radar.
+    // Combined mode: animated keyed-cloud layers below the radar, each radar
+    // frame paired with its nearest-in-time IR snapshot so clouds move with
+    // the precipitation (added first so they stack under the radar).
     if (mode === 'combined' && satelliteFrames.length > 0) {
-      const latest = satelliteFrames[satelliteFrames.length - 1];
-      const base = viewer.imageryLayers.addImageryProvider(makeSatProvider(host, latest));
-      base.alpha = opacity * 0.45;
-      baseLayersRef.current = [base];
+      const satIdxPerFrame = timeline.map((t) => nearestFrameIndex(satelliteFrames, t.time));
+      const layerBySatIdx = new Map<number, number>();
+      for (const satIdx of satIdxPerFrame) {
+        if (satIdx >= 0 && !layerBySatIdx.has(satIdx)) {
+          const layer = addImageryBelowLabels(
+            viewer,
+            makeCloudProvider(host, satelliteFrames[satIdx])
+          );
+          layer.alpha = 0;
+          layerBySatIdx.set(satIdx, cloudLayersRef.current.length);
+          cloudLayersRef.current.push(layer);
+        }
+      }
+      cloudMapRef.current = satIdxPerFrame.map((satIdx) => layerBySatIdx.get(satIdx) ?? -1);
+    } else {
+      cloudMapRef.current = [];
     }
 
     const makeProvider =
       mode === 'satellite'
-        ? (f: RadarFrame) => makeSatProvider(host, f)
-        : (f: RadarFrame) => makeRadarProvider(host, f, colorScheme);
+        ? (f: RadarFrame) => makeCloudProvider(host, f)
+        : (f: RadarFrame) => makeRadarProvider(host, f, palette);
 
     animLayersRef.current = timeline.map((t) => {
-      const layer = viewer.imageryLayers.addImageryProvider(makeProvider(t.frame));
+      const layer = addImageryBelowLabels(viewer, makeProvider(t.frame));
       layer.alpha = 0;
       return layer;
     });
 
     // Start paused on "now" (latest observed) so the first thing shown is the
     // current conditions; playback runs forward into the forecast then loops.
-    setCurrentIndex(nowIndex(timeline));
+    const startIdx = nowIndex(timeline);
+    applyInstant(startIdx);
+    setCurrentIndex(startIdx);
     viewer.scene.requestRender();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewer, active, host, frames, nowcastFrames, satelliteFrames, mode, windowMinutes, colorScheme]);
 
-  // Sync alpha with the current frame / opacity.
+    return () => {
+      cancelFade();
+      for (const l of [...cloudLayersRef.current, ...animLayersRef.current]) {
+        viewer.imageryLayers.remove(l, true);
+      }
+      cloudLayersRef.current = [];
+      animLayersRef.current = [];
+      cloudMapRef.current = [];
+      shownIndexRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewer, active, host, frames, nowcastFrames, satelliteFrames, mode, windowMinutes, palette]);
+
+  // Crossfade to the current frame whenever the index moves.
   useEffect(() => {
     if (!viewer) return;
-    animLayersRef.current.forEach((l, i) => {
-      l.alpha = i === currentIndex ? opacity : 0;
-    });
-    baseLayersRef.current.forEach((l) => {
-      l.alpha = opacity * 0.45;
-    });
-    viewer.scene.requestRender();
-  }, [viewer, currentIndex, opacity, mode]);
+    const layers = animLayersRef.current;
+    if (layers.length === 0) return;
+    const to = Math.min(Math.max(0, currentIndex), layers.length - 1);
+    const from = shownIndexRef.current;
+    cancelFade();
+    if (from == null || from === to) {
+      applyInstant(to);
+      viewer.scene.requestRender();
+      return;
+    }
+    const t0 = performance.now();
+    const fromCloud = cloudMapRef.current[from] ?? -1;
+    const toCloud = cloudMapRef.current[to] ?? -1;
+    const tick = () => {
+      const t = Math.min(1, (performance.now() - t0) / FADE_MS);
+      const e = easeInOut(t);
+      const tgt = targets();
+      layers.forEach((l, i) => {
+        l.alpha = i === to ? tgt.anim * e : i === from ? tgt.anim * (1 - e) : 0;
+      });
+      cloudLayersRef.current.forEach((l, i) => {
+        if (fromCloud === toCloud) {
+          l.alpha = i === toCloud ? tgt.cloud : 0;
+        } else {
+          l.alpha = i === toCloud ? tgt.cloud * e : i === fromCloud ? tgt.cloud * (1 - e) : 0;
+        }
+      });
+      viewer.scene.requestRender();
+      if (t < 1) {
+        fadeRafRef.current = requestAnimationFrame(tick);
+      } else {
+        fadeRafRef.current = null;
+        shownIndexRef.current = to;
+      }
+    };
+    fadeRafRef.current = requestAnimationFrame(tick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewer, currentIndex]);
+
+  // Re-apply alphas when opacity moves (mid-fade the ticker reads the store
+  // itself, so only the settled state needs a nudge).
+  useEffect(() => {
+    if (!viewer) return;
+    if (fadeRafRef.current == null && shownIndexRef.current != null) {
+      applyInstant(shownIndexRef.current);
+      viewer.scene.requestRender();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewer, opacity]);
 
   // Playback ticker.
   useEffect(() => {

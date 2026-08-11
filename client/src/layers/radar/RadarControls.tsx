@@ -1,18 +1,19 @@
 import { useRadarStore } from './radarStore';
 import type { RadarMode } from './radarStore';
+import type { RadarPaletteId } from './palettes';
 
 const WINDOWS: Array<30 | 60 | 120> = [30, 60, 120];
 const MODES: Array<{ value: RadarMode; label: string }> = [
   { value: 'radar', label: 'Radar' },
-  { value: 'satellite', label: 'Satellite' },
+  { value: 'satellite', label: 'Clouds' },
   { value: 'combined', label: 'Combined' },
 ];
-// RainViewer color scheme ids — curated to a few clean palettes.
-const PALETTES: Array<{ value: number; label: string }> = [
-  { value: 4, label: 'Classic' },  // The Weather Channel (zoom.earth-like)
-  { value: 2, label: 'Blue' },     // Universal Blue
-  { value: 7, label: 'Vivid' },    // Rainbow @ SELEX-SI
-  { value: 8, label: 'Mono' },     // Dark Sky
+// Client-side palettes (see palettes.ts) — applied to raw dBZ tiles.
+const PALETTES: Array<{ value: RadarPaletteId; label: string }> = [
+  { value: 'storm', label: 'Storm' },     // zoom.earth-class default
+  { value: 'classic', label: 'Classic' }, // familiar meteorology greens
+  { value: 'blue', label: 'Blue' },       // subdued single-hue
+  { value: 'mono', label: 'Mono' },       // grayscale
 ];
 
 export function RadarControls() {
@@ -24,8 +25,8 @@ export function RadarControls() {
   const setPlaying = useRadarStore((s) => s.setPlaying);
   const opacity = useRadarStore((s) => s.opacity);
   const setOpacity = useRadarStore((s) => s.setOpacity);
-  const colorScheme = useRadarStore((s) => s.colorScheme);
-  const setColorScheme = useRadarStore((s) => s.setColorScheme);
+  const palette = useRadarStore((s) => s.palette);
+  const setPalette = useRadarStore((s) => s.setPalette);
 
   // The palette only affects the precipitation overlay, not the IR satellite.
   const showPalette = mode !== 'satellite';
@@ -78,9 +79,9 @@ export function RadarControls() {
           {PALETTES.map(({ value, label }) => (
             <button
               key={value}
-              onClick={() => setColorScheme(value)}
+              onClick={() => setPalette(value)}
               className={`flex-1 rounded px-1 py-1 text-[11px] font-medium transition ${
-                colorScheme === value
+                palette === value
                   ? 'bg-sky-500/30 text-sky-300'
                   : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/70'
               }`}

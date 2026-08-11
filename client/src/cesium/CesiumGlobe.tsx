@@ -1,6 +1,7 @@
 import * as Cesium from 'cesium';
 import { useEffect, useRef, useState } from 'react';
 import { BASEMAPS } from './basemaps';
+import { setLabelOverlay } from './imageryOrder';
 import { getPanelData } from './entityPanelLink';
 import { useLayersStore } from '../store/layersStore';
 import { usePanelStore } from '../panels/panelStore';
@@ -295,6 +296,12 @@ export function CesiumGlobe({ children, onReady }: Props) {
     canvas.addEventListener('webglcontextrestored', onContextRestored, false);
 
     setViewer(v);
+    // Dev-only escape hatch so headless test drivers (and console debugging)
+    // can steer the camera / inspect imagery layers without UI scripting.
+    if (import.meta.env.DEV) {
+      (window as unknown as Record<string, unknown>).__viewer = v;
+      (window as unknown as Record<string, unknown>).Cesium = Cesium;
+    }
     onReady?.(v);
     // A fresh viewer is live — drop the recovery overlay. Let the attempt
     // counter decay after a stable spell so an unrelated future loss still
@@ -317,6 +324,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
       // than trying to remove imagery layers that belonged to the dead viewer.
       baseLayerRef.current = null;
       overlayLayerRef.current = null;
+      setLabelOverlay(null);
       try { v.destroy(); } catch { /* context may already be gone */ }
       setViewer(null);
     };
@@ -330,8 +338,10 @@ export function CesiumGlobe({ children, onReady }: Props) {
     const prevBase = baseLayerRef.current;
     const prevOverlay = overlayLayerRef.current;
 
-    // Add the new base imagery and (optionally) its label overlay, then lower
-    // each to the bottom so the final stack is base → overlay → data layers.
+    // Add the new base imagery at the bottom of the stack and its label
+    // overlay at the very top, so the final order is base → data layers
+    // (weather etc.) → place labels. Labels above weather keeps city names
+    // legible under a radar or cloud overlay.
     const baseLayer = layers.addImageryProvider(def.build());
     applyAdjust(baseLayer, def.adjust);
 
@@ -344,9 +354,10 @@ export function CesiumGlobe({ children, onReady }: Props) {
       const h = viewer.camera.positionCartographic?.height ?? Number.POSITIVE_INFINITY;
       overlayLayer.alpha = labelAlphaAt(h, currentLabelBand());
       overlayLayer.show = overlayLayer.alpha > 0.001;
-      layers.lowerToBottom(overlayLayer);
+      layers.raiseToTop(overlayLayer);
     }
     layers.lowerToBottom(baseLayer);
+    setLabelOverlay(overlayLayer);
 
     // Remove the previous layers only after the new ones are in place so the
     // swap doesn't flash the empty globe.
