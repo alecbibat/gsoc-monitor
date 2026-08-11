@@ -5,6 +5,8 @@ import { LOCATION_GROUPS, type LocationGroup } from '../layers/locations/locatio
 import { CrisisShareMap } from './CrisisShareMap';
 import { ShareWatchCard } from './ShareWatchCard';
 import { isShareLiveLayerId } from './shareLiveLayers';
+import { ImageLightbox, ZoomableImage } from './ImageLightbox';
+import { TYPE_STYLES, TimelineView, LogShowMore, DEFAULT_LOG_LIMIT } from './logViews';
 
 // The live globe (Cesium + every layer component) is only loaded when the
 // incident actually prescribes live layers; plain share links keep the light
@@ -17,12 +19,6 @@ const STATUS_BADGE: Record<string, { dot: string; badge: string }> = {
   active:    { dot: '#ef4444', badge: 'text-red-400 bg-red-500/15 border-red-500/40' },
   contained: { dot: '#f59e0b', badge: 'text-amber-300 bg-amber-400/15 border-amber-400/40' },
   resolved:  { dot: '#22c55e', badge: 'text-green-400 bg-green-500/15 border-green-500/40' },
-};
-
-const TYPE_STYLES = {
-  action: 'text-blue-300 bg-blue-400/15 border-blue-400/30',
-  event:  'text-amber-300 bg-amber-400/15 border-amber-400/30',
-  info:   'text-cyan-300 bg-cyan-400/15 border-cyan-400/30',
 };
 
 function fmtTs(iso: string) {
@@ -200,6 +196,11 @@ export function CrisisShareView({ token }: { token: string }) {
   const [offLive, setOffLive] = useState<Set<ShareLiveLayerId>>(new Set());
   const [offDraw, setOffDraw] = useState<Set<string>>(new Set());
   const [hideInfo, setHideInfo] = useState(false);
+  const [logView, setLogView] = useState<'list' | 'timeline'>('list');
+  const [logLimit, setLogLimit] = useState(DEFAULT_LOG_LIMIT);
+  // Hoisted above the paginated log rows: an SSE update can slide a row out
+  // of the visible slice, and an open viewer must survive that unmount.
+  const [logLightbox, setLogLightbox] = useState<{ src: string; alt?: string } | null>(null);
 
   // Once the globe has mounted, keep it mounted even if a live prescription
   // update empties the layer/pin lists — swapping a viewer down to the flat
@@ -421,6 +422,10 @@ export function CrisisShareView({ token }: { token: string }) {
           const visibleLog = hideInfo
             ? data.actionLog.filter((e) => e.entryType !== 'info')
             : data.actionLog;
+          const sortedLog = [...visibleLog].sort(
+            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+          );
+          const shownLog = sortedLog.slice(0, logLimit);
           return (
           <div>
             <div className="mb-3 flex items-center gap-3">
@@ -437,36 +442,62 @@ export function CrisisShareView({ token }: { token: string }) {
                   {hideInfo ? `Show info (${infoCount})` : `Hide info (${infoCount})`}
                 </button>
               )}
+              <div className="ml-auto flex rounded border border-white/10 text-[10px]">
+                <button
+                  onClick={() => setLogView('list')}
+                  className={`rounded-l px-2.5 py-1 transition ${logView === 'list' ? 'bg-white/10 text-white/70' : 'text-white/30 hover:text-white/50'}`}
+                >
+                  List
+                </button>
+                <button
+                  onClick={() => setLogView('timeline')}
+                  className={`rounded-r px-2.5 py-1 transition ${logView === 'timeline' ? 'bg-white/10 text-white/70' : 'text-white/30 hover:text-white/50'}`}
+                >
+                  Timeline
+                </button>
+              </div>
             </div>
-            <div className="divide-y divide-white/6 rounded-lg border border-white/8 bg-ink-950/60">
-              {visibleLog.length === 0 && (
+            <div className="rounded-lg border border-white/8 bg-ink-950/60">
+              {visibleLog.length === 0 ? (
                 <p className="px-4 py-6 text-center text-[12px] text-white/30 italic">
                   All entries are informational and currently hidden
                 </p>
-              )}
-              {[...visibleLog]
-                .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-                .map((entry) => (
-                  <div key={entry.id} className="flex items-start gap-3 px-4 py-3">
-                    <span className={`mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-widest ${TYPE_STYLES[entry.entryType ?? 'action']}`}>
-                      {entry.entryType ?? 'action'}
-                    </span>
-                    <span className="w-36 shrink-0 text-[11px] text-white/45">{fmtTs(entry.timestamp)}</span>
-                    <p className="flex-1 text-[13px] leading-snug text-white/80">{entry.description || <span className="text-white/30 italic">No description</span>}</p>
-                    <div className="shrink-0 flex flex-col items-end gap-1">
-                      {(entry as { attachmentData?: string }).attachmentData && (
-                        <img
-                          src={(entry as { attachmentData?: string }).attachmentData}
-                          alt={entry.attachmentName}
-                          className="max-h-48 max-w-[220px] rounded border border-white/12 object-cover shadow-lg"
-                        />
-                      )}
-                      {entry.attachmentName && !(entry as { attachmentData?: string }).attachmentData && (
-                        <span className="text-[9px] text-accent/70">📎 {entry.attachmentName}</span>
-                      )}
-                    </div>
+              ) : logView === 'timeline' ? (
+                <div className="px-4 py-4">
+                  <TimelineView entries={visibleLog} />
+                </div>
+              ) : (
+                <>
+                  <div className="divide-y divide-white/6">
+                    {shownLog.map((entry) => (
+                      <div key={entry.id} className="flex items-start gap-3 px-4 py-3">
+                        <span className={`mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-widest ${TYPE_STYLES[entry.entryType ?? 'action']}`}>
+                          {entry.entryType ?? 'action'}
+                        </span>
+                        <span className="w-36 shrink-0 text-[11px] text-white/45">{fmtTs(entry.timestamp)}</span>
+                        <p className="flex-1 text-[13px] leading-snug text-white/80">{entry.description || <span className="text-white/30 italic">No description</span>}</p>
+                        <div className="shrink-0 flex flex-col items-end gap-1">
+                          {(entry as { attachmentData?: string }).attachmentData && (
+                            <ZoomableImage
+                              src={(entry as { attachmentData?: string }).attachmentData!}
+                              alt={entry.attachmentName}
+                              onOpen={() => setLogLightbox({
+                                src: (entry as { attachmentData?: string }).attachmentData!,
+                                alt: entry.attachmentName,
+                              })}
+                              className="max-h-48 max-w-[220px] rounded border border-white/12 object-cover shadow-lg"
+                            />
+                          )}
+                          {entry.attachmentName && !(entry as { attachmentData?: string }).attachmentData && (
+                            <span className="text-[9px] text-accent/70">📎 {entry.attachmentName}</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                  <LogShowMore total={sortedLog.length} limit={logLimit} onLimitChange={setLogLimit} />
+                </>
+              )}
             </div>
           </div>
           );
@@ -566,6 +597,14 @@ export function CrisisShareView({ token }: { token: string }) {
         <p className="border-t border-white/6 pt-4 text-center text-[9px] text-white/20">
           Published {fmtTs(data.publishedAt)} · Updates automatically in real-time
         </p>
+
+        {logLightbox && (
+          <ImageLightbox
+            src={logLightbox.src}
+            alt={logLightbox.alt}
+            onClose={() => setLogLightbox(null)}
+          />
+        )}
       </main>
     </div>
   );
