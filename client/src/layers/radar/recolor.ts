@@ -163,13 +163,21 @@ export function radarBlurPx(level: number): number {
   return Math.min(4, Math.max(1.5, 0.7 * 2 ** Math.max(0, level - 6)));
 }
 
-export function recolorRadarTile(img: SourceImage, lut: RadarLut, blurPx: number): HTMLCanvasElement {
+export function recolorRadarTile(
+  img: SourceImage,
+  lut: RadarLut,
+  blurPx: number,
+  // Cesium-fetched ImageBitmaps arrive pre-flipped (see drawSourceUpright);
+  // images we fetch ourselves (mosaic assembly) do not.
+  preFlipped = true
+): HTMLCanvasElement {
   const w = img.width;
   const h = img.height;
 
   const src = scratch('src', w, h);
   src.ctx.clearRect(0, 0, w, h);
-  drawSourceUpright(src.ctx, img, h);
+  if (preFlipped) drawSourceUpright(src.ctx, img, h);
+  else src.ctx.drawImage(img, 0, 0);
   const sd = src.ctx.getImageData(0, 0, w, h).data;
 
   // Decode into an opaque field image: R = magnitude (2·(dBZ+32)) scaled by
