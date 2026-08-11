@@ -13,16 +13,6 @@ export function setLabelOverlay(layer: Cesium.ImageryLayer | null) {
   labelOverlay = layer;
 }
 
-// The active label overlay's URL template (and current fade alpha), for
-// renderers that re-draw labels themselves (the radar morph sheet drapes
-// above globe imagery, so it must re-composite labels to keep them on top).
-export function getLabelOverlayInfo(): { url: string; alpha: number } | null {
-  if (!labelOverlay || !labelOverlay.show) return null;
-  const provider = labelOverlay.imageryProvider;
-  const url = (provider as { url?: string }).url;
-  return typeof url === 'string' ? { url, alpha: labelOverlay.alpha } : null;
-}
-
 // Insert an overlay just below the place labels (or on top of the stack when
 // the active basemap has no label overlay).
 export function addImageryBelowLabels(

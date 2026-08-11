@@ -8,8 +8,6 @@ import { startVisiblePolling } from '../../lib/poll';
 import type { RadarFrame } from '../../types';
 import { useRadarStore, buildTimeline, nowIndex } from './radarStore';
 import { CLIENT_RECOLOR, makeCloudProvider, makeRadarProvider } from './RainViewerImagery';
-import { RadarMorph } from './morph/RadarMorph';
-import { useMorphStore } from './morph/state';
 
 // Frame cadence during playback (ms). The dissolve occupies almost the whole
 // interval — the incoming frame fades in continuously on top of the held one
@@ -106,14 +104,11 @@ export function RadarLayer() {
   // Target alphas for the current mode/opacity. With client recoloring the
   // per-pixel translucency lives in the palette and the layer runs at full
   // strength; pass-through server tiles are solid colors, so cap the layer
-  // alpha to keep the basemap readable underneath. While the morph sheet owns
-  // the radar, its imagery layers go fully transparent (they stay loaded as
-  // the instant fallback for camera movement).
+  // alpha to keep the basemap readable underneath.
   const targets = () => {
     const s = useRadarStore.getState();
-    const morphing = useMorphStore.getState().active;
     return {
-      anim: morphing ? 0 : s.opacity * (CLIENT_RECOLOR ? 1 : 0.8),
+      anim: s.opacity * (CLIENT_RECOLOR ? 1 : 0.8),
       cloud: s.opacity * CLOUD_ALPHA,
     };
   };
@@ -294,25 +289,9 @@ export function RadarLayer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewer, opacity]);
 
-  // Re-apply alphas when the morph sheet takes over or hands back the radar.
-  const morphActive = useMorphStore((s) => s.active);
+  // Playback ticker.
   useEffect(() => {
-    if (!viewer || viewer.isDestroyed()) return;
-    cancelFade();
-    if (shownIndexRef.current != null && animLayersRef.current.length > 0) {
-      const idx = Math.min(
-        Math.max(0, useRadarStore.getState().currentIndex),
-        animLayersRef.current.length - 1
-      );
-      applyInstant(idx);
-      viewer.scene.requestRender();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewer, morphActive]);
-
-  // Playback ticker (idle while the morph clock owns playback).
-  useEffect(() => {
-    if (!viewer || !active || !playing || morphActive) return;
+    if (!viewer || !active || !playing) return;
     const interval = setInterval(() => {
       const s = useRadarStore.getState();
       const tl = buildTimeline(s);
@@ -320,9 +299,7 @@ export function RadarLayer() {
       s.setCurrentIndex((s.currentIndex + 1) % tl.length);
     }, FRAME_MS);
     return () => clearInterval(interval);
-  }, [viewer, active, playing, morphActive]);
+  }, [viewer, active, playing]);
 
-  // Continuous motion-compensated playback replaces the dissolve whenever the
-  // camera is settled (falls back automatically while moving).
-  return active && CLIENT_RECOLOR ? <RadarMorph /> : null;
+  return null;
 }
