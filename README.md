@@ -40,6 +40,7 @@ npm run dev:client
 | USGS Earthquakes | No key needed | Fully public. |
 | CelesTrak (satellites) | No key needed | Public TLE data; the server caches each group for 2h per CelesTrak's guidance. |
 | RainViewer | No key needed | Fully public tile CDN. |
+| NASA GIBS (live satellite) | No key needed | Public WMTS tiles of NOAA GOES-East/West + JMA Himawari GeoColor; the server only queries the time index (DescribeDomains). |
 | Nominatim (geocoding) | No key needed | Uses OSM data; `NWS_USER_AGENT` string is also used here as User-Agent per their policy. |
 
 ## Deploy to Heroku
@@ -88,4 +89,4 @@ The architecture is designed for easy extension. For each new layer:
 4. Add a proxy route under `server/src/routes/`
 5. Add a toggle to `Sidebar.tsx`
 
-Shipped since: hurricanes (NOAA NHC), lightning (Blitzortung), FIRMS fire hotspots, ships (AISStream), satellite tracker (CelesTrak TLE + satellite.js).
+Shipped since: hurricanes (NOAA NHC), lightning (Blitzortung), FIRMS fire hotspots, ships (AISStream), satellite tracker (CelesTrak TLE + satellite.js), live satellite imagery (NOAA GOES + Himawari GeoColor via NASA GIBS, animated 10-min loop).

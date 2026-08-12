@@ -1,5 +1,6 @@
 export type LayerId =
   | 'radar'
+  | 'goes'
   | 'earthquakes'
   | 'alerts'
   | 'flights'
@@ -137,6 +138,18 @@ export interface RadarManifest {
   satellite: {
     infrared: RadarFrame[];
   };
+}
+
+// Time index for the live GOES/Himawari GeoColor imagery layer. Frames are
+// epoch SECONDS on the shared 10-minute scan cadence, oldest → newest, ending
+// at the newest timestamp every covered satellite has published to NASA GIBS.
+// 'estimated' means the GIBS time-domain lookup failed and the server fell
+// back to now-minus-latency arithmetic (frames may 404 → transparent tiles).
+export interface GoesManifest {
+  frames: number[];
+  latest: number;
+  source: 'gibs' | 'estimated';
+  updated: number;
 }
 
 export interface ShipTrackPoint {

@@ -36,6 +36,8 @@ import { Section } from './Section';
 import { BasemapSwitcher } from './BasemapSwitcher';
 import { ScreensaverControls } from './ScreensaverControls';
 import { RadarControls } from '../layers/radar/RadarControls';
+import { GoesControls } from '../layers/goes/GoesControls';
+import { useGoesStore } from '../layers/goes/goesStore';
 import { PrecipControls } from '../layers/precip/PrecipControls';
 import { usePrecipStore, QPF_PERIOD_LABEL } from '../layers/precip/precipStore';
 import { LightningControls } from '../layers/lightning/LightningControls';
@@ -154,6 +156,13 @@ export function Sidebar() {
     }))
   );
   const precipPeriod = usePrecipStore((s) => s.period);
+  const goesStatus = useGoesStore(
+    useShallow((s) => ({
+      latest: s.frames.length > 0 ? s.frames[s.frames.length - 1] : null,
+      source: s.source,
+      error: s.error,
+    }))
+  );
   const fireOutlookError = useFireOutlookStore((s) => s.error);
   const fuelError = useFuelStatus((s) => s.error);
   const windStatus = useWindStatus(
@@ -422,6 +431,22 @@ export function Sidebar() {
             onToggle={() => toggleLayer('radar')}
           >
             <RadarControls />
+          </LayerToggle>
+          <LayerToggle
+            label="Live Satellite (GOES)"
+            active={(active as Record<string, boolean>).goes ?? false}
+            onToggle={() => toggleLayer('goes')}
+            statusText={
+              goesStatus.error ??
+              (goesStatus.latest != null
+                ? `GeoColor · latest scan ${new Date(goesStatus.latest * 1000).toLocaleTimeString(
+                    undefined,
+                    { hour: 'numeric', minute: '2-digit' }
+                  )}${goesStatus.source === 'estimated' ? ' (est.)' : ''}`
+                : 'NOAA GOES-E/W + Himawari · 10-min loop')
+            }
+          >
+            <GoesControls />
           </LayerToggle>
           <LayerToggle
             label="Precipitation Forecast (WPC)"
