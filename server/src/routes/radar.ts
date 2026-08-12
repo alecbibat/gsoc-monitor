@@ -150,6 +150,147 @@ async function fetchTileStats(url: string) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Stage 0 additions (see docs/radar-motion-engine-plan.md § Stage 0). These
+// answer the questions the dev sandbox cannot: its egress proxy blocks
+// rainviewer.com, so the facts the Motion Engine's pruning decisions rest on
+// have to be measured from a host that can actually reach the CDN.
+// ---------------------------------------------------------------------------
+
+type Frame = { time: number; path: string };
+
+// Status + transport metadata for one tile, with the decoded pixels kept
+// separately so callers can diff them without re-fetching.
+async function probeTile(url: string): Promise<{
+  url: string;
+  status?: number;
+  bytes?: number;
+  ms?: number;
+  cacheControl?: string | null;
+  age?: string | null;
+  cfCacheStatus?: string | null;
+  contentType?: string | null;
+  allowOrigin?: string | null;
+  error?: string;
+  png?: { width: number; height: number; colorType: number; rgba: Uint8Array };
+}> {
+  const t0 = Date.now();
+  try {
+    // Origin is sent so a server that varies CORS by origin reveals that here;
+    // a browser probe is still the authority (see the plan's Stage 0.2).
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(10_000),
+      headers: { Origin: 'https://gsoc-monitor.example' },
+    });
+    const buf = Buffer.from(await res.arrayBuffer());
+    const meta = {
+      url,
+      status: res.status,
+      bytes: buf.length,
+      ms: Date.now() - t0,
+      cacheControl: res.headers.get('cache-control'),
+      age: res.headers.get('age'),
+      cfCacheStatus: res.headers.get('cf-cache-status') ?? res.headers.get('x-cache'),
+      contentType: res.headers.get('content-type'),
+      allowOrigin: res.headers.get('access-control-allow-origin'),
+    };
+    if (!res.ok) return meta;
+    try {
+      return { ...meta, png: decodePng(buf) };
+    } catch (err) {
+      return { ...meta, error: `decode failed: ${String(err)}` };
+    }
+  } catch (err) {
+    return { url, ms: Date.now() - t0, error: String(err) };
+  }
+}
+
+function visiblePx(png: { rgba: Uint8Array }): number {
+  let n = 0;
+  for (let i = 3; i < png.rgba.length; i += 4) if (png.rgba[i] !== 0) n++;
+  return n;
+}
+
+// Walk down the pyramid from a starting tile, always following the child with
+// the most echo, so the zoom probes land on a tile that actually has data
+// (an empty tile would make every level look identical).
+async function descendToEcho(host: string, frame: Frame, z0: number, x0: number, y0: number, toZ: number) {
+  let x = x0;
+  let y = y0;
+  for (let z = z0; z < toZ; z++) {
+    let best: { x: number; y: number; visible: number } | null = null;
+    for (const [cx, cy] of [
+      [x * 2, y * 2],
+      [x * 2 + 1, y * 2],
+      [x * 2, y * 2 + 1],
+      [x * 2 + 1, y * 2 + 1],
+    ]) {
+      const p = await probeTile(`${host}${frame.path}/512/${z + 1}/${cx}/${cy}/2/1_0.png`);
+      const v = p.png ? visiblePx(p.png) : -1;
+      if (!best || v > best.visible) best = { x: cx, y: cy, visible: v };
+    }
+    if (!best || best.visible <= 0) return { z: z + 1, x: best?.x ?? x * 2, y: best?.y ?? y * 2, dead: true };
+    x = best.x;
+    y = best.y;
+  }
+  return { z: toZ, x, y, dead: false };
+}
+
+// Is a child tile genuine new detail, or just its parent's quadrant blown up?
+// If the CDN synthesizes deep zooms by upscaling, the child matches a
+// nearest-neighbour 2x of the parent quadrant almost exactly — which is the
+// signal that requesting that level buys nothing but bandwidth.
+function compareToUpscaledParent(
+  child: { width: number; height: number; rgba: Uint8Array },
+  parent: { width: number; height: number; rgba: Uint8Array },
+  childX: number,
+  childY: number
+) {
+  const w = child.width;
+  const h = child.height;
+  if (parent.width !== w || parent.height !== h) return { error: 'size mismatch' };
+  // Which quadrant of the parent this child covers.
+  const ox = (childX & 1) * (w / 2);
+  const oy = (childY & 1) * (h / 2);
+  let identical = 0;
+  let sumAbs = 0;
+  let compared = 0;
+  let alphaDiff = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const ci = (y * w + x) * 4;
+      const pi = ((oy + (y >> 1)) * w + (ox + (x >> 1))) * 4;
+      const same =
+        child.rgba[ci] === parent.rgba[pi] &&
+        child.rgba[ci + 1] === parent.rgba[pi + 1] &&
+        child.rgba[ci + 2] === parent.rgba[pi + 2] &&
+        child.rgba[ci + 3] === parent.rgba[pi + 3];
+      if (same) identical++;
+      if (child.rgba[ci + 3] !== parent.rgba[pi + 3]) alphaDiff++;
+      if (child.rgba[ci + 3] > 0 || parent.rgba[pi + 3] > 0) {
+        sumAbs +=
+          Math.abs(child.rgba[ci] - parent.rgba[pi]) +
+          Math.abs(child.rgba[ci + 1] - parent.rgba[pi + 1]) +
+          Math.abs(child.rgba[ci + 2] - parent.rgba[pi + 2]);
+        compared++;
+      }
+    }
+  }
+  const px = w * h;
+  return {
+    identicalFrac: +(identical / px).toFixed(4),
+    alphaDiffFrac: +(alphaDiff / px).toFixed(4),
+    meanAbsRgbDiff: compared ? +(sumAbs / (compared * 3)).toFixed(2) : 0,
+    // The call the pruning decision actually needs.
+    verdict:
+      identical / px > 0.98
+        ? 'UPSCALE — no real detail at this level'
+        : identical / px > 0.85
+          ? 'mostly upscale — marginal detail'
+          : 'genuine new detail',
+  };
+}
+
 // TEMPORARY: inspect what RainViewer's tile endpoints actually serve. Finds
 // the CONUS z5 tile with the most echo in the latest frame, then reports
 // pixel statistics for the raw scheme (0/0_1), its smoothed variant, two
@@ -198,11 +339,169 @@ router.get('/diag', async (_req, res) => {
       satellite_0_0_0: sat
         ? await fetchTileStats(`${manifest.host}${sat.path}/512/5/${x}/${y}/0/0_0.png`)
         : 'no satellite frames',
+      stage0: await stage0Report(manifest, frame, x, y),
     });
   } catch (err) {
     res.status(502).json({ error: 'diag failed', detail: String(err) });
   }
 });
+
+// Stage 0 of the Motion Engine plan: the five load-bearing facts about what
+// RainViewer's free tier actually serves in Aug 2026. Reported under the
+// existing /diag payload so one URL answers everything.
+async function stage0Report(
+  manifest: {
+    host: string;
+    version?: string;
+    generated?: number;
+    radar: { past: Frame[]; nowcast?: Frame[] };
+    satellite?: { infrared?: Frame[] };
+  },
+  frame: Frame,
+  z5x: number,
+  z5y: number
+) {
+  const out: Record<string, unknown> = {};
+
+  // --- 0.1a Manifest shape: is nowcast / IR still published? --------------
+  const past = manifest.radar.past ?? [];
+  const gaps: number[] = [];
+  for (let i = 1; i < past.length; i++) gaps.push(Math.round((past[i].time - past[i - 1].time) / 60));
+  out.manifest = {
+    topLevelKeys: Object.keys(manifest),
+    radarKeys: Object.keys(manifest.radar ?? {}),
+    version: manifest.version,
+    generated: manifest.generated,
+    pastCount: past.length,
+    pastCadenceMinutes: [...new Set(gaps)].sort((a, b) => a - b),
+    pastHistoryMinutes: past.length > 1 ? Math.round((past[past.length - 1].time - past[0].time) / 60) : 0,
+    newestFrameAgeMinutes: past.length
+      ? Math.round((Date.now() / 1000 - past[past.length - 1].time) / 60)
+      : null,
+    nowcastPresent: Array.isArray(manifest.radar?.nowcast) && manifest.radar.nowcast.length > 0,
+    nowcastCount: manifest.radar?.nowcast?.length ?? 0,
+    nowcastLeadMinutes:
+      manifest.radar?.nowcast?.length && past.length
+        ? Math.round(
+            (manifest.radar.nowcast[manifest.radar.nowcast.length - 1].time -
+              past[past.length - 1].time) /
+              60
+          )
+        : 0,
+    satelliteInfraredPresent: (manifest.satellite?.infrared?.length ?? 0) > 0,
+    satelliteInfraredCount: manifest.satellite?.infrared?.length ?? 0,
+  };
+
+  // --- 0.1b Max useful zoom: status per level, plus a real-detail test ----
+  // Follow the echo down the pyramid so the deep-zoom tiles aren't empty.
+  const deep = await descendToEcho(manifest.host, frame, 5, z5x, z5y, 9);
+  out.echoDescent = deep;
+
+  const tileUrl = (z: number, tx: number, ty: number) =>
+    `${manifest.host}${frame.path}/512/${z}/${tx}/${ty}/2/1_0.png`;
+
+  // Tile coords at any level, derived from wherever the descent stopped:
+  // halve going up, take the NW child going down (the descent bails early if a
+  // level serves nothing, so the deeper coords may be extrapolated).
+  const at = (z: number) => {
+    const d = deep.z - z;
+    return d >= 0
+      ? { z, x: deep.x >> d, y: deep.y >> d }
+      : { z, x: deep.x << -d, y: deep.y << -d };
+  };
+  const levels = [6, 7, 8, 9, 10, 11].map(at);
+  const probes = await Promise.all(
+    levels.map(({ z, x: tx, y: ty }) => probeTile(tileUrl(z, tx, ty)))
+  );
+  out.zoomLevels = probes.map((p, i) => ({
+    z: levels[i].z,
+    x: levels[i].x,
+    y: levels[i].y,
+    status: p.status,
+    bytes: p.bytes,
+    ms: p.ms,
+    visiblePx: p.png ? visiblePx(p.png) : undefined,
+    error: p.error,
+  }));
+
+  // Is z8 real detail over z7, and z9 over z8? This is what sets RADAR_MAX_LEVEL.
+  const byZ = new Map(levels.map((l, i) => [l.z, { level: l, probe: probes[i] }]));
+  const detail: Record<string, unknown> = {};
+  for (const [child, parent] of [
+    [8, 7],
+    [9, 8],
+    [7, 6],
+  ] as const) {
+    const c = byZ.get(child);
+    const p = byZ.get(parent);
+    if (c?.probe.png && p?.probe.png) {
+      detail[`z${child}_vs_z${parent}`] = compareToUpscaledParent(
+        c.probe.png,
+        p.probe.png,
+        c.level.x,
+        c.level.y
+      );
+    } else {
+      detail[`z${child}_vs_z${parent}`] = {
+        error: `missing tile (z${child}: ${c?.probe.status ?? 'n/a'}, z${parent}: ${p?.probe.status ?? 'n/a'})`,
+      };
+    }
+  }
+  out.realDetailAboveParent = detail;
+
+  // --- 0.1c Rate limits + cache headers under a 30-tile burst -------------
+  // Distinct tiles fired concurrently, the way a frame rebuild hits the CDN.
+  const burstTiles: Array<[number, number]> = [];
+  for (let bx = 12; bx < 22; bx++) for (let by = 22; by < 25; by++) burstTiles.push([bx, by]);
+  const t0 = Date.now();
+  const burst = await Promise.all(burstTiles.slice(0, 30).map(([bx, by]) => probeTile(tileUrl(6, bx, by))));
+  const statusCounts: Record<string, number> = {};
+  for (const b of burst) {
+    const k = b.error ? `error:${b.error.slice(0, 40)}` : String(b.status);
+    statusCounts[k] = (statusCounts[k] ?? 0) + 1;
+  }
+  const times = burst.map((b) => b.ms ?? 0).sort((a, b) => a - b);
+  out.burst30 = {
+    wallMs: Date.now() - t0,
+    statusCounts,
+    rateLimited: burst.some((b) => b.status === 429),
+    medianTileMs: times[Math.floor(times.length / 2)],
+    maxTileMs: times[times.length - 1],
+    totalBytes: burst.reduce((n, b) => n + (b.bytes ?? 0), 0),
+    sampleHeaders: burst.slice(0, 3).map((b) => ({
+      url: b.url,
+      status: b.status,
+      cacheControl: b.cacheControl,
+      age: b.age,
+      cfCacheStatus: b.cfCacheStatus,
+      contentType: b.contentType,
+      allowOrigin: b.allowOrigin,
+    })),
+  };
+
+  // --- 0.2 IEM CONUS tiles: reachable from a server, and how fast? --------
+  // NB: this only proves server-side reachability. The CORS check the plan
+  // needs must come from a real browser — see the browser probe in the plan.
+  const iemBase = 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0';
+  const iemProbes = await Promise.all([
+    probeTile(`${iemBase}/ridge::USCOMP-N0Q-0/5/${z5x}/${z5y}.png`),
+    probeTile(`${iemBase}/ridge::USCOMP-N0Q-m05m/5/${z5x}/${z5y}.png`),
+    probeTile(`${iemBase}/ridge::USCOMP-N0Q-m50m/5/${z5x}/${z5y}.png`),
+    probeTile(`${iemBase}/q2-hsr-900913/5/${z5x}/${z5y}.png`),
+  ]);
+  out.iem = iemProbes.map((p) => ({
+    url: p.url,
+    status: p.status,
+    bytes: p.bytes,
+    ms: p.ms,
+    visiblePx: p.png ? visiblePx(p.png) : undefined,
+    cacheControl: p.cacheControl,
+    allowOrigin: p.allowOrigin,
+    error: p.error,
+  }));
+
+  return out;
+}
 
 // RainViewer's frame manifest. Tile images are fetched directly by the client
 // from RainViewer's CDN (host comes back in this payload) to avoid proxying
