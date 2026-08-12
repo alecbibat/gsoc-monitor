@@ -9,9 +9,18 @@
 // as the kill switch.
 
 import { radarEngine } from './engineFlag';
+import { RadarGlSpike, radarGlEnabled } from './gl/RadarGlSpike';
 import { RadarLayerV1 } from './RadarLayerV1';
 import { RadarLayerV2 } from './RadarLayerV2';
 
 export function RadarLayer() {
-  return radarEngine() === 'v2' ? <RadarLayerV2 /> : <RadarLayerV1 />;
+  if (radarEngine() !== 'v2') return <RadarLayerV1 />;
+  return (
+    <>
+      <RadarLayerV2 />
+      {/* Stage B spike: draws over the imagery below the handover altitude and
+          dims it to match, so the flag being off leaves Stage A untouched. */}
+      {radarGlEnabled() && <RadarGlSpike />}
+    </>
+  );
 }

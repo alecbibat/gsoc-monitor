@@ -46,7 +46,7 @@ interface Pending {
   worker: number;
   fetchBlob: FetchTileBlob;
   warmOnly: boolean;
-  resolve: (bitmap: ImageBitmap | null) => void;
+  resolve: (bitmap: ImageBitmap | null, coverage?: number) => void;
   reject: (err: unknown) => void;
   timer: number;
 }
@@ -125,9 +125,18 @@ function onMessage(e: MessageEvent<RadarWorkerResponse>) {
     return;
   }
 
+  if (msg.type === 'error') {
+    settle(msg.id);
+    cached[job.worker].delete(msg.key);
+    job.reject(new Error(msg.message));
+    return;
+  }
+
+  // 'composited' — Stage B. Composites are not tiles, so nothing is recorded in
+  // the cache hint; the bitmap and how much of it was actually filled go
+  // straight to the caller.
   settle(msg.id);
-  cached[job.worker].delete(msg.key);
-  job.reject(new Error(msg.message));
+  job.resolve(msg.bitmap, msg.coverage);
 }
 
 function ensureWorkers(): Worker[] {
@@ -255,6 +264,51 @@ export function recolorTile(
   if (!job) return undefined;
   return { id: job.id, bitmap: job.done as Promise<ImageBitmap> };
 }
+
+// Stage B: stitch a block of already-cached fields into one texture for the
+// draped primitive. Purely a cache read — nothing is fetched — so an uncovered
+// region simply comes back partly transparent and the caller retries once the
+// prefetcher has warmed it.
+//
+// Routed to the worker that owns the block's NORTH-WEST tile. That worker holds
+// only the subset of the block its hash claimed, so coverage is partial by
+// construction; both workers are asked and the caller merges. Keeping the whole
+// composite in one worker would need the tile hash to be block-aware, which is
+// a Stage C decision, not a spike one.
+export function compositeRegion(
+  worker: number,
+  framePath: string,
+  level: number,
+  x0: number,
+  y0: number,
+  nx: number,
+  ny: number
+): { id: number; result: Promise<{ bitmap: ImageBitmap; coverage: number }> } {
+  ensureWorkers();
+  const id = nextId++;
+  const result = new Promise<{ bitmap: ImageBitmap; coverage: number }>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(id)) return;
+      settle(id);
+      reject(new Error(`radar composite timed out: ${framePath}`));
+    }, TILE_TIMEOUT_MS) as unknown as number;
+    pending.set(id, {
+      key: framePath,
+      level,
+      palette: 'storm',
+      worker,
+      fetchBlob: () => undefined,
+      warmOnly: false,
+      resolve: (b, coverage) => resolve({ bitmap: b as ImageBitmap, coverage: coverage ?? 0 }),
+      reject,
+      timer,
+    });
+    send(worker, { type: 'composite', id, framePath, level, x0, y0, nx, ny });
+  });
+  return { id, result };
+}
+
+export const WORKER_SLOTS = WORKER_COUNT;
 
 // Decode a tile into the field cache without producing an image. Used by
 // prefetch, where nothing is waiting to draw the result.

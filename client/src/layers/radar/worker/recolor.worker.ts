@@ -9,7 +9,12 @@
 import { getRadarLut } from '../palettes';
 import { blurField, colorizeField, decodeField, radarBlurSigma } from '../radarField';
 import { FieldCache } from './fieldCache';
-import type { RadarWorkerRequest, RadarWorkerResponse, TileRequest } from './protocol';
+import type {
+  CompositeRequest,
+  RadarWorkerRequest,
+  RadarWorkerResponse,
+  TileRequest,
+} from './protocol';
 
 // The client tsconfig loads the DOM lib, not WebWorker (one program, one
 // config), so the worker global is declared here with just the surface this
@@ -26,6 +31,9 @@ declare const self: {
 const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
 const BUDGET_BYTES = (deviceMemory && deviceMemory <= 4 ? 30 : 60) * 1024 * 1024;
 const cache = new FieldCache(BUDGET_BYTES);
+
+// RainViewer tiles are 512px square (see TILE_SIZE in RainViewerImagery).
+const TILE_PX = 512;
 
 // One canvas, resized on demand, reused for every decode. The worker handles
 // one tile at a time (see the queue below), so sharing it is safe.
@@ -83,7 +91,7 @@ function withTimeout(work: Promise<ImageBitmap>, what: string): Promise<ImageBit
 // Requests queue and run one at a time. Serializing keeps peak memory to a
 // single tile's intermediates and makes cancellation meaningful: a superseded
 // frame's queued tiles are dropped before they ever cost anything.
-const queue: TileRequest[] = [];
+const queue: Array<TileRequest | CompositeRequest> = [];
 // Ids accepted and not yet answered, and the subset of those the caller has
 // since given up on. Tracking `pending` keeps `cancelled` from accumulating
 // cancels that arrive after their tile already finished.
@@ -146,6 +154,61 @@ async function handle(req: TileRequest): Promise<void> {
   post({ type: 'tile', id, key, bitmap: tile }, [tile]);
 }
 
+// Stitch a rectangular block of cached fields into one magnitude/presence
+// texture for the Stage B primitive. Tiles missing from the cache are left
+// transparent rather than fetched: this runs on the render path, and the
+// prefetcher is already warming exactly these keys.
+async function composite(req: CompositeRequest): Promise<void> {
+  const { id, framePath, level, x0, y0, nx, ny } = req;
+  const w = nx * TILE_PX;
+  const h = ny * TILE_PX;
+  const out = new Uint8ClampedArray(new ArrayBuffer(w * h * 4));
+  let present = 0;
+
+  for (let ty = 0; ty < ny; ty++) {
+    for (let tx = 0; tx < nx; tx++) {
+      const field = cache.get(`${framePath}|${level}/${x0 + tx}/${y0 + ty}`);
+      if (!field) continue;
+      present++;
+      const ox = tx * TILE_PX;
+      const oy = ty * TILE_PX;
+      for (let y = 0; y < field.height; y++) {
+        let src = y * field.width;
+        let dst = ((oy + y) * w + ox) * 4;
+        for (let x = 0; x < field.width; x++, src++, dst += 4) {
+          out[dst] = field.mag[src];
+          out[dst + 1] = field.presence[src];
+          out[dst + 3] = 255;
+        }
+      }
+    }
+  }
+
+  if (present === 0) {
+    // A composite with nothing in it means the planner and the cache disagree
+    // about which tiles exist — worth saying out loud, because the symptom
+    // downstream is just "the GPU path draws nothing".
+    console.warn(
+      `[radar] composite found no cached tiles: wanted ${framePath}|${level}/${x0}/${y0} ` +
+        `(${nx}x${ny}); this worker holds ${cache.size} fields`
+    );
+  }
+
+  // No imageOrientation: row 0 stays row 0, which is the NORTH edge of the tile
+  // block. WebGL ignores UNPACK_FLIP_Y for ImageBitmap sources, so texture
+  // coordinate t=0 lands on that same north edge — the shader's reprojection
+  // assumes exactly that.
+  const bitmap = await withTimeout(
+    createImageBitmap(new ImageData(out, w, h), { premultiplyAlpha: 'none' }),
+    'composite encode'
+  );
+  if (cancelled.has(id)) {
+    bitmap.close();
+    return;
+  }
+  post({ type: 'composited', id, bitmap, coverage: present / (nx * ny) }, [bitmap]);
+}
+
 async function drain(): Promise<void> {
   if (draining) return;
   draining = true;
@@ -158,12 +221,18 @@ async function drain(): Promise<void> {
         continue;
       }
       try {
-        await handle(req);
+        if (req.type === 'composite') await composite(req);
+        else await handle(req);
       } catch (err) {
         // A failed recolor degrades to a transparent tile on the main thread —
         // never the raw tile. Scheme-0 bytes are dBZ-encoded grayscale and
         // read as white/gray garbage over the map.
-        post({ type: 'error', id: req.id, key: req.key, message: String(err) });
+        post({
+          type: 'error',
+          id: req.id,
+          key: req.type === 'composite' ? req.framePath : req.key,
+          message: String(err),
+        });
       } finally {
         cancelled.delete(req.id);
         pending.delete(req.id);

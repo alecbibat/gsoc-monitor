@@ -184,6 +184,81 @@ runs in the worker on the equirect composite at reduced cadence (~30 fps view-re
 updates) feeding a single frequently-updated imagery layer. Lower ceiling, same visual
 idea; decision recorded here with the measured reasons.
 
+## Stage B verdict: NO-GO on the draped primitive
+
+**Recommendation: take the worker-composite fallback.** The blocker is
+architectural, not performance — which is why more frame-rate measurement would
+not change the answer.
+
+### The decisive finding: the altitude hybrid is inverted
+
+The plan proposed running the primitive "only above the altitude where labels are
+faded/gone", on the assumption that labels fade out as you zoom out. They do the
+opposite. `labelAlphaAt` in `CesiumGlobe.tsx` returns **0 below `LABELS_FADE.near`
+(55 km)** and ramps to **1 at `far` (80 km)**: labels are invisible close in and
+fully visible zoomed out.
+
+Cesium primitives draw above all imagery, including the label overlay, and
+"labels stay above weather" is a house rule. So the only altitudes where a
+primitive may legally draw are **below ~55 km** — city scale. Animated
+precipitation is watched at regional and continental scale, which is precisely
+where the primitive is forbidden. The GPU path would buy smooth motion in the one
+regime nobody animates radar in.
+
+Everything else follows from that:
+
+- **The 4096-texture criterion is unreachable in the permitted band.** Below
+  55 km the view spans a fraction of one level-7 tile, so the composite planner
+  produces a 512×512 or 1024×1024 block. Measured: `regionKey 7/30/49/1/1`,
+  262 144 px, 2.1 MB of texture. Two 4096-square textures only appear if the
+  ceiling is lifted past the point where labels are visible.
+- **Compositing is per-keyframe CPU work proportional to region area**, which the
+  imagery path does not have at all: 445–765 ms per pair for 0.26–1.0 MP here.
+  That is a software rasterizer in a container and would be far quicker on real
+  hardware, but the *shape* of the cost — O(region) per keyframe, on top of the
+  decode the imagery path already does — is inherent.
+- **The composite and the field cache are awkwardly coupled.** The GPU path needs
+  exactly the tiles the imagery path decoded, and has no authoritative handle on
+  which those are. Three derivations were tried — camera view rectangle, deepest
+  observed level, current display level — and all three produced empty composites
+  while the camera was moving, because they name tiles Cesium has not requested.
+  Solvable (drive compositing from the imagery layer's own tile set, or give the
+  compositor its own decode path), but it is real work the plan did not budget.
+
+### What did work, and is worth keeping
+
+- The custom `Material` fabric **compiles and renders**: no shader compile or link
+  errors, correct drape via `EllipsoidSurfaceAppearance` on `RectangleGeometry`,
+  the palette LUT matching the CPU path, per-pixel alpha, and the mercator
+  reprojection of a latitude-linear `st`.
+- **Texture swapping is leak-free.** Cesium destroys a material's old GPU texture
+  only after the replacement uploads (`Material.update`), and the spike retires
+  its own `ImageBitmap`s three rendered frames after handover: 134 retired,
+  `bitmapsOutstanding` back to 0.
+- Promoting the outgoing B composite into the A slot on a playhead step **halves**
+  the composite work per frame advance (measured 41 reuses across 138 swaps).
+- Blending magnitude and presence separately and dividing afterwards — the
+  normalized convolution carried into the time axis — is the right shape for
+  Stage C and survives unchanged into the fallback.
+
+### Not measured here
+
+Frame rate, GPU memory under real drivers, compositing against the live basemaps
+and the day/night terminator. This sandbox renders through SwiftShader (measured
+2.1 fps, meaningless) and its basemap CDNs are blocked. The harness is shipped —
+`?radargl=1` plus `window.__radarGl()` — so these can be read off real hardware
+if the verdict is worth contesting. Given the label-ordering finding, they would
+have to be extraordinary to change it.
+
+### What Stage C takes forward
+
+The fallback keeps weather **below labels at every altitude**, which is the house
+rule the primitive cannot satisfy. It reuses the Stage A ping-pong and the field
+cache unchanged, and `composite.ts`'s mercator stitch is directly reusable — the
+warp runs in the worker over the same block and the result feeds an imagery
+provider instead of a material. `WeatherMaterial`'s GLSL becomes the reference
+for the worker-side warp math rather than dead code.
+
 ---
 
 ## Stage C — Motion (~10–15 dev-days)

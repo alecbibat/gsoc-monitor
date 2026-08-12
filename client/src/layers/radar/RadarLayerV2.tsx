@@ -55,6 +55,7 @@ export function RadarLayerV2() {
   const opacity = useRadarStore((s) => s.opacity);
   const playing = useRadarStore((s) => s.playing);
   const palette = useRadarStore((s) => s.palette);
+  const glTileDim = useRadarStore((s) => s.glTileDim);
 
   useRadarManifest(active);
 
@@ -97,7 +98,7 @@ export function RadarLayerV2() {
       useRadarStore.getState().host,
       tl[startIdx].frame,
       useRadarStore.getState().palette,
-      useRadarStore.getState().opacity,
+      useRadarStore.getState().opacity * useRadarStore.getState().glTileDim,
       FADE_MS
     );
     pairRef.current = pair;
@@ -155,9 +156,12 @@ export function RadarLayerV2() {
     pairRef.current?.setPalette(palette);
   }, [palette]);
 
+  // The GPU spike dims the imagery path as its primitive fades in, so the two
+  // never draw the same echo on top of each other. Off the spike, glTileDim is
+  // 1 and this is just the opacity slider.
   useEffect(() => {
-    pairRef.current?.setOpacity(opacity);
-  }, [opacity]);
+    pairRef.current?.setOpacity(opacity * glTileDim);
+  }, [opacity, glTileDim]);
 
   // Give warming a bounded head start, then play regardless.
   useEffect(() => {

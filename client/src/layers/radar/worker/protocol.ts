@@ -24,11 +24,31 @@ export interface TileRequest {
   warmOnly?: boolean;
 }
 
-export type RadarWorkerRequest = TileRequest | { type: 'cancel'; id: number };
+// Stage B (GPU spike): stitch a rectangular block of cached fields into one
+// texture for the draped primitive. Nothing is palettized here — the shader
+// does the LUT — so this hands back the raw magnitude/presence pair.
+export interface CompositeRequest {
+  type: 'composite';
+  id: number;
+  framePath: string;
+  level: number;
+  x0: number;
+  y0: number;
+  nx: number;
+  ny: number;
+}
+
+export type RadarWorkerRequest =
+  | TileRequest
+  | CompositeRequest
+  | { type: 'cancel'; id: number };
 
 export type RadarWorkerResponse =
   // `bitmap` is pre-flipped for WebGL — see colorizeField's flipY note.
   | { type: 'tile'; id: number; key: string; bitmap: ImageBitmap }
   | { type: 'warmed'; id: number; key: string }
   | { type: 'miss'; id: number; key: string }
-  | { type: 'error'; id: number; key: string; message: string };
+  | { type: 'error'; id: number; key: string; message: string }
+  // `coverage` is the fraction of requested tiles that were actually in cache;
+  // the rest are transparent, so the caller can decide whether to wait.
+  | { type: 'composited'; id: number; bitmap: ImageBitmap; coverage: number };

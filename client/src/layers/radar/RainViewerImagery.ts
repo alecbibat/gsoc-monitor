@@ -23,7 +23,7 @@ const TILE_SIZE = 512;
 // nothing but bandwidth and a placeholder image fed through the palette
 // inversion. Beyond this Cesium bilinearly magnifies our smoothed level-7
 // texture, which is the same trick zoom.earth leans on.
-const RADAR_MAX_LEVEL = 7;
+export const RADAR_MAX_LEVEL = 7;
 
 type Recolor = (img: HTMLImageElement | ImageBitmap, level: number) => HTMLCanvasElement;
 

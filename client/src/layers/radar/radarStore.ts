@@ -32,6 +32,10 @@ interface RadarState {
   // than a download-per-frame stutter; the timeline shows it as a progress
   // ring on the play button and a buffered bar on the track.
   loopReady: number;
+  // Stage B handover: how much of the imagery path to draw while the GPU
+  // primitive covers the same field. 1 normally; the spike drives it toward 0
+  // as the primitive fades in, so the two never double-expose the same echo.
+  glTileDim: number;
   setManifest: (host: string, frames: RadarFrame[], nowcastFrames: RadarFrame[]) => void;
   setWindowMinutes: (m: 30 | 60 | 120) => void;
   setCurrentIndex: (i: number) => void;
@@ -39,6 +43,7 @@ interface RadarState {
   setOpacity: (o: number) => void;
   setPalette: (p: RadarPaletteId) => void;
   setLoopReady: (r: number) => void;
+  setGlTileDim: (d: number) => void;
 }
 
 // RainViewer republishes an identical manifest on most polls; comparing
@@ -65,6 +70,7 @@ export const useRadarStore = create<RadarState>((set) => ({
   opacity: 1,
   palette: 'storm',
   loopReady: 0,
+  glTileDim: 1,
   setManifest: (host, frames, nowcastFrames) =>
     set((s) =>
       manifestSig(host, frames, nowcastFrames) === manifestSig(s.host, s.frames, s.nowcastFrames)
@@ -77,6 +83,7 @@ export const useRadarStore = create<RadarState>((set) => ({
   setOpacity: (opacity) => set({ opacity }),
   setPalette: (palette) => set({ palette }),
   setLoopReady: (loopReady) => set((s) => (s.loopReady === loopReady ? {} : { loopReady })),
+  setGlTileDim: (glTileDim) => set((s) => (s.glTileDim === glTileDim ? {} : { glTileDim })),
 }));
 
 // Playback waits for the loop to be nearly warm rather than fully warm: the
