@@ -45,7 +45,8 @@ interface Pending {
   palette: RadarPaletteId;
   worker: number;
   fetchBlob: FetchTileBlob;
-  resolve: (bitmap: ImageBitmap) => void;
+  warmOnly: boolean;
+  resolve: (bitmap: ImageBitmap | null) => void;
   reject: (err: unknown) => void;
   timer: number;
 }
@@ -83,6 +84,13 @@ function onMessage(e: MessageEvent<RadarWorkerResponse>) {
     return;
   }
 
+  if (msg.type === 'warmed') {
+    settle(msg.id);
+    cached[job.worker].add(msg.key);
+    job.resolve(null);
+    return;
+  }
+
   if (msg.type === 'miss') {
     // The cache hint was stale: this worker evicted the field between the hint
     // and the request. Re-fetch UNTHROTTLED — Cesium's slot for this tile was
@@ -106,6 +114,7 @@ function onMessage(e: MessageEvent<RadarWorkerResponse>) {
           level: job.level,
           palette: job.palette,
           blob,
+          warmOnly: job.warmOnly,
         });
       },
       (err) => {
@@ -167,7 +176,70 @@ export interface TileJob {
   bitmap: Promise<ImageBitmap>;
 }
 
-// Recolor one tile.
+export interface WarmJob {
+  id: number;
+  done: Promise<void>;
+}
+
+// Whether a tile's decoded field is believed to be in a worker already. Only a
+// hint (the LRU may have evicted since), which is all the prefetch planner
+// needs — a wrong "yes" just means one tile gets fetched at display time.
+export function isTileWarm(key: string): boolean {
+  return cached[workerFor(key)]?.has(key) ?? false;
+}
+
+function submit(
+  key: string,
+  level: number,
+  palette: RadarPaletteId,
+  fetchBlob: FetchTileBlob,
+  warmOnly: boolean
+): { id: number; done: Promise<ImageBitmap | null> } | undefined {
+  const worker = workerFor(key);
+  ensureWorkers();
+  const isCached = cached[worker].has(key);
+
+  // Warming a tile the worker already holds is a no-op — don't even message it.
+  if (isCached && warmOnly) return { id: 0, done: Promise.resolve(null) };
+
+  // The fetch must start (or be declined) synchronously, before we hand back a
+  // promise, so the declined case can be reported as undefined.
+  let blobPromise: Promise<Blob> | undefined;
+  if (!isCached) {
+    blobPromise = fetchBlob(true);
+    if (!blobPromise) return undefined;
+  }
+
+  const id = nextId++;
+  const done = new Promise<ImageBitmap | null>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(id)) return;
+      settle(id);
+      // The hint may be what stranded us; drop it so a retry re-sends bytes.
+      cached[worker].delete(key);
+      reject(new Error(`radar tile timed out after ${TILE_TIMEOUT_MS}ms: ${key}`));
+    }, TILE_TIMEOUT_MS) as unknown as number;
+    pending.set(id, { key, level, palette, worker, fetchBlob, warmOnly, resolve, reject, timer });
+    if (!blobPromise) {
+      // Believed cached: a re-LUT with no bytes, no network and no decode.
+      send(worker, { type: 'tile', id, key, level, palette, warmOnly });
+      return;
+    }
+    blobPromise.then(
+      (blob) => {
+        if (!pending.has(id)) return;
+        send(worker, { type: 'tile', id, key, level, palette, blob, warmOnly });
+      },
+      (err) => {
+        settle(id);
+        reject(err);
+      }
+    );
+  });
+  return { id, done };
+}
+
+// Recolor one tile for display.
 //
 // Returns undefined when Cesium's scheduler declined to start the fetch, which
 // the caller must propagate out of `requestImage` unchanged — that is how
@@ -179,45 +251,22 @@ export function recolorTile(
   palette: RadarPaletteId,
   fetchBlob: FetchTileBlob
 ): TileJob | undefined {
-  const worker = workerFor(key);
-  ensureWorkers();
-  const isCached = cached[worker].has(key);
+  const job = submit(key, level, palette, fetchBlob, false);
+  if (!job) return undefined;
+  return { id: job.id, bitmap: job.done as Promise<ImageBitmap> };
+}
 
-  // The fetch must start (or be declined) synchronously, before we hand back a
-  // promise, so the declined case can be reported as undefined.
-  let blobPromise: Promise<Blob> | undefined;
-  if (!isCached) {
-    blobPromise = fetchBlob(true);
-    if (!blobPromise) return undefined;
-  }
-
-  const id = nextId++;
-  const bitmap = new Promise<ImageBitmap>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (!pending.has(id)) return;
-      settle(id);
-      // The hint may be what stranded us; drop it so a retry re-sends bytes.
-      cached[worker].delete(key);
-      reject(new Error(`radar tile timed out after ${TILE_TIMEOUT_MS}ms: ${key}`));
-    }, TILE_TIMEOUT_MS) as unknown as number;
-    pending.set(id, { key, level, palette, worker, fetchBlob, resolve, reject, timer });
-    if (!blobPromise) {
-      // Believed cached: a re-LUT with no bytes, no network and no decode.
-      send(worker, { type: 'tile', id, key, level, palette });
-      return;
-    }
-    blobPromise.then(
-      (blob) => {
-        if (!pending.has(id)) return;
-        send(worker, { type: 'tile', id, key, level, palette, blob });
-      },
-      (err) => {
-        settle(id);
-        reject(err);
-      }
-    );
-  });
-  return { id, bitmap };
+// Decode a tile into the field cache without producing an image. Used by
+// prefetch, where nothing is waiting to draw the result.
+export function warmTile(
+  key: string,
+  level: number,
+  palette: RadarPaletteId,
+  fetchBlob: FetchTileBlob
+): WarmJob | undefined {
+  const job = submit(key, level, palette, fetchBlob, true);
+  if (!job) return undefined;
+  return { id: job.id, done: job.done.then(() => undefined) };
 }
 
 // Abandon a job. The worker drops it if still queued; a reply that arrives

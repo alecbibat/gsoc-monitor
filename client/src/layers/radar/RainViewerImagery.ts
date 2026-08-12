@@ -9,6 +9,7 @@ import type { RadarFrame } from '../../types';
 import { radarEngine } from './engineFlag';
 import { getCloudLut, getRadarLut, type RadarPaletteId } from './palettes';
 import { radarBlurPx, recolorCloudTile, recolorRadarTile } from './recolor';
+import { noteTileRequested } from './visibleTiles';
 import { recolorTile, workerPipelineSupported } from './worker/pool';
 
 // 512px tiles: fewer requests, and declaring the true tile size lets Cesium
@@ -63,7 +64,7 @@ class RecoloringImageryProvider extends Cesium.UrlTemplateImageryProvider {
 // that matches what actually arrives, and what the inversion anchors expect)
 // with server smoothing on and snow folded into the rain ramp, so if the
 // parameter ever starts working again the bytes stay what the inverter expects.
-function radarTileUrl(
+export function radarTileUrl(
   host: string,
   frame: RadarFrame,
   z: number | string,
@@ -166,6 +167,9 @@ export class RadarFrameProvider extends Cesium.UrlTemplateImageryProvider {
     const frame = this.frame;
     const palette = this.palette;
     const url = radarTileUrl(this.host, frame, level, x, y);
+    // Whatever Cesium asks for IS the visible tile set — that is what the
+    // prefetcher warms the other frames' copies of.
+    noteTileRequested(level, x, y);
 
     if (!this.useWorker) {
       const upstream = new Cesium.Resource({ url, request }).fetchImage({

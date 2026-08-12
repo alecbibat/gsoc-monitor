@@ -23,6 +23,11 @@ interface RadarState {
   playing: boolean;
   opacity: number;
   palette: RadarPaletteId;
+  // How much of the playback loop is decoded and ready, 0–1 (engine v2 only).
+  // Playback holds until the loop is warm so the first pass is smooth rather
+  // than a download-per-frame stutter; the timeline shows it as a progress
+  // ring on the play button and a buffered bar on the track.
+  loopReady: number;
   setManifest: (
     host: string,
     frames: RadarFrame[],
@@ -35,6 +40,7 @@ interface RadarState {
   setPlaying: (p: boolean) => void;
   setOpacity: (o: number) => void;
   setPalette: (p: RadarPaletteId) => void;
+  setLoopReady: (r: number) => void;
 }
 
 // RainViewer republishes an identical manifest on most polls; comparing
@@ -72,6 +78,7 @@ export const useRadarStore = create<RadarState>((set) => ({
   // per-pixel (light rain airy, cores solid), not in a flat layer fade.
   opacity: 1,
   palette: 'storm',
+  loopReady: 0,
   setManifest: (host, frames, nowcastFrames, satelliteFrames) =>
     set((s) =>
       manifestSig(host, frames, nowcastFrames, satelliteFrames) ===
@@ -85,7 +92,13 @@ export const useRadarStore = create<RadarState>((set) => ({
   setPlaying: (playing) => set({ playing }),
   setOpacity: (opacity) => set({ opacity }),
   setPalette: (palette) => set({ palette }),
+  setLoopReady: (loopReady) => set((s) => (s.loopReady === loopReady ? {} : { loopReady })),
 }));
+
+// Playback waits for the loop to be nearly warm rather than fully warm: the
+// last few tiles are usually an off-screen straggler, and holding the whole
+// timeline hostage to them reads as the radar being broken.
+export const LOOP_READY_THRESHOLD = 0.9;
 
 export function framesInWindow(frames: RadarFrame[], windowMinutes: number): RadarFrame[] {
   const count = Math.max(1, Math.round(windowMinutes / 10));

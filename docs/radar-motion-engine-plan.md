@@ -442,3 +442,49 @@ palette changing all flow through the existing pair.
 The rotation number is the one that matters: v1 tears the whole stack down and
 re-downloads every frame every two minutes, forever. v2 keeps its two layers and
 pays only for the frame that is genuinely new.
+
+### PR 3 — prefetch + loop warming (landed)
+
+v1's one genuine virtue was instant scrubbing: a layer per frame meant every
+frame was already downloaded. v2 loads lazily, so the replacement is a warmed
+horizon — `prefetch.ts` decodes every timeline frame's copy of the visible tiles
+into the worker field cache, nearest-the-playhead first, and playback waits for
+it. `radarStore` gained `loopReady` (0–1) and `LOOP_READY_THRESHOLD`; the
+timeline shows a conic progress ring on the play button and a buffered bar on
+the track.
+
+**Deviations**
+
+- **The visible tile set is observed, not derived.** The plan called for
+  `camera.computeViewRectangle()` → tiling-scheme tile range at the layer's
+  current level. The level part of that means reimplementing Cesium's private
+  `_getLevelWithMaximumTexelSpacing` and keeping the copy in step with it
+  forever, and a mismatch would silently warm the wrong keys. `visibleTiles.ts`
+  instead records the coordinates Cesium actually requests, which is exact by
+  construction and needs no private API. Entries age out after 90 s so panning
+  away stops warming tiles nobody is looking at.
+- **Warm fetches go through `RequestScheduler` with `throttle: true`**, unlike
+  visible imagery (`throttle: false`). Warming therefore loses the priority
+  contest to tiles someone is looking at, and a declined fetch just backs off.
+  Concurrency is additionally capped at 2 and paused entirely while either
+  visible layer has tiles outstanding.
+- **Playback has a warm-wait safety valve** (`WARM_WAIT_MS`, 8 s). Two deadlocks
+  are otherwise reachable: a plan built before Cesium has requested anything is
+  empty, holds `loopReady` at 0, and — because playback waits on it — never
+  produces the playhead change that would re-plan; and warming that stalls for
+  any reason would freeze the timeline entirely. Radar that plays while still
+  filling in is strictly better than radar that refuses to play, which is what
+  v1 did anyway. The prefetcher also re-plans on its backoff rather than merely
+  resuming, which closes the first deadlock at the source.
+
+**Measured**:
+
+| Check | v1 | v2 |
+|---|---|---|
+| Network tiles from scrubbing the entire track after warm | 0 | **0** |
+| Frames warmed | 6 of 6 | 6 of 6 |
+| Total tiles fetched over the session | 42 | 46 |
+
+Scrub cost is the criterion: v2 reaches v1's zero-network scrubbing without
+v1's layer-per-frame stack. The 4 extra tiles are the overlap between warming
+and the two visible layers racing for the same keys.

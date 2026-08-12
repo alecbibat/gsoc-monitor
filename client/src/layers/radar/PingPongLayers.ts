@@ -91,6 +91,12 @@ export class PingPongLayers {
     return this.frontProvider.framePath;
   }
 
+  // True while either layer still has tiles outstanding. Prefetch pauses on
+  // this so warming never competes with the frame someone is looking at.
+  get loading(): boolean {
+    return this.frontProvider.pendingTiles > 0 || this.backProvider.pendingTiles > 0;
+  }
+
   destroy(): void {
     this.destroyed = true;
     this.cancelRaf();

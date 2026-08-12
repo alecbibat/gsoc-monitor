@@ -18,6 +18,10 @@ export interface TileRequest {
   // decoded field. The worker answers `miss` if that guess was wrong (the LRU
   // evicted it), and the caller then re-sends with the bytes.
   blob?: Blob;
+  // Warming only: decode and cache the field, but skip the palette pass and the
+  // ImageBitmap. Prefetch has nothing to draw, and the colorize + encode +
+  // transfer is the expensive half.
+  warmOnly?: boolean;
 }
 
 export type RadarWorkerRequest = TileRequest | { type: 'cancel'; id: number };
@@ -25,5 +29,6 @@ export type RadarWorkerRequest = TileRequest | { type: 'cancel'; id: number };
 export type RadarWorkerResponse =
   // `bitmap` is pre-flipped for WebGL — see colorizeField's flipY note.
   | { type: 'tile'; id: number; key: string; bitmap: ImageBitmap }
+  | { type: 'warmed'; id: number; key: string }
   | { type: 'miss'; id: number; key: string }
   | { type: 'error'; id: number; key: string; message: string };

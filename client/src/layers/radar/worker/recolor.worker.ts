@@ -122,6 +122,13 @@ async function handle(req: TileRequest): Promise<void> {
 
   if (cancelled.has(id)) return;
 
+  // Warming stops here: the field is cached, which is the whole point, and
+  // whoever displays this tile later gets it as a pure LUT pass.
+  if (req.warmOnly) {
+    post({ type: 'warmed', id, key });
+    return;
+  }
+
   const { width: w, height: h } = field;
   const out = outputBuffer(w * h * 4);
   colorizeField(field, getRadarLut(palette), out, true);

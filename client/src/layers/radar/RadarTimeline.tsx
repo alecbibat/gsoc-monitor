@@ -1,6 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { useLayersStore } from '../../store/layersStore';
-import { useRadarStore, buildTimeline, nowIndex } from './radarStore';
+import { useRadarStore, buildTimeline, nowIndex, LOOP_READY_THRESHOLD } from './radarStore';
 
 // Local clock time, e.g. "2:40 PM".
 function fmtClock(sec: number): string {
@@ -32,6 +32,7 @@ export function RadarTimeline() {
   const playing = useRadarStore((s) => s.playing);
   const setCurrentIndex = useRadarStore((s) => s.setCurrentIndex);
   const setPlaying = useRadarStore((s) => s.setPlaying);
+  const loopReady = useRadarStore((s) => s.loopReady);
 
   const timeline = useMemo(
     () => buildTimeline({ mode, frames, nowcastFrames, satelliteFrames, windowMinutes }),
@@ -45,6 +46,9 @@ export function RadarTimeline() {
   const n = timeline.length;
   const idx = Math.min(Math.max(0, currentIndex), n - 1);
   const nIdx = nowIndex(timeline);
+  // Engine v2 decodes the whole loop before playing it, so the controls say so
+  // rather than looking stuck. v1 never reports progress, so this stays off.
+  const warming = playing && loopReady > 0 && loopReady < LOOP_READY_THRESHOLD;
   const cur = timeline[idx];
   const nowTime = timeline[nIdx].time;
 
@@ -64,12 +68,24 @@ export function RadarTimeline() {
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-5 z-30 flex justify-center px-4">
       <div className="pointer-events-auto flex w-full max-w-2xl items-center gap-3 rounded-2xl border border-white/10 bg-ink-900/85 px-3 py-2.5 shadow-panel backdrop-blur-md">
-        {/* Play / pause */}
+        {/* Play / pause, with a warming ring while the loop is still decoding */}
         <button
           onClick={() => setPlaying(!playing)}
           aria-label={playing ? 'Pause' : 'Play'}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-sky-500/20 text-sky-300 transition hover:bg-sky-500/30"
+          title={warming ? `Buffering loop — ${Math.round(loopReady * 100)}%` : undefined}
+          className="relative grid h-9 w-9 shrink-0 place-items-center rounded-full bg-sky-500/20 text-sky-300 transition hover:bg-sky-500/30"
         >
+          {warming && (
+            <span
+              aria-hidden
+              className="absolute inset-0 rounded-full"
+              style={{
+                background: `conic-gradient(rgb(125 211 252 / 0.85) ${loopReady * 360}deg, rgb(125 211 252 / 0.12) 0deg)`,
+                WebkitMask: 'radial-gradient(circle, transparent 62%, #000 64%)',
+                mask: 'radial-gradient(circle, transparent 62%, #000 64%)',
+              }}
+            />
+          )}
           <span className="text-[15px] leading-none">{playing ? '⏸' : '▶'}</span>
         </button>
 
@@ -100,6 +116,13 @@ export function RadarTimeline() {
                   backgroundImage:
                     'repeating-linear-gradient(45deg, rgba(255,210,80,0.45) 0 4px, rgba(255,210,80,0.12) 4px 8px)',
                 }}
+              />
+            )}
+            {/* How much of the loop is decoded and ready to play */}
+            {loopReady > 0 && loopReady < 1 && (
+              <div
+                className="absolute inset-y-0 left-0 rounded-full bg-white/20"
+                style={{ width: `${loopReady * 100}%` }}
               />
             )}
             {/* Played progress */}
