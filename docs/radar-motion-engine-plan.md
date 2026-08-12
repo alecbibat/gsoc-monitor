@@ -488,3 +488,25 @@ the track.
 Scrub cost is the criterion: v2 reaches v1's zero-network scrubbing without
 v1's layer-per-frame stack. The 4 extra tiles are the overlap between warming
 and the two visible layers racing for the same keys.
+
+### PR 4 — partially landed, rest blocked on Stage 0
+
+Only the legend is independent of the upstream questions, so only it has landed:
+`RadarLegend` is registered in `layerLegends`, which puts it on the operator
+app's floating legend stack and under the crisis share globe automatically. It
+is built from the same LUT the tiles are painted with (so it cannot drift) and
+composites the palette's per-pixel alpha over the panel ground so the swatches
+read the way they do over the globe. Per the registry's store-free rule it shows
+the default Storm ramp rather than following the palette picker.
+
+**Still blocked, and why each one needs the answer rather than a guess:**
+
+- `RADAR_MAX_LEVEL` is still 9. Lowering it is a bandwidth win only if z8/z9 are
+  genuinely upscales; if they carry real detail, lowering it visibly softens
+  deep zooms. The diag's child-vs-parent comparison answers exactly this.
+- Clouds/Combined still run the v1 stack. If IR is discontinued they get pruned;
+  if it is alive they should be ported to the ping-pong instead. Opposite work.
+- The upstream nowcast frames are still consumed as-is.
+- **The `radarEngine=v2` default is still `v1`.** The rollout gates the flip on
+  Stage A being complete, and it is not complete while the pruning decisions are
+  open. Everything above is reachable today with `?radar=v2`.
