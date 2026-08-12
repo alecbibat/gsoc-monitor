@@ -330,6 +330,15 @@ re-verified against 1.142 source:
   `fetchImage`. Imagery requests are created with `throttle: false,
   throttleByServer: true`, so the undefined case is real (the per-server slot
   limit) and `requestImage` must propagate it synchronously.
+- **The handoff's "a globe tile is not renderable until ALL layers' imagery is
+  ready" is WRONG for 1.142.** `GlobeSurfaceTile.processStateMachine` computes
+  `isAnyTileLoaded` and sets `tile.renderable = tile.renderable &&
+  (isAnyTileLoaded || isDoneLoading)` — "allow rendering if any available layers
+  are loaded". So one slow or stuck imagery layer does NOT hold up the tile,
+  which is why the two-layer ping-pong does not delay first paint. The corollary
+  still bites, though: a tile with NO layer's imagery ready is not drawn at all,
+  so where radar is the only imagery layer (as in the headless harness, whose
+  basemap CDN is blocked) a stuck radar tile shows as bare globe.
 - **`UNPACK_FLIP_Y_WEBGL` is ignored for `ImageBitmap` sources.** Cesium
   compensates by decoding imagery with `imageOrientation: 'flipY'` and
   `premultiplyAlpha: false`. Anything handing Cesium a bitmap must match that
@@ -363,9 +372,11 @@ re-verified against 1.142 source:
 **The hang that forced the watchdogs.** Under stress, a worker occasionally
 stopped answering: one run had worker 0 resolve 0 tiles, another had worker 1
 resolve 25 of 30 and then stall. Because the worker drains its queue serially, a
-single `createImageBitmap` that never settles strands every tile queued behind
-it — and because Cesium will not render a globe tile until EVERY layer's imagery
-for it is ready, one stuck tile blanks the **entire globe**, not one tile. Two
+single `createImageBitmap` that never settles strands every tile routed to that
+worker. Cesium leaves those tiles in TRANSITIONING and never retries, so radar
+goes missing there for the rest of the session; in the harness — where the
+basemap CDN is blocked and radar is the only imagery layer — the affected globe
+tiles were not drawn at all, which is how it surfaced as a blank globe. Two
 bounds now make that impossible:
 
 - worker side: each decode/encode is raced against `DECODE_TIMEOUT_MS` (8 s) so a
@@ -388,8 +399,46 @@ the sandbox cannot reach the real CDN):**
 The zero-network palette switch is the criterion this PR exists to hit: v1 tears
 down and refetches the whole layer stack, v2 re-runs the LUT over cached fields.
 
-**Still open for later PRs**: first-radar-pixel timing, long-task counts during
-playback, manifest-rotation teardown and the context-loss drill all depend on the
-PR 2 ping-pong layers, and are measured there. A palette switch in v2 still
-rebuilds the layer stack (`RadarLayer` keys its effect on `palette`), so the
-"< 100 ms" half of that criterion also lands with PR 2.
+**Still open for later PRs**: first-radar-pixel timing and long-task counts
+during playback.
+
+### PR 2 — two-layer ping-pong (landed)
+
+`PingPongLayers` owns exactly two `ImageryLayer`s and walks them through the
+timeline; `RadarFrameProvider` gained a mutable frame/palette plus an in-flight
+tile counter. `RadarLayer` is now a chooser: `RadarLayerV1` is the old
+stack-per-frame implementation, kept verbatim as the kill switch, and
+`RadarLayerV2` is a thin orchestrator over the pair. The pair is created on
+`[viewer, active, host]` only — frames rotating, the window changing and the
+palette changing all flow through the existing pair.
+
+**Deviations**
+
+- **v2 covers the plain radar mode only**; Clouds/Combined still run the v1
+  stack. Both are built on RainViewer's infrared product, which Stage 0 is
+  checking still exists — porting a product that is about to be pruned would be
+  wasted work, so PR 4 decides.
+- **No per-tile cancellation of Cesium-driven requests.** Cancelling would leave
+  the imagery promise unsettled, which is precisely the hang PR 1 had to bound.
+  Superseded tiles are allowed to finish instead (they are cheap, and the field
+  cache keeps them useful). `cancelTile` stays for PR 3's prefetch, where
+  nothing is waiting on the result.
+- **Teardown drains its own waiters.** `destroy()` cancels the rAFs that would
+  have resolved an in-flight transition, so the promises are resolved explicitly;
+  otherwise `pump` parks forever holding the viewer and both layers alive, and
+  StrictMode's double-mount leaks one per mount in dev.
+
+**Measured** (same harness):
+
+| Check | v1 | v2 |
+|---|---|---|
+| Imagery layers for a 6-frame timeline | 6 (one per frame) | **2** (asserted in dev) |
+| Distinct frames' tiles fetched to display ONE frame | 6 of 6 | **3 of 6** — only frames actually shown |
+| Tiles refetched by a manifest rotation | **42** (full teardown + rebuild) | **6** (the one new frame) |
+| Network tiles during a second playback loop | 0 | 0 |
+| Same scrubbed frame rendered vs v1 | — | **0.09%** differing pixels |
+| WebGL context-loss drill | — | **recovers, radar repaints** (chroma 0.62 vs 0.64 before) |
+
+The rotation number is the one that matters: v1 tears the whole stack down and
+re-downloads every frame every two minutes, forever. v2 keeps its two layers and
+pays only for the frame that is genuinely new.

@@ -83,13 +83,30 @@ function blankTile(size = TILE_SIZE): HTMLCanvasElement {
   return blank;
 }
 
-// Engine v2: tile bytes are fetched here (so Cesium's RequestScheduler still
-// governs the network) and everything after that — decode, blur, palette LUT —
-// happens in a worker, which also caches the decoded intensity field.
-class WorkerRadarProvider extends Cesium.UrlTemplateImageryProvider {
+// Cesium assigns `_reload` onto an imagery provider while its layer is in the
+// scene (GlobeSurfaceTileProvider._onLayerAdded). Calling it rebuilds the
+// layer's tile imagery in place: new skeletons are created and the OLD ones are
+// freed only once the new ones are ready, so the swap never blanks. It is the
+// same hook Cesium's own time-dynamic WMTS provider uses, but it is private and
+// absent from the typings, hence the cast.
+type Reloadable = { _reload?: () => void };
+
+// Engine v2's radar provider. Its frame and palette are MUTABLE: pointing it at
+// a new frame and calling `reload()` swaps what the layer draws without
+// touching the layer itself, which is what lets two layers serve a whole
+// timeline instead of one layer per frame.
+//
+// Tile bytes are fetched here so Cesium's RequestScheduler still governs the
+// network; everything after that — decode, blur, palette LUT — happens in a
+// worker that caches the decoded intensity field. Where OffscreenCanvas is
+// missing the same class runs the synchronous main-thread pipeline instead, so
+// the ping-pong works everywhere.
+export class RadarFrameProvider extends Cesium.UrlTemplateImageryProvider {
   private readonly host: string;
-  private readonly frame: RadarFrame;
-  private readonly palette: RadarPaletteId;
+  private readonly useWorker: boolean;
+  private frame: RadarFrame;
+  private palette: RadarPaletteId;
+  private inFlight = 0;
 
   constructor(host: string, frame: RadarFrame, palette: RadarPaletteId) {
     super({
@@ -103,6 +120,41 @@ class WorkerRadarProvider extends Cesium.UrlTemplateImageryProvider {
     this.host = host;
     this.frame = frame;
     this.palette = palette;
+    this.useWorker = workerPipelineSupported();
+  }
+
+  get framePath(): string {
+    return this.frame.path;
+  }
+
+  // Tiles requested but not yet handed back. Cesium exposes no "layer ready"
+  // event, so readiness is counted here (see PingPongLayers.waitForSettled).
+  get pendingTiles(): number {
+    return this.inFlight;
+  }
+
+  // Point at a different frame / palette. Returns whether anything changed, so
+  // callers can skip a pointless reload.
+  setFrame(frame: RadarFrame): boolean {
+    if (this.frame.path === frame.path) return false;
+    this.frame = frame;
+    return true;
+  }
+
+  setPalette(palette: RadarPaletteId): boolean {
+    if (this.palette === palette) return false;
+    this.palette = palette;
+    return true;
+  }
+
+  // Rebuild this layer's tiles from the current frame/palette.
+  //
+  // NB: a reload SKIPS any tile still waiting on a previous reload's
+  // loaded-callback, so back-to-back reloads can leave tiles showing the older
+  // frame. Callers must let one settle before issuing the next — PingPongLayers
+  // serializes transitions for exactly this reason.
+  reload(): void {
+    (this as unknown as Reloadable)._reload?.();
   }
 
   requestImage(
@@ -111,9 +163,29 @@ class WorkerRadarProvider extends Cesium.UrlTemplateImageryProvider {
     level: number,
     request?: Cesium.Request
   ): Promise<Cesium.ImageryTypes> | undefined {
-    const url = radarTileUrl(this.host, this.frame, level, x, y);
-    const key = `${this.frame.path}|${level}/${x}/${y}`;
-    const job = recolorTile(key, level, this.palette, (throttled) =>
+    const frame = this.frame;
+    const palette = this.palette;
+    const url = radarTileUrl(this.host, frame, level, x, y);
+
+    if (!this.useWorker) {
+      const upstream = new Cesium.Resource({ url, request }).fetchImage({
+        preferImageBitmap: true,
+        flipY: true,
+      });
+      if (!upstream) return undefined;
+      return this.track(
+        upstream.then((img) => {
+          if (!img || !('width' in img)) return blankTile();
+          return recolorRadarTile(
+            img as HTMLImageElement | ImageBitmap,
+            getRadarLut(palette),
+            radarBlurPx(level)
+          );
+        })
+      );
+    }
+
+    const job = recolorTile(`${frame.path}|${level}/${x}/${y}`, level, palette, (throttled) =>
       // Cesium's own Request carries the per-server slot this tile was granted;
       // without it (the worker's cache-miss retry) a default Request issues
       // immediately, which is what that path needs.
@@ -121,10 +193,24 @@ class WorkerRadarProvider extends Cesium.UrlTemplateImageryProvider {
     );
     // Scheduler declined the fetch — preserve the contract so Cesium retries.
     if (!job) return undefined;
-    return job.bitmap.catch((err) => {
-      console.error('[radar] tile recolor failed — dropping tile', err);
-      return blankTile();
-    });
+    return this.track(job.bitmap);
+  }
+
+  // Count a tile as in flight until it is handed back, and never let a failure
+  // escape: an imagery request that rejects or never settles leaves Cesium's
+  // tile in TRANSITIONING with no retry, so radar stays missing there for the
+  // rest of the session. Resolving with a transparent tile instead keeps the
+  // tile's state machine moving.
+  private track(work: Promise<Cesium.ImageryTypes>): Promise<Cesium.ImageryTypes> {
+    this.inFlight++;
+    return work
+      .catch((err) => {
+        console.error('[radar] tile recolor failed — dropping tile', err);
+        return blankTile();
+      })
+      .finally(() => {
+        this.inFlight--;
+      });
   }
 }
 
@@ -157,9 +243,7 @@ export function makeRadarProvider(
       tileHeight: TILE_SIZE,
     });
   }
-  if (radarEngine() === 'v2' && workerPipelineSupported()) {
-    return new WorkerRadarProvider(host, frame, palette);
-  }
+  if (radarEngine() === 'v2') return new RadarFrameProvider(host, frame, palette);
   const lut = getRadarLut(palette);
   return new RecoloringImageryProvider(
     {

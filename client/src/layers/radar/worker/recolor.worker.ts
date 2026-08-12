@@ -55,10 +55,9 @@ function post(msg: RadarWorkerResponse, transfer?: Transferable[]) {
 }
 
 // Tiles are processed one at a time (see the queue below), so a decode that
-// never settles would wedge this worker for every tile behind it — and since
-// Cesium will not render a globe tile until every layer's imagery for it is
-// ready, that shows up as a permanently blank globe rather than one missing
-// tile. Bounding each decode turns that into a single dropped tile.
+// never settles wedges this worker for every tile queued behind it — one bad
+// call takes out every tile routed to this worker, not just its own. Bounding
+// each decode turns that into a single dropped tile.
 const DECODE_TIMEOUT_MS = 8_000;
 
 function withTimeout(work: Promise<ImageBitmap>, what: string): Promise<ImageBitmap> {

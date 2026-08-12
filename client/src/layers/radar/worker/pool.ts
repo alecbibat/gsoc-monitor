@@ -10,13 +10,15 @@ import type { RadarWorkerRequest, RadarWorkerResponse } from './protocol';
 
 const WORKER_COUNT = 2;
 
-// A job that never gets an answer is the worst failure this module has: Cesium
-// will not render a globe tile until EVERY layer's imagery for it is ready, so
-// a single imagery request stuck in-flight blanks the whole globe, not just one
-// tile. Worker replies can go missing in practice — a dropped `messageerror`, a
-// worker killed under memory pressure — so every job is bounded. On expiry the
+// A job that never gets an answer is the worst failure this module has. Cesium
+// leaves that tile's imagery in TRANSITIONING forever and never retries it, so
+// radar is silently missing there for the rest of the session — and since a
+// globe tile is only drawn once SOME imagery layer has data for it, a tile
+// where radar is the only layer is not drawn at all. Worker replies do go
+// missing in practice (a decode that never settles, a dropped `messageerror`, a
+// worker killed under memory pressure), so every job is bounded. On expiry the
 // job rejects and the caller degrades to a transparent tile, which Cesium
-// treats as loaded and the render continues.
+// treats as loaded, so the tile resolves and rendering continues.
 const TILE_TIMEOUT_MS = 15_000;
 
 // Fetches the tile's bytes. `throttled: true` must go through the Request
