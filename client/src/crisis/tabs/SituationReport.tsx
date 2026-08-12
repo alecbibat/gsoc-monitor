@@ -6,7 +6,7 @@ import {
 import { IcsOrgChart } from '../IcsOrgChart';
 import { ActionLog } from '../ActionLog';
 import { parseCoords } from '../parseCoords';
-import { SHARE_LIVE_LAYER_GROUPS } from '../shareLiveLayers';
+import { SHARE_LIVE_LAYER_GROUPS, isShareLiveLayerId } from '../shareLiveLayers';
 import { LOCATION_GROUPS } from '../../layers/locations/locations';
 
 const STATUS_STYLES: Record<IncidentStatus, string> = {
@@ -362,7 +362,11 @@ function LiveLayersSection() {
   const inc = useActiveIncident();
   const toggleLiveLayer = useCrisisStore((s) => s.toggleLiveLayer);
   const toggleExtraLocationGroup = useCrisisStore((s) => s.toggleExtraLocationGroup);
-  const selected = new Set(inc?.liveLayers ?? []);
+  // Persisted incidents can prescribe layer ids removed in a later release
+  // (they outlive deploys); count only the ones that still exist, matching
+  // what the share globe actually renders (CrisisShareView filters the same
+  // way) — otherwise the "N live" badge overcounts with no button to clear it.
+  const selected = new Set((inc?.liveLayers ?? []).filter(isShareLiveLayerId));
   const primaryGroupId = inc?.locationGroupId ?? null;
   const extraGroups = new Set(inc?.extraLocationGroups ?? []);
 

@@ -8,7 +8,6 @@ import { config } from './config';
 import { migrate } from './migrate';
 import earthquakesRouter from './routes/earthquakes';
 import radarRouter from './routes/radar';
-import goesRouter from './routes/goes';
 import flightsRouter from './routes/flights';
 import geocodeRouter from './routes/geocode';
 import shipsRouter, { initShipsStream } from './routes/ships';
@@ -118,7 +117,6 @@ function main() {
   // Live data layers
   app.use('/api/earthquakes', earthquakesRouter);
   app.use('/api/radar', radarRouter);
-  app.use('/api/goes', goesRouter);
   app.use('/api/flights', flightsRouter);
   app.use('/api/geocode', geocodeRouter);
   app.use('/api/ships', shipsRouter);

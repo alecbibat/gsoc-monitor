@@ -46,7 +46,6 @@ export const api = {
       `/api/earthquakes?magnitude=${magnitude}&period=${period}`
     ),
   radarManifest: () => getJson<import('../types').RadarManifest>('/api/radar'),
-  goesManifest: () => getJson<import('../types').GoesManifest>('/api/goes'),
   flights: (lat: number, lon: number, dist: number) =>
     getJson<{ flights: import('../types').FlightState[] }>(
       `/api/flights?lat=${lat}&lon=${lon}&dist=${dist}`
