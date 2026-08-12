@@ -27,6 +27,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'goes',
+    info: {
+      name: 'Live Satellite (GeoColor)',
+      icon: '🛰',
+      source: 'NOAA GOES-East/West + JMA Himawari, via NASA GIBS',
+      method:
+        'GeoColor composites from the geostationary weather satellites: true color by day, multispectral IR with city lights at night. NOAA/CIRA render GOES-East and GOES-West (ABI imager); JMA’s Himawari (AHI) covers the western Pacific. NASA’s Global Imagery Browse Services tiles a new scan every 10 minutes (~20–60 min behind real time); the three feeds are mosaicked by longitude. No coverage over Europe/Africa — GIBS carries no Meteosat feed.',
+      trust:
+        'The official operational imagery from NOAA’s and JMA’s geostationary weather satellites, tiled by NASA — the same GeoColor product on NOAA STAR and NASA Worldview.',
+      url: 'https://www.star.nesdis.noaa.gov/GOES/',
+    },
+  },
+  {
     id: 'earthquakes',
     info: {
       name: 'Earthquakes',
