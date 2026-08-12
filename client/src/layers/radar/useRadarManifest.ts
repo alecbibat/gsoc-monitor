@@ -22,12 +22,7 @@ export function useRadarManifest(active: boolean): void {
         if (cancelled) return;
         useRadarStore
           .getState()
-          .setManifest(
-            manifest.host,
-            manifest.radar.past,
-            manifest.radar.nowcast ?? [],
-            manifest.satellite?.infrared ?? []
-          );
+          .setManifest(manifest.host, manifest.radar.past, manifest.radar.nowcast ?? []);
       } catch (err) {
         console.error('Failed to load radar manifest', err);
       }

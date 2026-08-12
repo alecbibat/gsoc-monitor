@@ -7,7 +7,3 @@
 // normally completes before the next tick supersedes it.
 export const FRAME_MS = 800;
 export const FADE_MS = 720;
-
-// Clouds sit dimmer than radar in combined mode so precipitation stays the
-// subject of the composition.
-export const CLOUD_ALPHA = 0.7;

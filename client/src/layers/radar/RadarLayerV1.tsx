@@ -2,36 +2,17 @@
 // playback crossfading their alphas, and tiles recolored synchronously on the
 // main thread.
 //
-// Superseded by engine v2 (PingPongLayers + the worker pipeline) but kept
-// intact as the kill switch, and still the path used for the Clouds/Combined
-// modes until Stage 0 settles whether those products still exist upstream.
+// Superseded by engine v2 (PingPongLayers + the worker pipeline); kept for one
+// release as the kill switch, reachable with `?radar=v1`.
 import * as Cesium from 'cesium';
 import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { addImageryBelowLabels } from '../../cesium/imageryOrder';
 import { useLayersStore } from '../../store/layersStore';
-import type { RadarFrame } from '../../types';
 import { useRadarStore, buildTimeline, nowIndex } from './radarStore';
-import { CLIENT_RECOLOR, makeCloudProvider, makeRadarProvider } from './RainViewerImagery';
-import { CLOUD_ALPHA, FADE_MS, FRAME_MS } from './timing';
+import { CLIENT_RECOLOR, makeRadarProvider } from './RainViewerImagery';
+import { FADE_MS, FRAME_MS } from './timing';
 import { useRadarManifest } from './useRadarManifest';
-
-// Index of the satellite frame nearest in time to `time`, or -1 when nothing
-// is within tolerance. Radar and IR frames are both ~10-minute cadences but
-// not perfectly aligned, so playback pairs each radar frame with its closest
-// cloud snapshot (nowcast frames just reuse the latest clouds).
-function nearestFrameIndex(frames: RadarFrame[], time: number, maxDeltaSec = 3600): number {
-  let best = -1;
-  let bestDelta = maxDeltaSec + 1;
-  for (let i = 0; i < frames.length; i++) {
-    const d = Math.abs(frames[i].time - time);
-    if (d < bestDelta) {
-      bestDelta = d;
-      best = i;
-    }
-  }
-  return best;
-}
 
 export function RadarLayerV1() {
   const viewer = useCesiumViewer();
@@ -39,8 +20,6 @@ export function RadarLayerV1() {
   const host = useRadarStore((s) => s.host);
   const frames = useRadarStore((s) => s.frames);
   const nowcastFrames = useRadarStore((s) => s.nowcastFrames);
-  const satelliteFrames = useRadarStore((s) => s.satelliteFrames);
-  const mode = useRadarStore((s) => s.mode);
   const windowMinutes = useRadarStore((s) => s.windowMinutes);
   const currentIndex = useRadarStore((s) => s.currentIndex);
   const opacity = useRadarStore((s) => s.opacity);
@@ -48,14 +27,8 @@ export function RadarLayerV1() {
   const palette = useRadarStore((s) => s.palette);
   const setCurrentIndex = useRadarStore((s) => s.setCurrentIndex);
 
-  // One imagery layer per timeline frame (radar, or clouds in satellite
-  // mode); playback crossfades their alphas.
+  // One imagery layer per timeline frame; playback crossfades their alphas.
   const animLayersRef = useRef<Cesium.ImageryLayer[]>([]);
-  // Combined mode only: keyed-cloud layers under the radar, one per distinct
-  // satellite frame the timeline maps onto.
-  const cloudLayersRef = useRef<Cesium.ImageryLayer[]>([]);
-  // timeline index → index into cloudLayersRef (-1 = no clouds for frame).
-  const cloudMapRef = useRef<number[]>([]);
   // Which timeline index is currently displayed, the in-flight fade, and the
   // frame that fade is heading toward (used to finalize a superseded fade).
   const shownIndexRef = useRef<number | null>(null);
@@ -78,10 +51,7 @@ export function RadarLayerV1() {
   // alpha to keep the basemap readable underneath.
   const targets = () => {
     const s = useRadarStore.getState();
-    return {
-      anim: s.opacity * (CLIENT_RECOLOR ? 1 : 0.8),
-      cloud: s.opacity * CLOUD_ALPHA,
-    };
+    return { anim: s.opacity * (CLIENT_RECOLOR ? 1 : 0.8) };
   };
 
   // Snap every layer to a frame with no fade (initial display, scrubbing
@@ -90,10 +60,6 @@ export function RadarLayerV1() {
     const t = targets();
     animLayersRef.current.forEach((l, i) => {
       l.alpha = i === idx ? t.anim : 0;
-    });
-    const cloudIdx = cloudMapRef.current[idx] ?? -1;
-    cloudLayersRef.current.forEach((l, i) => {
-      l.alpha = i === cloudIdx ? t.cloud : 0;
     });
     shownIndexRef.current = idx;
   };
@@ -112,47 +78,14 @@ export function RadarLayerV1() {
       return;
     }
 
-    const timeline = buildTimeline({
-      mode,
-      frames,
-      nowcastFrames,
-      satelliteFrames,
-      windowMinutes,
-    });
+    const timeline = buildTimeline({ frames, nowcastFrames, windowMinutes });
     if (timeline.length === 0) {
       viewer.scene.requestRender();
       return;
     }
 
-    // Combined mode: animated keyed-cloud layers below the radar, each radar
-    // frame paired with its nearest-in-time IR snapshot so clouds move with
-    // the precipitation (added first so they stack under the radar).
-    if (mode === 'combined' && satelliteFrames.length > 0) {
-      const satIdxPerFrame = timeline.map((t) => nearestFrameIndex(satelliteFrames, t.time));
-      const layerBySatIdx = new Map<number, number>();
-      for (const satIdx of satIdxPerFrame) {
-        if (satIdx >= 0 && !layerBySatIdx.has(satIdx)) {
-          const layer = addImageryBelowLabels(
-            viewer,
-            makeCloudProvider(host, satelliteFrames[satIdx])
-          );
-          layer.alpha = 0;
-          layerBySatIdx.set(satIdx, cloudLayersRef.current.length);
-          cloudLayersRef.current.push(layer);
-        }
-      }
-      cloudMapRef.current = satIdxPerFrame.map((satIdx) => layerBySatIdx.get(satIdx) ?? -1);
-    } else {
-      cloudMapRef.current = [];
-    }
-
-    const makeProvider =
-      mode === 'satellite'
-        ? (f: RadarFrame) => makeCloudProvider(host, f)
-        : (f: RadarFrame) => makeRadarProvider(host, f, palette);
-
     animLayersRef.current = timeline.map((t) => {
-      const layer = addImageryBelowLabels(viewer, makeProvider(t.frame));
+      const layer = addImageryBelowLabels(viewer, makeRadarProvider(host, t.frame, palette));
       layer.alpha = 0;
       return layer;
     });
@@ -167,17 +100,13 @@ export function RadarLayerV1() {
     return () => {
       cancelFade();
       if (!viewer.isDestroyed()) {
-        for (const l of [...cloudLayersRef.current, ...animLayersRef.current]) {
-          viewer.imageryLayers.remove(l, true);
-        }
+        for (const l of animLayersRef.current) viewer.imageryLayers.remove(l, true);
       }
-      cloudLayersRef.current = [];
       animLayersRef.current = [];
-      cloudMapRef.current = [];
       shownIndexRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewer, active, host, frames, nowcastFrames, satelliteFrames, mode, windowMinutes, palette]);
+  }, [viewer, active, host, frames, nowcastFrames, windowMinutes, palette]);
 
   // Dissolve to the current frame whenever the index moves.
   useEffect(() => {
@@ -202,8 +131,6 @@ export function RadarLayerV1() {
       return;
     }
     const t0 = performance.now();
-    const fromCloud = cloudMapRef.current[from] ?? -1;
-    const toCloud = cloudMapRef.current[to] ?? -1;
     // Layers are stacked in timeline order, so during forward playback the
     // incoming frame sits ABOVE the held one: ramping it in on top never dips
     // combined coverage (zoom.earth's rolling dissolve). On the loop wrap the
@@ -222,17 +149,6 @@ export function RadarLayerV1() {
         if (i === to) l.alpha = forward ? tgt.anim * t : tgt.anim;
         else if (i === from) l.alpha = forward ? tgt.anim : tgt.anim * (1 - t);
         else l.alpha = 0;
-      });
-      cloudLayersRef.current.forEach((l, i) => {
-        if (fromCloud === toCloud) {
-          l.alpha = i === toCloud ? tgt.cloud : 0;
-        } else if (i === toCloud) {
-          l.alpha = forward ? tgt.cloud * t : tgt.cloud;
-        } else if (i === fromCloud) {
-          l.alpha = forward ? tgt.cloud : tgt.cloud * (1 - t);
-        } else {
-          l.alpha = 0;
-        }
       });
       viewer.scene.requestRender();
       if (t < 1) {

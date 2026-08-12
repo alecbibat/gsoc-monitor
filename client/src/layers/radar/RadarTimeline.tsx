@@ -23,10 +23,8 @@ function fmtRel(deltaSec: number): string {
 // layer is on.
 export function RadarTimeline() {
   const active = useLayersStore((s) => s.active.radar);
-  const mode = useRadarStore((s) => s.mode);
   const frames = useRadarStore((s) => s.frames);
   const nowcastFrames = useRadarStore((s) => s.nowcastFrames);
-  const satelliteFrames = useRadarStore((s) => s.satelliteFrames);
   const windowMinutes = useRadarStore((s) => s.windowMinutes);
   const currentIndex = useRadarStore((s) => s.currentIndex);
   const playing = useRadarStore((s) => s.playing);
@@ -35,8 +33,8 @@ export function RadarTimeline() {
   const loopReady = useRadarStore((s) => s.loopReady);
 
   const timeline = useMemo(
-    () => buildTimeline({ mode, frames, nowcastFrames, satelliteFrames, windowMinutes }),
-    [mode, frames, nowcastFrames, satelliteFrames, windowMinutes]
+    () => buildTimeline({ frames, nowcastFrames, windowMinutes }),
+    [frames, nowcastFrames, windowMinutes]
   );
   const trackRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);

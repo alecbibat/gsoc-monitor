@@ -5,14 +5,16 @@
 //   v2  the Motion Engine refit: worker recolor pipeline, and (from PR 2) two
 //       ping-ponged layers instead of a stack per frame
 //
-// v1 stays as the kill switch until Stage C stabilizes. Selection is
-// `?radar=v2` (sticky — it persists so a reload keeps the choice) or the
-// stored value, and `?radar=v1` switches back.
+// v2 is the default; v1 stays as the kill switch until Stage C stabilizes.
+// Selection is `?radar=v1` (sticky — it persists so a reload keeps the choice)
+// or the stored value, and `?radar=v2` switches back.
 
 export type RadarEngine = 'v1' | 'v2';
 
 const STORAGE_KEY = 'radarEngine';
-const DEFAULT_ENGINE: RadarEngine = 'v1';
+// v2 is the default now that Stage A is complete. v1 stays reachable as
+// `?radar=v1` for one release as the kill switch.
+const DEFAULT_ENGINE: RadarEngine = 'v2';
 
 function isEngine(v: string | null): v is RadarEngine {
   return v === 'v1' || v === 'v2';

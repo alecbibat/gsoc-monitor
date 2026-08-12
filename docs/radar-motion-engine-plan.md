@@ -293,18 +293,48 @@ texture), `imageryOrder.ts`, crisis share components, `EarthTimeBar.tsx`.
 
 ## Stage 0 results
 
-The diag extension is built and deployed (`GET /api/radar/diag`, `stage0` block).
-**Waiting on a production run** — the dev sandbox's egress proxy still blocks
-rainviewer.com, so the four upstream questions can only be answered from the
-deployed app.
+Run against production 2026-08-12 (`GET /api/radar/diag`). Every expectation in
+the plan was confirmed.
 
-- [ ] Live manifest: nowcast present? IR present? cadence/history:
-- [ ] z8/z9 tile behavior:
-- [ ] Rate-limit observations:
-- [ ] IEM CORS/latency/policy: _(server-side reachability comes back in the diag;
-      the browser CORS probe is still required)_
-- [x] **`_reload` spike result: verified — see below.**
-- [ ] Baseline metrics captured:
+- [x] **Live manifest**: `radar.nowcast` is published but **empty** (0 frames) —
+      nowcast is discontinued. `satellite.infrared` is **absent/empty** (0
+      frames) — infrared is discontinued. Past radar: 13 frames, **10-minute**
+      cadence, **120 minutes** of history, newest frame 5 minutes old.
+- [x] **z8/z9 tile behavior**: z6 and z7 serve real, distinct mosaics (z7 vs its
+      z6 parent upscaled: only 33.6% of pixels identical, mean RGB difference
+      24.8 — genuine new detail). z8, z9, z10 and z11 **all return the same
+      3269-byte payload** regardless of coordinate, a 4-bit paletted PNG that
+      carries no radar data. **There is nothing above z7.** The client had
+      `RADAR_MAX_LEVEL = 9`, so deep zooms were downloading that placeholder and
+      feeding it through the palette inversion; what it rendered as is unknown
+      (the sandbox cannot reach the CDN and the server-side decoder does not
+      handle 4-bit PNGs), but it was never radar.
+- [x] **Rate limits**: a 30-tile concurrent burst returned 30×200, **no 429s**,
+      723 ms wall, 453 ms median per tile, 881 KB total. Tiles carry
+      `Cache-Control: max-age=172800` (48 h), `cf-cache-status: rv_edge` and
+      `Access-Control-Allow-Origin: *` — so the browser HTTP cache absorbs
+      repeat requests, which is why the two ping-pong layers pointing at the
+      same frame cost one download rather than two.
+- [x] **IEM**: all four probes returned 200 with `Access-Control-Allow-Origin: *`
+      and `Cache-Control: public, max-age=300`, 179–413 ms. `q2-hsr-900913` is
+      distinct content and the fastest. **Caveat**: `USCOMP-N0Q-0`, `-m05m` and
+      `-m50m` all returned byte-identical 20480-byte payloads with identical
+      visible-pixel counts, so the time-slugged variants did **not**
+      differentiate in this sample. Before Stage C relies on IEM for history,
+      re-probe those from a browser at spaced intervals — they may be edge-cached
+      or the slugs may no longer work. Usage policy is still unread.
+- [x] **`_reload` spike**: verified against 1.142 source and exercised by PR 2 —
+      see the version-correction notes above.
+- [x] **Baseline metrics**: captured as the v1 column of each PR's table below.
+
+**Decisions recorded**
+
+| Decision | Outcome |
+|---|---|
+| `RADAR_MAX_LEVEL` | **7** (was 9) |
+| Clouds / Combined modes | **Pruned** — the product behind them serves zero frames |
+| Upstream nowcast frames | **Dropped as a source**; the `nowcastFrames` slot and its hatched forecast styling stay for Stage C's advection frames |
+| IEM as Stage C secondary source | **Approved**, subject to re-probing the time-slug variants |
 
 ### Cesium version correction (affects the whole plan)
 
@@ -489,24 +519,34 @@ Scrub cost is the criterion: v2 reaches v1's zero-network scrubbing without
 v1's layer-per-frame stack. The 4 extra tiles are the overlap between warming
 and the two visible layers racing for the same keys.
 
-### PR 4 — partially landed, rest blocked on Stage 0
+### PR 4 — pruning, legend, flag default (landed)
 
-Only the legend is independent of the upstream questions, so only it has landed:
-`RadarLegend` is registered in `layerLegends`, which puts it on the operator
-app's floating legend stack and under the crisis share globe automatically. It
-is built from the same LUT the tiles are painted with (so it cannot drift) and
-composites the palette's per-pixel alpha over the panel ground so the swatches
-read the way they do over the globe. Per the registry's store-free rule it shows
-the default Storm ramp rather than following the palette picker.
+- **`RADAR_MAX_LEVEL` 9 → 7.** Everything above 7 was a placeholder.
+- **Clouds/Combined pruned.** The modes, the mode selector, `makeCloudProvider`,
+  `recolorCloudTile`, `getCloudLut` and v1's combined-mode layer code are gone.
+  Worth noting they were not merely redundant: with zero infrared frames,
+  `buildTimeline` returned an empty array in satellite mode, so picking Clouds
+  blanked the radar and hid the timeline. Controls are now window + palette +
+  opacity + play, as the plan specified.
+- **Upstream nowcast dropped as a source.** `nowcastFrames` and the hatched
+  forecast zone stay — that is where Stage C's advection frames land.
+- **The radar legend** is registered in `layerLegends`, which puts it on the
+  operator app's floating legend stack and under the crisis share globe
+  automatically. Built from the same LUT the tiles are painted with (so it
+  cannot drift) and composites the palette's per-pixel alpha over the panel
+  ground, so the swatches read the way they do over the globe. Per the
+  registry's store-free rule it shows the default Storm ramp.
+- **`radarEngine` now defaults to v2.** `?radar=v1` remains the kill switch for
+  one release.
 
-**Still blocked, and why each one needs the answer rather than a guess:**
+**Store shape changed** — `mode`, `setMode` and `satelliteFrames` are gone, and
+`setManifest` lost its fourth argument. `buildTimeline`/`nowIndex` keep working
+for `EarthTimeBar`, which passes the whole store state and relies on structural
+typing; `buildTimeline`'s parameter type was narrowed to the three fields it
+actually reads so that stays true as fields come and go.
 
-- `RADAR_MAX_LEVEL` is still 9. Lowering it is a bandwidth win only if z8/z9 are
-  genuinely upscales; if they carry real detail, lowering it visibly softens
-  deep zooms. The diag's child-vs-parent comparison answers exactly this.
-- Clouds/Combined still run the v1 stack. If IR is discontinued they get pruned;
-  if it is alive they should be ported to the ping-pong instead. Opposite work.
-- The upstream nowcast frames are still consumed as-is.
-- **The `radarEngine=v2` default is still `v1`.** The rollout gates the flip on
-  Stage A being complete, and it is not complete while the pruning decisions are
-  open. Everything above is reachable today with `?radar=v2`.
+One consequence of the observation-based prefetch worth knowing: warmed
+coordinates age out after 90 s, so a camera left untouched eventually plans
+nothing (Cesium has no reason to re-request tiles it already holds). The
+prefetcher deliberately does not report readiness in that state — reporting 0
+would undo a loop that is fully warm — and drops to a 2 s heartbeat.

@@ -1,13 +1,7 @@
 import { useRadarStore } from './radarStore';
-import type { RadarMode } from './radarStore';
 import type { RadarPaletteId } from './palettes';
 
 const WINDOWS: Array<30 | 60 | 120> = [30, 60, 120];
-const MODES: Array<{ value: RadarMode; label: string }> = [
-  { value: 'radar', label: 'Radar' },
-  { value: 'satellite', label: 'Clouds' },
-  { value: 'combined', label: 'Combined' },
-];
 // Client-side palettes (see palettes.ts) — applied to raw dBZ tiles.
 const PALETTES: Array<{ value: RadarPaletteId; label: string }> = [
   { value: 'storm', label: 'Storm' },     // zoom.earth-class default
@@ -17,8 +11,6 @@ const PALETTES: Array<{ value: RadarPaletteId; label: string }> = [
 ];
 
 export function RadarControls() {
-  const mode = useRadarStore((s) => s.mode);
-  const setMode = useRadarStore((s) => s.setMode);
   const windowMinutes = useRadarStore((s) => s.windowMinutes);
   const setWindowMinutes = useRadarStore((s) => s.setWindowMinutes);
   const playing = useRadarStore((s) => s.playing);
@@ -28,29 +20,9 @@ export function RadarControls() {
   const palette = useRadarStore((s) => s.palette);
   const setPalette = useRadarStore((s) => s.setPalette);
 
-  // The palette only affects the precipitation overlay, not the IR satellite.
-  const showPalette = mode !== 'satellite';
-
   return (
     <div className="mt-2 space-y-2 rounded-md bg-black/20 p-2">
-      {/* Mode selector */}
-      <div className="flex items-center gap-1">
-        {MODES.map(({ value, label }) => (
-          <button
-            key={value}
-            onClick={() => setMode(value)}
-            className={`flex-1 rounded px-1 py-1 text-[11px] font-medium transition ${
-              mode === value
-                ? 'bg-sky-500/30 text-sky-300'
-                : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/70'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Time window + play/pause (hidden in satellite-only with no window concept) */}
+      {/* Time window + play/pause */}
       <div className="flex items-center gap-1.5">
         {WINDOWS.map((w) => (
           <button
@@ -74,23 +46,21 @@ export function RadarControls() {
       </div>
 
       {/* Precipitation palette */}
-      {showPalette && (
-        <div className="flex items-center gap-1">
-          {PALETTES.map(({ value, label }) => (
-            <button
-              key={value}
-              onClick={() => setPalette(value)}
-              className={`flex-1 rounded px-1 py-1 text-[11px] font-medium transition ${
-                palette === value
-                  ? 'bg-sky-500/30 text-sky-300'
-                  : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/70'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="flex items-center gap-1">
+        {PALETTES.map(({ value, label }) => (
+          <button
+            key={value}
+            onClick={() => setPalette(value)}
+            className={`flex-1 rounded px-1 py-1 text-[11px] font-medium transition ${
+              palette === value
+                ? 'bg-sky-500/30 text-sky-300'
+                : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/70'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
       <label className="flex items-center gap-2 text-[11px] text-white/50">
         Opacity

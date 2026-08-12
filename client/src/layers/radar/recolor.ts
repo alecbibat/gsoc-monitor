@@ -175,31 +175,3 @@ export function recolorRadarTile(img: SourceImage, lut: RadarLut, blurPx: number
   outCtx.putImageData(od, 0, 0);
   return out;
 }
-
-// Infrared satellite tile → keyed cloud overlay via a 256-entry luminance LUT.
-export function recolorCloudTile(img: SourceImage, cloudLut: Uint8ClampedArray): HTMLCanvasElement {
-  const w = img.width;
-  const h = img.height;
-  const src = scratch('src', w, h);
-  src.ctx.clearRect(0, 0, w, h);
-  drawSourceUpright(src.ctx, img, h);
-  const sd = src.ctx.getImageData(0, 0, w, h).data;
-
-  const out = document.createElement('canvas');
-  out.width = w;
-  out.height = h;
-  const outCtx = out.getContext('2d');
-  if (!outCtx) throw new Error('2d canvas unavailable');
-  const od = outCtx.createImageData(w, h);
-  const o = od.data;
-  for (let i = 0; i < sd.length; i += 4) {
-    if (sd[i + 3] < 128) continue; // outside coverage
-    const v = sd[i];
-    o[i] = cloudLut[v * 4];
-    o[i + 1] = cloudLut[v * 4 + 1];
-    o[i + 2] = cloudLut[v * 4 + 2];
-    o[i + 3] = cloudLut[v * 4 + 3];
-  }
-  outCtx.putImageData(od, 0, 0);
-  return out;
-}

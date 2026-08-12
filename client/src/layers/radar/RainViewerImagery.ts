@@ -7,8 +7,8 @@
 import * as Cesium from 'cesium';
 import type { RadarFrame } from '../../types';
 import { radarEngine } from './engineFlag';
-import { getCloudLut, getRadarLut, type RadarPaletteId } from './palettes';
-import { radarBlurPx, recolorCloudTile, recolorRadarTile } from './recolor';
+import { getRadarLut, type RadarPaletteId } from './palettes';
+import { radarBlurPx, recolorRadarTile } from './recolor';
 import { noteTileRequested } from './visibleTiles';
 import { recolorTile, workerPipelineSupported } from './worker/pool';
 
@@ -16,12 +16,14 @@ import { recolorTile, workerPipelineSupported } from './worker/pool';
 // pick one level coarser for the same screen density — the radar data is far
 // coarser than the basemap anyway.
 const TILE_SIZE = 512;
-// Cap requests a few levels below the basemap: RainViewer's mosaic is ~1 km
-// data, so high-zoom tiles are just upscales. Letting Cesium bilinearly
-// magnify our smoothed level-9 texture looks cleaner (zoom.earth's trick).
-const RADAR_MAX_LEVEL = 9;
-// The IR satellite mosaic is coarser still (~4 km).
-const SAT_MAX_LEVEL = 6;
+// The deepest level RainViewer actually serves data for. Verified against the
+// live CDN (Stage 0, Aug 2026): z6 and z7 return real mosaics that differ from
+// their parents, while z8, z9, z10 and z11 all return the SAME 3269-byte
+// placeholder regardless of coordinates. Requesting past 7 therefore bought
+// nothing but bandwidth and a placeholder image fed through the palette
+// inversion. Beyond this Cesium bilinearly magnifies our smoothed level-7
+// texture, which is the same trick zoom.earth leans on.
+const RADAR_MAX_LEVEL = 7;
 
 type Recolor = (img: HTMLImageElement | ImageBitmap, level: number) => HTMLCanvasElement;
 
@@ -257,19 +259,5 @@ export function makeRadarProvider(
       tileHeight: TILE_SIZE,
     },
     (img, level) => recolorRadarTile(img, lut, radarBlurPx(level))
-  );
-}
-
-export function makeCloudProvider(host: string, frame: RadarFrame): Cesium.ImageryProvider {
-  const lut = getCloudLut();
-  return new RecoloringImageryProvider(
-    {
-      // color 0 = grayscale infrared; luminance keys the cloud overlay.
-      url: `${host}${frame.path}/${TILE_SIZE}/{z}/{x}/{y}/0/0_0.png`,
-      maximumLevel: SAT_MAX_LEVEL,
-      tileWidth: TILE_SIZE,
-      tileHeight: TILE_SIZE,
-    },
-    (img) => recolorCloudTile(img, lut)
   );
 }

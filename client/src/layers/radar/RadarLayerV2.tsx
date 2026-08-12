@@ -50,8 +50,6 @@ export function RadarLayerV2() {
   const host = useRadarStore((s) => s.host);
   const frames = useRadarStore((s) => s.frames);
   const nowcastFrames = useRadarStore((s) => s.nowcastFrames);
-  const satelliteFrames = useRadarStore((s) => s.satelliteFrames);
-  const mode = useRadarStore((s) => s.mode);
   const windowMinutes = useRadarStore((s) => s.windowMinutes);
   const currentIndex = useRadarStore((s) => s.currentIndex);
   const opacity = useRadarStore((s) => s.opacity);
@@ -61,8 +59,8 @@ export function RadarLayerV2() {
   useRadarManifest(active);
 
   const timeline = useMemo(
-    () => buildTimeline({ mode, frames, nowcastFrames, satelliteFrames, windowMinutes }),
-    [mode, frames, nowcastFrames, satelliteFrames, windowMinutes]
+    () => buildTimeline({ frames, nowcastFrames, windowMinutes }),
+    [frames, nowcastFrames, windowMinutes]
   );
   // The creation effect must not re-run when the timeline changes, but it needs
   // the current one to pick its opening frame.

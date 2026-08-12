@@ -24,6 +24,10 @@ const MAX_CONCURRENT = 2;
 // (it declines because the visible layer is using the server slots, which is
 // exactly the right outcome — just try again shortly).
 const BACKOFF_MS = 400;
+// Slower heartbeat when there is nothing to warm at all. Observed tile
+// coordinates age out, so a view left untouched eventually plans nothing —
+// polling that at the working cadence would burn a timer forever for no reason.
+const IDLE_BACKOFF_MS = 2000;
 
 interface PlanEntry {
   key: string;
@@ -78,10 +82,12 @@ export class RadarPrefetcher {
     if (frames.length === 0 || coords.length === 0) {
       this.plan = [];
       this.cursor = 0;
-      this.report();
-      // Nothing to warm YET — try again once the visible layer has asked for
-      // some tiles.
-      this.schedule();
+      // Deliberately NOT reporting: an empty plan means there is nothing to say
+      // about readiness, not that nothing is ready. Reporting 0 here would undo
+      // a loop that is already fully warm — the coordinates simply aged out
+      // because the camera has been still and Cesium had no reason to re-ask
+      // for tiles it already holds.
+      this.schedule(IDLE_BACKOFF_MS);
       return;
     }
 
@@ -112,12 +118,12 @@ export class RadarPrefetcher {
 
   // Re-plan after a backoff rather than merely resuming: the visible tile set
   // may have appeared or moved since, and re-planning covers both.
-  private schedule(): void {
+  private schedule(delayMs = BACKOFF_MS): void {
     if (this.destroyed || this.timer != null) return;
     this.timer = setTimeout(() => {
       this.timer = null;
       if (!this.destroyed) this.update(this.lastFrames, this.lastPlayhead);
-    }, BACKOFF_MS) as unknown as number;
+    }, delayMs) as unknown as number;
   }
 
   private pump(): void {
