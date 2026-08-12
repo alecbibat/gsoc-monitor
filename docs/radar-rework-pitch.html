@@ -1,0 +1,1277 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>
+<title>Radar Rework</title>
+<style>
+  /* GSOC Monitor's own design system (client/tailwind.config.js), committed
+     dark — the mockups depict a dark ops product, so the page lives in its
+     world. Every surface painted explicitly; no reliance on host theme. */
+  :root {
+    --ink-950: #05070a;
+    --ink-900: #0a0e14;
+    --ink-800: #10151d;
+    --ink-700: #161c26;
+    --ink-600: #1f2733;
+    --paper: #dfe7f2;
+    --muted: #8798b0;
+    --faint: #5d6d85;
+    --accent: #3ddcff;
+    --accent-dim: #1d8fa8;
+    --warn: #ffb84d;
+    --danger: #ff5d5d;
+    --ok: #52e3a4;
+    --line: rgba(223, 231, 242, 0.09);
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --storm-ramp: linear-gradient(90deg,
+      rgba(100,152,250,0.55) 0%, rgb(68,122,245) 22%, rgb(122,88,240) 40%,
+      rgb(205,72,195) 52%, rgb(242,64,120) 62%, rgb(248,100,52) 72%,
+      rgb(252,160,46) 82%, rgb(255,215,75) 90%, rgb(255,246,195) 100%);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--ink-950);
+    color: var(--paper);
+    font: 400 15.5px/1.65 var(--sans);
+    letter-spacing: 0.005em;
+  }
+  ::selection { background: rgba(61, 220, 255, 0.25); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font: 500 0.86em var(--mono);
+    background: var(--ink-800);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0.1em 0.35em;
+    white-space: nowrap;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  .prose { max-width: 70ch; }
+  .prose p { margin: 0 0 1em; color: var(--muted); }
+  .prose p strong, .prose li strong { color: var(--paper); font-weight: 600; }
+  .prose ul { margin: 0 0 1em; padding-left: 1.2em; color: var(--muted); }
+  .prose li { margin-bottom: 0.45em; }
+  .prose li::marker { color: var(--accent-dim); }
+
+  /* ---------- masthead ---------- */
+  header.mast { padding: 56px 0 8px; }
+  .eyebrow {
+    font: 600 11px/1 var(--mono);
+    letter-spacing: 0.22em;
+    color: var(--accent);
+    text-transform: uppercase;
+    margin: 0 0 18px;
+  }
+  h1 {
+    font: 800 clamp(36px, 6vw, 58px)/1.02 var(--sans);
+    letter-spacing: -0.025em;
+    margin: 0 0 14px;
+    text-wrap: balance;
+  }
+  .dek {
+    font-size: 18px;
+    color: var(--muted);
+    max-width: 62ch;
+    margin: 0 0 22px;
+    text-wrap: pretty;
+  }
+  .dek b { color: var(--paper); font-weight: 600; }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 8px 20px;
+    font: 500 11.5px/1.4 var(--mono);
+    color: var(--faint);
+    padding-bottom: 8px;
+  }
+  .meta span b { color: var(--muted); font-weight: 500; }
+
+  h2 {
+    font: 700 clamp(22px, 3.2vw, 30px)/1.15 var(--sans);
+    letter-spacing: -0.015em;
+    margin: 0 0 8px;
+    text-wrap: balance;
+  }
+  h3 { font: 650 17px/1.3 var(--sans); margin: 0 0 6px; }
+  section { padding: 44px 0 10px; }
+  .kicker {
+    font: 600 10.5px/1 var(--mono);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0 0 10px;
+  }
+  .lead { color: var(--muted); max-width: 72ch; margin: 0 0 22px; }
+  .lead b { color: var(--paper); font-weight: 600; }
+
+  /* ---------- mockup frame ---------- */
+  .mock {
+    background: var(--ink-900);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 0 0 1px rgba(61,220,255,0.05), 0 18px 48px rgba(0,0,0,0.5);
+  }
+  .mock .stage { position: relative; }
+  .mock canvas { display: block; width: 100%; height: 100%; }
+  .stage-h { height: clamp(240px, 38vw, 400px); }
+  .stage-h-sm { height: clamp(190px, 30vw, 300px); }
+  .chip {
+    position: absolute; top: 12px;
+    font: 600 10px/1 var(--mono);
+    letter-spacing: 0.14em;
+    padding: 7px 10px 6px;
+    border-radius: 999px;
+    background: rgba(5, 7, 10, 0.72);
+    border: 1px solid var(--line);
+    backdrop-filter: blur(4px);
+    white-space: nowrap;
+  }
+  .chip.l { left: 12px; }
+  .chip.r { right: 12px; }
+  .chip .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+
+  /* wipe divider */
+  .wipe-wrap { position: relative; touch-action: none; cursor: ew-resize; }
+  .wipe-wrap canvas.top { position: absolute; inset: 0; }
+  .wipe-bar {
+    position: absolute; top: 0; bottom: 0; width: 2px;
+    background: rgba(223,231,242,0.85);
+    box-shadow: 0 0 12px rgba(61,220,255,0.5);
+    pointer-events: none;
+  }
+  .wipe-knob {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 34px; height: 34px; border-radius: 50%;
+    background: var(--ink-900);
+    border: 2px solid rgba(223,231,242,0.85);
+    display: grid; place-items: center;
+    font-size: 11px; color: var(--paper);
+    letter-spacing: -1px;
+  }
+
+  /* ---------- timeline chrome ---------- */
+  .tlbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 16px 14px;
+    border-top: 1px solid var(--line);
+    background: rgba(10, 14, 20, 0.9);
+  }
+  .tl-play {
+    flex: none;
+    width: 38px; height: 38px; border-radius: 50%;
+    border: none; cursor: pointer;
+    background: rgba(61,220,255,0.16);
+    color: var(--accent);
+    font-size: 13px;
+    display: grid; place-items: center;
+    position: relative;
+  }
+  .tl-play:hover { background: rgba(61,220,255,0.26); }
+  .tl-play:focus-visible, .wipe-wrap:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  .tl-play svg { display: block; }
+  .tl-track-zone { flex: 1; padding: 8px 0 2px; cursor: pointer; }
+  .tl-track { position: relative; height: 6px; border-radius: 3px; background: rgba(223,231,242,0.12); }
+  .tl-buffer { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: rgba(61,220,255,0.16); width: 100%; }
+  .tl-hatch {
+    position: absolute; top: 0; bottom: 0; right: 0; border-radius: 0 3px 3px 0;
+    background: repeating-linear-gradient(45deg, rgba(255,184,77,0.4) 0 3px, rgba(255,184,77,0.1) 3px 7px);
+  }
+  .tl-progress { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: rgba(61,220,255,0.65); }
+  .tl-now { position: absolute; top: -4px; bottom: -4px; width: 1.5px; background: rgba(223,231,242,0.65); }
+  .tl-tick { position: absolute; top: 50%; width: 3px; height: 3px; border-radius: 50%; background: rgba(223,231,242,0.28); transform: translate(-50%, -50%); }
+  .tl-handle {
+    position: absolute; top: 50%; width: 15px; height: 15px;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    background: var(--ink-900);
+    border: 2.5px solid var(--accent);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+  }
+  .tl-labels { display: flex; justify-content: space-between; font: 500 9.5px/1 var(--mono); color: var(--faint); margin-top: 7px; }
+  .tl-read { flex: none; width: 86px; text-align: right; }
+  .tl-read .t { font: 700 16px/1.1 var(--mono); font-variant-numeric: tabular-nums; }
+  .tl-read .s { font: 500 9.5px/1.3 var(--mono); letter-spacing: 0.08em; color: var(--faint); text-transform: uppercase; }
+  .tl-read .s.fc { color: var(--warn); }
+
+  .legendbar {
+    display: flex; align-items: center; gap: 10px;
+    font: 500 9.5px/1 var(--mono); letter-spacing: 0.1em; color: var(--faint);
+    padding: 10px 16px;
+    border-top: 1px solid var(--line);
+    text-transform: uppercase;
+  }
+  .legendbar .ramp { flex: 1; max-width: 260px; height: 6px; border-radius: 3px; background: var(--storm-ramp); }
+
+  /* ---------- stat tiles ---------- */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 26px 0; }
+  .tile {
+    background: var(--ink-900);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 18px 15px;
+  }
+  .tile .num { font: 700 30px/1 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .tile .num small { font-size: 15px; font-weight: 600; color: var(--muted); letter-spacing: 0; }
+  .tile .lbl { font: 600 11px/1.45 var(--sans); color: var(--muted); margin-top: 8px; }
+  .tile .src { font: 500 10px/1.5 var(--mono); color: var(--faint); margin-top: 6px; }
+  .tile.bad .num { color: var(--danger); }
+  .tile.warn .num { color: var(--warn); }
+
+  /* ---------- pipeline flows ---------- */
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; margin: 18px 0 8px; }
+  .flow .node {
+    background: var(--ink-800);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font: 500 12.5px/1.45 var(--sans);
+    color: var(--paper);
+    flex: 1 1 150px;
+    min-width: 150px;
+    position: relative;
+  }
+  .flow .node .sub { display: block; font: 500 10.5px/1.5 var(--mono); color: var(--faint); margin-top: 3px; }
+  .flow .node.pain { border-color: rgba(255,93,93,0.35); }
+  .flow .node.gain { border-color: rgba(82,227,164,0.3); }
+  .flow .node .flag {
+    display: inline-block;
+    font: 700 9px/1 var(--mono); letter-spacing: 0.1em;
+    color: var(--danger);
+    border: 1px solid rgba(255,93,93,0.4);
+    background: rgba(255,93,93,0.08);
+    border-radius: 999px;
+    padding: 4px 7px 3px;
+    margin-top: 7px; margin-right: 4px;
+    text-transform: uppercase;
+  }
+  .flow .node .flag.ok { color: var(--ok); border-color: rgba(82,227,164,0.35); background: rgba(82,227,164,0.07); }
+  .flow .arr { align-self: center; color: var(--faint); font-size: 15px; flex: none; }
+
+  /* ---------- option cards ---------- */
+  .opt {
+    background: linear-gradient(180deg, rgba(16,21,29,0.5), rgba(10,14,20,0.2));
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 26px 26px 22px;
+    margin: 26px 0;
+  }
+  .opt.rec { border-color: rgba(61,220,255,0.35); box-shadow: 0 0 0 1px rgba(61,220,255,0.12), 0 24px 64px rgba(0,0,0,0.35); }
+  .opt-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 14px; margin-bottom: 6px; }
+  .opt-num {
+    font: 700 11px/1 var(--mono); letter-spacing: 0.16em;
+    color: var(--accent);
+    border: 1px solid rgba(61,220,255,0.3);
+    border-radius: 999px;
+    padding: 6px 10px 5px;
+  }
+  .opt-head h3 { font: 750 24px/1.1 var(--sans); letter-spacing: -0.015em; margin: 0; }
+  .badge-rec {
+    font: 700 10px/1 var(--mono); letter-spacing: 0.14em;
+    color: var(--ink-950);
+    background: var(--accent);
+    border-radius: 999px;
+    padding: 6px 10px 5px;
+  }
+  .opt-thesis { color: var(--muted); margin: 2px 0 18px; max-width: 78ch; }
+  .opt-thesis b { color: var(--paper); font-weight: 600; }
+  .specs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
+  .spec {
+    font: 600 11px/1.5 var(--mono);
+    background: var(--ink-800);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 11px;
+    color: var(--muted);
+  }
+  .spec b { color: var(--paper); font-weight: 650; }
+  .spec.risk-low b { color: var(--ok); }
+  .spec.risk-med b { color: var(--warn); }
+  .spec.risk-high b { color: var(--danger); }
+  .opt-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 34px; margin-top: 20px; }
+  @media (max-width: 760px) { .opt-cols { grid-template-columns: 1fr; } }
+  .opt-cols h4 { font: 650 12px/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); margin: 8px 0 10px; }
+  .opt-cols ul { margin: 0; padding-left: 1.15em; color: var(--muted); font-size: 14.5px; }
+  .opt-cols li { margin-bottom: 0.5em; }
+  .opt-cols li::marker { color: var(--accent-dim); }
+  .opt-cols li b { color: var(--paper); font-weight: 600; }
+  .opt-cols .con li::marker { color: var(--faint); }
+
+  /* ---------- comparison ---------- */
+  .cmp-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--ink-900); }
+  table.cmp { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 13.5px; }
+  .cmp th, .cmp td { padding: 11px 16px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .cmp thead th {
+    font: 650 11px/1.3 var(--mono); letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted); background: var(--ink-800);
+    position: sticky; top: 0;
+  }
+  .cmp tbody tr:last-child td { border-bottom: none; }
+  .cmp td:first-child { color: var(--muted); font-weight: 500; white-space: nowrap; }
+  .cmp td { color: var(--paper); }
+  .cmp .rec-col { background: rgba(61,220,255,0.05); }
+  .cmp thead th.rec-col { color: var(--accent); }
+  .cmp .y { color: var(--ok); font-weight: 600; }
+  .cmp .n { color: var(--faint); }
+  .cmp .m { color: var(--warn); }
+
+  /* ---------- verdict / roadmap ---------- */
+  .verdict {
+    border: 1px solid rgba(61,220,255,0.3);
+    background: linear-gradient(180deg, rgba(61,220,255,0.07), rgba(61,220,255,0.015));
+    border-radius: 18px;
+    padding: 28px 28px 24px;
+    margin: 24px 0;
+  }
+  .verdict h3 { font: 750 21px/1.2 var(--sans); margin: 0 0 10px; letter-spacing: -0.01em; }
+  .verdict p { color: var(--muted); max-width: 78ch; margin: 0 0 12px; }
+  .verdict p b { color: var(--paper); font-weight: 600; }
+  .phases { display: grid; gap: 10px; margin-top: 20px; }
+  .phase {
+    display: grid; grid-template-columns: 120px 1fr; gap: 4px 20px;
+    background: var(--ink-900);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  @media (max-width: 620px) { .phase { grid-template-columns: 1fr; } }
+  .phase .tag { font: 700 11px/1.6 var(--mono); color: var(--accent); letter-spacing: 0.08em; }
+  .phase .tag small { display: block; color: var(--faint); font-weight: 500; letter-spacing: 0.04em; }
+  .phase .what { font-size: 14px; color: var(--muted); }
+  .phase .what b { color: var(--paper); font-weight: 600; }
+
+  /* ---------- misc ---------- */
+  .btn {
+    font: 600 12px/1 var(--mono);
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    background: rgba(61,220,255,0.1);
+    border: 1px solid rgba(61,220,255,0.3);
+    border-radius: 8px;
+    padding: 9px 14px;
+    cursor: pointer;
+  }
+  .btn:hover { background: rgba(61,220,255,0.18); }
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 20px 0 10px; }
+  @media (max-width: 700px) { .duo { grid-template-columns: 1fr; } }
+  .duo .mock .cap { padding: 10px 14px; font: 500 11px/1.5 var(--mono); color: var(--faint); border-top: 1px solid var(--line); }
+  .duo .cap b { color: var(--muted); font-weight: 600; }
+  .note {
+    font-size: 13px; color: var(--faint);
+    border-left: 2px solid var(--ink-600);
+    padding-left: 14px;
+    max-width: 78ch;
+    margin: 18px 0;
+  }
+  footer { padding: 40px 0 70px; }
+  footer .prose p { font-size: 13px; color: var(--faint); }
+  hr.sep { border: none; border-top: 1px solid var(--line); margin: 42px 0 0; }
+</style>
+
+<div class="wrap">
+
+  <!-- ======================= masthead ======================= -->
+  <header class="mast">
+    <p class="eyebrow">GSOC Monitor · Engineering Pitch</p>
+    <h1>Radar Rework</h1>
+    <p class="dek">
+      Three directions for rebuilding the precipitation layer — from a two-week refit
+      to a first-party data pipeline — each with a live mockup you can scrub.
+      <b>Recommendation: Option 2, staged so its first milestone is Option 1.</b>
+    </p>
+    <div class="meta">
+      <span><b>branch</b> claude/precipitation-radar-redesign-fbj907</span>
+      <span><b>current stack</b> RainViewer → 15–30 imagery layers → main-thread recolor</span>
+      <span><b>target</b> zoom.earth-class motion &amp; load</span>
+    </div>
+  </header>
+
+  <!-- ======================= hero wipe ======================= -->
+  <section id="hero">
+    <div class="mock">
+      <div class="stage stage-h wipe-wrap" id="wipe" tabindex="0" aria-label="Drag to compare stepped versus continuous radar motion">
+        <canvas id="heroFluid"></canvas>
+        <canvas id="heroStepped" class="top"></canvas>
+        <div class="wipe-bar" id="wipeBar"><div class="wipe-knob"><svg width="14" height="10" viewBox="0 0 14 10" fill="currentColor"><path d="M4.2 0 0 5l4.2 5V6.6h1.6V3.4H4.2zM9.8 0 14 5l-4.2 5V6.6H8.2V3.4h1.6z"/></svg></div></div>
+        <span class="chip l"><span class="dot" style="background:var(--danger)"></span>TODAY · 10-MIN STEPS + DISSOLVE</span>
+        <span class="chip r"><span class="dot" style="background:var(--ok)"></span>PROPOSED · CONTINUOUS MOTION</span>
+      </div>
+      <div class="tlbar" id="heroTl"></div>
+      <div class="legendbar"><span>Light</span><div class="ramp"></div><span>Extreme</span></div>
+    </div>
+    <p class="note">Every mockup on this page is a live procedural simulation — a synthetic storm
+      field driven through the app's real “storm” palette — so each option's temporal behavior can
+      be felt, not imagined. Drag the divider; scrub the timeline.</p>
+  </section>
+
+  <!-- ======================= diagnosis ======================= -->
+  <section id="diagnosis">
+    <p class="kicker">Diagnosis</p>
+    <h2>Why it feels choppy today</h2>
+    <p class="lead">
+      The current layer is smarter than it looks — client-side palette remapping, a rolling
+      dissolve, nowcast frames — but it fights its own architecture in three places, and all
+      three are visible on screen.
+    </p>
+
+    <div class="tiles">
+      <div class="tile bad">
+        <div class="num">15–30<small> layers</small></div>
+        <div class="lbl">Cesium imagery layers alive at once (15 in radar mode, ~30 in combined) — and Cesium fetches, decodes, and GPU-uploads tiles even for the invisible ones (alpha 0 skips only the draw)</div>
+        <div class="src">RadarLayer.tsx:183 · GlobeSurfaceTile.js:533</div>
+      </div>
+      <div class="tile bad">
+        <div class="num">135–450<small> tiles</small></div>
+        <div class="lbl">Fetch + recolor operations per stack rebuild — which recurs every ~10 min as the manifest rotates, and on every palette, window, or mode change</div>
+        <div class="src">RadarLayer.tsx:131–209</div>
+      </div>
+      <div class="tile warn">
+        <div class="num">½M<small> px-loop iters/tile</small></div>
+        <div class="lbl">Main-thread pixel work per 512² tile — decode → invert → pad → blur → LUT, ~2 MB of canvas readback each; a rebuild burst costs 1–4 s of main thread</div>
+        <div class="src">recolor.ts:166–242</div>
+      </div>
+      <div class="tile warn">
+        <div class="num">10<small> min steps</small></div>
+        <div class="lbl">Temporal resolution of playback — an 800 ms dissolve between frames is the only motion smoothing</div>
+        <div class="src">RadarLayer.tsx:17–18</div>
+      </div>
+    </div>
+
+    <p class="lead" style="margin-top:6px">
+      Two of these we verified in Cesium 1.121's own source: layers with <code>show: true</code>
+      fetch, decode, and upload tiles <b>regardless of alpha</b>, and a newly loaded globe tile
+      isn't renderable until <b>every</b> layer's imagery for it is in — so with 15+ radar layers
+      alive, every camera pan waits on fifteen tile pyramids, and frame textures hold 200–500 MB
+      of VRAM at deeper zooms, on hardware this codebase already documents as
+      context-loss-prone. That is the choppiness, mechanically. (To be fair to the original
+      design: the eager 15-layer preload is what makes scrubbing instant — any replacement has to
+      keep that property by smarter means, not just delete it.)
+    </p>
+    <p class="lead" style="margin-top:6px">
+      There's also a perceptual reason the dissolve can't be saved by tuning: storms advect
+      <b>6–15 km per 10-minute frame</b> — 10–25 screen pixels at regional zooms. Crossfading
+      across a displacement wider than the cell itself produces the classic double-exposure
+      artifact: <b>each cell fades out in place while its ghost fades in ahead.</b> Motion reads
+      as pulsing teleportation no matter how well-fed the layers are. Only warping along the
+      storm's actual motion fixes it — that's the line between Option 1 and Option 2.
+    </p>
+
+    <div class="flow" aria-label="Current pipeline">
+      <div class="node">Manifest poll<span class="sub">every 2 min</span></div>
+      <div class="arr">→</div>
+      <div class="node pain">Tear down + rebuild all frame layers<span class="sub">on any frame/mode/window/palette change</span><span class="flag">×15 pyramids</span></div>
+      <div class="arr">→</div>
+      <div class="node pain">Per-tile recolor on the main thread<span class="sub">getImageData / blur / putImageData</span><span class="flag">jank</span></div>
+      <div class="arr">→</div>
+      <div class="node pain">Alpha crossfade between frame layers<span class="sub">800 ms per 10-min step</span><span class="flag">stepped motion</span></div>
+    </div>
+
+    <p class="kicker" style="margin-top:34px">Cold start, replayed</p>
+    <div class="duo">
+      <div class="mock">
+        <div class="stage stage-h-sm"><canvas id="loadToday"></canvas>
+          <span class="chip l"><span class="dot" style="background:var(--danger)"></span>TODAY</span></div>
+        <div class="cap"><b>Tiles trickle in</b> — 16 pyramids race the CDN; the loop stutters until every frame's tiles land.</div>
+      </div>
+      <div class="mock">
+        <div class="stage stage-h-sm"><canvas id="loadNew"></canvas>
+          <span class="chip l"><span class="dot" style="background:var(--ok)"></span>PROPOSED</span></div>
+        <div class="cap"><b>Coarse-first, then sharpen</b> — one low-zoom pass paints full coverage in under a second; detail streams behind it.</div>
+      </div>
+    </div>
+    <button class="btn" id="replayLoad">↻ Replay cold start</button>
+  </section>
+
+  <!-- ======================= data reality ======================= -->
+  <section id="reality">
+    <p class="kicker">The other shoe</p>
+    <h2>The foundation is shrinking under us</h2>
+    <div class="prose">
+      <p>
+        Part of "not particularly valuable right now" isn't our code at all. <strong>RainViewer
+        discontinued most of its free API in January 2026</strong> — and there is no paid tier to
+        upgrade to; they exited the API business entirely. Per their transition notes:
+      </p>
+      <ul>
+        <li><strong>Nowcast/forecast frames: discontinued.</strong> The forecast half of our timeline is fed by a product that no longer exists.</li>
+        <li><strong>Infrared satellite: discontinued.</strong> The "Clouds" and "Combined" modes have nothing to render.</li>
+        <li><strong>All color schemes but one: discontinued.</strong> The CDN ignoring our palette parameter — the thing the palette-inversion hack works around — is permanent, not a glitch.</li>
+        <li><strong>Max tile zoom clamped to level 7.</strong> The client still requests levels 8–9 (<code>RADAR_MAX_LEVEL = 9</code>), which would explain tiles that never arrive when zoomed in.</li>
+        <li><strong>100 requests/IP/min rate limit</strong> — a number a 16-layer rebuild storm can plausibly hit on its own.</li>
+      </ul>
+      <p>
+        (Sourced from RainViewer's transition FAQ and API docs; this sandbox can't reach their
+        endpoints directly, so the zoom clamp and rate limit should be re-verified from production
+        before we lean on them.) The takeaway either way: <strong>any rework that treats RainViewer
+        as a permanent foundation is building on sand.</strong> The options below are ordered by how
+        far they step off of it.
+      </p>
+    </div>
+  </section>
+
+  <!-- ======================= zoom.earth teardown ======================= -->
+  <section id="zoomearth">
+    <p class="kicker">Reference point</p>
+    <h2>What zoom.earth is actually doing</h2>
+    <div class="prose" id="zeContent">
+      <p>
+        We reverse-engineered their radar stack from public integrations against their endpoints.
+        The punchline: <strong>everything hard happens on their servers, and the browser's job is
+        made trivial.</strong>
+      </p>
+      <ul>
+        <li><strong>They pre-process radar into their own tile pyramid.</strong> A tiny manifest
+          (<code>times/radar.json</code>) maps each frame timestamp to a content hash; tiles live at
+          <code>/radar/reflectivity/{date}/{time}/{hash}/{z}/{y}/{x}.webp</code> — small,
+          pre-colored, display-ready 256px WebP. No client-side palette math at all.</li>
+        <li><strong>Content-hash URLs make every frame immutable</strong> — cacheable forever at the
+          CDN and in the browser. Replaying the loop costs zero refetches. This is most of why their
+          loop feels instant.</li>
+        <li><strong>The animation is modest</strong> — a ~12-frame loop with a rolling dissolve,
+          refreshed every 10 minutes. The smoothness comes from tiles that are always already there,
+          low-res data bilinearly upscaled (radar is intentionally capped coarse), and labels kept
+          crisp above the weather.</li>
+        <li><strong>Their data: NOAA MRMS for the US plus national radar services</strong>
+          (Météo-France, UK Met Office, KMA, AEMET, and ~a dozen more), with a separate DWD
+          ICON/GFS model layer for global precipitation <em>forecasts</em>. They don't blend
+          satellite-derived rain into the radar mosaic — where radar doesn't exist, radar just ends.</li>
+        <li><strong>They bootstrapped exactly the way we did.</strong> Until mid-2025, zoom.earth's
+          rain overlay was literally RainViewer tiles fetched client-side. Then they built the
+          pipeline above. Our Option 3 is, more or less, the move they made.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ======================= contracts ======================= -->
+  <section id="contracts">
+    <p class="kicker">House rules</p>
+    <h2>What any option must preserve</h2>
+    <p class="lead">From a full read of the integration surface — these are the contracts a
+      redesign breaks at its peril:</p>
+    <div class="prose">
+      <ul>
+        <li><strong>The stacking order.</strong> Weather sits above the basemap and below place labels (<code>addImageryBelowLabels</code>) — radar blotting out city names is the fastest way to make the view illegible.</li>
+        <li><strong>Explicit rendering.</strong> The globe runs <code>requestRenderMode</code>; every visual change must call <code>requestRender()</code> or it silently doesn't appear until the camera moves.</li>
+        <li><strong>Context-loss discipline.</strong> The app has an elaborate WebGL context-loss recovery path; every async tile callback, worker completion, and animation tick must guard <code>viewer.isDestroyed()</code>.</li>
+        <li><strong>The crisis share page.</strong> <code>RadarLayer</code> + <code>RadarTimeline</code> mount standalone on a public, anonymous share view — tile fetching must stay keyless and client-side there. (This also rules out browser-direct keyed commercial feeds.)</li>
+        <li><strong>Timeline coupling.</strong> <code>EarthTimeBar</code> repositions itself by subscribing to the radar timeline's shape — the store's exports are a public interface.</li>
+        <li><strong>Instant scrubbing.</strong> Today's eager preload is what makes scrubbing feel immediate; its replacement is a prefetch horizon, not deletion.</li>
+      </ul>
+    </div>
+  </section>
+
+  <hr class="sep">
+
+  <!-- ======================= options ======================= -->
+  <section id="options">
+    <p class="kicker">Directions</p>
+    <h2>Three ways to rebuild it</h2>
+    <p class="lead">
+      They are not mutually exclusive — each one contains the previous. The question is where to
+      stop, and the mockups below let you feel the difference before committing.
+    </p>
+
+    <!-- ---------- OPTION 1 ---------- -->
+    <div class="opt" id="opt1">
+      <div class="opt-head">
+        <span class="opt-num">OPTION 1</span>
+        <h3>The Refit</h3>
+      </div>
+      <p class="opt-thesis">
+        Keep RainViewer and the current look; replace the plumbing. <b>Two imagery layers instead
+        of sixteen, all pixel work off the main thread, and nothing ever refetched without
+        reason.</b> Playback still steps every 10 minutes — but it loads fast and never stutters.
+      </p>
+      <div class="specs">
+        <span class="spec">EFFORT <b>~1–2 wk</b></span>
+        <span class="spec risk-low">RISK <b>LOW</b></span>
+        <span class="spec">NEW INFRA <b>NONE</b></span>
+        <span class="spec">MOTION <b>10-MIN STEPS</b></span>
+      </div>
+      <div class="mock">
+        <div class="stage stage-h"><canvas id="sim1"></canvas>
+          <span class="chip r" id="chip1"><span class="dot" style="background:var(--accent)"></span>LOOP CACHED 16/16</span></div>
+        <div class="tlbar" id="tl1"></div>
+      </div>
+      <div class="opt-cols">
+        <div>
+          <h4>What changes</h4>
+          <ul>
+            <li><b>Two-layer ping-pong.</b> Only the visible frame and the incoming frame exist as Cesium layers; frames swap <i>in place</i> via the provider's time-templated reload — the same flicker-free hook Cesium's own time-dynamic WMTS uses, which keeps old tile textures on screen until replacements are ready. The ×16 pyramid stream disappears.</li>
+            <li><b>Worker recolor.</b> Decode → invert → smooth → palette runs in a Web Worker pool on <code>OffscreenCanvas</code>; tiles arrive as ready <code>ImageBitmap</code>s. Zero main-thread pixel work.</li>
+            <li><b>Decoded-field cache.</b> The inverted dBZ field is cached per tile — a palette switch re-maps from cache instead of refetching the internet.</li>
+            <li><b>Loop warming.</b> The exact tile set the radar layer is rendering is readable off the globe surface — prefetch those URLs for every frame in the loop before autoplay begins; the play button shows a progress ring until the loop is airtight.</li>
+            <li><b>Manifest diffing.</b> New frames append; old frames drop. No more full teardown every poll.</li>
+          </ul>
+        </div>
+        <div class="con">
+          <h4>What it can't fix</h4>
+          <ul>
+            <li>Motion is still 10-minute keyframes with a dissolve — better fed, not smoother.</li>
+            <li>Still hostage to RainViewer's fixed served palette and the inversion hack — and to a provider that just exited the API business. The refit also has to <b>prune what upstream killed</b>: drop the dead Clouds/Combined modes and forecast frames, align <code>RADAR_MAX_LEVEL</code> to the new zoom-7 cap.</li>
+            <li>No cadence upgrade: CONUS stays at 10 min while MRMS publishes every 2.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- OPTION 2 ---------- -->
+    <div class="opt rec" id="opt2">
+      <div class="opt-head">
+        <span class="opt-num">OPTION 2</span>
+        <h3>The Motion Engine</h3>
+        <span class="badge-rec">RECOMMENDED</span>
+      </div>
+      <p class="opt-thesis">
+        Everything in the Refit, plus radar stops being a stack of pictures and becomes
+        <b>data on the GPU: two keyframes and a motion field, blended per-pixel by a shader at
+        any instant in time.</b> Storms drift continuously instead of dissolving in place — the
+        thing zoom.earth's loop has and ours doesn't.
+      </p>
+      <div class="specs">
+        <span class="spec">EFFORT <b>~3–5 wk</b></span>
+        <span class="spec risk-med">RISK <b>MEDIUM</b></span>
+        <span class="spec">NEW INFRA <b>NONE</b></span>
+        <span class="spec">MOTION <b>CONTINUOUS</b></span>
+      </div>
+      <div class="mock">
+        <div class="stage stage-h"><canvas id="sim2"></canvas>
+          <span class="chip r"><span class="dot" style="background:var(--ok)"></span>FLOW-INTERPOLATED</span></div>
+        <div class="tlbar" id="tl2"></div>
+      </div>
+      <div class="opt-cols">
+        <div>
+          <h4>What changes (on top of Option 1)</h4>
+          <ul>
+            <li><b>GPU weather pass.</b> Radar frames upload as raw dBZ data textures; a fragment shader maps them through a 1-D palette LUT texture and blends two keyframes per pixel. Palette switching becomes free and instant. The proven shape is a <b>hybrid</b>: a globe-draped material pass at regional-to-global zooms (Cesium materials accept swappable ImageBitmap sampler uniforms), falling back to the Stage A ping-pong layers when zoomed deep. Stage B proves it before we commit.</li>
+            <li><b>Optical-flow interpolation.</b> A worker computes a coarse motion field between consecutive mosaics (pyramidal Lucas-Kanade on a downsampled luminance mosaic: ~30–300 ms <i>per frame-pair</i>, amortized in the background); the shader warps frame A forward and frame B backward along it — storms <i>move</i> between keyframes instead of crossfading. Per displayed frame the warp costs ~3 texture taps: &lt;1 ms of GPU.</li>
+            <li><b>Proven, not exotic.</b> Dark Sky shipped exactly this (server velocity textures, client warp), and an open-source Home Assistant weather card runs worker-side Lucas-Kanade over RainViewer tiles in production today. Because both endpoints of every blend are observed truth, even mediocre flow looks right.</li>
+            <li><b>The forecast comes back.</b> RainViewer killed its nowcast in Jan 2026 — but the same flow field, extrapolated forward, regenerates a +30–60 min advection nowcast on the client. We rebuild upstream's dead feature ourselves, clearly flagged as forecast.</li>
+            <li><b>A continuous timeline.</b> Time is a float, not an index of 16. Scrubbing is perfectly fluid; playback speed becomes a control, not a constant.</li>
+            <li><b>Data diversification, zero infra.</b> Iowa Environmental Mesonet serves ready-made NEXRAD/MRMS composite tiles at 5-min cadence for CONUS — a free, no-key second source the engine can prefer over RainViewer where it's better, straight from the browser.</li>
+            <li><b>Graceful fallback.</b> If flow fails or WebGL context is lost, the engine degrades to Option 1's dissolve — never to a blank layer.</li>
+          </ul>
+        </div>
+        <div class="con">
+          <h4>What it can't fix</h4>
+          <ul>
+            <li>Interpolation is perceptual, not forecast-grade — between-frame motion is a reconstruction, flagged as such in the UI.</li>
+            <li>Global coverage still leans on RainViewer's shrunken free tier (10-min, past-only, zoom 7); IEM is a university service run on goodwill, not an SLA.</li>
+            <li>No real snow/mix typing — that needs Option 3's data.</li>
+            <li>The custom Cesium render path is the risk concentration — it needs a spike week before committing.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- OPTION 3 ---------- -->
+    <div class="opt" id="opt3">
+      <div class="opt-head">
+        <span class="opt-num">OPTION 3</span>
+        <h3>The First-Party Pipeline</h3>
+      </div>
+      <p class="opt-thesis">
+        The Motion Engine, fed by our own data. <b>A server-side ingest worker turns NOAA MRMS
+        (2-minute, 1-km CONUS) and a global mosaic into first-party data tiles with motion
+        fields and precipitation type</b> — the layer stops being a RainViewer skin and becomes
+        an owned capability.
+      </p>
+      <div class="specs">
+        <span class="spec">EFFORT <b>~6–10 wk</b></span>
+        <span class="spec risk-high">RISK <b>HIGH</b></span>
+        <span class="spec">NEW INFRA <b>WORKER + OBJECT STORAGE</b></span>
+        <span class="spec">MOTION <b>CONTINUOUS · 2-MIN DATA</b></span>
+      </div>
+      <div class="mock">
+        <div class="stage stage-h"><canvas id="sim3"></canvas>
+          <span class="chip r"><span class="dot" style="background:var(--warn)"></span>MRMS 2-MIN · CELL TRACKING</span></div>
+        <div class="tlbar" id="tl3"></div>
+      </div>
+      <div class="opt-cols">
+        <div>
+          <h4>What changes (on top of Option 2)</h4>
+          <ul>
+            <li><b>MRMS ingest — verified viable this week.</b> NOAA's MRMS mirror on AWS S3 publishes CONUS composites every 2 minutes, ~1–2.5 min behind real time, 0.2–1.6 MB gzipped GRIB2 per frame, <code>Access-Control-Allow-Origin: *</code>, public domain. A scheduled worker decodes and emits data-encoded imagery — real dBZ, no palette inversion, 5× the temporal resolution. At this size, ingest is &lt;5% of one vCPU.</li>
+            <li><b>The CONUS shortcut.</b> MRMS is one 7000×3500 grid — the ingest can emit a <i>single</i> value-encoded WebP per frame and drape it as one Cesium imagery rectangle. No tile pyramid, no tile server: object storage + CDN and done. (Content-hash URLs, immutable forever — zoom.earth's exact caching trick. Mobile GPUs cap textures at 4096px, so ship a half-res variant or a 2×2 split for them.)</li>
+            <li><b>Global merge.</b> RainViewer (or per-country radars, or a commercial feed like Rainbow.ai's raw-dBZ tiles) fills the rest of the world — one seamless field with per-region provenance.</li>
+            <li><b>Precip typing.</b> MRMS PrecipFlag distinguishes rain / snow / mix — the snow ramp in the palette finally gets real data.</li>
+            <li><b>Server-side flow fields.</b> Motion vectors precompute once per frame-pair for everyone, instead of per-client.</li>
+            <li><b>Storm-cell layer.</b> Cell detection on the ingest side unlocks tracked cells with motion vectors and intensity trends as a click-able overlay.</li>
+          </ul>
+        </div>
+        <div class="con">
+          <h4>What it costs</h4>
+          <ul>
+            <li>Real infrastructure: a worker process, object storage/CDN, monitoring — on an app that today runs on one 512 MB Heroku dyno that also hosts AIS/lightning collectors. Decoding a 7000×3500 grid peaks at 100–200 MB, so ingest lives on a worker process or a small VPS, not the web dyno. (The single-image drape trick shrinks the serving side, but doesn't erase ops.)</li>
+            <li>An operational commitment: MRMS outages, format drift, and storage growth become our pages, not RainViewer's.</li>
+            <li>Longest time-to-value; nothing ships until the pipeline is trustworthy. Prior art exists to lean on (LibreWXR, an AGPL self-hosted RainViewer-compatible pipeline), but it's still ours to run.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================= comparison ======================= -->
+  <section id="compare">
+    <p class="kicker">Side by side</p>
+    <h2>The trade in one table</h2>
+    <div class="cmp-scroll" style="margin-top:18px">
+      <table class="cmp">
+        <thead>
+          <tr>
+            <th></th><th>Today</th><th>Opt 1 · Refit</th>
+            <th class="rec-col">Opt 2 · Motion Engine</th><th>Opt 3 · Pipeline</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>First paint at view</td><td class="n">5–15 s, popcorn</td><td class="y">&lt;2 s coarse-first</td><td class="rec-col y">&lt;2 s coarse-first</td><td class="y">&lt;2 s coarse-first</td></tr>
+          <tr><td>Playback motion</td><td class="n">10-min steps, dissolve</td><td class="m">10-min steps, clean dissolve</td><td class="rec-col y">Continuous, flow-warped</td><td class="y">Continuous, 2-min keyframes</td></tr>
+          <tr><td>Scrubbing</td><td class="n">Snaps to 16 frames</td><td class="m">Snaps, but instant</td><td class="rec-col y">Any instant, fluid</td><td class="y">Any instant, fluid</td></tr>
+          <tr><td>Palette switch</td><td class="n">Refetches everything</td><td class="y">Re-map from cache</td><td class="rec-col y">Instant (LUT texture)</td><td class="y">Instant (LUT texture)</td></tr>
+          <tr><td>Main-thread pixel work</td><td class="n">All of it</td><td class="y">None (workers)</td><td class="rec-col y">None (GPU + workers)</td><td class="y">None (GPU)</td></tr>
+          <tr><td>CONUS data cadence</td><td class="n">10 min</td><td class="n">10 min</td><td class="rec-col m">5 min (IEM), continuous feel</td><td class="y">2 min (MRMS)</td></tr>
+          <tr><td>Forecast frames</td><td class="n">Dead (upstream killed nowcast)</td><td class="n">Pruned</td><td class="rec-col y">+30–60 min flow nowcast</td><td class="y">+60 min server nowcast</td></tr>
+          <tr><td>Snow / precip type</td><td class="n">No signal</td><td class="n">No signal</td><td class="rec-col n">No signal</td><td class="y">Real (PrecipFlag)</td></tr>
+          <tr><td>Storm-cell tracking</td><td class="n">—</td><td class="n">—</td><td class="rec-col m">Client-side, basic</td><td class="y">Server-side, tracked</td></tr>
+          <tr><td>New infrastructure</td><td class="y">—</td><td class="y">None</td><td class="rec-col y">None</td><td class="n">Worker + storage/CDN</td></tr>
+          <tr><td>Effort</td><td class="y">—</td><td class="y">~1–2 wk</td><td class="rec-col m">~3–5 wk</td><td class="n">~6–10 wk + ops</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">First-paint figures are estimates for a typical regional view on a warm CDN —
+      Stage A instruments the real numbers before/after so the improvement is measured, not
+      asserted.</p>
+  </section>
+
+  <!-- ======================= verdict ======================= -->
+  <section id="verdict">
+    <p class="kicker">Recommendation</p>
+    <h2>Option 2, staged to pay out early</h2>
+    <div class="verdict">
+      <h3>Build the Motion Engine — but ship the Refit on the way.</h3>
+      <p>
+        Option 1 alone fixes the complaints but leaves the experience a slideshow built on a
+        provider that's winding down; Option 3 is the right long-term destination but stakes weeks
+        on infrastructure before anyone sees a pixel improve. <b>Option 2 hits the quality bar that
+        motivated this rework — motion indistinguishable from zoom.earth's — with zero new
+        infrastructure,</b> it resurrects the forecast RainViewer killed, and it's built in stages
+        that each ship standalone value. Critically, its GPU engine consumes <i>data textures +
+        flow fields</i> — exactly what Option 3's pipeline would emit — so when 2-minute MRMS or
+        precip typing earn priority, the pipeline slots in under an unchanged renderer. That's the
+        path zoom.earth itself took: they rendered RainViewer tiles until mid-2025, then swapped
+        their own pipeline in behind an established client. Choosing 2 keeps 3 open; choosing 1
+        doesn't.
+      </p>
+      <div class="phases">
+        <div class="phase">
+          <div class="tag">STAGE 0<small>half a day</small></div>
+          <div class="what"><b>Production truth first.</b> Five research claims are load-bearing and this sandbox couldn't verify them directly: fetch the live RainViewer manifest (are <code>nowcast[]</code> and <code>satellite.infrared[]</code> already empty?), request a z8/z9 tile (404 or served?), watch for 429 rate-limiting during a rebuild, probe IEM's tile CORS from a browser, and spike the in-place layer-reload swap. Half a day of measurement arbitrates everything below.</div>
+        </div>
+        <div class="phase">
+          <div class="tag">STAGE A<small>week 1–2</small></div>
+          <div class="what"><b>The Refit shipped whole:</b> two-layer ping-pong, worker recolor, decoded-field cache, loop warming, manifest diffing. Users feel it immediately — fast first paint, zero jank, instant palette switches.</div>
+        </div>
+        <div class="phase">
+          <div class="tag">STAGE B<small>week 2–3</small></div>
+          <div class="what"><b>GPU spike, de-risked:</b> a one-week proof that a custom render path can composite two dBZ textures + LUT on the globe inside Cesium 1.121. Go/no-go checkpoint — a "no" leaves Stage A as a finished, improved radar.</div>
+        </div>
+        <div class="phase">
+          <div class="tag">STAGE C<small>week 3–5</small></div>
+          <div class="what"><b>Motion:</b> worker-side optical flow between mosaics, shader warp-dissolve, continuous timeline + fluid scrubbing, flow-extrapolated +30–60 min nowcast (replacing the one upstream killed), IEM 5-min CONUS source, dissolve fallback. This is the zoom.earth moment.</div>
+        </div>
+        <div class="phase">
+          <div class="tag">LATER<small>optional</small></div>
+          <div class="what"><b>Option 3 as an upgrade, not a rewrite:</b> when 2-min CONUS cadence, real snow typing, or cell tracking earn priority, the ingest pipeline feeds the same engine.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="prose" id="footNotes">
+      <p><b style="color:var(--muted)">Honesty note.</b> The mockups are procedural simulations
+      (synthetic storm field, real “storm” palette) built to demonstrate temporal behavior —
+      stepped dissolve vs. flow interpolation vs. 2-minute cadence — not real radar data.</p>
+      <p id="sourcesNote"><b style="color:var(--muted)">Evidence base.</b> Current-code findings
+      reference <code>client/src/layers/radar/</code> (RadarLayer.tsx, RainViewerImagery.ts,
+      recolor.ts) on main. RainViewer's January 2026 API cuts: their transition FAQ and API docs
+      (re-verify from production; this sandbox's egress proxy blocks the host). zoom.earth
+      internals: public integrations against <code>tiles.zoom.earth</code> (times/radar.json
+      manifest, content-hashed WebP frame tiles), which also document their pre-2025 use of
+      RainViewer. MRMS: probed live this session on the AWS Open Data mirror
+      (<code>noaa-mrms-pds.s3.amazonaws.com</code>) — 2-min cadence observed, ~1–2.5 min ingest
+      lag, CORS <code>*</code>, archive to 2020. IEM tile cadence and usage policy should be
+      confirmed with mesonet.agron.iastate.edu before Stage C leans on it.</p>
+    </div>
+  </footer>
+</div>
+
+<script>
+/* ==========================================================================
+   Procedural radar mockup engine. Simulates a drifting, evolving storm field
+   (fractal value noise advected by a wind vector) rendered through the app's
+   real "storm" palette, with three temporal behaviors:
+     stepped : 10-min keyframes + alpha dissolve   (today / Option 1)
+     fluid   : continuous field(t)                 (Option 2)
+     hires   : continuous + detail + cell markers  (Option 3)
+   ========================================================================== */
+(function () {
+  'use strict';
+  var REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ---- deterministic value noise -------------------------------------------
+  var PERM = new Uint8Array(512);
+  (function () {
+    var p = new Uint8Array(256), i, j, t, seed = 1337;
+    function rnd() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+    for (i = 0; i < 256; i++) p[i] = i;
+    for (i = 255; i > 0; i--) { j = (rnd() * (i + 1)) | 0; t = p[i]; p[i] = p[j]; p[j] = t; }
+    for (i = 0; i < 512; i++) PERM[i] = p[i & 255];
+  })();
+  function lat(ix, iy, iz) { return PERM[(PERM[(PERM[ix & 255] + iy) & 255] + iz) & 255] / 255; }
+  function fade(t) { return t * t * (3 - 2 * t); }
+  function vnoise3(x, y, z) {
+    var xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+    var xf = x - xi, yf = y - yi, zf = z - zi;
+    var u = fade(xf), v = fade(yf), w = fade(zf);
+    var c000 = lat(xi, yi, zi), c100 = lat(xi + 1, yi, zi);
+    var c010 = lat(xi, yi + 1, zi), c110 = lat(xi + 1, yi + 1, zi);
+    var c001 = lat(xi, yi, zi + 1), c101 = lat(xi + 1, yi, zi + 1);
+    var c011 = lat(xi, yi + 1, zi + 1), c111 = lat(xi + 1, yi + 1, zi + 1);
+    var x00 = c000 + (c100 - c000) * u, x10 = c010 + (c110 - c010) * u;
+    var x01 = c001 + (c101 - c001) * u, x11 = c011 + (c111 - c011) * u;
+    var y0 = x00 + (x10 - x00) * v, y1 = x01 + (x11 - x01) * v;
+    return y0 + (y1 - y0) * w;
+  }
+
+  // ---- storm field: pseudo-dBZ 0..70 at map coords (0..1), t in minutes ----
+  var WIND_X = 0.0135, WIND_Y = -0.0042, EVOLVE = 0.011;
+  function sstep(e0, e1, x) {
+    var t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+    return t * t * (3 - 2 * t);
+  }
+  function fieldDbz(nx, ny, t, detail) {
+    var ax = nx - WIND_X * t, ay = ny - WIND_Y * t, az = t * EVOLVE;
+    var env = vnoise3(ax * 2.1 + 7.3, ay * 2.1 + 3.1, az * 0.5);
+    env = Math.max(0, (env - 0.40) / 0.60);
+    if (env <= 0.003) return 0;
+    var b = vnoise3(ax * 5.5, ay * 5.5, az) * 0.62
+          + vnoise3(ax * 11, ay * 11, az * 1.6) * 0.27
+          + vnoise3(ax * 22, ay * 22, az * 2.2) * 0.11;
+    if (detail) b = b * 0.88 + vnoise3(ax * 40, ay * 40, az * 2.8) * 0.12;
+    var v = env * sstep(0.31, 0.78, b);
+    if (v <= 0.004) return 0;
+    // body ramp + a "core kicker" so convective cores burn through the palette
+    return Math.min(70, v * 90 + sstep(0.56, 0.76, b) * env * 50);
+  }
+
+  // ---- the app's real "storm" palette (palettes.ts) ------------------------
+  var STOPS = [
+    [2,120,175,255,0.0],[8,100,152,250,0.42],[16,68,122,245,0.62],
+    [24,52,96,238,0.74],[30,122,88,240,0.8],[35,205,72,195,0.86],
+    [40,242,64,120,0.9],[45,248,100,52,0.93],[50,252,160,46,0.96],
+    [55,255,215,75,0.98],[62,255,246,195,0.99],[70,255,255,255,1.0]
+  ];
+  var LUT = new Uint8ClampedArray(141 * 4);
+  (function () {
+    for (var i = 0; i <= 140; i++) {
+      var d = i / 2;
+      if (d < 3) continue;
+      var s0 = STOPS[0], s1 = STOPS[STOPS.length - 1], k;
+      for (k = 0; k < STOPS.length - 1; k++) {
+        if (d <= STOPS[k + 1][0]) { s0 = STOPS[k]; s1 = STOPS[k + 1]; break; }
+      }
+      var t = s1[0] === s0[0] ? 1 : Math.min(1, Math.max(0, (d - s0[0]) / (s1[0] - s0[0])));
+      LUT[i*4]   = s0[1] + (s1[1] - s0[1]) * t;
+      LUT[i*4+1] = s0[2] + (s1[2] - s0[2]) * t;
+      LUT[i*4+2] = s0[3] + (s1[3] - s0[3]) * t;
+      LUT[i*4+3] = (s0[4] + (s1[4] - s0[4]) * t) * 255;
+    }
+  })();
+
+  // ---- shared low-res basemap raster (computed once) -----------------------
+  var BASE_W = 240, BASE_H = 150, baseRaster = null;
+  function getBaseRaster() {
+    if (baseRaster) return baseRaster;
+    baseRaster = document.createElement('canvas');
+    baseRaster.width = BASE_W; baseRaster.height = BASE_H;
+    var ctx = baseRaster.getContext('2d');
+    var img = ctx.createImageData(BASE_W, BASE_H), d = img.data, x, y, i = 0;
+    for (y = 0; y < BASE_H; y++) {
+      for (x = 0; x < BASE_W; x++, i += 4) {
+        var v = vnoise3(x / BASE_W * 3.1 + 40.7, y / BASE_H * 2.2 + 11.9, 0.5)
+              + vnoise3(x / BASE_W * 7.4 + 40.7, y / BASE_H * 5.1 + 11.9, 1.5) * 0.25;
+        if (v > 0.66) { d[i] = 16; d[i+1] = 21; d[i+2] = 29; }       // land
+        else { d[i] = 7; d[i+1] = 10; d[i+2] = 16; }                 // water
+        d[i+3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return baseRaster;
+  }
+  var CITIES = [
+    [0.18,0.30,'FSD'],[0.34,0.44,'OMA'],[0.52,0.58,'MCI'],[0.71,0.40,'DSM'],
+    [0.84,0.66,'STL'],[0.24,0.74,'ICT'],[0.62,0.16,'MSP'],[0.90,0.22,'MSN']
+  ];
+
+  // ---- field raster: renders field(t) into a low-res canvas, cached by t ---
+  function FieldRaster(w, h, detail) {
+    this.w = w; this.h = h; this.detail = detail;
+    this.canvas = document.createElement('canvas');
+    this.canvas.width = w; this.canvas.height = h;
+    this.ctx = this.canvas.getContext('2d');
+    this.img = this.ctx.createImageData(w, h);
+    this.t = null;
+  }
+  FieldRaster.prototype.render = function (t) {
+    if (this.t === t) return this.canvas;
+    var d = this.img.data, w = this.w, h = this.h, x, y, i = 0;
+    for (y = 0; y < h; y++) {
+      var ny = y / h;
+      for (x = 0; x < w; x++, i += 4) {
+        var dbz = fieldDbz(x / w, ny, t, this.detail);
+        if (dbz < 3) { d[i+3] = 0; continue; }
+        var li = Math.min(140, (dbz * 2) | 0) * 4;
+        d[i] = LUT[li]; d[i+1] = LUT[li+1]; d[i+2] = LUT[li+2]; d[i+3] = LUT[li+3];
+      }
+    }
+    this.ctx.putImageData(this.img, 0, 0);
+    this.t = t;
+    return this.canvas;
+  };
+
+  // ---- cell detection (Option 3 garnish) -----------------------------------
+  function findCells(t) {
+    var G = 26, cells = [], gx, gy;
+    for (gy = 2; gy < G - 2; gy++) {
+      for (gx = 2; gx < G - 2; gx++) {
+        var v = fieldDbz(gx / G, gy / G, t, true);
+        if (v < 45) continue;
+        var isMax = true, dx, dy;
+        for (dy = -1; dy <= 1 && isMax; dy++) for (dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          if (fieldDbz((gx + dx) / G, (gy + dy) / G, t, true) > v) { isMax = false; break; }
+        }
+        if (isMax) cells.push({ x: gx / G, y: gy / G, dbz: v });
+      }
+    }
+    cells.sort(function (a, b) { return b.dbz - a.dbz; });
+    return cells.slice(0, 3);
+  }
+
+  // ---- sim -----------------------------------------------------------------
+  var FLUID_Q = 0.25; // fluid recompute quantum, sim-minutes
+  function RadarSim(canvas, opts) {
+    this.canvas = canvas;
+    this.opts = opts || {};
+    this.mode = this.opts.mode || 'fluid';
+    this.stepMin = this.opts.stepMin || 10;
+    this.range = this.opts.range || [-120, 30];
+    this.t = this.opts.startT != null ? this.opts.startT : -60;
+    this.speed = this.opts.speed || 7; // sim-minutes per real second
+    this.playing = !REDUCED;
+    this.visible = true;
+    this.loadMode = null; this.loadT0 = 0; this.tiles = null;
+    this.dpr = Math.min(1.5, window.devicePixelRatio || 1);
+    var rw = this.opts.resW || 176;
+    this.fA = new FieldRaster(rw, Math.round(rw * 0.625), this.mode === 'hires');
+    this.fB = this.mode === 'stepped' ? new FieldRaster(rw, Math.round(rw * 0.625), false) : null;
+    this.base = document.createElement('canvas');
+    this.cells = []; this.cellsT = -1e9;
+    this.listeners = [];
+  }
+  RadarSim.prototype.onTime = function (fn) { this.listeners.push(fn); };
+  RadarSim.prototype.setT = function (t, snap) {
+    if (snap) t = Math.round(t / this.stepMin) * this.stepMin;
+    this.t = Math.min(this.range[1], Math.max(this.range[0], t));
+  };
+  RadarSim.prototype.sizeToClient = function () {
+    var c = this.canvas, dpr = this.dpr;
+    var w = Math.max(1, Math.round(c.clientWidth * dpr));
+    var h = Math.max(1, Math.round(c.clientHeight * dpr));
+    if (c.width !== w || c.height !== h) {
+      c.width = w; c.height = h;
+      this.base.width = w; this.base.height = h;
+      var b = this.base.getContext('2d');
+      b.imageSmoothingEnabled = true; b.imageSmoothingQuality = 'high';
+      b.drawImage(getBaseRaster(), 0, 0, w, h);
+      b.strokeStyle = 'rgba(255,255,255,0.045)'; b.lineWidth = 1;
+      var g;
+      for (g = 0.5; g < w; g += w / 8) { b.beginPath(); b.moveTo(g, 0); b.lineTo(g, h); b.stroke(); }
+      for (g = 0.5; g < h; g += h / 5) { b.beginPath(); b.moveTo(0, g); b.lineTo(w, g); b.stroke(); }
+      b.font = (9 * dpr) + 'px ui-monospace, monospace';
+      for (var i = 0; i < CITIES.length; i++) {
+        var ct = CITIES[i], x = ct[0] * w, y = ct[1] * h;
+        b.fillStyle = 'rgba(220,230,245,0.85)';
+        b.beginPath(); b.arc(x, y, 1.6 * dpr, 0, 6.2832); b.fill();
+        b.fillStyle = 'rgba(150,165,190,0.75)';
+        b.fillText(ct[2], x + 4 * dpr, y - 4 * dpr);
+      }
+    }
+  };
+  RadarSim.prototype.replayLoad = function (mode) {
+    this.loadMode = mode; this.loadT0 = performance.now();
+    if (mode === 'popcorn') {
+      this.tiles = [];
+      var seed = 987, i;
+      function rnd() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+      for (i = 0; i < 40; i++) {
+        var r = rnd();
+        this.tiles.push(r < 0.8 ? 300 + r * 3000 : 3200 + r * 3000);
+      }
+    }
+  };
+  RadarSim.prototype.step = function (dtMs) {
+    if (this.playing) {
+      this.t += (dtMs / 1000) * this.speed;
+      if (this.t > this.range[1]) this.t = this.range[0];
+    }
+    for (var i = 0; i < this.listeners.length; i++) this.listeners[i](this.t, this);
+  };
+  RadarSim.prototype.draw = function () {
+    this.sizeToClient();
+    var c = this.canvas, ctx = c.getContext('2d'), w = c.width, h = c.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(this.base, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    var t = this.t, A = 0.92, lp = 1;
+    if (this.loadMode) {
+      lp = Math.min(1, (performance.now() - this.loadT0) / (this.loadMode === 'popcorn' ? 6400 : 950));
+      if (lp >= 1) this.loadMode = null;
+    }
+
+    if (this.mode === 'stepped') {
+      var q = Math.floor(t / this.stepMin) * this.stepMin;
+      var mix = Math.min(1, ((t - q) / this.stepMin) / 0.9);
+      ctx.globalAlpha = A;
+      ctx.drawImage(this.fA.render(q), 0, 0, w, h);
+      ctx.globalAlpha = A * mix;
+      ctx.drawImage(this.fB.render(q + this.stepMin), 0, 0, w, h);
+    } else {
+      ctx.globalAlpha = A;
+      ctx.drawImage(this.fA.render(Math.round(t / FLUID_Q) * FLUID_Q), 0, 0, w, h);
+    }
+    ctx.globalAlpha = 1;
+
+    if (this.loadMode === 'popcorn' && this.tiles) {
+      var elapsed = performance.now() - this.loadT0, i2, tw = w / 8, th = h / 5;
+      for (i2 = 0; i2 < 40; i2++) {
+        if (elapsed < this.tiles[i2]) {
+          var tx = (i2 % 8) * tw, ty = Math.floor(i2 / 8) * th;
+          ctx.fillStyle = '#0a0e14';
+          ctx.fillRect(tx, ty, tw + 1, th + 1);
+          ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+          ctx.strokeRect(tx + 0.5, ty + 0.5, tw, th);
+        }
+      }
+    } else if (this.loadMode === 'blurup') {
+      var tmp = RadarSim._tmp || (RadarSim._tmp = document.createElement('canvas'));
+      tmp.width = 22; tmp.height = 14;
+      var tc = tmp.getContext('2d');
+      tc.clearRect(0, 0, 22, 14);
+      tc.drawImage(this.fA.canvas, 0, 0, 22, 14);
+      ctx.globalAlpha = (1 - lp) * A;
+      ctx.drawImage(tmp, 0, 0, w, h);
+      ctx.globalAlpha = 1;
+    }
+
+    if (this.mode === 'hires' && this.opts.showCells !== false) {
+      if (Math.abs(t - this.cellsT) > 1.5) { this.cells = findCells(t); this.cellsT = t; }
+      var dpr = this.dpr, k;
+      for (k = 0; k < this.cells.length; k++) {
+        var cell = this.cells[k], x = cell.x * w, y = cell.y * h;
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+        ctx.lineWidth = 1.2 * dpr;
+        ctx.strokeRect(x - 5 * dpr, y - 5 * dpr, 10 * dpr, 10 * dpr);
+        var vl = Math.hypot(WIND_X, WIND_Y);
+        ctx.beginPath();
+        ctx.moveTo(x + 7 * dpr, y);
+        ctx.lineTo(x + 7 * dpr + (WIND_X / vl) * 15 * dpr, y + (WIND_Y / vl) * 15 * dpr);
+        ctx.stroke();
+        ctx.font = '600 ' + (8.5 * dpr) + 'px ui-monospace, monospace';
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.fillText(Math.round(cell.dbz) + 'dBZ', x + 8 * dpr, y + 13 * dpr);
+      }
+    }
+  };
+
+  /* ==================== timeline chrome ==================== */
+  function fmtRel(t) {
+    var m = Math.round(t);
+    if (m === 0) return { t: 'NOW', s: 'observed', fc: false };
+    var sign = m > 0 ? '+' : '−', a = Math.abs(m);
+    var txt = a < 60 ? sign + a + 'm' : sign + Math.floor(a / 60) + 'h' + String(a % 60).padStart(2, '0');
+    return { t: txt, s: m > 0 ? 'forecast' : 'observed', fc: m > 0 };
+  }
+  function makeTimeline(el, sim, opts) {
+    opts = opts || {};
+    var range = sim.range, span = range[1] - range[0];
+    var pct = function (t) { return ((t - range[0]) / span) * 100; };
+    el.innerHTML = '';
+    var play = document.createElement('button');
+    play.className = 'tl-play';
+    play.setAttribute('aria-label', 'Play or pause');
+    function playIcon() {
+      play.innerHTML = sim.playing
+        ? '<svg width="11" height="12" viewBox="0 0 11 12" fill="currentColor"><rect x="1" y="1" width="3.2" height="10" rx="1"/><rect x="6.8" y="1" width="3.2" height="10" rx="1"/></svg>'
+        : '<svg width="11" height="12" viewBox="0 0 11 12" fill="currentColor"><path d="M1.5 1.2v9.6c0 .8.9 1.3 1.6.9l7.2-4.8c.6-.4.6-1.4 0-1.8L3.1.3c-.7-.4-1.6.1-1.6.9z"/></svg>';
+    }
+    playIcon();
+    play.addEventListener('click', function () { sim.playing = !sim.playing; playIcon(); });
+
+    var zone = document.createElement('div');
+    zone.className = 'tl-track-zone';
+    var track = document.createElement('div');
+    track.className = 'tl-track';
+    var buffer = document.createElement('div'); buffer.className = 'tl-buffer';
+    var hatch = document.createElement('div'); hatch.className = 'tl-hatch';
+    hatch.style.width = (100 - pct(0)) + '%';
+    var progress = document.createElement('div'); progress.className = 'tl-progress';
+    var now = document.createElement('div'); now.className = 'tl-now';
+    now.style.left = pct(0) + '%';
+    track.appendChild(buffer); track.appendChild(hatch); track.appendChild(progress); track.appendChild(now);
+    if (opts.snap) {
+      for (var tt = range[0]; tt <= range[1]; tt += sim.stepMin) {
+        var tick = document.createElement('div');
+        tick.className = 'tl-tick';
+        tick.style.left = pct(tt) + '%';
+        track.appendChild(tick);
+      }
+    }
+    var handle = document.createElement('div'); handle.className = 'tl-handle';
+    track.appendChild(handle);
+    var labels = document.createElement('div');
+    labels.className = 'tl-labels';
+    labels.style.position = 'relative';
+    labels.innerHTML = '<span>−2h</span>' +
+      '<span style="position:absolute;left:' + pct(0) + '%;transform:translateX(-50%);color:rgba(223,231,242,0.55)">now</span>' +
+      '<span>+30m</span>';
+    zone.appendChild(track); zone.appendChild(labels);
+
+    var read = document.createElement('div');
+    read.className = 'tl-read';
+    read.innerHTML = '<div class="t"></div><div class="s"></div>';
+    var readT = read.children[0], readS = read.children[1];
+
+    el.appendChild(play); el.appendChild(zone); el.appendChild(read);
+
+    var dragging = false;
+    function seek(clientX) {
+      var r = track.getBoundingClientRect();
+      var frac = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+      sim.setT(range[0] + frac * span, opts.snap);
+    }
+    zone.addEventListener('pointerdown', function (e) {
+      dragging = true;
+      zone.setPointerCapture(e.pointerId);
+      sim.playing = false; playIcon();
+      seek(e.clientX);
+      e.preventDefault();
+    });
+    zone.addEventListener('pointermove', function (e) { if (dragging) seek(e.clientX); });
+    zone.addEventListener('pointerup', function () { dragging = false; });
+
+    sim.onTime(function (t) {
+      var p = pct(t);
+      progress.style.width = p + '%';
+      handle.style.left = p + '%';
+      var f = fmtRel(t);
+      if (readT.textContent !== f.t) {
+        readT.textContent = f.t;
+        readS.textContent = f.s;
+        readS.className = 's' + (f.fc ? ' fc' : '');
+      }
+    });
+  }
+
+  /* ==================== page wiring ==================== */
+  var sims = [];
+  function addSim(id, opts) {
+    var canvas = document.getElementById(id);
+    if (!canvas) return null;
+    var sim = new RadarSim(canvas, opts);
+    sims.push(sim);
+    return sim;
+  }
+
+  // hero wipe: stepped (top, clipped) vs fluid (below); one clock drives both
+  var heroFluid = addSim('heroFluid', { mode: 'fluid', startT: -60 });
+  var heroStepped = addSim('heroStepped', { mode: 'stepped', startT: -60 });
+  heroStepped.playing = false; // driven by heroFluid's clock
+  heroFluid.onTime(function (t) { heroStepped.t = t; });
+  makeTimeline(document.getElementById('heroTl'), heroFluid, {});
+
+  var wipe = document.getElementById('wipe');
+  var wipeBar = document.getElementById('wipeBar');
+  var wipeX = 0.5;
+  function setWipe(x) {
+    wipeX = Math.min(0.98, Math.max(0.02, x));
+    heroStepped.canvas.style.clipPath = 'inset(0 ' + ((1 - wipeX) * 100) + '% 0 0)';
+    wipeBar.style.left = 'calc(' + (wipeX * 100) + '% - 1px)';
+  }
+  setWipe(0.5);
+  var wipeDrag = false;
+  wipe.addEventListener('pointerdown', function (e) {
+    wipeDrag = true; wipe.setPointerCapture(e.pointerId);
+    setWipe((e.clientX - wipe.getBoundingClientRect().left) / wipe.clientWidth);
+  });
+  wipe.addEventListener('pointermove', function (e) {
+    if (wipeDrag) setWipe((e.clientX - wipe.getBoundingClientRect().left) / wipe.clientWidth);
+  });
+  wipe.addEventListener('pointerup', function () { wipeDrag = false; });
+  wipe.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowLeft') { setWipe(wipeX - 0.05); e.preventDefault(); }
+    if (e.key === 'ArrowRight') { setWipe(wipeX + 0.05); e.preventDefault(); }
+  });
+
+  // cold-start duo
+  var loadToday = addSim('loadToday', { mode: 'stepped', startT: -40, resW: 132 });
+  var loadNew = addSim('loadNew', { mode: 'fluid', startT: -40, resW: 132 });
+  function replayLoads() {
+    loadToday.replayLoad('popcorn');
+    loadNew.replayLoad('blurup');
+  }
+  document.getElementById('replayLoad').addEventListener('click', replayLoads);
+  if (!REDUCED) setTimeout(replayLoads, 600);
+
+  // option mockups
+  var sim1 = addSim('sim1', { mode: 'stepped', startT: -60 });
+  makeTimeline(document.getElementById('tl1'), sim1, { snap: true });
+  var sim2 = addSim('sim2', { mode: 'fluid', startT: -60 });
+  makeTimeline(document.getElementById('tl2'), sim2, {});
+  var sim3 = addSim('sim3', { mode: 'hires', startT: -60, resW: 216 });
+  makeTimeline(document.getElementById('tl3'), sim3, {});
+
+  // visibility-scoped ticking
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (en) {
+      for (var i = 0; i < sims.length; i++) {
+        if (sims[i].canvas === en.target) sims[i].visible = en.isIntersecting;
+      }
+    });
+  }, { rootMargin: '80px' });
+  sims.forEach(function (s) { io.observe(s.canvas); });
+
+  var last = performance.now();
+  function tick(nowMs) {
+    var dt = Math.min(80, nowMs - last);
+    last = nowMs;
+    for (var i = 0; i < sims.length; i++) {
+      var s = sims[i];
+      if (!s.visible) continue;
+      s.step(dt);
+      s.draw();
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  // reduced motion: draw one static frame for every sim so nothing is blank
+  if (REDUCED) sims.forEach(function (s) { s.step(0); s.draw(); });
+})();
+</script>
+</body></html>
