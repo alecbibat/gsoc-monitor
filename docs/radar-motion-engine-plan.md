@@ -293,11 +293,103 @@ texture), `imageryOrder.ts`, crisis share components, `EarthTimeBar.tsx`.
 
 ## Stage 0 results
 
-_To be filled in when the diag extension runs in production._
+The diag extension is built and deployed (`GET /api/radar/diag`, `stage0` block).
+**Waiting on a production run** — the dev sandbox's egress proxy still blocks
+rainviewer.com, so the four upstream questions can only be answered from the
+deployed app.
 
 - [ ] Live manifest: nowcast present? IR present? cadence/history:
 - [ ] z8/z9 tile behavior:
 - [ ] Rate-limit observations:
-- [ ] IEM CORS/latency/policy:
-- [ ] `_reload` spike result:
+- [ ] IEM CORS/latency/policy: _(server-side reachability comes back in the diag;
+      the browser CORS probe is still required)_
+- [x] **`_reload` spike result: verified — see below.**
 - [ ] Baseline metrics captured:
+
+### Cesium version correction (affects the whole plan)
+
+The plan was written against **Cesium 1.121**. The repo's `^1.121.1` range
+actually resolves to **1.142.0 (`@cesium/engine` 26.0.0)**, and that is what
+`package-lock.json` pins and what ships. Every load-bearing claim was therefore
+re-verified against 1.142 source:
+
+- **`_reload` exists and is better than assumed.** `GlobeSurfaceTileProvider`
+  assigns `imageryProvider._reload` when a layer is added and clears it on
+  removal. The reload function inserts NEW `TileImagery` skeletons after the
+  existing ones and frees the old ones only once the new ones are ready
+  (`getTileReadyCallback`). So the in-place frame swap is inherently
+  flicker-free — the old frame stays on screen until the new one can replace it.
+  Two caveats for Stage A PR 2: `_reload` is only assigned if `layer.show` was
+  true at add time, and a reload SKIPS any tile that still has a pending
+  loaded-callback, so rapid successive reloads need re-issuing rather than
+  fire-and-forget.
+- **Toggling `show` really is a full teardown**: `_onLayerShownOrHidden` calls
+  `_onLayerAdded`/`_onLayerRemoved` outright. Alpha stays the only safe knob.
+- **`readyPromise` is gone**, and there is still no public "layer ready" event.
+- **`Resource.fetchBlob` returns `undefined` when throttled**, exactly like
+  `fetchImage`. Imagery requests are created with `throttle: false,
+  throttleByServer: true`, so the undefined case is real (the per-server slot
+  limit) and `requestImage` must propagate it synchronously.
+- **`UNPACK_FLIP_Y_WEBGL` is ignored for `ImageBitmap` sources.** Cesium
+  compensates by decoding imagery with `imageOrientation: 'flipY'` and
+  `premultiplyAlpha: false`. Anything handing Cesium a bitmap must match that
+  convention or every tile renders mirrored. This is why `colorizeField` writes
+  its rows bottom-up (canvas sources, i.e. the v1 fallback, are flipped at
+  upload instead and must NOT be pre-flipped).
+
+## Stage A results
+
+### PR 1 — worker recolor pipeline (landed)
+
+**Deviations from the plan, and why**
+
+- **`radarField.ts` lives at `layers/radar/`, not under `worker/`.** It is
+  shared math: the worker and the v1 main-thread fallback both drive it, so
+  there is exactly one definition of the palette inversion and the blur
+  schedule. `recolor.ts` now imports from it instead of duplicating the anchor
+  table.
+- **The blur is three box passes, not a canvas `filter: blur()`.** `ctx.filter`
+  is unavailable/slow in a worker, and the SVG filter spec defines
+  `feGaussianBlur` in terms of exactly this three-box approximation — so this is
+  what the main-thread path was already computing. Measured against a true
+  Gaussian on a clamped-edge disc: max error 3.0/255 at σ=1.5, 5.8 at σ=2.0, 5.1
+  at σ=4.0, mass preserved within 0.06%. Running sums make it O(1) per pixel
+  instead of the ~25-tap kernel σ=4 would need.
+- **No snow plane in the cached field.** The served palette carries no snow
+  signal (the v1 snow branch is already dead code), so the field is the planned
+  magnitude+presence pair with nothing wasted.
+- **Two watchdogs were added that the plan did not call for.** Justified below.
+
+**The hang that forced the watchdogs.** Under stress, a worker occasionally
+stopped answering: one run had worker 0 resolve 0 tiles, another had worker 1
+resolve 25 of 30 and then stall. Because the worker drains its queue serially, a
+single `createImageBitmap` that never settles strands every tile queued behind
+it — and because Cesium will not render a globe tile until EVERY layer's imagery
+for it is ready, one stuck tile blanks the **entire globe**, not one tile. Two
+bounds now make that impossible:
+
+- worker side: each decode/encode is raced against `DECODE_TIMEOUT_MS` (8 s) so a
+  hung call throws instead of wedging the queue;
+- main-thread side: every job is bounded by `TILE_TIMEOUT_MS` (15 s), covering a
+  genuinely dead worker or a dropped `messageerror`, and rejecting into the
+  existing "degrade to a transparent tile" contract.
+
+Reproduced on the production build before the fix; 8/8 clean after.
+
+**Measured (headless Chromium against synthetic RainViewer-palette tiles, since
+the sandbox cannot reach the real CDN):**
+
+| Check | v1 | v2 |
+|---|---|---|
+| Palette switch → network tile requests | **36** | **0** |
+| Globe render vs v1 (differing pixels, globe region) | — | **0.67%**, mean 0.61/255 (terminator drift between runs) |
+| Blank/partial globes over 8 consecutive loads | — | **0** |
+
+The zero-network palette switch is the criterion this PR exists to hit: v1 tears
+down and refetches the whole layer stack, v2 re-runs the LUT over cached fields.
+
+**Still open for later PRs**: first-radar-pixel timing, long-task counts during
+playback, manifest-rotation teardown and the context-loss drill all depend on the
+PR 2 ping-pong layers, and are measured there. A palette switch in v2 still
+rebuilds the layer stack (`RadarLayer` keys its effect on `palette`), so the
+"< 100 ms" half of that criterion also lands with PR 2.

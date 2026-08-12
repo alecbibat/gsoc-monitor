@@ -6,8 +6,10 @@
 
 import * as Cesium from 'cesium';
 import type { RadarFrame } from '../../types';
+import { radarEngine } from './engineFlag';
 import { getCloudLut, getRadarLut, type RadarPaletteId } from './palettes';
 import { radarBlurPx, recolorCloudTile, recolorRadarTile } from './recolor';
+import { recolorTile, workerPipelineSupported } from './worker/pool';
 
 // 512px tiles: fewer requests, and declaring the true tile size lets Cesium
 // pick one level coarser for the same screen density — the radar data is far
@@ -56,6 +58,76 @@ class RecoloringImageryProvider extends Cesium.UrlTemplateImageryProvider {
   }
 }
 
+// The tile path the pipeline is calibrated for. The CDN currently serves the
+// same palette for every color id; request 2 (Universal Blue — the palette
+// that matches what actually arrives, and what the inversion anchors expect)
+// with server smoothing on and snow folded into the rain ramp, so if the
+// parameter ever starts working again the bytes stay what the inverter expects.
+function radarTileUrl(
+  host: string,
+  frame: RadarFrame,
+  z: number | string,
+  x: number | string,
+  y: number | string
+): string {
+  return `${host}${frame.path}/${TILE_SIZE}/${z}/${x}/${y}/2/1_0.png`;
+}
+
+// A tile we could not recolor renders as nothing. Raw scheme-0 bytes are
+// dBZ-encoded grayscale — as UI they read as white/gray garbage over the map —
+// so a failed recolor degrades to an EMPTY tile, never the raw one.
+function blankTile(size = TILE_SIZE): HTMLCanvasElement {
+  const blank = document.createElement('canvas');
+  blank.width = size;
+  blank.height = size;
+  return blank;
+}
+
+// Engine v2: tile bytes are fetched here (so Cesium's RequestScheduler still
+// governs the network) and everything after that — decode, blur, palette LUT —
+// happens in a worker, which also caches the decoded intensity field.
+class WorkerRadarProvider extends Cesium.UrlTemplateImageryProvider {
+  private readonly host: string;
+  private readonly frame: RadarFrame;
+  private readonly palette: RadarPaletteId;
+
+  constructor(host: string, frame: RadarFrame, palette: RadarPaletteId) {
+    super({
+      // requestImage is fully overridden below; the template is what the base
+      // class reports as this provider's identity.
+      url: radarTileUrl(host, frame, '{z}', '{x}', '{y}'),
+      maximumLevel: RADAR_MAX_LEVEL,
+      tileWidth: TILE_SIZE,
+      tileHeight: TILE_SIZE,
+    });
+    this.host = host;
+    this.frame = frame;
+    this.palette = palette;
+  }
+
+  requestImage(
+    x: number,
+    y: number,
+    level: number,
+    request?: Cesium.Request
+  ): Promise<Cesium.ImageryTypes> | undefined {
+    const url = radarTileUrl(this.host, this.frame, level, x, y);
+    const key = `${this.frame.path}|${level}/${x}/${y}`;
+    const job = recolorTile(key, level, this.palette, (throttled) =>
+      // Cesium's own Request carries the per-server slot this tile was granted;
+      // without it (the worker's cache-miss retry) a default Request issues
+      // immediately, which is what that path needs.
+      new Cesium.Resource(throttled ? { url, request } : { url }).fetchBlob()
+    );
+    // Scheduler declined the fetch — preserve the contract so Cesium retries.
+    if (!job) return undefined;
+    return job.bitmap.catch((err) => {
+      console.error('[radar] tile recolor failed — dropping tile', err);
+      return blankTile();
+    });
+  }
+}
+
 // Client recoloring inverts the palette RainViewer actually serves (the CDN
 // ignores the {color} path segment — see recolor.ts) and repaints through our
 // own gradients. Escape hatch: flipping this off falls back to the served
@@ -85,15 +157,13 @@ export function makeRadarProvider(
       tileHeight: TILE_SIZE,
     });
   }
+  if (radarEngine() === 'v2' && workerPipelineSupported()) {
+    return new WorkerRadarProvider(host, frame, palette);
+  }
   const lut = getRadarLut(palette);
   return new RecoloringImageryProvider(
     {
-      // The CDN currently serves the same palette for every color id; request
-      // 2 (Universal Blue — the palette that matches what actually arrives,
-      // and what the inversion anchors expect) with server smoothing on and
-      // snow folded into the rain ramp, so if the parameter ever starts
-      // working again the bytes stay what the inverter is calibrated for.
-      url: `${host}${frame.path}/${TILE_SIZE}/{z}/{x}/{y}/2/1_0.png`,
+      url: radarTileUrl(host, frame, '{z}', '{x}', '{y}'),
       maximumLevel: RADAR_MAX_LEVEL,
       tileWidth: TILE_SIZE,
       tileHeight: TILE_SIZE,

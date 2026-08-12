@@ -8,6 +8,7 @@
 // palettization would smear unrelated hues together.
 
 import type { RadarLut } from './palettes';
+import { getPaletteInversionLut, radarBlurSigma } from './radarField';
 
 type SourceImage = HTMLImageElement | ImageBitmap | HTMLCanvasElement;
 
@@ -86,81 +87,15 @@ function padWithEdgeExtend(src: HTMLCanvasElement, w: number, h: number, p: numb
   return pad;
 }
 
-// RainViewer's tile CDN ignores the {color} path segment and serves one fixed
-// house palette for every scheme id (verified 2026-08 via the /api/radar/diag
-// endpoint: scheme 0, 2 and 4 requests returned byte-identical tiles) — a
-// blue ramp for light→moderate rain rising through yellow, orange and red,
-// with alpha-feathered edges. So instead of decoding a raw data product that
-// does not exist, we invert that served palette: each pixel's color is
-// matched to the nearest anchor on the ramp below, giving back an intensity
-// on this pipeline's internal magnitude scale (2·(dBZ+32)), which then flows
-// through the same blur + custom-palette LUT as before. Anchors beyond the
-// observed colors (orange → red → magenta) extend the ramp so extreme cores
-// keep grading instead of clipping; colors that drift off the ramp entirely
-// (if RainViewer ever changes palette) degrade to the nearest anchor's
-// intensity — never to noise.
-const PALETTE_ANCHORS: Array<[number, number, number, number]> = [
-  // [r, g, b, dBZ-equivalent]
-  [0, 60, 92, 3],
-  [0, 71, 104, 6],
-  [0, 78, 120, 10],
-  [0, 85, 136, 14],
-  [0, 98, 149, 19],
-  [0, 112, 163, 24],
-  [0, 127, 180, 29],
-  [255, 238, 0, 33],
-  [255, 210, 0, 38],
-  [255, 180, 0, 43],
-  [255, 150, 0, 47],
-  [255, 110, 0, 51],
-  [255, 60, 0, 55],
-  [230, 0, 0, 60],
-  [180, 0, 40, 64],
-  [255, 0, 255, 68],
-  [255, 255, 255, 70],
-];
+// The palette-inversion table and the blur schedule live in `radarField.ts`,
+// which is DOM-free so the worker pipeline runs the same math. This module is
+// the main-thread fallback for browsers without OffscreenCanvas.
 
-// Quantized RGB (5 bits/channel) → magnitude byte (2·(dBZ+32)). 32 KB, built
-// once on first use.
-let inversionLut: Uint8Array | null = null;
-function getPaletteInversionLut(): Uint8Array {
-  if (inversionLut) return inversionLut;
-  const lut = new Uint8Array(32 * 32 * 32);
-  for (let r = 0; r < 32; r++) {
-    for (let g = 0; g < 32; g++) {
-      for (let b = 0; b < 32; b++) {
-        const pr = r * 8 + 4;
-        const pg = g * 8 + 4;
-        const pb = b * 8 + 4;
-        let bestD = Infinity;
-        let bestDbz = 0;
-        for (const [ar, ag, ab, dbz] of PALETTE_ANCHORS) {
-          const d = (pr - ar) ** 2 + (pg - ag) ** 2 + (pb - ab) ** 2;
-          if (d < bestD) {
-            bestD = d;
-            bestDbz = dbz;
-          }
-        }
-        lut[(r << 10) | (g << 5) | b] = Math.min(255, Math.round(2 * (bestDbz + 32)));
-      }
-    }
-  }
-  inversionLut = lut;
-  return lut;
-}
-
-// How much data-space smoothing a tile needs. RainViewer's radar mosaic is
-// ~1 km resolution; past level ~6 the 512px tiles out-resolve the data and the
-// raw field turns blocky, so smoothing scales up with zoom (capped — beyond
-// the native level Cesium upsamples our smoothed texture bilinearly anyway,
-// which is the same trick zoom.earth leans on).
+// Data-space smoothing radius for a tile, or 0 where canvas filters are
+// unavailable and the blur has to be skipped entirely.
 export function radarBlurPx(level: number): number {
   if (!canvasFilterSupported()) return 0;
-  // Floor of 1.5px at every level: real mosaics are speckled at national zoom
-  // even where the data out-resolves the tile, and the served palette's hard
-  // blue→yellow step needs a few pixels of data-space diffusion or the
-  // moderate-to-heavy transition renders as an abrupt ring.
-  return Math.min(4, Math.max(1.5, 0.7 * 2 ** Math.max(0, level - 6)));
+  return radarBlurSigma(level);
 }
 
 export function recolorRadarTile(img: SourceImage, lut: RadarLut, blurPx: number): HTMLCanvasElement {
