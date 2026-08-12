@@ -2,14 +2,14 @@ import { BASEMAPS } from '../cesium/basemaps';
 import { useLayersStore } from '../store/layersStore';
 import type { BasemapId } from '../types';
 
-const ORDER: BasemapId[] = ['dark', 'light', 'satellite', 'topo'];
+const ORDER: BasemapId[] = ['dark', 'light', 'satellite', 'earth', 'topo'];
 
 export function BasemapSwitcher() {
   const basemap = useLayersStore((s) => s.basemap);
   const setBasemap = useLayersStore((s) => s.setBasemap);
 
   return (
-    <div className="grid grid-cols-4 gap-1.5">
+    <div className="grid grid-cols-3 gap-1.5">
       {ORDER.map((id) => (
         <button
           key={id}

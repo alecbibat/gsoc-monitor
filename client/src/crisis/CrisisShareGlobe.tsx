@@ -14,8 +14,6 @@ import { LAYER_LEGENDS } from '../layers/layerLegends';
 import type { DrawLayer } from './crisisStore';
 import { RadarLayer } from '../layers/radar/RadarLayer';
 import { RadarTimeline } from '../layers/radar/RadarTimeline';
-import { GoesLayer } from '../layers/goes/GoesLayer';
-import { GoesTimeline } from '../layers/goes/GoesTimeline';
 import { PrecipLayer } from '../layers/precip/PrecipLayer';
 import { HurricaneLayer } from '../layers/hurricanes/HurricaneLayer';
 import { HurricaneTooltip } from '../layers/hurricanes/HurricaneTooltip';
@@ -292,7 +290,6 @@ export function CrisisShareGlobe({
       >
           <CesiumGlobe onReady={setViewer}>
             {live.has('radar') && <RadarLayer />}
-            {live.has('goes') && <GoesLayer />}
             {live.has('precip') && <PrecipLayer />}
             {live.has('hurricanes') && <HurricaneLayer />}
             {live.has('lightning') && <LightningLayer />}
@@ -314,7 +311,6 @@ export function CrisisShareGlobe({
             <ShareDrawLayers layers={drawLayers} />
             <SharePinsLayer groups={pinGroups} />
             {live.has('radar') && <RadarTimeline />}
-            {live.has('goes') && <GoesTimeline />}
           </CesiumGlobe>
           {live.has('hurricanes') && <HurricaneTooltip />}
 

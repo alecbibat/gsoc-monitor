@@ -27,19 +27,6 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
-    id: 'goes',
-    info: {
-      name: 'Live Satellite (GeoColor)',
-      icon: '🛰',
-      source: 'NOAA GOES-East/West + JMA Himawari, via NASA GIBS',
-      method:
-        'GeoColor composites from the geostationary weather satellites: true color by day, multispectral IR with city lights at night. NOAA/CIRA render GOES-East and GOES-West (ABI imager); JMA’s Himawari (AHI) covers the western Pacific. NASA’s Global Imagery Browse Services tiles a new scan every 10 minutes (~20–60 min behind real time); the three feeds are mosaicked by longitude. No coverage over Europe/Africa — GIBS carries no Meteosat feed.',
-      trust:
-        'The official operational imagery from NOAA’s and JMA’s geostationary weather satellites, tiled by NASA — the same GeoColor product on NOAA STAR and NASA Worldview.',
-      url: 'https://www.star.nesdis.noaa.gov/GOES/',
-    },
-  },
-  {
     id: 'earthquakes',
     info: {
       name: 'Earthquakes',
@@ -349,5 +336,15 @@ export const BASEMAP_PROVENANCE: Record<BasemapId, Provenance> = {
     method: 'Topographic raster tiles rendered from OpenStreetMap + SRTM elevation data.',
     trust: 'Community topographic styling of open data (CC-BY-SA).',
     url: 'https://opentopomap.org',
+  },
+  earth: {
+    name: 'Earth (Daily Satellite)',
+    icon: '🌍',
+    source: 'NASA EOSDIS GIBS — MODIS Terra & Aqua',
+    method:
+      'True-color imagery from NASA’s polar-orbiting Terra (≈10:30 AM local pass) and Aqua (≈1:30 PM local pass) satellites, mosaicked into a global daily image and tiled by NASA’s Global Imagery Browse Services. The AM/PM toggle switches satellites; the date can step back through the archive (Terra from Feb 2000, Aqua from Jul 2002). Today’s image fills in swath by swath as the satellites orbit — dark wedges are simply not-yet-imaged.',
+    trust:
+      'NASA’s operational EOSDIS imagery service — the same source behind NASA Worldview and Zoom Earth’s HD satellite view.',
+    url: 'https://worldview.earthdata.nasa.gov',
   },
 };

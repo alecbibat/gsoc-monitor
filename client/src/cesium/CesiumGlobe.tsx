@@ -1,6 +1,7 @@
 import * as Cesium from 'cesium';
 import { useEffect, useRef, useState } from 'react';
 import { BASEMAPS } from './basemaps';
+import { useEarthBasemapStore } from './earthBasemap';
 import { setLabelOverlay } from './imageryOrder';
 import { getPanelData } from './entityPanelLink';
 import { useLayersStore } from '../store/layersStore';
@@ -90,6 +91,12 @@ export function CesiumGlobe({ children, onReady }: Props) {
   const baseLayerRef = useRef<Cesium.ImageryLayer | null>(null);
   const overlayLayerRef = useRef<Cesium.ImageryLayer | null>(null);
   const basemap = useLayersStore((s) => s.basemap);
+  // The Earth map type bakes its date + AM/PM pass into the provider URL, so
+  // stepping either one must rebuild the base imagery. Collapsed to '' for the
+  // stateless basemaps so their rebuild effect never fires on date changes.
+  const earthDate = useEarthBasemapStore((s) => s.date);
+  const earthPass = useEarthBasemapStore((s) => s.pass);
+  const earthKey = basemap === 'earth' ? `${earthDate}|${earthPass}` : '';
   // Always render at max quality — the user-facing quality control was removed.
   const qualityLevel = 'quality' as const;
 
@@ -367,7 +374,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
     baseLayerRef.current = baseLayer;
     overlayLayerRef.current = overlayLayer;
     viewer.scene.requestRender();
-  }, [viewer, basemap]);
+  }, [viewer, basemap, earthKey]);
 
   // Smoothly fade the place-label overlay with camera height. Driven from
   // preRender so the alpha ramps every frame during programmatic flights (pin

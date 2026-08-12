@@ -26,17 +26,3 @@ export function addImageryBelowLabels(
   }
   return layers.addImageryProvider(provider);
 }
-
-// Insert an overlay directly above the base imagery (index 1 — CesiumGlobe
-// pins the basemap to the bottom of the stack). Live satellite imagery is
-// opaque earth photography: inserted at the label index like the other
-// overlays it would land above whatever data layer rebuilt before it and blot
-// out radar echoes or QPF shading, so it gets a deterministic slot beneath
-// every data overlay instead.
-export function addImageryAboveBase(
-  viewer: Cesium.Viewer,
-  provider: Cesium.ImageryProvider
-): Cesium.ImageryLayer {
-  const layers = viewer.imageryLayers;
-  return layers.addImageryProvider(provider, Math.min(1, layers.length));
-}

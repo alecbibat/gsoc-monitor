@@ -1,5 +1,6 @@
 import * as Cesium from 'cesium';
 import type { BasemapId } from '../types';
+import { buildEarthProvider } from './earthBasemap';
 
 interface ImageryAdjust {
   brightness?: number;
@@ -26,6 +27,18 @@ interface BasemapDef {
   // overlay leaves clean terrain/imagery behind.
   overlay?: ImagerySource;
 }
+
+// Esri's transparent boundaries + place labels (countries, states/provinces,
+// cities): light text with dark halos, designed to overlay photographic
+// imagery. Shared by the map types whose base is raw satellite imagery.
+const ESRI_LABELS: ImagerySource = {
+  build: () =>
+    new Cesium.UrlTemplateImageryProvider({
+      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+      maximumLevel: 13,
+      credit: new Cesium.Credit('Esri'),
+    }),
+};
 
 export const BASEMAPS: Record<BasemapId, BasemapDef> = {
   dark: {
@@ -79,17 +92,17 @@ export const BASEMAPS: Record<BasemapId, BasemapDef> = {
       }),
     // Darken Esri imagery into a muted "night satellite" look so overlays pop.
     adjust: { brightness: 0.68, contrast: 1.1, saturation: 0.75, gamma: 1.3 },
-    // Transparent boundaries + place labels (countries, states/provinces,
-    // cities) so the imagery isn't an unlabelled blank. Light text with dark
-    // halos, designed by Esri to overlay World Imagery.
-    overlay: {
-      build: () =>
-        new Cesium.UrlTemplateImageryProvider({
-          url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
-          maximumLevel: 13,
-          credit: new Cesium.Credit('Esri'),
-        }),
-    },
+    overlay: ESRI_LABELS,
+  },
+  earth: {
+    label: 'Earth',
+    attribution: 'NASA EOSDIS GIBS · MODIS Terra/Aqua',
+    // Stateful: the provider bakes in the date + AM/PM pass from
+    // earthBasemap.ts, and CesiumGlobe rebuilds the base imagery whenever that
+    // store changes (see the EarthTimeBar navigator). True color as-shot — no
+    // darkening, this map type IS the photograph.
+    build: buildEarthProvider,
+    overlay: ESRI_LABELS,
   },
   topo: {
     label: 'Topographic',

@@ -5,8 +5,7 @@ import { CesiumGlobe } from './cesium/CesiumGlobe';
 import { EarthquakeLayer } from './layers/earthquakes/EarthquakeLayer';
 import { AlertsLayer } from './layers/alerts/AlertsLayer';
 import { RadarLayer } from './layers/radar/RadarLayer';
-import { GoesLayer } from './layers/goes/GoesLayer';
-import { GoesTimeline } from './layers/goes/GoesTimeline';
+import { EarthTimeBar } from './ui/EarthTimeBar';
 import { FlightLayer } from './layers/flights/FlightLayer';
 import { HurricaneLayer } from './layers/hurricanes/HurricaneLayer';
 import { LightningLayer } from './layers/lightning/LightningLayer';
@@ -133,7 +132,6 @@ export default function App() {
       <div className="relative h-full w-full overflow-hidden bg-black">
         <StarField />
         <CesiumGlobe onReady={setViewer}>
-          <GoesLayer />
           <RadarLayer />
           <EarthquakeLayer />
           <AlertsLayer />
@@ -195,7 +193,7 @@ export default function App() {
           <WindReadout />
         </div>
         <RadarTimeline />
-        <GoesTimeline />
+        <EarthTimeBar />
         <HoverOverlay />
         <PickChooser />
         <NewsTicker />

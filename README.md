@@ -4,7 +4,7 @@ Global Situational & Operational Conditions Monitor — a real-time 3D globe das
 
 ## Phase 1 features
 
-- **3D globe** — CesiumJS with starfield, real sun lighting (day/night terminator), dark/light/satellite/topo basemaps.
+- **3D globe** — CesiumJS with starfield, real sun lighting (day/night terminator), dark/light/satellite/topo basemaps plus an Earth map type: NASA's daily MODIS true-color mosaic with an AM/PM (Terra/Aqua) toggle and a date picker back to Feb 2000.
 - **Precipitation radar** — RainViewer animated tiles with adjustable 30/60/120-min playback window and opacity control.
 - **Earthquakes** — USGS live feed, magnitude-scaled colored points, click for details panel.
 - **NWS Weather Alerts** — every active alert, including zone/county-based ones (winter, heat, flood, red-flag) resolved to polygons server-side; severity-coded overlays with full alert text in click panels.
@@ -40,7 +40,7 @@ npm run dev:client
 | USGS Earthquakes | No key needed | Fully public. |
 | CelesTrak (satellites) | No key needed | Public TLE data; the server caches each group for 2h per CelesTrak's guidance. |
 | RainViewer | No key needed | Fully public tile CDN. |
-| NASA GIBS (live satellite) | No key needed | Public WMTS tiles of NOAA GOES-East/West + JMA Himawari GeoColor; the server only queries the time index (DescribeDomains). |
+| NASA GIBS (Earth basemap) | No key needed | Public WMTS tiles of the daily MODIS Terra/Aqua true-color mosaic, fetched straight from the browser (no server involvement). |
 | Nominatim (geocoding) | No key needed | Uses OSM data; `NWS_USER_AGENT` string is also used here as User-Agent per their policy. |
 
 ## Deploy to Heroku
@@ -89,4 +89,4 @@ The architecture is designed for easy extension. For each new layer:
 4. Add a proxy route under `server/src/routes/`
 5. Add a toggle to `Sidebar.tsx`
 
-Shipped since: hurricanes (NOAA NHC), lightning (Blitzortung), FIRMS fire hotspots, ships (AISStream), satellite tracker (CelesTrak TLE + satellite.js), live satellite imagery (NOAA GOES + Himawari GeoColor via NASA GIBS, animated 10-min loop).
+Shipped since: hurricanes (NOAA NHC), lightning (Blitzortung), FIRMS fire hotspots, ships (AISStream), satellite tracker (CelesTrak TLE + satellite.js), the Earth map type (NASA MODIS Terra/Aqua daily true color via GIBS — AM/PM passes, date-steppable back to 2000).

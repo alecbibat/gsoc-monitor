@@ -10,7 +10,7 @@ import type { LayerId } from '../types';
 // (timezones).
 export type ShareLiveLayerId = Extract<
   LayerId,
-  | 'radar' | 'goes' | 'precip' | 'hurricanes' | 'lightning' | 'wind' | 'windArrows'
+  | 'radar' | 'precip' | 'hurricanes' | 'lightning' | 'wind' | 'windArrows'
   | 'fires' | 'wildfires' | 'smoke' | 'aqi' | 'fireOutlook' | 'fuel'
   | 'alerts' | 'earthquakes' | 'rivers' | 'outages'
   | 'newsMap' | 'intel'
@@ -32,7 +32,6 @@ export const SHARE_LIVE_LAYER_GROUPS: ShareLiveLayerGroup[] = [
     name: 'Weather',
     layers: [
       { id: 'radar',      label: 'Precipitation Radar',    hint: 'RainViewer composite · animated' },
-      { id: 'goes',       label: 'Live Satellite (GOES)',  hint: 'GeoColor · 10-min loop' },
       { id: 'precip',     label: 'Precip Forecast (WPC)',  hint: 'NOAA QPF accumulation' },
       { id: 'hurricanes', label: 'Hurricanes',             hint: 'NHC + JTWC tracks & cones' },
       { id: 'lightning',  label: 'Lightning',              hint: 'Blitzortung · live strikes' },
