@@ -1263,3 +1263,33 @@ suites green after every change above.
    ~190 lines, all isolated behind `radarEngine()`. Delete it when (a) the
    Stage A and Stage C acceptance numbers pass on real hardware, and (b) one
    release has shipped default-on-v2 with no one needing `?radar=v1`.
+
+### Post-wrap-up tuning (same day): the honesty gates needed hysteresis
+
+The first real-hardware feedback on the wrap-up commits reported the radar
+feeling *worse*: choppy, cutting in and out, flickering between smooth and
+stepped, loading in chunks. That report was correct, the regression was this
+wrap-up's, and it had two layers:
+
+- **The per-worker field budget never caught up with PR 6's routing.** Tiles
+  hash by zoom level, so the whole on-screen level — every frame of the
+  loop — lands on ONE worker: a 13-frame window over ~16 visible tiles is
+  ~208 fields ≈ 104 MB against a 60 MB budget written when tiles spread
+  across both workers. Mid-loop eviction churn was therefore guaranteed;
+  before the wrap-up it was invisible (hollow warps presented as success —
+  the bug fixed above), and after it the coverage gate exposed the churn as
+  visible flapping. Budget is now **120 MB per worker** (45 MB on
+  `deviceMemory ≤ 4`), sized so a full two-hour loop fits with headroom.
+- **A single coverage cutoff with a 250 ms retry is a strobe, not a gate.**
+  Engaging and staying engaged are different questions: motion now engages
+  at ≥ 0.6 stitched, holds until < 0.5, and a coverage stand-down backs off
+  2 s instead of 250 ms — so a device whose loop genuinely cannot fit
+  degrades to steady stepped tiles rather than flicker. Likewise one expired
+  serve while the warp is already on the globe is tolerated (the previous
+  frame is still drawn; the next step retries); only the second consecutive
+  miss stands down.
+
+The honesty contracts all still hold: nothing below half-stitched is ever
+presented, a timeout still never counts as a serve, and the hints still get
+repaired on eviction. What changed is that refusing to lie no longer means
+flapping — the gates gained the hysteresis they should have shipped with.

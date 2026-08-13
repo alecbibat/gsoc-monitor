@@ -52,12 +52,23 @@ const RETRY_MS = 250;
 // weather that flickers.
 const REGION_KEEP_COVERAGE = 0.6;
 
-// Below this fraction of the block actually stitched (per frame — the reply's
-// coverage is the minimum across the pair), the warp is mostly empty sky where
-// the warmth hints promised weather. Presenting it would dim the real tiles
-// away behind a hollow image — the blank-but-successful failure this engine
-// has been bitten by once already — so motion stands down instead.
-const MOTION_MIN_COVERAGE = 0.6;
+// Coverage gates on what the worker actually stitched (the reply's coverage
+// is the minimum across the pair's frames). Below them the warp is missing
+// weather the warmth hints promised, and presenting it would dim the real
+// tiles away behind a partly-empty image — the blank-but-successful failure
+// this engine has been bitten by once already.
+//
+// TWO thresholds, not one, because engaging and staying engaged are
+// different questions: with a single cutoff and the standard 250 ms retry,
+// cache churn near the line flips motion between smooth and stepped several
+// times a second — measured on real hardware as exactly that flicker. Engage
+// only on a solidly stitched block; once showing, tolerate a dip to half;
+// and after a coverage stand-down, back off well past the normal retry so a
+// loop that cannot fit the worker budget degrades to steady stepped tiles
+// rather than a strobe.
+const MOTION_ENGAGE_COVERAGE = 0.6;
+const MOTION_HOLD_COVERAGE = 0.5;
+const COVERAGE_RETRY_MS = 2000;
 
 // Whether a region still overlaps what the camera is looking at. The held
 // region is kept while its tiles stay warm, and worker-cache warmth does not
@@ -150,6 +161,11 @@ export function MotionLayer() {
     let count = 0;
     let regionChanges = 0;
     let hideRaf: number | null = null;
+    // Consecutive presents that expired on the serve valve. One while the
+    // warp is already on the globe is noise (the previous frame is still
+    // drawn and the next step retries); standing down on every single one
+    // flipped a busy frame into a visible bounce off the tile path.
+    let serveMisses = 0;
     // Set by moveEnd; the pump then re-checks whether the held region is still
     // on screen. Camera moves change no store state, so without this flag the
     // early-out gate below never lets a pan reach the region logic.
@@ -391,14 +407,16 @@ export function MotionLayer() {
           // warmth hints that approved this region are only optimistic — the
           // worker's LRU may have rotated the fields out since. A hollow
           // block must stand down, not present: revealing it dims the real
-          // tiles away behind mostly-empty sky while every status field
+          // tiles away behind partly-empty sky while every status field
           // reports success.
-          if (warped.coverage < MOTION_MIN_COVERAGE) {
+          const floor = stats.showing ? MOTION_HOLD_COVERAGE : MOTION_ENGAGE_COVERAGE;
+          if (warped.coverage < floor) {
             warped.bitmap.close();
             standDown(
               `region only ${Math.round(warped.coverage * 100)}% stitched for this ` +
                 `${forecast ? 'forecast' : 'pair'} — cache evicted under it`
             );
+            retryAfter = performance.now() + COVERAGE_RETRY_MS;
             return;
           }
           totalMs += warped.ms;
@@ -425,10 +443,16 @@ export function MotionLayer() {
             // The serve valve expired: the globe never asked for the region's
             // tile. Revealing anyway would dim the real tiles behind a frame
             // nothing is drawing — the timeout and the serve must not share
-            // an outcome.
+            // an outcome. But a SINGLE miss while already showing is
+            // tolerated: the previously served frame is still on the globe,
+            // and the next playhead step retries naturally.
+            serveMisses++;
+            if (stats.showing && serveMisses < 2) return;
+            serveMisses = 0;
             standDown('globe never took the frame — region off screen or renderer stalled');
             return;
           }
+          serveMisses = 0;
           shown = key;
           reveal();
           if (forecast) useRadarStore.getState().setForecastAvailable(true);

@@ -32,12 +32,17 @@ declare const self: {
   postMessage(message: RadarWorkerResponse, transfer: Transferable[]): void;
 };
 
-// Field cache budget. Each 512² field is 2 planes × 256 KB = 512 KB, so the
-// default holds ~120 tiles per worker. Low-memory devices get half — the
-// budget is per worker and the pool spawns two, so the totals are 120 MB and
-// 60 MB respectively.
+// Field cache budget, PER WORKER. Each 512² field is 2 planes × 256 KB =
+// 512 KB. Tiles are hashed by ZOOM LEVEL (PR 6), so the whole on-screen
+// level — every frame of the loop — lands on ONE worker: a 13-frame window
+// over ~16 visible tiles is ~208 fields, ~104 MB. The original 60 MB budget
+// predated that routing and guaranteed mid-loop eviction churn, which real
+// hardware rendered as motion flickering between smooth and stepped as
+// stitch coverage rose and fell under it. Sized so a full two-hour loop fits
+// with headroom; low-memory devices get less and rely on the coverage
+// hysteresis and the prefetch cooldown to degrade to steady tiles instead.
 const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-const BUDGET_BYTES = (deviceMemory && deviceMemory <= 4 ? 30 : 60) * 1024 * 1024;
+const BUDGET_BYTES = (deviceMemory && deviceMemory <= 4 ? 45 : 120) * 1024 * 1024;
 const cache = new FieldCache(BUDGET_BYTES);
 
 // RainViewer tiles are 512px square (see TILE_SIZE in RainViewerImagery).
