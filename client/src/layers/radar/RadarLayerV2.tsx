@@ -56,6 +56,7 @@ export function RadarLayerV2() {
   const playing = useRadarStore((s) => s.playing);
   const palette = useRadarStore((s) => s.palette);
   const glTileDim = useRadarStore((s) => s.glTileDim);
+  const motionDim = useRadarStore((s) => s.motionDim);
 
   useRadarManifest(active);
 
@@ -98,7 +99,9 @@ export function RadarLayerV2() {
       useRadarStore.getState().host,
       tl[startIdx].frame,
       useRadarStore.getState().palette,
-      useRadarStore.getState().opacity * useRadarStore.getState().glTileDim,
+      useRadarStore.getState().opacity *
+        useRadarStore.getState().glTileDim *
+        useRadarStore.getState().motionDim,
       FADE_MS
     );
     pairRef.current = pair;
@@ -138,13 +141,19 @@ export function RadarLayerV2() {
     };
   }, [viewer, ready, host]);
 
-  // Follow the playhead. Dissolve during playback; snap while scrubbing, where
-  // the frame under the handle must always be the one on screen.
+  // Follow the playhead, which for this path means the nearest keyframe.
+  //
+  // Dissolve during playback; snap while scrubbing, where the frame under the
+  // handle must always be the one on screen. Snap too while the motion layer is
+  // covering this one: a dissolve on a layer dimmed to zero is a 720 ms alpha
+  // tween nobody can see, and it drives an animation frame and a render request
+  // per step for the privilege.
   useEffect(() => {
     const pair = pairRef.current;
     if (!pair || timeline.length === 0) return;
     const idx = Math.min(Math.max(0, currentIndex), timeline.length - 1);
-    pair.showFrame(timeline[idx].frame, useRadarStore.getState().playing);
+    const s = useRadarStore.getState();
+    pair.showFrame(timeline[idx].frame, s.playing && s.motionDim > 0);
   }, [currentIndex, timeline]);
 
   // Warming follows the playhead and the timeline.
@@ -156,12 +165,13 @@ export function RadarLayerV2() {
     pairRef.current?.setPalette(palette);
   }, [palette]);
 
-  // The GPU spike dims the imagery path as its primitive fades in, so the two
-  // never draw the same echo on top of each other. Off the spike, glTileDim is
-  // 1 and this is just the opacity slider.
+  // Both the Stage B spike and the Stage C motion layer draw the same weather
+  // this path does, and dim it out from under themselves so one echo is never
+  // drawn twice. With neither engaged both dims are 1 and this is just the
+  // opacity slider.
   useEffect(() => {
-    pairRef.current?.setOpacity(opacity * glTileDim);
-  }, [opacity, glTileDim]);
+    pairRef.current?.setOpacity(opacity * glTileDim * motionDim);
+  }, [opacity, glTileDim, motionDim]);
 
   // Give warming a bounded head start, then play regardless.
   useEffect(() => {
@@ -173,16 +183,35 @@ export function RadarLayerV2() {
 
   // Playback ticker. Held until the loop is warm enough to play through
   // without stopping to download every frame.
+  //
+  // The playhead advances CONTINUOUSLY on an animation frame rather than
+  // stepping an index on a timer: `position` is what the warp reads, and a
+  // storm can only be carried between two frames if the thing driving it moves
+  // between them. The Stage A tile path still sees only whole frames, because
+  // `currentIndex` is the round of the position — one playhead serves both.
   const warmEnough = loopReady >= LOOP_READY_THRESHOLD || warmWaitElapsed;
   useEffect(() => {
     if (!viewer || !active || !playing || !warmEnough) return;
-    const interval = setInterval(() => {
+    let raf = 0;
+    let previous = performance.now();
+    const tick = (now: number) => {
+      // A backgrounded tab stops firing animation frames; on return the gap
+      // would otherwise teleport the playhead by however long it was away.
+      const dt = Math.min(now - previous, FRAME_MS);
+      previous = now;
       const s = useRadarStore.getState();
       const tl = buildTimeline(s);
-      if (tl.length === 0) return;
-      s.setCurrentIndex((s.currentIndex + 1) % tl.length);
-    }, FRAME_MS);
-    return () => clearInterval(interval);
+      if (tl.length > 1 && viewer && !viewer.isDestroyed()) {
+        const span = tl.length - 1;
+        const next = s.position + (dt / FRAME_MS) * s.speed;
+        // Wrap through the end back to the start, keeping the fractional
+        // remainder so the loop point is not a stutter.
+        s.setPosition(next > span ? next - span - 1 : next);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   }, [viewer, active, playing, warmEnough]);
 
   return null;
