@@ -380,6 +380,87 @@ failure this exists to catch.
 Nothing draws the warp yet: `t` becomes continuous in PR 7, which is where the
 render wiring belongs.
 
+### Stage C PR 7 — continuous timeline, and the warp on screen (landed)
+
+`radarStore.position` is a float index into the timeline; `currentIndex` remains
+as its round, because warming, the Stage A tile path and engine v1 all want a
+single frame. Both setters write both fields, so the two can never disagree.
+`buildTimeline` and `nowIndex` are untouched — `EarthTimeBar` subscribes to them.
+
+Playback advances the playhead on an animation frame instead of stepping an
+index on a timer, at 0.5×/1×/2×. The timeline handle is continuous and its
+readout interpolates.
+
+`motion/WarpRegionLayer.ts` puts the warp on the globe: **one** imagery layer
+pinned to exactly the region, via a `WebMercatorTilingScheme` with a 1×1
+level-zero grid whose bounds are the block's own mercator corners. The block IS
+the level-zero tile and the composite IS its pixels, so nothing is reprojected on
+the way to the screen. Below labels, like everything else.
+
+**Deviations and decisions**
+
+- **A float index, not minutes-relative-to-now.** Every consumer wants a frame
+  pair and a mix; `floor` and `fract` give both directly, where a time needs a
+  search. `framePairAt` clamps rather than extrapolating past the last frame —
+  extrapolation is a forecast and has to be labelled as one (PR 8), so warping
+  past the end would present invented weather as observed.
+- **Scrubbing stands motion down.** The house rule is that the frame under the
+  handle is the frame on screen, immediately; a warp costs tens of milliseconds.
+  A drag renders from cached tiles and stays instant. Pointer-*cancel* clears the
+  flag too — without it a drag interrupted by a browser gesture leaves motion
+  off for good.
+- **`present` drives renders until the globe takes the image.** `requestRenderMode`
+  means the globe will not render on its own, and a tile reload only advances
+  while it renders. One `requestRender()` after the reload is not enough — the
+  tile's state machine needs several passes — and without this the serve
+  reliably expired instead. Same pattern as `PingPongLayers.waitForSettled`.
+- **The region in use is preferred over the best one available** (new
+  `regionWarmth`). `planWarmRegion` returns the *deepest* warm level, and which
+  level qualifies differs from pair to pair, so re-planning on each pair flipped
+  the region back and forth while the camera sat perfectly still — each flip a
+  layer teardown and rebuild. Slightly coarser weather that holds still beats
+  sharper weather that flickers.
+- **The serve valve is 2 s, not 400 ms.** Near the frame time it made a slow
+  device queue a second warp before the first was drawn — the back-to-back
+  reload hazard, plus wasted worker time. At 400 ms a third of all presents
+  expired on the software renderer.
+- **Handover is ordered to overlap, never gap**: show the warp before dimming the
+  tiles, restore the tiles before hiding the warp. A frame where both draw is a
+  momentary brightening of the same weather; a frame where neither draws is a
+  hole in it.
+- **Blocks are capped at 4 tiles a side for motion** (2048², 16 MB an upload),
+  against `composite.ts`'s 8 for the Stage B spike. A warped frame is re-uploaded
+  as a whole texture every time it changes, so block size is a per-frame
+  bandwidth cost rather than a one-off.
+
+**Verified** — browser runs against the tile fixture:
+
+| Check | Result |
+|---|---|
+| Two positions in one interval, stepping path | **byte-identical** screenshots — it cannot tell them apart |
+| Two positions in one interval, motion path | **different** — the storm has moved |
+| Motion engages and holds | `showing`, 16–28 warps per run, 27–82 ms each |
+| Handle advance | 8 distinct positions across 8 samples — continuous, not stepped |
+| Speed control | 2× / 1× ratio **2.00**, 0.5× / 1× ratio **0.53**, strictly ordered |
+| Imagery layers on the globe | **5** — basemap, labels, two tile layers, one motion layer |
+| Region stability, camera still | **0** rebuilds (was flipping before `regionWarmth`) |
+| Scrub | stands down mid-drag, returns after release |
+| Presents reaching the globe | 12 of 19; the rest are the valve pacing to a 1.6 s frame time |
+
+**What this sandbox cannot measure.** It renders through SwiftShader at roughly
+one frame per 1.6 s — measured **identical with `?radarmotion=0`**, so that is
+the software renderer and not this feature. Two consequences are visible in the
+numbers above and would not appear on real hardware: the advance cap makes
+playback run ~16% slow (a frame longer than a whole interval loses the
+remainder, deliberately), and a quarter of presents hit the serve valve. Both
+are the design working as intended under a frame time it was never going to see
+in a browser with a GPU. Absolute frame rate and texture-upload cost still need
+a real device.
+
+The first thing to check on real hardware is whether `T_STEPS = 16` is the right
+granularity — it caps motion at about 20 renders a second, which is a guess, not
+a measurement.
+
 ### What Stage C takes forward
 
 The fallback keeps weather **below labels at every altitude**, which is the house
