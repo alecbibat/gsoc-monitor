@@ -98,12 +98,44 @@ export interface WarpRequest {
   flowScale: number;
 }
 
+// Stage C PR 8: the advection nowcast. Stitches ONE observed frame over a tile
+// block and carries it forward along the flow to a lead time, then colorizes.
+//
+// Structurally the warp's sibling — same block, same flow, same worker chosen by
+// zoom level — but with one source frame instead of two, because there is no
+// second frame to interpolate toward. That is the whole difference between
+// showing what happened and guessing what will.
+export interface NowcastRequest {
+  type: 'nowcast';
+  id: number;
+  /** The observed frame to carry forward — always the newest one. */
+  frame: string;
+  level: number;
+  x0: number;
+  y0: number;
+  nx: number;
+  ny: number;
+  /** Lead time as a multiple of the flow's own interval. */
+  lead: number;
+  /** Intensity multiplier for this lead — see forecastDecay. */
+  decay: number;
+  palette: RadarPaletteId;
+  /**
+   * Flow measured over the same region. Null produces persistence in place,
+   * which is a legitimate (if dull) forecast: no measurable motion, no
+   * predicted movement.
+   */
+  flow: { cols: number; rows: number; u: Float32Array; v: Float32Array } | null;
+  flowScale: number;
+}
+
 export type RadarWorkerRequest =
   | TileRequest
   | CompositeRequest
   | MosaicRequest
   | FlowRequest
   | WarpRequest
+  | NowcastRequest
   | { type: 'cancel'; id: number };
 
 export type RadarWorkerResponse =
@@ -118,6 +150,9 @@ export type RadarWorkerResponse =
   // `coverage` here is over both frames of the pair: a block warm for A but not
   // B cannot be warped, and the caller needs to know that before drawing it.
   | { type: 'warped'; id: number; bitmap: ImageBitmap; coverage: number; ms: number }
+  // `coverage` is over the single source frame — a forecast needs only the
+  // frame it is carrying forward, not a pair.
+  | { type: 'nowcasted'; id: number; bitmap: ImageBitmap; coverage: number; ms: number }
   | {
       type: 'mosaic';
       id: number;

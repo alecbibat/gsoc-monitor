@@ -11,6 +11,7 @@ import { blurField, colorizeField, decodeField, radarBlurSigma } from '../radarF
 import type { RadarField } from '../radarField';
 import { computeFlow } from '../flow/lk';
 import { warpBlend } from '../flow/warp';
+import { advectField } from '../flow/advect';
 import { FieldCache } from './fieldCache';
 import type {
   CompositeRequest,
@@ -20,6 +21,7 @@ import type {
   RadarWorkerResponse,
   TileRequest,
   WarpRequest,
+  NowcastRequest,
 } from './protocol';
 
 // The client tsconfig loads the DOM lib, not WebWorker (one program, one
@@ -97,7 +99,13 @@ function withTimeout(work: Promise<ImageBitmap>, what: string): Promise<ImageBit
 // Requests queue and run one at a time. Serializing keeps peak memory to a
 // single tile's intermediates and makes cancellation meaningful: a superseded
 // frame's queued tiles are dropped before they ever cost anything.
-type QueuedRequest = TileRequest | CompositeRequest | MosaicRequest | FlowRequest | WarpRequest;
+type QueuedRequest =
+  | TileRequest
+  | CompositeRequest
+  | MosaicRequest
+  | FlowRequest
+  | WarpRequest
+  | NowcastRequest;
 const queue: QueuedRequest[] = [];
 // Ids accepted and not yet answered, and the subset of those the caller has
 // since given up on. Tracking `pending` keeps `cancelled` from accumulating
@@ -348,6 +356,40 @@ async function warp(req: WarpRequest): Promise<void> {
 
 const EMPTY_CONFIDENCE = new Float32Array(0);
 
+// The advection nowcast: carry one observed frame forward along the flow.
+async function nowcast(req: NowcastRequest): Promise<void> {
+  const started = performance.now();
+  const { id, frame, level, x0, y0, nx, ny, lead, decay, palette, flowScale } = req;
+  const src = stitchField('now', frame, level, x0, y0, nx, ny);
+  const total = nx * ny;
+  const coverage = total > 0 ? src.present / total : 0;
+
+  const w = src.field.width;
+  const h = src.field.height;
+  const out = outputBuffer(w * h * 4);
+  advectField(src.field, out, {
+    lead,
+    decay,
+    flow: req.flow ? { ...req.flow, confidence: EMPTY_CONFIDENCE } : null,
+    flowScale,
+    lut: getRadarLut(palette),
+    flipY: true,
+  });
+
+  const bitmap = await withTimeout(
+    createImageBitmap(new ImageData(out, w, h), { premultiplyAlpha: 'none' }),
+    'nowcast encode'
+  );
+  if (cancelled.has(id)) {
+    bitmap.close();
+    return;
+  }
+  post(
+    { type: 'nowcasted', id, bitmap, coverage, ms: Math.round(performance.now() - started) },
+    [bitmap]
+  );
+}
+
 function flow(req: FlowRequest): void {
   const started = performance.now();
   const result = computeFlow(
@@ -386,6 +428,7 @@ async function drain(): Promise<void> {
         else if (req.type === 'mosaic') mosaic(req);
         else if (req.type === 'flow') flow(req);
         else if (req.type === 'warp') await warp(req);
+        else if (req.type === 'nowcast') await nowcast(req);
         else await handle(req);
       } catch (err) {
         // A failed recolor degrades to a transparent tile on the main thread —
@@ -401,7 +444,9 @@ async function drain(): Promise<void> {
                 ? 'flow'
                 : req.type === 'warp'
                   ? `${req.frameA}>${req.frameB}`
-                  : req.key,
+                  : req.type === 'nowcast'
+                    ? `${req.frame}+${req.lead}`
+                    : req.key,
           message: String(err),
         });
       } finally {

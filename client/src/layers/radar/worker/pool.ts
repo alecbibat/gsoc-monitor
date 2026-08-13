@@ -76,7 +76,12 @@ function onMessage(e: MessageEvent<RadarWorkerResponse>) {
     // Cancelled between request and reply — close the orphan so its backing
     // store is released now rather than whenever GC gets to it. Region bitmaps
     // matter most: a full 8x8 block is 4096² RGBA, 67 MB apiece.
-    if (msg.type === 'tile' || msg.type === 'composited' || msg.type === 'warped') {
+    if (
+      msg.type === 'tile' ||
+      msg.type === 'composited' ||
+      msg.type === 'warped' ||
+      msg.type === 'nowcasted'
+    ) {
       msg.bitmap.close();
     }
     return;
@@ -486,6 +491,47 @@ export function warpRegion(
     (msg) =>
       msg.type === 'warped' ? { bitmap: msg.bitmap, coverage: msg.coverage, ms: msg.ms } : null,
     'warp'
+  );
+}
+
+// The advection nowcast over one region, at one lead time.
+//
+// The warp's sibling, and routed the same way: a region is single-level, so the
+// worker `workerForLevel` picks already holds every tile of the block.
+export function nowcastRegion(
+  frame: string,
+  level: number,
+  x0: number,
+  y0: number,
+  nx: number,
+  ny: number,
+  lead: number,
+  decay: number,
+  palette: RadarPaletteId,
+  flow: { cols: number; rows: number; u: Float32Array; v: Float32Array } | null,
+  flowScale: number
+): Promise<WarpedRegion> {
+  return regionRequest(
+    workerForLevel(level),
+    (id) => ({
+      type: 'nowcast',
+      id,
+      frame,
+      level,
+      x0,
+      y0,
+      nx,
+      ny,
+      lead,
+      decay,
+      palette,
+      flow,
+      flowScale,
+    }),
+    [],
+    (msg) =>
+      msg.type === 'nowcasted' ? { bitmap: msg.bitmap, coverage: msg.coverage, ms: msg.ms } : null,
+    'nowcast'
   );
 }
 
