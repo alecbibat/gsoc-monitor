@@ -64,7 +64,7 @@ export function warpBlend(
   const presB = b.presence;
   out.fill(0);
 
-  const [fu, fv] = resolveFlow(flow, w, h, flowScale);
+  const [fu, fv] = resolveFlowTo(flow, w, h, flowScale);
   const back = -t;
   const fwd = 1 - t;
 
@@ -146,46 +146,67 @@ export function warpBlend(
   }
 }
 
-// Expand the coarse flow grid to full resolution once, in output-pixel units.
+// Expand a coarse flow grid to full resolution, in output-pixel units.
+//
 // Reused between calls so stepping t across a keyframe interval — the common
 // case — costs one allocation, not one per rendered frame.
-let cacheW = 0;
-let cacheH = 0;
-let cacheFu: Float32Array = new Float32Array(0);
-let cacheFv: Float32Array = new Float32Array(0);
-let cacheToken: unknown = null;
-let cacheKeyScale: string | null = null;
+//
+// TWO slots, not one. The warp resolves the field as measured while the
+// advection nowcast resolves its densified version, and the motion layer asks
+// for both over the same region. With a single slot those two evict each other
+// on every call, and re-resolving means a bilinear sample per output pixel —
+// four million of them on a full-size region, which measured an order of
+// magnitude worse than the warp it was meant to serve.
+interface ResolveSlot {
+  w: number;
+  h: number;
+  fu: Float32Array;
+  fv: Float32Array;
+  token: unknown;
+  scale: number;
+}
 
-function resolveFlow(
+const slots: ResolveSlot[] = [];
+const MAX_SLOTS = 2;
+
+export function resolveFlowTo(
   flow: FlowField | null,
   w: number,
   h: number,
   scale: number
 ): [Float32Array, Float32Array] {
-  if (cacheW !== w || cacheH !== h) {
-    cacheFu = new Float32Array(w * h);
-    cacheFv = new Float32Array(w * h);
-    cacheW = w;
-    cacheH = h;
-    cacheToken = null;
+  const hit = slots.findIndex(
+    (s) => s.token === flow && s.scale === scale && s.w === w && s.h === h
+  );
+  if (hit >= 0) {
+    // Most-recently-used first, so two alternating callers both stay resident.
+    const [slot] = slots.splice(hit, 1);
+    slots.unshift(slot);
+    return [slot.fu, slot.fv];
   }
-  const token = flow ? `${scale}` : null;
-  if (cacheToken === flow && cacheKeyScale === token) return [cacheFu, cacheFv];
-  cacheToken = flow;
-  cacheKeyScale = token;
+
+  // Reuse the oldest slot's buffers when they are the right size; the point of
+  // the cache is to stop allocating a pair of full-resolution planes per frame.
+  let slot = slots.length >= MAX_SLOTS ? slots.pop() : undefined;
+  if (!slot || slot.w !== w || slot.h !== h) {
+    slot = { w, h, fu: new Float32Array(w * h), fv: new Float32Array(w * h), token: null, scale };
+  }
+  slot.token = flow;
+  slot.scale = scale;
+  slots.unshift(slot);
 
   if (!flow) {
-    cacheFu.fill(0);
-    cacheFv.fill(0);
-    return [cacheFu, cacheFv];
+    slot.fu.fill(0);
+    slot.fv.fill(0);
+    return [slot.fu, slot.fv];
   }
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = y * w + x;
       const [u, v] = sampleFlow(flow, (x + 0.5) / w, (y + 0.5) / h);
-      cacheFu[i] = u * scale;
-      cacheFv[i] = v * scale;
+      slot.fu[i] = u * scale;
+      slot.fv[i] = v * scale;
     }
   }
-  return [cacheFu, cacheFv];
+  return [slot.fu, slot.fv];
 }
