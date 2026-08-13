@@ -15,6 +15,7 @@
 import * as Cesium from 'cesium';
 import type { RadarFrame } from '../../types';
 import type { RadarPaletteId } from './palettes';
+import { isForecastPath } from './nowcast/forecast';
 import { radarTileUrl } from './RainViewerImagery';
 import { recentTiles } from './visibleTiles';
 import { isTileWarm, warmTile } from './worker/pool';
@@ -98,6 +99,10 @@ export class RadarPrefetcher {
     const plan: PlanEntry[] = [];
     for (const i of order) {
       const frame = frames[i];
+      // Forecast frames are computed, not downloaded. Warming one would fetch a
+      // URL that does not exist, and counting it toward readiness would hold
+      // playback waiting for bytes that are never coming.
+      if (isForecastPath(frame.path)) continue;
       for (const c of coords) {
         plan.push({
           key: `${frame.path}|${c.level}/${c.x}/${c.y}`,

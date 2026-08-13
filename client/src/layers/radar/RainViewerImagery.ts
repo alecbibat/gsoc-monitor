@@ -8,6 +8,7 @@ import * as Cesium from 'cesium';
 import type { RadarFrame } from '../../types';
 import { radarEngine } from './engineFlag';
 import { getRadarLut, type RadarPaletteId } from './palettes';
+import { isForecastPath } from './nowcast/forecast';
 import { radarBlurPx, recolorRadarTile } from './recolor';
 import { noteTileRequested } from './visibleTiles';
 import { recolorTile, workerPipelineSupported } from './worker/pool';
@@ -168,10 +169,29 @@ export class RadarFrameProvider extends Cesium.UrlTemplateImageryProvider {
   ): Promise<Cesium.ImageryTypes> | undefined {
     const frame = this.frame;
     const palette = this.palette;
-    const url = radarTileUrl(this.host, frame, level, x, y);
-    // Whatever Cesium asks for IS the visible tile set — that is what the
-    // prefetcher warms the other frames' copies of.
+
+    // Noted BEFORE the forecast short-circuit below. Whatever Cesium asks for
+    // IS the visible tile set, whichever frame happens to be mounted — it is
+    // what the prefetcher warms the other frames' copies of and what region
+    // planning is built from. Skipping it for forecast frames meant that
+    // parking in the forecast zone recorded nothing, the observed coordinates
+    // aged out after ninety seconds, and the forecast then had no region to
+    // render into and vanished.
     noteTileRequested(level, x, y);
+
+    // A forecast frame has no bytes anywhere — it is computed from the newest
+    // observation, and only the motion layer can compute it. This path renders
+    // it EMPTY rather than falling back to the observation it was derived from.
+    //
+    // That is the whole honesty contract for the forecast zone. The tempting
+    // alternative — leave the last observed frame showing underneath — puts
+    // current weather on screen while the timeline reads "forecast +20 min",
+    // and there is no state in which that is not a lie. Empty is legible: the
+    // timeline says the forecast is unavailable and there is nothing drawn to
+    // contradict it.
+    if (isForecastPath(frame.path)) return Promise.resolve(blankTile());
+
+    const url = radarTileUrl(this.host, frame, level, x, y);
 
     if (!this.useWorker) {
       const upstream = new Cesium.Resource({ url, request }).fetchImage({
