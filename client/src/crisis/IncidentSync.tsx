@@ -1,26 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { useAuthStore } from '../auth/authStore';
 import { useCrisisStore, useActiveIncident, extractPublicState, type Incident } from './crisisStore';
-
-// ── Canonical serialization ───────────────────────────────────────────────────
-// The change-watcher and the live-sync merge both need to answer "is this
-// incident different from what the server has?". A plain JSON.stringify can't:
-// Postgres JSONB doesn't preserve key order, so an incident that round-trips
-// through the DB (or arrives as our own SSE echo) serializes to different bytes
-// despite identical data. stableStringify sorts object keys and drops undefined
-// keys — mirroring JSON/JSONB semantics — so equal data always compares equal.
-function stableStringify(v: unknown): string | undefined {
-  if (v === undefined || typeof v === 'function') return undefined;
-  if (v === null || typeof v !== 'object') return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map((x) => stableStringify(x) ?? 'null').join(',')}]`;
-  const parts: string[] = [];
-  for (const k of Object.keys(v as Record<string, unknown>).sort()) {
-    const sv = stableStringify((v as Record<string, unknown>)[k]);
-    if (sv === undefined) continue; // omit undefined-valued keys, like JSON does
-    parts.push(`${JSON.stringify(k)}:${sv}`);
-  }
-  return `{${parts.join(',')}}`;
-}
+// serverCanon normalizes before serializing. Server-origin blobs may carry
+// retired taxonomy values that the store rewrites on ingest — canonicalizing
+// both sides identically is what keeps that rewrite from registering as a
+// local edit (see syncCanon.ts for why a phantom edit here is dangerous).
+import { serverCanon } from './syncCanon';
 
 // Server-known state per incident id — the baseline the watcher diffs against.
 // Populated on load, after each successful push, and whenever a peer's change
@@ -36,7 +21,7 @@ const setSync = (s: 'idle' | 'saving' | 'saved' | 'error') =>
 
 function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
   const url = method === 'POST' ? '/api/incidents' : `/api/incidents/${incident.id}`;
-  serverState.set(incident.id, stableStringify(incident)!); // optimistic baseline
+  serverState.set(incident.id, serverCanon(incident)); // optimistic baseline
   setSync('saving');
   return fetch(url, {
     method,
@@ -77,7 +62,7 @@ function flushPending() {
     try {
       const blob = new Blob([JSON.stringify(incident)], { type: 'application/json' });
       const ok = navigator.sendBeacon('/api/incidents', blob);
-      if (ok) serverState.set(incident.id, stableStringify(incident)!);
+      if (ok) serverState.set(incident.id, serverCanon(incident));
     } catch {
       /* best effort — nothing more we can do as the page unloads */
     }
@@ -138,7 +123,7 @@ export function IncidentSync() {
         return r.json() as Promise<Incident[]>;
       })
       .then((incidents) => {
-        for (const inc of incidents) serverState.set(inc.id, stableStringify(inc)!);
+        for (const inc of incidents) serverState.set(inc.id, serverCanon(inc));
         setIncidents(incidents);
       })
       .catch((e) => console.error('[incident-sync] initial load failed:', e));
@@ -158,7 +143,7 @@ export function IncidentSync() {
       const nextIds = new Set(next.map((i) => i.id));
 
       for (const inc of next) {
-        const canon = stableStringify(inc)!;
+        const canon = serverCanon(inc);
         const known = serverState.get(inc.id);
         if (known === canon) continue; // matches server / just applied from a peer
         if (known === undefined) {
@@ -193,7 +178,7 @@ export function IncidentSync() {
       if (!inc?.id) return;
       // Don't stomp an edit we're still saving locally — our write wins.
       if (pending.has(inc.id)) return;
-      const canon = stableStringify(inc)!;
+      const canon = serverCanon(inc);
       if (serverState.get(inc.id) === canon) return; // our own echo / no change
       serverState.set(inc.id, canon);
       useCrisisStore.getState().applyRemoteUpsert(inc);

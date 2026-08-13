@@ -523,12 +523,17 @@ export function SituationReport() {
             </FieldRow>
 
             <FieldRow label="Status">
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {INCIDENT_STATUSES.map((s) => (
                   <button
                     key={s.id}
+                    // Archived incidents are Closed by definition (stand-down
+                    // forces it, and every client re-normalizes archived
+                    // incidents to closed) — a chip change here would only
+                    // flicker and revert. Reopen first.
+                    disabled={!!inc.archivedAt}
                     onClick={() => update({ incidentStatus: s.id })}
-                    className={`rounded-full border px-3 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition ${
+                    className={`rounded-full border px-3 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition disabled:cursor-not-allowed disabled:opacity-40 ${
                       inc.incidentStatus === s.id
                         ? s.badge
                         : 'border-white/12 text-white/35 hover:border-white/25 hover:text-white/55'
@@ -537,6 +542,9 @@ export function SituationReport() {
                     {s.label}
                   </button>
                 ))}
+                {!!inc.archivedAt && (
+                  <span className="text-[9px] text-white/30">Reopen the incident to change status</span>
+                )}
               </div>
             </FieldRow>
           </div>

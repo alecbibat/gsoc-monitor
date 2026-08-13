@@ -52,6 +52,17 @@ describe('incident type taxonomy', () => {
     expect(incidentTypeDef('volcano').label).toBe('Other');
   });
 
+  it('does not read inherited keys off the alias object prototype', () => {
+    // Share snapshots are attacker-influenceable JSON — these must not crash
+    // or return a non-taxonomy value.
+    for (const hostile of ['toString', 'constructor', 'hasOwnProperty', 'valueOf', '__proto__']) {
+      expect(normalizeIncidentType(hostile)).toBe('other');
+      expect(incidentTypeDef(hostile).label).toBe('Other');
+      expect(normalizeIncidentStatus(hostile)).toBe('active');
+      expect(incidentStatusDef(hostile).label).toBe('Active');
+    }
+  });
+
   it('groups the full set by category with nothing dropped', () => {
     const grouped = INCIDENT_CATEGORIES.flatMap((c) => incidentTypesInCategory(c.id));
     expect(grouped.length).toBe(INCIDENT_TYPES.length);

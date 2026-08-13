@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useCrisisStore, type Incident } from './crisisStore';
 import { incidentStatusDef, incidentTypeDef } from './taxonomy';
+import { publishShareSnapshots } from './publishSnapshot';
 import { useAuthStore } from '../auth/authStore';
 import { CrisisReportModal } from './CrisisReportModal';
 
@@ -180,6 +181,10 @@ function ArchivedCard({
             onClick={() => {
               if (confirm(`Reopen "${incident.incidentName || 'Untitled'}"? It will return to the active incident list.`)) {
                 reopenIncident(incident.id);
+                // Reopening from the list never mounts useAutoPublish for this
+                // incident, so push the transition to the share links here
+                // (mirrors what reopenIncident just stored).
+                publishShareSnapshots({ ...incident, incidentStatus: 'monitoring', archivedAt: null });
               }
             }}
             className="rounded border border-accent/25 bg-accent/8 px-3 py-1.5 text-[11px] text-accent/70 transition hover:border-accent/45 hover:text-accent"

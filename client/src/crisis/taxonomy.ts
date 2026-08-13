@@ -110,7 +110,12 @@ export const LEGACY_TYPE_ALIASES: Record<string, IncidentType> = {
 export function normalizeIncidentType(raw: unknown): IncidentType {
   if (typeof raw === 'string') {
     if (TYPE_BY_ID.has(raw)) return raw as IncidentType;
-    const alias = LEGACY_TYPE_ALIASES[raw];
+    // Own-property check: share snapshots are attacker-influenceable JSON, and
+    // a bare index would read inherited keys ('toString', '__proto__', …) off
+    // the object prototype and return a non-string.
+    const alias = Object.prototype.hasOwnProperty.call(LEGACY_TYPE_ALIASES, raw)
+      ? LEGACY_TYPE_ALIASES[raw]
+      : undefined;
     if (alias) return alias;
   }
   return 'other';
@@ -172,7 +177,10 @@ export const LEGACY_STATUS_ALIASES: Record<string, IncidentStatus> = {
 export function normalizeIncidentStatus(raw: unknown): IncidentStatus {
   if (typeof raw === 'string') {
     if (STATUS_BY_ID.has(raw)) return raw as IncidentStatus;
-    const alias = LEGACY_STATUS_ALIASES[raw];
+    // Own-property check — same prototype-chain hazard as the type aliases.
+    const alias = Object.prototype.hasOwnProperty.call(LEGACY_STATUS_ALIASES, raw)
+      ? LEGACY_STATUS_ALIASES[raw]
+      : undefined;
     if (alias) return alias;
   }
   // Unknown → active, matching the old `?? STATUS_BADGE.active` fallbacks:

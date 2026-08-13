@@ -560,8 +560,10 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
 
       // Both server ingest paths normalize legacy taxonomy values (retired
       // type/status ids, archived-but-not-closed) on the way into the store.
-      // The sync watcher then sees the normalized incident as "changed" and
-      // writes the canonical values back — lazy, idempotent data migration.
+      // The sync layer canonicalizes its baselines the same way (syncCanon.ts),
+      // so normalization alone never registers as a local edit — stored legacy
+      // values migrate when a person genuinely edits the incident, not on load
+      // (an unprompted write-back could race and overwrite peers' edits).
       setIncidents: (incidents) => set({ incidents: incidents.map(normalizeIncidentFields) }),
       setSyncState: (syncState) => set({ syncState }),
 

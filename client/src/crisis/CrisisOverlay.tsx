@@ -4,6 +4,7 @@ import {
   useCrisisStore, useActiveIncident, extractPublicState, type CrisisTab,
 } from './crisisStore';
 import { incidentStatusDef } from './taxonomy';
+import { publishShareSnapshots } from './publishSnapshot';
 import { useAuthStore } from '../auth/authStore';
 import { SituationReport } from './tabs/SituationReport';
 import { IncidentList } from './IncidentList';
@@ -308,6 +309,10 @@ function IncidentDetail() {
                 onClick={() => {
                   if (confirm(`Stand down incident "${inc.incidentName || 'Untitled'}"?\n\nIt will be moved to the archive. You can reopen or generate a PDF report from the archive.`)) {
                     standDown(inc.id);
+                    // Stand-down navigates back to the list, so useAutoPublish
+                    // never sees the closed state — push it to the share links
+                    // explicitly (mirrors what standDownIncident just stored).
+                    publishShareSnapshots({ ...inc, incidentStatus: 'closed', archivedAt: new Date().toISOString() });
                   }
                 }}
                 className="rounded border border-amber-500/25 bg-amber-500/8 px-3 py-1.5 text-[11px] text-amber-300/60 transition hover:border-amber-500/40 hover:text-amber-300/90"
