@@ -12,6 +12,7 @@ import { radarEngine } from './engineFlag';
 import { FlowProbe, radarFlowProbeEnabled } from './flow/FlowProbe';
 import { WarpProbe, radarWarpProbeEnabled } from './flow/WarpProbe';
 import { RadarGlSpike, radarGlEnabled } from './gl/RadarGlSpike';
+import { MotionLayer, motionEnabled } from './motion/MotionLayer';
 import { RadarLayerV1 } from './RadarLayerV1';
 import { RadarLayerV2 } from './RadarLayerV2';
 
@@ -27,9 +28,12 @@ export function RadarLayer() {
           window.__radarFlow(). Measures only — nothing draws it. */}
       {radarFlowProbeEnabled() && <FlowProbe />}
       {/* Stage C PR 6: runs the warp over the live region and reports how far
-          it departs from a crossfade, at window.__radarWarp(). The render
-          wiring lands in PR 7, where `t` becomes continuous. */}
+          it departs from a crossfade, at window.__radarWarp(). */}
       {radarWarpProbeEnabled() && <WarpProbe />}
+      {/* Stage C PR 7: draws the warp at the continuous playhead, dimming the
+          tile path out from under itself. Stands down to that path whenever
+          motion is not available — see MotionLayer's header. */}
+      {motionEnabled() && <MotionLayer />}
     </>
   );
 }

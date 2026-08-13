@@ -137,6 +137,30 @@ export function regionKey(region: CompositeRegion): string {
   return `${region.level}/${region.x0}/${region.y0}/${region.nx}/${region.ny}`;
 }
 
+// What fraction of a specific region's tiles are decoded for every frame named.
+//
+// `planWarmRegion` answers "what is the best region right now", which is the
+// wrong question for anything that has already built state around one. It picks
+// the DEEPEST warm level, and which level qualifies differs from frame pair to
+// frame pair, so asking it afresh each pair makes the answer flip back and
+// forth between levels while the camera sits perfectly still. A caller holding
+// a region can ask this instead and keep what it has while it still works.
+export function regionWarmth(region: CompositeRegion, framePaths: string[]): number {
+  if (framePaths.length === 0) return 0;
+  let warm = 0;
+  let total = 0;
+  for (let ty = 0; ty < region.ny; ty++) {
+    for (let tx = 0; tx < region.nx; tx++) {
+      const suffix = `|${region.level}/${region.x0 + tx}/${region.y0 + ty}`;
+      for (const frame of framePaths) {
+        total++;
+        if (isTileWarm(frame + suffix)) warm++;
+      }
+    }
+  }
+  return total > 0 ? warm / total : 0;
+}
+
 // Ask every worker for its share of the block and flatten them into one bitmap.
 //
 // Tiles are hashed across workers by coordinate (so a tile's whole time series
