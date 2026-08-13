@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Router } from 'express';
 import zlib from 'zlib';
 import { cache } from '../cache';
@@ -291,6 +292,105 @@ function compareToUpscaledParent(
   };
 }
 
+// Can IEM supply HISTORY, or only "now"?
+//
+// This is the gate on Stage C's PR 9. IEM is only worth adding as a second
+// source because it is 5-minute CONUS data against RainViewer's 10-minute
+// global, and a radar timeline needs past frames — a source that can only
+// answer "what is falling right now" cannot fill a scrubber.
+//
+// Stage 0 probed `-0`, `-m05m` and `-m50m` on one tile and got byte-identical
+// payloads, which has two very different explanations that the sample could not
+// separate: the time slugs do not work, or that tile was EMPTY and all three
+// agreed on a picture of nothing. This settles it by hashing the payloads,
+// reporting the visible-pixel count beside every hash, and doing it on a tile
+// chosen because it has echo — plus the full slug ladder rather than three
+// points of it, so a partial failure is visible as a partial failure.
+function md5(buf: Buffer): string {
+  return createHash('md5').update(buf).digest('hex').slice(0, 12);
+}
+
+const IEM_SLUGS = ['0', 'm05m', 'm10m', 'm15m', 'm20m', 'm30m', 'm45m', 'm50m'];
+
+async function iemHistoryReport(z5x: number, z5y: number) {
+  const base = 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0';
+
+  // Find a tile that actually contains weather. A slug ladder compared on empty
+  // sky agrees perfectly and proves nothing, which is exactly the trap the
+  // Stage 0 sample fell into. Scan a band of CONUS z5 tiles and take the one
+  // with the most echo; fall back to the caller's tile if the whole country is
+  // dry, and SAY SO in the verdict rather than reporting a false negative.
+  let pick = { x: z5x, y: z5y, visible: -1 };
+  const scanned: Array<{ x: number; y: number; visible: number }> = [];
+  for (let x = 5; x <= 9; x++) {
+    for (let y = 11; y <= 13; y++) {
+      const p = await probeTile(`${base}/ridge::USCOMP-N0Q-0/5/${x}/${y}.png`);
+      const v = p.png ? visiblePx(p.png) : -1;
+      scanned.push({ x, y, visible: v });
+      if (v > pick.visible) pick = { x, y, visible: v };
+    }
+  }
+
+  const ladder: Array<Record<string, unknown>> = [];
+  for (const slug of IEM_SLUGS) {
+    const url = `${base}/ridge::USCOMP-N0Q-${slug}/5/${pick.x}/${pick.y}.png`;
+    const t0 = Date.now();
+    try {
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(10_000),
+        headers: { Origin: 'https://gsoc-monitor.example' },
+      });
+      const buf = Buffer.from(await res.arrayBuffer());
+      let px: number | undefined;
+      try {
+        px = visiblePx(decodePng(buf));
+      } catch {
+        px = undefined;
+      }
+      ladder.push({
+        slug,
+        status: res.status,
+        bytes: buf.length,
+        md5: md5(buf),
+        visiblePx: px,
+        ms: Date.now() - t0,
+        age: res.headers.get('age'),
+        lastModified: res.headers.get('last-modified'),
+        cacheControl: res.headers.get('cache-control'),
+      });
+    } catch (err) {
+      ladder.push({ slug, error: String(err), ms: Date.now() - t0 });
+    }
+  }
+
+  const hashes = ladder.map((l) => l.md5).filter(Boolean) as string[];
+  const distinct = new Set(hashes).size;
+  const echo = pick.visible > 0;
+
+  return {
+    tile: { z: 5, ...pick },
+    scanned,
+    ladder,
+    distinctPayloads: distinct,
+    ladderLength: hashes.length,
+    // The single line the Stage C decision turns on.
+    verdict: !echo
+      ? 'INCONCLUSIVE — no echo anywhere in the scanned CONUS band; every slug ' +
+        'agrees on an empty picture, which says nothing about whether they work. ' +
+        'Re-run when there is weather over the United States.'
+      : distinct <= 1
+        ? 'NO HISTORY — every time slug returned byte-identical bytes on a tile ' +
+          'that HAS echo, so the slugs do not select past imagery. IEM can supply ' +
+          '"now" only, and cannot back a timeline.'
+        : distinct < hashes.length
+          ? `PARTIAL — ${distinct} distinct payloads across ${hashes.length} slugs. ` +
+            'Some slugs work; the timeline could only use those, at whatever ' +
+            'spacing they actually provide.'
+          : 'HISTORY WORKS — every slug returned distinct bytes, so IEM can back ' +
+            'a 5-minute CONUS timeline.',
+  };
+}
+
 // TEMPORARY: inspect what RainViewer's tile endpoints actually serve. Finds
 // the CONUS z5 tile with the most echo in the latest frame, then reports
 // pixel statistics for the raw scheme (0/0_1), its smoothed variant, two
@@ -499,6 +599,8 @@ async function stage0Report(
     allowOrigin: p.allowOrigin,
     error: p.error,
   }));
+
+  out.iemHistory = await iemHistoryReport(z5x, z5y);
 
   return out;
 }
