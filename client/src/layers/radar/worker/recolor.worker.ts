@@ -8,7 +8,9 @@
 
 import { getRadarLut } from '../palettes';
 import { blurField, colorizeField, decodeField, radarBlurSigma } from '../radarField';
+import type { RadarField } from '../radarField';
 import { computeFlow } from '../flow/lk';
+import { warpBlend } from '../flow/warp';
 import { FieldCache } from './fieldCache';
 import type {
   CompositeRequest,
@@ -17,6 +19,7 @@ import type {
   RadarWorkerRequest,
   RadarWorkerResponse,
   TileRequest,
+  WarpRequest,
 } from './protocol';
 
 // The client tsconfig loads the DOM lib, not WebWorker (one program, one
@@ -94,7 +97,7 @@ function withTimeout(work: Promise<ImageBitmap>, what: string): Promise<ImageBit
 // Requests queue and run one at a time. Serializing keeps peak memory to a
 // single tile's intermediates and makes cancellation meaningful: a superseded
 // frame's queued tiles are dropped before they ever cost anything.
-type QueuedRequest = TileRequest | CompositeRequest | MosaicRequest | FlowRequest;
+type QueuedRequest = TileRequest | CompositeRequest | MosaicRequest | FlowRequest | WarpRequest;
 const queue: QueuedRequest[] = [];
 // Ids accepted and not yet answered, and the subset of those the caller has
 // since given up on. Tracking `pending` keeps `cancelled` from accumulating
@@ -257,6 +260,94 @@ function mosaic(req: MosaicRequest): void {
   );
 }
 
+// Stitch a tile block into one field, for the warp. Unlike `composite` this
+// keeps the mag/presence pair as a RadarField rather than packing it into RGBA,
+// because that is what `warpBlend` reads. Absent tiles stay zero — which is
+// exactly what empty sky decodes to, so a partly-warm block warps correctly
+// over the part it has.
+//
+// The buffers are reused across calls: a 4-tile-square block is 4 MB per plane
+// and this runs on the render path, so allocating per frame would hand the GC a
+// steady 16 MB/frame to collect.
+const stitchScratch = new Map<string, RadarField>();
+function stitchField(
+  slot: string,
+  framePath: string,
+  level: number,
+  x0: number,
+  y0: number,
+  nx: number,
+  ny: number
+): { field: RadarField; present: number } {
+  const w = nx * TILE_PX;
+  const h = ny * TILE_PX;
+  let field = stitchScratch.get(slot);
+  if (!field || field.width !== w || field.height !== h) {
+    field = { width: w, height: h, mag: new Uint8Array(w * h), presence: new Uint8Array(w * h) };
+    stitchScratch.set(slot, field);
+  } else {
+    field.mag.fill(0);
+    field.presence.fill(0);
+  }
+
+  let present = 0;
+  for (let ty = 0; ty < ny; ty++) {
+    for (let tx = 0; tx < nx; tx++) {
+      const tile = cache.get(`${framePath}|${level}/${x0 + tx}/${y0 + ty}`);
+      if (!tile) continue;
+      present++;
+      const ox = tx * TILE_PX;
+      const oy = ty * TILE_PX;
+      for (let y = 0; y < tile.height; y++) {
+        const src = y * tile.width;
+        const dst = (oy + y) * w + ox;
+        field.mag.set(tile.mag.subarray(src, src + tile.width), dst);
+        field.presence.set(tile.presence.subarray(src, src + tile.width), dst);
+      }
+    }
+  }
+  return { field, present };
+}
+
+async function warp(req: WarpRequest): Promise<void> {
+  const started = performance.now();
+  const { id, frameA, frameB, level, x0, y0, nx, ny, t, palette, flowScale } = req;
+  const a = stitchField('a', frameA, level, x0, y0, nx, ny);
+  const b = stitchField('b', frameB, level, x0, y0, nx, ny);
+  const total = nx * ny * 2;
+  const coverage = total > 0 ? (a.present + b.present) / total : 0;
+
+  const w = a.field.width;
+  const h = a.field.height;
+  const out = outputBuffer(w * h * 4);
+  warpBlend(a.field, b.field, out, {
+    t,
+    // A flow field with no confidence plane is fine here: warpBlend reads only
+    // u/v, and the caller has already thresholded on confidence when it decided
+    // this pair was worth warping at all.
+    flow: req.flow ? { ...req.flow, confidence: EMPTY_CONFIDENCE } : null,
+    flowScale,
+    lut: getRadarLut(palette),
+    // Same orientation as the single-tile path — the flip is baked into `out`.
+    flipY: true,
+  });
+
+  const bitmap = await withTimeout(
+    createImageBitmap(new ImageData(out, w, h), { premultiplyAlpha: 'none' }),
+    'warp encode'
+  );
+  if (cancelled.has(id)) {
+    bitmap.close();
+    return;
+  }
+  post(
+    { type: 'warped', id, bitmap, coverage, ms: Math.round(performance.now() - started) },
+    [bitmap]
+  );
+}
+
+const EMPTY_CONFIDENCE = new Float32Array(0);
+
 function flow(req: FlowRequest): void {
   const started = performance.now();
   const result = computeFlow(
@@ -294,6 +385,7 @@ async function drain(): Promise<void> {
         if (req.type === 'composite') await composite(req);
         else if (req.type === 'mosaic') mosaic(req);
         else if (req.type === 'flow') flow(req);
+        else if (req.type === 'warp') await warp(req);
         else await handle(req);
       } catch (err) {
         // A failed recolor degrades to a transparent tile on the main thread —
@@ -307,7 +399,9 @@ async function drain(): Promise<void> {
               ? req.framePath
               : req.type === 'flow'
                 ? 'flow'
-                : req.key,
+                : req.type === 'warp'
+                  ? `${req.frameA}>${req.frameB}`
+                  : req.key,
           message: String(err),
         });
       } finally {

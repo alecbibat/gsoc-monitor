@@ -74,8 +74,11 @@ function onMessage(e: MessageEvent<RadarWorkerResponse>) {
   const job = pending.get(msg.id);
   if (!job) {
     // Cancelled between request and reply — close the orphan so its backing
-    // store is released now rather than whenever GC gets to it.
-    if (msg.type === 'tile') msg.bitmap.close();
+    // store is released now rather than whenever GC gets to it. Region bitmaps
+    // matter most: a full 8x8 block is 4096² RGBA, 67 MB apiece.
+    if (msg.type === 'tile' || msg.type === 'composited' || msg.type === 'warped') {
+      msg.bitmap.close();
+    }
     return;
   }
 
@@ -168,18 +171,27 @@ function send(worker: number, msg: RadarWorkerRequest) {
   ensureWorkers()[worker].postMessage(msg);
 }
 
-// Route by tile coordinates ONLY, never by frame: every frame's copy of a
-// given tile then lands in the same worker, so that worker holds the whole
-// time series for the tile. That is what makes a palette switch a pure cache
-// hit, and it is the locality Stage C's frame-pair optical flow needs.
+// Route by ZOOM LEVEL, never by frame or by tile coordinate.
+//
+// Frame is excluded so a tile's whole time series stays in one worker — that is
+// what makes a palette switch a pure cache hit. Coordinate is excluded because
+// every Stage C operation is region-scoped (composite, flow mosaic, warp) and a
+// region is single-level by construction: hashing on level alone guarantees one
+// worker holds the ENTIRE region, so those operations read straight from its
+// cache instead of being gathered and merged across workers.
+//
+// The cost is that decoding for the level on screen lands on one worker. That
+// is not the bottleneck: tile fetches are throttled to two at a time, so the
+// network gates warming long before the decode does.
 function workerFor(key: string): number {
-  const xyz = key.slice(key.lastIndexOf('|') + 1);
-  let h = 2166136261;
-  for (let i = 0; i < xyz.length; i++) {
-    h ^= xyz.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0) % WORKER_COUNT;
+  const suffix = key.slice(key.lastIndexOf('|') + 1);
+  const level = parseInt(suffix, 10);
+  return (Number.isFinite(level) ? Math.abs(level) : 0) % WORKER_COUNT;
+}
+
+// The worker that owns every tile at a level, for region-scoped requests.
+export function workerForLevel(level: number): number {
+  return Math.abs(level) % WORKER_COUNT;
 }
 
 export interface TileJob {
@@ -420,6 +432,60 @@ export function computeFlowInWorker(
           }
         : null,
     'flow'
+  );
+}
+
+export interface WarpedRegion {
+  bitmap: ImageBitmap;
+  /** Fraction of the block's tiles cached across BOTH frames of the pair. */
+  coverage: number;
+  ms: number;
+}
+
+// The warp-dissolve over one region, at one point in time between two frames.
+//
+// Unlike composite and mosaic this does NOT fan out across workers: the tile
+// hash is by level and a region is single-level, so the worker returned by
+// `workerForLevel` holds every tile of the block for both frames. The whole
+// operation runs inside it and only the finished bitmap crosses a postMessage.
+//
+// `flow` is copied rather than transferred: the caller keeps it cached and
+// re-warps the same pair at many values of `t`, so detaching it would cost a
+// re-solve per frame. A 32×32 grid is 8 KB, well under the cost of the solve.
+export function warpRegion(
+  frameA: string,
+  frameB: string,
+  level: number,
+  x0: number,
+  y0: number,
+  nx: number,
+  ny: number,
+  t: number,
+  palette: RadarPaletteId,
+  flow: { cols: number; rows: number; u: Float32Array; v: Float32Array } | null,
+  flowScale: number
+): Promise<WarpedRegion> {
+  return regionRequest(
+    workerForLevel(level),
+    (id) => ({
+      type: 'warp',
+      id,
+      frameA,
+      frameB,
+      level,
+      x0,
+      y0,
+      nx,
+      ny,
+      t,
+      palette,
+      flow,
+      flowScale,
+    }),
+    [],
+    (msg) =>
+      msg.type === 'warped' ? { bitmap: msg.bitmap, coverage: msg.coverage, ms: msg.ms } : null,
+    'warp'
   );
 }
 
