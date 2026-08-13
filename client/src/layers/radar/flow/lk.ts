@@ -436,6 +436,20 @@ export function densifyFlow(flow: FlowField, iterations = 24): FlowField {
   const { cols, rows } = flow;
   const n = cols * rows;
 
+  // Loud, because the silent version cost hours. A grid that arrives without a
+  // matching confidence plane makes every weight NaN, every densified vector
+  // NaN, and every back-trajectory NaN — and a NaN trajectory fails its own
+  // bounds check (`NaN < 0` is false), so nothing is flagged as out of bounds
+  // and the forecast renders completely empty while every status field
+  // downstream still reports success.
+  if (flow.confidence.length !== n) {
+    console.error(
+      `[radar] flow confidence plane is ${flow.confidence.length}, expected ${n} — ` +
+        'refusing to densify; the forecast will fall back to persistence'
+    );
+    return flow;
+  }
+
   // The dominant motion, for cells the spreading never reaches.
   let mu = 0;
   let mv = 0;

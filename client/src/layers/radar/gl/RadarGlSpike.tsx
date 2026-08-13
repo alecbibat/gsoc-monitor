@@ -10,7 +10,7 @@ import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../../../cesium/CesiumContext';
 import { useLayersStore } from '../../../store/layersStore';
 import { RADAR_MAX_LEVEL } from '../RainViewerImagery';
-import { buildTimeline, useRadarStore } from '../radarStore';
+import { buildTimeline, nowIndex, useRadarStore } from '../radarStore';
 import { handoverAt } from './handover';
 import { glStats, installGlStatsHook } from './glStats';
 import { WeatherPrimitive } from './WeatherPrimitive';
@@ -93,7 +93,8 @@ export function RadarGlSpike() {
       const s = useRadarStore.getState();
       const timeline = buildTimeline(s);
       if (timeline.length === 0) return;
-      const i = Math.min(Math.max(0, s.currentIndex), timeline.length - 1);
+      // Observed frames only — forecast frames have no tiles to composite.
+      const i = Math.min(Math.max(0, s.currentIndex), nowIndex(timeline));
       const next = timeline[Math.min(timeline.length - 1, i + 1)];
       void primitive.update(timeline[i].frame.path, next.frame.path, RADAR_MAX_LEVEL);
     }, REGION_POLL_MS);

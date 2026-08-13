@@ -12,7 +12,7 @@ import { useEffect } from 'react';
 import { useCesiumViewer } from '../../../cesium/CesiumContext';
 import { useLayersStore } from '../../../store/layersStore';
 import { planWarmRegion, regionKey } from '../gl/composite';
-import { buildTimeline, useRadarStore } from '../radarStore';
+import { buildTimeline, nowIndex, useRadarStore } from '../radarStore';
 import { RADAR_MAX_LEVEL } from '../RainViewerImagery';
 import { flowCacheSize, getFlow } from './flowCache';
 
@@ -75,7 +75,14 @@ export function FlowProbe() {
       const s = useRadarStore.getState();
       const timeline = buildTimeline(s);
       if (timeline.length < 2) return;
-      const i = Math.min(Math.max(0, s.currentIndex), timeline.length - 2);
+      // Clamped to the OBSERVED range, not to the timeline's end. Since PR 8 the
+      // timeline carries forecast frames whose paths are sentinels with no tiles
+      // behind them; feeding one to planWarmRegion finds nothing warm and this
+      // reports a permanent "no region decoded" whenever the playhead sits past
+      // "now".
+      const lastPair = nowIndex(timeline) - 1;
+      if (lastPair < 0) return;
+      const i = Math.min(Math.max(0, s.currentIndex), lastPair);
       const a = timeline[i].frame.path;
       const b = timeline[i + 1].frame.path;
       // Ask for a region that is decoded for BOTH frames — flow measured from

@@ -8,6 +8,32 @@
 
 import type { RadarPaletteId } from '../palettes';
 
+// A flow grid as it crosses a postMessage.
+//
+// `confidence` is NOT optional, and is not decoration. The nowcast densifies the
+// field before advecting — spreading measured vectors into the empty sky ahead,
+// weighted by confidence — so a grid that arrives without it produces NaN for
+// every vector, and NaN back-trajectories render an entirely EMPTY forecast.
+// Nothing throws and nothing logs; the forecast simply is not there.
+export interface FlowGrid {
+  cols: number;
+  rows: number;
+  u: Float32Array;
+  v: Float32Array;
+  confidence: Float32Array;
+  /**
+   * Stable identity for this field — the flow cache's own key.
+   *
+   * The warp and the nowcast expand the coarse grid to full resolution and
+   * cache the result, because that expansion is a bilinear sample per output
+   * pixel and would otherwise run on every rendered frame. That cache used to
+   * key on OBJECT IDENTITY, which can never hit here: postMessage structured-
+   * clones, so every message deserializes a brand new object and the worker
+   * re-expanded a million-pixel field for every single frame it drew.
+   */
+  key: string;
+}
+
 export interface TileRequest {
   type: 'tile';
   id: number;
@@ -93,7 +119,7 @@ export interface WarpRequest {
   t: number;
   palette: RadarPaletteId;
   /** Flow measured A→B on the same region. Null renders the plain dissolve. */
-  flow: { cols: number; rows: number; u: Float32Array; v: Float32Array } | null;
+  flow: FlowGrid | null;
   /** Multiplier taking flow from its plane's pixels to composite pixels. */
   flowScale: number;
 }
@@ -125,7 +151,7 @@ export interface NowcastRequest {
    * which is a legitimate (if dull) forecast: no measurable motion, no
    * predicted movement.
    */
-  flow: { cols: number; rows: number; u: Float32Array; v: Float32Array } | null;
+  flow: FlowGrid | null;
   flowScale: number;
 }
 

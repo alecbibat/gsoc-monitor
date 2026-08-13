@@ -31,6 +31,11 @@ export interface WarpOptions {
    * plain dissolve.
    */
   flow: FlowField | null;
+  /**
+   * Stable identity for `flow`, so the full-resolution expansion can be reused
+   * across calls. Omit in-process and object identity is used instead.
+   */
+  flowKey?: string;
   /** Multiply flow by this to reach output-pixel units. */
   flowScale: number;
   lut: RadarLut;
@@ -56,7 +61,7 @@ export function warpBlend(
   const w = a.width;
   const h = a.height;
   const t = options.t < 0 ? 0 : options.t > 1 ? 1 : options.t;
-  const { flow, flowScale, lut, flipY } = options;
+  const { flow, flowScale, flowKey, lut, flipY } = options;
   const rain = lut.rain;
   const magA = a.mag;
   const presA = a.presence;
@@ -64,7 +69,7 @@ export function warpBlend(
   const presB = b.presence;
   out.fill(0);
 
-  const [fu, fv] = resolveFlowTo(flow, w, h, flowScale);
+  const [fu, fv] = resolveFlowTo(flow, w, h, flowScale, flowKey);
   const back = -t;
   const fwd = 1 - t;
 
@@ -173,10 +178,15 @@ export function resolveFlowTo(
   flow: FlowField | null,
   w: number,
   h: number,
-  scale: number
+  scale: number,
+  key?: string
 ): [Float32Array, Float32Array] {
+  // A caller-supplied token when there is one, object identity when there is
+  // not. Identity is right in-process; across a postMessage it is worthless,
+  // because the flow is structured-cloned into a fresh object every time.
+  const token: unknown = key ?? flow;
   const hit = slots.findIndex(
-    (s) => s.token === flow && s.scale === scale && s.w === w && s.h === h
+    (s) => s.token === token && s.scale === scale && s.w === w && s.h === h
   );
   if (hit >= 0) {
     // Most-recently-used first, so two alternating callers both stay resident.
@@ -191,7 +201,7 @@ export function resolveFlowTo(
   if (!slot || slot.w !== w || slot.h !== h) {
     slot = { w, h, fu: new Float32Array(w * h), fv: new Float32Array(w * h), token: null, scale };
   }
-  slot.token = flow;
+  slot.token = token;
   slot.scale = scale;
   slots.unshift(slot);
 

@@ -267,7 +267,17 @@ export function MotionLayer() {
           // re-warping an identical image.
           if (key === shown) return;
 
-          const grid = { cols: flow.cols, rows: flow.rows, u: flow.u, v: flow.v };
+          // confidence travels with the grid: the nowcast densifies the field
+          // before advecting and weights the spread by it. Without it every
+          // vector densifies to NaN and the forecast renders empty.
+          const grid = {
+            cols: flow.cols,
+            rows: flow.rows,
+            u: flow.u,
+            v: flow.v,
+            confidence: flow.confidence,
+            key: flow.key,
+          };
           const flowScale = region.widthPx / flow.planeWidth;
           const warped = forecast
             ? await nowcastRegion(

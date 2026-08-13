@@ -41,6 +41,8 @@ export interface AdvectOptions {
   lead: number;
   /** Flow measured over the same region, in the pixels of the plane LK ran on. */
   flow: FlowField | null;
+  /** Stable identity for `flow` — see WarpOptions.flowKey. */
+  flowKey?: string;
   /** Multiply flow by this to reach output-pixel units. */
   flowScale: number;
   /**
@@ -80,7 +82,7 @@ export function advectField(
 ): void {
   const w = src.width;
   const h = src.height;
-  const { flow, flowScale, lead, decay, lut, flipY } = options;
+  const { flow, flowScale, flowKey, lead, decay, lut, flipY } = options;
   const rain = lut.rain;
   const mag = src.mag;
   const pres = src.presence;
@@ -88,7 +90,15 @@ export function advectField(
 
   // Densified first: a back-trajectory for a forecast starts where the echo is
   // NOT yet, and the raw field has no motion there. See densifyFlow.
-  const [fu, fv] = resolveFlowTo(flow ? densified(flow) : null, w, h, flowScale);
+  // Keyed on the DENSIFIED field, which is a different array from the raw one
+  // the warp resolves over the same region — they must not share a slot.
+  const [fu, fv] = resolveFlowTo(
+    flow ? densified(flow) : null,
+    w,
+    h,
+    flowScale,
+    flowKey ? `${flowKey}~dense` : undefined
+  );
   const steps = Math.max(1, Math.round(Math.abs(lead) * SUBSTEPS_PER_INTERVAL));
   const dt = lead / steps;
 

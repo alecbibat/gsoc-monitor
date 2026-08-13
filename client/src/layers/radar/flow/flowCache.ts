@@ -24,6 +24,8 @@ const FLOW_ROWS = 32;
 const MAX_ENTRIES = 32;
 
 export interface RegionFlow extends FlowResult {
+  /** The cache key — a stable identity for this exact field. See FlowGrid.key. */
+  key: string;
   /** Fraction of the region's tiles that were decoded when this was computed. */
   coverage: number;
   /** Pixel scale of the plane LK ran on, relative to the region's full size. */
@@ -90,6 +92,7 @@ export function getFlow(
     );
     const flow: RegionFlow = {
       ...result,
+      key,
       coverage: Math.min(partsA.coverage, partsB.coverage),
       planeWidth: partsA.width,
       planeHeight: partsA.height,

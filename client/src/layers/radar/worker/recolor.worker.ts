@@ -330,10 +330,8 @@ async function warp(req: WarpRequest): Promise<void> {
   const out = outputBuffer(w * h * 4);
   warpBlend(a.field, b.field, out, {
     t,
-    // A flow field with no confidence plane is fine here: warpBlend reads only
-    // u/v, and the caller has already thresholded on confidence when it decided
-    // this pair was worth warping at all.
-    flow: req.flow ? { ...req.flow, confidence: EMPTY_CONFIDENCE } : null,
+    flow: req.flow,
+    flowKey: req.flow?.key,
     flowScale,
     lut: getRadarLut(palette),
     // Same orientation as the single-tile path — the flip is baked into `out`.
@@ -354,8 +352,6 @@ async function warp(req: WarpRequest): Promise<void> {
   );
 }
 
-const EMPTY_CONFIDENCE = new Float32Array(0);
-
 // The advection nowcast: carry one observed frame forward along the flow.
 async function nowcast(req: NowcastRequest): Promise<void> {
   const started = performance.now();
@@ -370,7 +366,8 @@ async function nowcast(req: NowcastRequest): Promise<void> {
   advectField(src.field, out, {
     lead,
     decay,
-    flow: req.flow ? { ...req.flow, confidence: EMPTY_CONFIDENCE } : null,
+    flow: req.flow,
+    flowKey: req.flow?.key,
     flowScale,
     lut: getRadarLut(palette),
     flipY: true,

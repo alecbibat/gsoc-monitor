@@ -6,7 +6,7 @@
 // routing, the cache hint, and cancelling work that has been superseded.
 
 import type { RadarPaletteId } from '../palettes';
-import type { RadarWorkerRequest, RadarWorkerResponse } from './protocol';
+import type { FlowGrid, RadarWorkerRequest, RadarWorkerResponse } from './protocol';
 
 const WORKER_COUNT = 2;
 
@@ -467,7 +467,7 @@ export function warpRegion(
   ny: number,
   t: number,
   palette: RadarPaletteId,
-  flow: { cols: number; rows: number; u: Float32Array; v: Float32Array } | null,
+  flow: FlowGrid | null,
   flowScale: number
 ): Promise<WarpedRegion> {
   return regionRequest(
@@ -508,7 +508,7 @@ export function nowcastRegion(
   lead: number,
   decay: number,
   palette: RadarPaletteId,
-  flow: { cols: number; rows: number; u: Float32Array; v: Float32Array } | null,
+  flow: FlowGrid | null,
   flowScale: number
 ): Promise<WarpedRegion> {
   return regionRequest(
