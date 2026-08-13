@@ -9,6 +9,7 @@
 // as the kill switch.
 
 import { radarEngine } from './engineFlag';
+import { FlowProbe, radarFlowProbeEnabled } from './flow/FlowProbe';
 import { RadarGlSpike, radarGlEnabled } from './gl/RadarGlSpike';
 import { RadarLayerV1 } from './RadarLayerV1';
 import { RadarLayerV2 } from './RadarLayerV2';
@@ -21,6 +22,9 @@ export function RadarLayer() {
       {/* Stage B spike: draws over the imagery below the handover altitude and
           dims it to match, so the flag being off leaves Stage A untouched. */}
       {radarGlEnabled() && <RadarGlSpike />}
+      {/* Stage C PR 5: computes optical flow and publishes a summary at
+          window.__radarFlow(). Measures only — nothing draws it until PR 6. */}
+      {radarFlowProbeEnabled() && <FlowProbe />}
     </>
   );
 }

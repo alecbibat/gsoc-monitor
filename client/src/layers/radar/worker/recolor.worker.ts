@@ -8,9 +8,12 @@
 
 import { getRadarLut } from '../palettes';
 import { blurField, colorizeField, decodeField, radarBlurSigma } from '../radarField';
+import { computeFlow } from '../flow/lk';
 import { FieldCache } from './fieldCache';
 import type {
   CompositeRequest,
+  FlowRequest,
+  MosaicRequest,
   RadarWorkerRequest,
   RadarWorkerResponse,
   TileRequest,
@@ -91,7 +94,8 @@ function withTimeout(work: Promise<ImageBitmap>, what: string): Promise<ImageBit
 // Requests queue and run one at a time. Serializing keeps peak memory to a
 // single tile's intermediates and makes cancellation meaningful: a superseded
 // frame's queued tiles are dropped before they ever cost anything.
-const queue: Array<TileRequest | CompositeRequest> = [];
+type QueuedRequest = TileRequest | CompositeRequest | MosaicRequest | FlowRequest;
+const queue: QueuedRequest[] = [];
 // Ids accepted and not yet answered, and the subset of those the caller has
 // since given up on. Tracking `pending` keeps `cancelled` from accumulating
 // cancels that arrive after their tile already finished.
@@ -209,6 +213,72 @@ async function composite(req: CompositeRequest): Promise<void> {
   post({ type: 'composited', id, bitmap, coverage: present / (nx * ny) }, [bitmap]);
 }
 
+// A downsampled magnitude mosaic of the tiles this worker happens to own.
+// Absent tiles stay zero, which is also what empty sky decodes to, so a caller
+// merging two workers' partials can simply take the per-pixel maximum.
+function mosaic(req: MosaicRequest): void {
+  const { id, framePath, level, x0, y0, nx, ny, maxSide } = req;
+  // Integer power-of-two reduction, so tile boundaries stay aligned with the
+  // output grid and downsampling-then-merging equals merging-then-downsampling.
+  let step = 1;
+  while (Math.max(nx, ny) * (TILE_PX / step) > maxSide && step < TILE_PX) step *= 2;
+  const tilePx = TILE_PX / step;
+  const w = nx * tilePx;
+  const h = ny * tilePx;
+  const plane = new Float32Array(w * h);
+  let present = 0;
+
+  for (let ty = 0; ty < ny; ty++) {
+    for (let tx = 0; tx < nx; tx++) {
+      const field = cache.get(`${framePath}|${level}/${x0 + tx}/${y0 + ty}`);
+      if (!field) continue;
+      present++;
+      const ox = tx * tilePx;
+      const oy = ty * tilePx;
+      const inv = 1 / (step * step);
+      for (let y = 0; y < tilePx; y++) {
+        for (let x = 0; x < tilePx; x++) {
+          // Box-average the step x step source patch.
+          let sum = 0;
+          const sy0 = y * step;
+          const sx0 = x * step;
+          for (let sy = 0; sy < step; sy++) {
+            const row = (sy0 + sy) * field.width;
+            for (let sx = 0; sx < step; sx++) sum += field.mag[row + sx0 + sx];
+          }
+          plane[(oy + y) * w + ox + x] = sum * inv;
+        }
+      }
+    }
+  }
+  post(
+    { type: 'mosaic', id, width: w, height: h, plane, coverage: present / (nx * ny) },
+    [plane.buffer]
+  );
+}
+
+function flow(req: FlowRequest): void {
+  const started = performance.now();
+  const result = computeFlow(
+    { width: req.width, height: req.height, data: req.a },
+    { width: req.width, height: req.height, data: req.b },
+    { cols: req.cols, rows: req.rows }
+  );
+  post(
+    {
+      type: 'flow',
+      id: req.id,
+      cols: result.cols,
+      rows: result.rows,
+      u: result.u,
+      v: result.v,
+      confidence: result.confidence,
+      ms: Math.round(performance.now() - started),
+    },
+    [result.u.buffer, result.v.buffer, result.confidence.buffer]
+  );
+}
+
 async function drain(): Promise<void> {
   if (draining) return;
   draining = true;
@@ -222,6 +292,8 @@ async function drain(): Promise<void> {
       }
       try {
         if (req.type === 'composite') await composite(req);
+        else if (req.type === 'mosaic') mosaic(req);
+        else if (req.type === 'flow') flow(req);
         else await handle(req);
       } catch (err) {
         // A failed recolor degrades to a transparent tile on the main thread —
@@ -230,7 +302,12 @@ async function drain(): Promise<void> {
         post({
           type: 'error',
           id: req.id,
-          key: req.type === 'composite' ? req.framePath : req.key,
+          key:
+            req.type === 'composite' || req.type === 'mosaic'
+              ? req.framePath
+              : req.type === 'flow'
+                ? 'flow'
+                : req.key,
           message: String(err),
         });
       } finally {

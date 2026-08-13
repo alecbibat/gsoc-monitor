@@ -47,6 +47,8 @@ interface Pending {
   fetchBlob: FetchTileBlob;
   warmOnly: boolean;
   resolve: (bitmap: ImageBitmap | null, coverage?: number) => void;
+  /** Set instead of `resolve` for region-scoped replies. */
+  resolveRegion?: (msg: RadarWorkerResponse) => void;
   reject: (err: unknown) => void;
   timer: number;
 }
@@ -132,11 +134,11 @@ function onMessage(e: MessageEvent<RadarWorkerResponse>) {
     return;
   }
 
-  // 'composited' — Stage B. Composites are not tiles, so nothing is recorded in
-  // the cache hint; the bitmap and how much of it was actually filled go
-  // straight to the caller.
+  // Region-scoped replies (composite, mosaic, flow) are not tiles, so nothing
+  // is recorded in the cache hint. They carry a payload rather than a bitmap,
+  // so they resolve through a separate channel.
   settle(msg.id);
-  job.resolve(msg.bitmap, msg.coverage);
+  job.resolveRegion?.(msg);
 }
 
 function ensureWorkers(): Worker[] {
@@ -299,7 +301,11 @@ export function compositeRegion(
       worker,
       fetchBlob: () => undefined,
       warmOnly: false,
-      resolve: (b, coverage) => resolve({ bitmap: b as ImageBitmap, coverage: coverage ?? 0 }),
+      resolve: () => {},
+      resolveRegion: (msg) => {
+        if (msg.type === 'composited') resolve({ bitmap: msg.bitmap, coverage: msg.coverage });
+        else reject(new Error(`unexpected reply for composite: ${msg.type}`));
+      },
       reject,
       timer,
     });
@@ -309,6 +315,113 @@ export function compositeRegion(
 }
 
 export const WORKER_SLOTS = WORKER_COUNT;
+
+// Generic region request. Composite, mosaic and flow all follow the same
+// shape — send, await one typed reply, no cache-hint bookkeeping.
+function regionRequest<T>(
+  worker: number,
+  request: (id: number) => RadarWorkerRequest,
+  transfer: Transferable[],
+  accept: (msg: RadarWorkerResponse) => T | null,
+  label: string
+): Promise<T> {
+  ensureWorkers();
+  const id = nextId++;
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!pending.has(id)) return;
+      settle(id);
+      reject(new Error(`radar ${label} timed out`));
+    }, TILE_TIMEOUT_MS) as unknown as number;
+    pending.set(id, {
+      key: label,
+      level: 0,
+      palette: 'storm',
+      worker,
+      fetchBlob: () => undefined,
+      warmOnly: false,
+      resolve: () => {},
+      resolveRegion: (msg) => {
+        const value = accept(msg);
+        if (value === null) reject(new Error(`unexpected reply for ${label}: ${msg.type}`));
+        else resolve(value);
+      },
+      reject,
+      timer,
+    });
+    ensureWorkers()[worker].postMessage(request(id), transfer);
+  });
+}
+
+export interface MosaicPart {
+  width: number;
+  height: number;
+  plane: Float32Array;
+  coverage: number;
+}
+
+// One worker's share of a region's magnitude field, downsampled for flow.
+export function mosaicPart(
+  worker: number,
+  framePath: string,
+  level: number,
+  x0: number,
+  y0: number,
+  nx: number,
+  ny: number,
+  maxSide: number
+): Promise<MosaicPart> {
+  return regionRequest(
+    worker,
+    (id) => ({ type: 'mosaic', id, framePath, level, x0, y0, nx, ny, maxSide }),
+    [],
+    (msg) =>
+      msg.type === 'mosaic'
+        ? { width: msg.width, height: msg.height, plane: msg.plane, coverage: msg.coverage }
+        : null,
+    'mosaic'
+  );
+}
+
+export interface FlowResult {
+  cols: number;
+  rows: number;
+  u: Float32Array;
+  v: Float32Array;
+  confidence: Float32Array;
+  ms: number;
+}
+
+// Lucas-Kanade over a merged pair of mosaics. The planes are TRANSFERRED, so
+// this costs a pointer hand-off rather than a copy, and the caller's arrays are
+// detached afterwards.
+export function computeFlowInWorker(
+  worker: number,
+  width: number,
+  height: number,
+  a: Float32Array,
+  b: Float32Array,
+  cols: number,
+  rows: number
+): Promise<FlowResult> {
+  return regionRequest(
+    worker,
+    (id) => ({ type: 'flow', id, width, height, a, b, cols, rows }),
+    [a.buffer, b.buffer],
+    (msg) =>
+      msg.type === 'flow'
+        ? {
+            cols: msg.cols,
+            rows: msg.rows,
+            u: msg.u,
+            v: msg.v,
+            confidence: msg.confidence,
+            ms: msg.ms,
+          }
+        : null,
+    'flow'
+  );
+}
 
 // Decode a tile into the field cache without producing an image. Used by
 // prefetch, where nothing is waiting to draw the result.

@@ -250,6 +250,59 @@ and the day/night terminator. This sandbox renders through SwiftShader (measured
 if the verdict is worth contesting. Given the label-ordering finding, they would
 have to be extraordinary to change it.
 
+### Stage C PR 5 — optical flow in the worker (landed)
+
+`flow/lk.ts` is dense pyramidal Lucas-Kanade over the cached intensity fields:
+3-level pyramid, per-cell solve over a 13×13 window, Tikhonov regularization
+scaled to the window's own gradient energy, confidence-weighted smoothing, and a
+3×3 median per level. Pure typed arrays, no dependencies.
+
+**Deviations and decisions**
+
+- **Windows are normalized to zero mean and matched energy.** Textbook LK
+  assumes brightness constancy, which radar breaks constantly — cells intensify
+  and decay in place. Before this, a blob growing 30% while standing still
+  reported ~4 px of spurious travel; after, **0.01 px** of net translation. This
+  is the plan's "flow artifacts on growth/decay" risk, closed at the source
+  rather than mitigated downstream.
+- **Gradients are precomputed per pyramid level** and cell centres snap to whole
+  pixels, so only the target frame needs bilinear sampling. Cost fell from
+  **256 ms to 62 ms** per 256² pair — comfortably inside the plan's 30–300 ms.
+- **Flow is solved from a merged mosaic, not per worker.** Tiles are hashed
+  across workers so a tile's whole time series stays together, which means no
+  single worker holds a complete region. Each worker returns its own downsampled
+  partial; because the shares are disjoint and absent tiles read as zero (as does
+  empty sky), a per-pixel maximum merges them. The merged planes are then
+  *transferred* into one worker for the solve, so the hand-off is a pointer, not
+  a copy.
+- **`planWarmRegion` replaces `planRegion` for flow.** "What is on screen" and
+  "what can be measured" are different questions: the level Cesium most recently
+  requested may have nothing decoded yet, and flow measured from holes is worse
+  than no flow. This walks the observed levels finest-first and returns the
+  deepest one whose tiles are genuinely warm for *both* frames. It is also the
+  fix for the empty composites the Stage B spike hit.
+- **Flow is cached per pair per region.** A 13-frame loop is 12 pairs, revisited
+  every few seconds by playback; the frames are historical, so the answer cannot
+  change.
+
+**Verified** — 15 checks in a synthetic harness plus one end-to-end browser run:
+
+| Check | Result |
+|---|---|
+| Pure translations (4–24 px, five directions) | recovered within **0.07–0.89 px** |
+| Growth in place (r ×1.3, amp ×1.35) | **0.01 px** net translation, peak 0.77 px |
+| Decay in place (r ×0.75, amp ×0.7) | **0.02 px** net translation, peak 1.21 px |
+| Identical frames | exactly zero |
+| Opposing halves (±10 px) | signs correct, −8.94 / +9.98 |
+| Empty field | finite, all-zero, no NaNs |
+| Confidence over echo vs empty sky | 0.33 vs 0.00 |
+| Cost per 256² pair | **62 ms** (128²: 34 ms) |
+| End-to-end through decode → cache → merge → solve | expected (5.12, 2.56), got **(5.01, 2.62)** |
+
+A diagnostic ships behind `?radarflow=1` (`window.__radarFlow()`), because flow
+lands one PR before anything draws it and a wrong field would otherwise first
+appear as a broken warp.
+
 ### What Stage C takes forward
 
 The fallback keeps weather **below labels at every altitude**, which is the house

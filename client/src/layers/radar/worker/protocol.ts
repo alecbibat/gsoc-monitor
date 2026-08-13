@@ -38,9 +38,41 @@ export interface CompositeRequest {
   ny: number;
 }
 
+// Stage C: a downsampled magnitude mosaic of a tile block, for optical flow.
+// Only the magnitude plane — flow tracks where the echo went, and presence is
+// the decode pipeline's edge feathering rather than signal.
+export interface MosaicRequest {
+  type: 'mosaic';
+  id: number;
+  framePath: string;
+  level: number;
+  x0: number;
+  y0: number;
+  nx: number;
+  ny: number;
+  /** Longest side of the returned plane; LK runs on a few hundred px. */
+  maxSide: number;
+}
+
+// Stage C: Lucas-Kanade over a pair of mosaics. The planes arrive transferred
+// rather than re-derived here, because tiles are hashed across workers and no
+// single worker holds a whole region — see `workerFor`.
+export interface FlowRequest {
+  type: 'flow';
+  id: number;
+  width: number;
+  height: number;
+  a: Float32Array;
+  b: Float32Array;
+  cols: number;
+  rows: number;
+}
+
 export type RadarWorkerRequest =
   | TileRequest
   | CompositeRequest
+  | MosaicRequest
+  | FlowRequest
   | { type: 'cancel'; id: number };
 
 export type RadarWorkerResponse =
@@ -51,4 +83,22 @@ export type RadarWorkerResponse =
   | { type: 'error'; id: number; key: string; message: string }
   // `coverage` is the fraction of requested tiles that were actually in cache;
   // the rest are transparent, so the caller can decide whether to wait.
-  | { type: 'composited'; id: number; bitmap: ImageBitmap; coverage: number };
+  | { type: 'composited'; id: number; bitmap: ImageBitmap; coverage: number }
+  | {
+      type: 'mosaic';
+      id: number;
+      width: number;
+      height: number;
+      plane: Float32Array;
+      coverage: number;
+    }
+  | {
+      type: 'flow';
+      id: number;
+      cols: number;
+      rows: number;
+      u: Float32Array;
+      v: Float32Array;
+      confidence: Float32Array;
+      ms: number;
+    };
