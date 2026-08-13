@@ -461,6 +461,119 @@ The first thing to check on real hardware is whether `T_STEPS = 16` is the right
 granularity — it caps motion at about 20 renders a second, which is a guess, not
 a measurement.
 
+### Stage C PR 8 — advection nowcast (landed)
+
+`flow/advect.ts` is Lagrangian persistence: the newest observed field carried
+forward along the measured flow by backward integration, substepped so a curved
+trajectory curves, with a gentle intensity decay for lead time. It is the
+standard short-range radar nowcast and the baseline pysteps and rainymotion use.
+
+One rule separates observed from forecast, and it is the clock rather than which
+frames a pair happens to name: where is the playhead in TIME relative to the
+newest observation? Before it, two real frames bracket the moment and PR 6's warp
+interpolates. After it, there is no second frame to reach toward, and the only
+honest thing to draw is an extrapolation of the last one. Deriving it from time
+keeps the boundary continuous — the last observed frame is lead 0, and the
+playhead slides off the end of the record without a seam.
+
+**The honesty contract.** The hazard the design had to answer: with the playhead
+in the forecast zone and motion standing down, whatever the tile path shows
+underneath would be the last OBSERVED frame while the readout says "forecast
++20 min". The resolution is that **the tile path renders forecast frames empty**.
+There is no state in which observed pixels can be on screen while the playhead
+names a forecast time, because the only thing that can draw a forecast is the
+region layer. Empty is legible; the hatch fades, the readout says "forecast
+unavailable", and nothing drawn contradicts it. Where nothing could ever draw a
+forecast — engine v1, `?radarmotion=0`, reduced motion — the zone is *absent*
+rather than present and empty.
+
+**Deviations and decisions**
+
+- **Flow must be DENSIFIED before it can be extrapolated along.** LK only knows
+  the motion of things it can see; over empty sky it returns near-zero at
+  near-zero confidence. That is fine for the warp, which only samples where the
+  echo already is, and fatal for a forecast, which traces backwards from a spot
+  that is currently empty. Against a raw field the trace starts in a zero-flow
+  cell, never travels, and reports empty sky forever — a storm bearing down on a
+  city simply never arrives. Measured on a known 18 px/frame track: +1 landed
+  7 px short, +3 landed 27 px short, and the echo tore apart. Spreading the
+  measured vectors outward by normalized convolution fixes it.
+- **The spread weights cells by confidence SQUARED above a floor.** A cell
+  straddling a storm's leading edge half-sees the motion and honestly reports a
+  smaller vector; enough of those averaged in linearly drag the answer below the
+  truth — worth 5–8 percentage points of advected speed, and another 5 for
+  including cells below the floor. Widening or narrowing the spread radius was
+  measured and made things worse in both directions.
+- **A back-trajectory that leaves the region renders TRANSPARENT**, where the
+  warp clamps to the border. There the edge value is real — both frames cover
+  the same ground. Here it is not: upwind of the boundary there is no data, and
+  replicating the edge row would paint a rain shield stretching off the side of
+  the forecast. Invented weather is the one thing a forecast may not do.
+- **Lead times are +10/+20/+30 with a +60 ceiling.** Persistence assumes storms
+  neither grow, decay nor turn; that holds for the first half hour and decays
+  badly after an hour.
+- **The decay is about confidence, not physics.** Persistence does not predict
+  that rain weakens and pysteps applies none. It is there because a forecast
+  drawn at exactly the strength of an observation claims to know as much as one.
+- **Forecast frames are anchored to the newest observed frame's time**, not the
+  wall clock, so a stalled feed pins the forecast to the last thing actually seen
+  instead of drifting into a future built on nothing.
+- **The readout names the method** — `advection +29 min`, with a tooltip saying
+  it cannot predict storms forming, dying or turning. "Forecast" alone reads like
+  a meteorologist's product.
+
+**Verified** — 13 synthetic checks plus 10 in the browser:
+
+| Check | Result |
+|---|---|
+| Lead 0 reproduces the observed frame | exact |
+| +1 / +2 / +3 direction | cosine **1.0000** at every lead |
+| +1 / +2 / +3 distance | **88% / 88% / 87%** of true — a steady, conservative bias |
+| Ground the storm vacated | **0** lit pixels — nothing smeared |
+| Upwind border | **0** lit pixels — nothing invented |
+| Decay | lowers intensity, moves the storm 0 px |
+| No flow | persistence in place, unmoved |
+| **Beats persistence against a HELD-OUT observed frame** | error **1.58 vs 6.09** — **74% better** |
+| Cost | **185 ms/megapixel** at lead 3 |
+| Browser: forecast zone appears after "now" | hatch at 62.5% |
+| Browser: playhead past "now" renders an extrapolation | lead 29 min, `forecast: true` |
+| Browser: the forecast draws real weather | **13.9%** of the view is echo |
+| Browser: forecast vs observation | different images, comparable echo (13.9% vs 16.4%) |
+| Browser: readout | reads `advection +29 min` |
+| Browser: motion disabled | **no forecast zone offered at all** |
+
+The held-out check is the plan's acceptance criterion ("sanity-checked against
+the next observed frames") made numeric: measure flow from frames 0 and 1 only,
+forecast frame 2, and score against the real frame 2 the measurement never saw,
+against the null hypothesis that nothing moves.
+
+**Two bugs this PR shipped and then fixed, both worth recording.**
+
+The first is the reason for the honesty framing above. The worker built its flow
+grid without a confidence plane, because the warp does not read one. The nowcast
+does — `densifyFlow` weights by it — so every vector densified to NaN, and a NaN
+back-trajectory fails its own bounds check (`NaN < 0` is false). Nothing threw,
+nothing logged, and **the forecast rendered completely empty while every status
+field reported success**. The browser test in place at the time passed, because
+it asserted only that the forecast image *differed* from the observed one — and a
+blank image differs from anything. Both were fixed: confidence is now a required
+field of a shared `FlowGrid` type (which turned the bug into three compile
+errors), `densifyFlow` refuses a mismatched plane loudly, and the test now counts
+weather-coloured pixels instead of comparing hashes.
+
+The second: the full-resolution flow expansion cached on OBJECT IDENTITY, which
+can never hit across a `postMessage` — structured clone hands the worker a fresh
+object every message, so it re-expanded a million-pixel field for every frame it
+drew. Keying on a stable token took warp cost per frame from 69–78 ms to **43**.
+
+**What still needs real hardware.** Everything the PR 7 section lists, plus the
+advection bias: the 87–88% figure is measured on a synthetic Gaussian storm
+travelling about its own radius per frame, and real convective fields have finer
+structure that LK tracks better (the smaller-feature case measured 95–99%). The
+honest expectation is between those, and it is conservative in the safe
+direction — the forecast puts a storm slightly short of where it will be — but it
+has not been scored against real radar.
+
 ### What Stage C takes forward
 
 The fallback keeps weather **below labels at every altitude**, which is the house
