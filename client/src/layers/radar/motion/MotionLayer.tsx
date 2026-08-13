@@ -13,11 +13,12 @@
 // failure mode where the radar disappears; the worst case is that it steps
 // instead of sliding, which is exactly what it did before Stage C.
 
+import * as Cesium from 'cesium';
 import { useEffect } from 'react';
 import { useCesiumViewer } from '../../../cesium/CesiumContext';
 import { useLayersStore } from '../../../store/layersStore';
 import { getFlow } from '../flow/flowCache';
-import { planWarmRegion, regionKey, regionWarmth } from '../gl/composite';
+import { planWarmRegion, regionKey, regionWarmth, type CompositeRegion } from '../gl/composite';
 import { forecastDecay } from '../nowcast/forecast';
 import { buildTimeline, framePairAt, nowIndex, useRadarStore } from '../radarStore';
 import { RADAR_MAX_LEVEL } from '../RainViewerImagery';
@@ -50,6 +51,30 @@ const RETRY_MS = 250;
 // mid-loop is visible. Slightly coarser weather that holds still beats sharper
 // weather that flickers.
 const REGION_KEEP_COVERAGE = 0.6;
+
+// Below this fraction of the block actually stitched (per frame — the reply's
+// coverage is the minimum across the pair), the warp is mostly empty sky where
+// the warmth hints promised weather. Presenting it would dim the real tiles
+// away behind a hollow image — the blank-but-successful failure this engine
+// has been bitten by once already — so motion stands down instead.
+const MOTION_MIN_COVERAGE = 0.6;
+
+// Whether a region still overlaps what the camera is looking at. The held
+// region is kept while its tiles stay warm, and worker-cache warmth does not
+// expire just because the camera left — so without an explicit check, a pan
+// leaves motion faithfully warping a rectangle nobody can see while the tile
+// path underneath is dimmed to zero everywhere else.
+function regionInView(viewer: Cesium.Viewer, region: CompositeRegion): boolean {
+  try {
+    const view = viewer.camera.computeViewRectangle();
+    // No computable view rectangle (horizon-grazing tilt) says nothing about
+    // overlap — keep what is working rather than tearing it down blind.
+    if (!view) return true;
+    return Cesium.Rectangle.intersection(view, region.rectangle) !== undefined;
+  } catch {
+    return true;
+  }
+}
 
 export function motionEnabled(): boolean {
   try {
@@ -124,21 +149,50 @@ export function MotionLayer() {
     let totalMs = 0;
     let count = 0;
     let regionChanges = 0;
+    let hideRaf: number | null = null;
+    // Set by moveEnd; the pump then re-checks whether the held region is still
+    // on screen. Camera moves change no store state, so without this flag the
+    // early-out gate below never lets a pan reach the region logic.
+    let viewCheckDue = false;
 
     const alive = () => !disposed && !viewer.isDestroyed();
+
+    const cancelHide = () => {
+      if (hideRaf != null) cancelAnimationFrame(hideRaf);
+      hideRaf = null;
+    };
 
     // Ordering matters in both directions, and it is always "overlap, never
     // gap": show the warp before dimming the tiles, restore the tiles before
     // hiding the warp. A frame where both draw is a momentary brightening of
     // the same weather; a frame where neither draws is a hole in it.
     const reveal = () => {
+      cancelHide();
       layer?.setAlpha(useRadarStore.getState().opacity);
       useRadarStore.getState().setMotionDim(0);
       stats = { ...stats, showing: true, standDown: null };
     };
     const standDown = (why: string) => {
       useRadarStore.getState().setMotionDim(1);
-      layer?.setAlpha(0);
+      // Nothing is drawn in the forecast zone while motion is down — the tile
+      // path renders forecast frames empty by design — so the timeline must
+      // not keep advertising an available forecast. The next successful
+      // forecast present sets it true again.
+      useRadarStore.getState().setForecastAvailable(false);
+      // The tile path's alpha comes back through a React effect (RadarLayerV2
+      // reads motionDim), which can flush after the next paint. Hiding the
+      // warp synchronously would paint a frame with NEITHER path drawn — a
+      // hole in the weather, which the handover rule forbids. Hold the warp
+      // for two frames instead; the brief double-draw is the allowed overlap.
+      if (hideRaf == null) {
+        const hiding = layer;
+        hideRaf = requestAnimationFrame(() => {
+          hideRaf = requestAnimationFrame(() => {
+            hideRaf = null;
+            if (!disposed) hiding?.setAlpha(0);
+          });
+        });
+      }
       shown = '';
       retryAfter = performance.now() + RETRY_MS;
       stats = { ...stats, showing: false, standDown: why };
@@ -165,12 +219,35 @@ export function MotionLayer() {
             // The house rule is that the frame under the handle is the frame
             // on screen, immediately. A warp costs tens of milliseconds, so a
             // drag hands rendering back to the cached tiles.
+            //
+            // lastAttempt is cleared so a release back onto the very same
+            // snapped position re-engages: with it held, a paused release
+            // within the retry window hit the early-out gate below with
+            // nothing left to ever wake the pump again.
+            lastAttempt = '';
             standDown('scrubbing — snapped to keyframes');
             return;
           }
           if (!pair || pair.a.frame.path === pair.b.frame.path) {
             standDown('no frame pair to interpolate');
             return;
+          }
+
+          // The opacity slider must keep working while the playhead is parked
+          // on a rendered warp — nothing else touches the layer's alpha until
+          // the next present, and the early-out gate below never lets an
+          // opacity-only store write reach it.
+          if (stats.showing && layer) layer.setAlpha(s.opacity);
+
+          // A pan is invisible to the store, so it arrives as this flag from
+          // moveEnd rather than as a changed target.
+          if (viewCheckDue) {
+            viewCheckDue = false;
+            if (layer && !regionInView(viewer, layer.region)) {
+              standDown('region left the view');
+              dropLayer();
+              lastAttempt = '';
+            }
           }
 
           // ONE rule decides observed from forecast, and it is the clock, not
@@ -310,6 +387,20 @@ export function MotionLayer() {
             warped.bitmap.close();
             return;
           }
+          // The reply's coverage is ground truth from the stitch, where the
+          // warmth hints that approved this region are only optimistic — the
+          // worker's LRU may have rotated the fields out since. A hollow
+          // block must stand down, not present: revealing it dims the real
+          // tiles away behind mostly-empty sky while every status field
+          // reports success.
+          if (warped.coverage < MOTION_MIN_COVERAGE) {
+            warped.bitmap.close();
+            standDown(
+              `region only ${Math.round(warped.coverage * 100)}% stitched for this ` +
+                `${forecast ? 'forecast' : 'pair'} — cache evicted under it`
+            );
+            return;
+          }
           totalMs += warped.ms;
           count++;
           stats = {
@@ -327,9 +418,17 @@ export function MotionLayer() {
           // `present` resolves once the globe has actually taken the image, so
           // this loop paces itself to what the device sustains instead of
           // queueing warps faster than they can be drawn.
-          await layer.present(warped.bitmap);
+          const served = await layer.present(warped.bitmap);
           if (!alive()) return;
           stats = { ...stats, serveTimeouts: layer.serveTimeouts };
+          if (!served) {
+            // The serve valve expired: the globe never asked for the region's
+            // tile. Revealing anyway would dim the real tiles behind a frame
+            // nothing is drawing — the timeout and the serve must not share
+            // an outcome.
+            standDown('globe never took the frame — region off screen or renderer stalled');
+            return;
+          }
           shown = key;
           reveal();
           if (forecast) useRadarStore.getState().setForecastAvailable(true);
@@ -348,15 +447,27 @@ export function MotionLayer() {
     const unsubscribe = useRadarStore.subscribe(() => {
       void pump();
     });
+    // Camera moves change nothing in the store, so they need their own wake —
+    // the held region has to be re-checked against the view it may have left.
+    const onMoveEnd = () => {
+      viewCheckDue = true;
+      void pump();
+    };
+    viewer.camera.moveEnd.addEventListener(onMoveEnd);
     void pump();
 
     return () => {
       disposed = true;
       unsubscribe();
+      cancelHide();
+      // Context loss destroys the viewer before this cleanup runs; touching a
+      // destroyed viewer's camera would throw mid-recovery.
+      if (!viewer.isDestroyed()) viewer.camera.moveEnd.removeEventListener(onMoveEnd);
       // Restore the tile path BEFORE the layer goes, so teardown never leaves
       // the radar dimmed with nothing drawn over it. StrictMode's double-mount
       // runs this between the two mounts, so it has to be exactly reversible.
       useRadarStore.getState().setMotionDim(1);
+      useRadarStore.getState().setForecastAvailable(false);
       dropLayer();
       stats = { ...stats, showing: false, standDown: 'unmounted' };
     };

@@ -144,7 +144,14 @@ const SOURCES = [RAINVIEWER, IEM_CONUS];
 export function sourceForView(view: [number, number, number, number] | null): RadarSource {
   if (view) {
     const [vw, vs, ve, vn] = view;
+    // A view crossing the antimeridian arrives with west > east (that is how
+    // Cesium's computeViewRectangle expresses it), and such a view cannot be
+    // inside any non-crossing coverage box — but it would PASS the four
+    // comparisons below (a Bering Strait view [170, 30, -170, 45] "fits"
+    // CONUS), so it must be rejected before them.
+    const crossesAntimeridian = vw > ve;
     for (const source of SOURCES) {
+      if (crossesAntimeridian) break;
       if (!source.available || !source.coverage) continue;
       const [cw, cs, ce, cn] = source.coverage;
       // Fully inside, not merely overlapping: a view straddling the coverage

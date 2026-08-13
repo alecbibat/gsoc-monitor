@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useLayersStore } from '../../store/layersStore';
 import {
   useRadarStore,
@@ -53,7 +53,20 @@ export function RadarTimeline() {
   const trackRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
 
-  if (!active || timeline.length < 2) return null;
+  // If the track disappears mid-drag — unmount, or the null-render below when
+  // radar is toggled off / the timeline empties — pointerup is never delivered
+  // to a removed element, and a stuck `scrubbing` flag keeps motion standing
+  // down forever. The store flag must not outlive the thing being dragged.
+  const rendered = active && timeline.length >= 2;
+  useEffect(() => {
+    if (!rendered) {
+      dragging.current = false;
+      setScrubbing(false);
+    }
+    return () => setScrubbing(false);
+  }, [rendered, setScrubbing]);
+
+  if (!rendered) return null;
 
   const n = timeline.length;
   const pos = Math.min(Math.max(0, position), n - 1);
@@ -67,8 +80,13 @@ export function RadarTimeline() {
   // under it genuinely is a third of the way across.
   const pair = framePairAt(timeline, pos);
   const curTime = pair ? pair.a.time + (pair.b.time - pair.a.time) * pair.t : timeline[0].time;
-  const isForecast = pair ? (pair.t > 0.5 ? pair.b.forecast : pair.a.forecast) : false;
   const nowTime = timeline[nIdx].time;
+  // Observed vs forecast is decided by TIME, the same one rule the renderer
+  // uses (see MotionLayer): any moment past the newest observation is an
+  // extrapolation. Labelling by the nearest frame instead marked the first
+  // half of the now→+10 interval as observed while the motion path was already
+  // drawing forecast pixels under it — extrapolation presented as observation.
+  const isForecast = pair ? curTime > nowTime : false;
 
   const pct = (i: number) => (n > 1 ? (i / (n - 1)) * 100 : 100);
   const nowPct = pct(nIdx);

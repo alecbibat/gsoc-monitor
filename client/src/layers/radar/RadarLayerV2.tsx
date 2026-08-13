@@ -130,7 +130,10 @@ export function RadarLayerV2() {
 
     if (import.meta.env.DEV) assertTwoRadarLayers(viewer);
     return () => {
-      viewer.camera.moveEnd.removeEventListener(onMoveEnd);
+      // Context loss destroys the viewer BEFORE the context value flips, so
+      // this cleanup can run against a destroyed viewer whose camera chain
+      // would throw mid-recovery — same guard as every other teardown here.
+      if (!viewer.isDestroyed()) viewer.camera.moveEnd.removeEventListener(onMoveEnd);
       if (moveTimer != null) clearTimeout(moveTimer);
       prefetcher.destroy();
       prefetcherRef.current = null;
@@ -205,8 +208,14 @@ export function RadarLayerV2() {
         const span = tl.length - 1;
         const next = s.position + (dt / FRAME_MS) * s.speed;
         // Wrap through the end back to the start, keeping the fractional
-        // remainder so the loop point is not a stutter.
-        s.setPosition(next > span ? next - span - 1 : next);
+        // remainder so the loop point is not a stutter. Overshoot past the
+        // last frame lands that far into the first interval: `next - span`,
+        // never below zero. (An earlier `- 1` here wrapped into [-1, 0),
+        // which every consumer clamped to frame 0 — freezing each loop pass
+        // on the oldest frame for a full interval, the very stutter this
+        // comment promises to avoid, and putting a currentIndex of -1 in the
+        // public store.)
+        s.setPosition(next > span ? next - span : next);
       }
       raf = requestAnimationFrame(tick);
     };

@@ -80,23 +80,27 @@ class WarpRegionProvider extends Cesium.UrlTemplateImageryProvider {
     (this as unknown as Reloadable)._reload?.();
   }
 
-  // Resolves once Cesium has actually taken the current bitmap.
+  // Resolves once Cesium has actually taken the current bitmap — `true` for a
+  // real serve, `false` when the timeout fired instead.
   //
   // A reload SKIPS any tile still waiting on a previous reload, so issuing them
   // back to back can leave the layer showing an older warp than the playhead.
   // Waiting for the serve makes the motion loop self-pacing: it renders as fast
-  // as the globe will accept frames and no faster.
-  waitForServe(): Promise<void> {
+  // as the globe will accept frames and no faster. The two outcomes must stay
+  // distinguishable: a timeout means the globe never asked for the region at
+  // all (off screen, renderer stalled), and treating that like success would
+  // let the caller dim the tile path behind a frame nobody is drawing.
+  waitForServe(): Promise<boolean> {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.timeouts++;
         this.onServed = null;
-        resolve();
+        resolve(false);
       }, SERVE_TIMEOUT_MS);
       this.onServed = () => {
         clearTimeout(timer);
         this.onServed = null;
-        resolve();
+        resolve(true);
       };
     });
   }
@@ -159,11 +163,13 @@ export class WarpRegionLayer {
     this.viewer.scene.requestRender();
   }
 
-  // Show a warped frame and resolve once the globe has taken it.
-  async present(bitmap: ImageBitmap): Promise<void> {
+  // Show a warped frame and resolve once the globe has taken it. Returns
+  // whether the globe actually did — a `false` is the serve timeout, and the
+  // caller must NOT treat it as something on screen.
+  async present(bitmap: ImageBitmap): Promise<boolean> {
     if (!this.alive) {
       bitmap.close();
-      return;
+      return false;
     }
     this.provider.setBitmap(bitmap);
     const served = this.provider.waitForServe();
@@ -186,10 +192,11 @@ export class WarpRegionLayer {
     };
     this.raf = requestAnimationFrame(drive);
 
-    await served;
+    const taken = await served;
     settled = true;
     this.cancelDrive();
     if (this.alive) this.viewer.scene.requestRender();
+    return taken && this.alive;
   }
 
   private cancelDrive(): void {

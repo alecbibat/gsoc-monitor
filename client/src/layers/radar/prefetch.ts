@@ -25,6 +25,12 @@ const MAX_CONCURRENT = 2;
 // (it declines because the visible layer is using the server slots, which is
 // exactly the right outcome — just try again shortly).
 const BACKOFF_MS = 400;
+// Per-key floor between warm attempts. Now that the worker reports LRU
+// evictions (so the warm hints can go cold again), a loop bigger than the
+// worker budget would otherwise churn forever: warm the head, evict the tail,
+// re-plan, re-warm the tail, evict the head. One attempt per key per cooldown
+// bounds that to a trickle; readiness still reports the honest warmth.
+const ATTEMPT_COOLDOWN_MS = 45_000;
 // Slower heartbeat when there is nothing to warm at all. Observed tile
 // coordinates age out, so a view left untouched eventually plans nothing —
 // polling that at the working cadence would burn a timer forever for no reason.
@@ -60,6 +66,8 @@ export class RadarPrefetcher {
   // playhead change that would have triggered the next re-plan.
   private lastFrames: RadarFrame[] = [];
   private lastPlayhead = 0;
+  // When each key was last handed to the worker, for the attempt cooldown.
+  private attempted = new Map<string, number>();
 
   constructor(deps: PrefetchDeps) {
     this.deps = deps;
@@ -79,6 +87,12 @@ export class RadarPrefetcher {
     if (this.destroyed) return;
     this.lastFrames = frames;
     this.lastPlayhead = playhead;
+    // Old attempt stamps are useless once their cooldown has lapsed; pruning
+    // here keeps the map bounded as the manifest rotates keys away.
+    const cutoff = performance.now() - ATTEMPT_COOLDOWN_MS;
+    for (const [key, at] of this.attempted) {
+      if (at < cutoff) this.attempted.delete(key);
+    }
     const coords = recentTiles();
     if (frames.length === 0 || coords.length === 0) {
       this.plan = [];
@@ -145,12 +159,22 @@ export class RadarPrefetcher {
       return;
     }
 
+    const now = performance.now();
     while (this.inFlight < MAX_CONCURRENT && this.cursor < this.plan.length) {
       const entry = this.plan[this.cursor];
       if (isTileWarm(entry.key)) {
         this.cursor++;
         continue;
       }
+      // Recently attempted and cold again means the worker evicted it — the
+      // loop does not fit the budget, and hammering the same key back in
+      // would only evict something else. Skip it this pass; readiness
+      // reporting still counts it cold, which is the truth.
+      if (now - (this.attempted.get(entry.key) ?? 0) < ATTEMPT_COOLDOWN_MS) {
+        this.cursor++;
+        continue;
+      }
+      this.attempted.set(entry.key, now);
       const job = warmTile(entry.key, entry.level, this.deps.palette(), () =>
         // Warming shares the imagery budget rather than going around it. A
         // declined fetch means the visible layer is using the slots; back off

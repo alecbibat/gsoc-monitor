@@ -81,8 +81,9 @@ export interface MosaicRequest {
 }
 
 // Stage C: Lucas-Kanade over a pair of mosaics. The planes arrive transferred
-// rather than re-derived here, because tiles are hashed across workers and no
-// single worker holds a whole region — see `workerFor`.
+// rather than re-derived here so the solve can run on a different worker from
+// the one that owns the level's tiles (worker 0 by convention), keeping it off
+// whichever worker is busy decoding — see flowCache.getFlow.
 export interface FlowRequest {
   type: 'flow';
   id: number;
@@ -173,8 +174,10 @@ export type RadarWorkerResponse =
   // `coverage` is the fraction of requested tiles that were actually in cache;
   // the rest are transparent, so the caller can decide whether to wait.
   | { type: 'composited'; id: number; bitmap: ImageBitmap; coverage: number }
-  // `coverage` here is over both frames of the pair: a block warm for A but not
-  // B cannot be warped, and the caller needs to know that before drawing it.
+  // `coverage` here is the MINIMUM across the pair's two frames: a block warm
+  // for A but not B cannot be warped, and pooling the two into an average would
+  // report 0.5 for that fatal case — indistinguishable from a benignly
+  // half-decoded block. The caller must check this before drawing.
   | { type: 'warped'; id: number; bitmap: ImageBitmap; coverage: number; ms: number }
   // `coverage` is over the single source frame — a forecast needs only the
   // frame it is carrying forward, not a pair.
@@ -196,4 +199,10 @@ export type RadarWorkerResponse =
       v: Float32Array;
       confidence: Float32Array;
       ms: number;
-    };
+    }
+  // Unsolicited (no id): the worker's LRU evicted these fields. Without this
+  // the main thread's warm-tile hints only ever GROW, and once the visible
+  // loop outgrows the worker budget every consumer of the hint inherits the
+  // lie — the prefetcher reports a warm loop that is not, and region planning
+  // approves blocks the worker can no longer stitch.
+  | { type: 'evicted'; keys: string[] };

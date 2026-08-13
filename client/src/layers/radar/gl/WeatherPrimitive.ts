@@ -79,9 +79,16 @@ export class WeatherPrimitive {
     return { ...this.stats, bitmapsOutstanding: this.retiring.length };
   }
 
+  // A context loss destroys the viewer BEFORE React runs the cleanup that
+  // calls destroy(), so `this.destroyed` alone cannot guard an async
+  // continuation — the viewer must be consulted too.
+  private gone(): boolean {
+    return this.destroyed || this.viewer.isDestroyed();
+  }
+
   async setPalette(palette: RadarPaletteId): Promise<void> {
     const lut = await buildLutBitmap(palette);
-    if (this.destroyed) {
+    if (this.gone()) {
       lut.close();
       return;
     }
@@ -134,7 +141,7 @@ export class WeatherPrimitive {
       ]);
       const a = built?.bitmap ?? null;
       const b = bBuilt.bitmap;
-      if (this.destroyed) {
+      if (this.gone()) {
         a?.close();
         b.close();
         return;
@@ -196,7 +203,12 @@ export class WeatherPrimitive {
       }),
       asynchronous: false,
     });
-    this.primitive.show = previous?.show ?? true;
+    // The first build starts HIDDEN. setShow is a no-op while there is no
+    // primitive yet, so the spike's usable/coverage gate has always run before
+    // this and its "not yet" answer must not be overruled by a default —
+    // showing an unvetted first composite double-draws the same echo over
+    // undimmed tiles.
+    this.primitive.show = previous?.show ?? false;
     this.viewer.scene.primitives.add(this.primitive);
     if (previous) this.viewer.scene.primitives.remove(previous);
   }

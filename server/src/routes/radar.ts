@@ -363,8 +363,16 @@ async function iemHistoryReport(z5x: number, z5y: number) {
     }
   }
 
-  const hashes = ladder.map((l) => l.md5).filter(Boolean) as string[];
+  // Only slugs that came back 200 with hashable bytes may vote. An errored
+  // fetch hashed (or silently dropped) would let an IEM outage or a block page
+  // masquerade as a verdict — "NO HISTORY" derived from zero comparable
+  // payloads is the blank-as-success trap on the one line that decides whether
+  // the source lives or dies.
+  const ok = ladder.filter((l) => l.status === 200 && typeof l.md5 === 'string');
+  const hashes = ok.map((l) => l.md5 as string);
   const distinct = new Set(hashes).size;
+  const failed = ladder.length - ok.length;
+  const failNote = failed > 0 ? ` (${failed} of ${ladder.length} slug fetches failed and were excluded)` : '';
   const echo = pick.visible > 0;
 
   return {
@@ -373,21 +381,26 @@ async function iemHistoryReport(z5x: number, z5y: number) {
     ladder,
     distinctPayloads: distinct,
     ladderLength: hashes.length,
+    slugFetchFailures: failed,
     // The single line the Stage C decision turns on.
     verdict: !echo
       ? 'INCONCLUSIVE — no echo anywhere in the scanned CONUS band; every slug ' +
         'agrees on an empty picture, which says nothing about whether they work. ' +
         'Re-run when there is weather over the United States.'
-      : distinct <= 1
-        ? 'NO HISTORY — every time slug returned byte-identical bytes on a tile ' +
-          'that HAS echo, so the slugs do not select past imagery. IEM can supply ' +
-          '"now" only, and cannot back a timeline.'
-        : distinct < hashes.length
-          ? `PARTIAL — ${distinct} distinct payloads across ${hashes.length} slugs. ` +
-            'Some slugs work; the timeline could only use those, at whatever ' +
-            'spacing they actually provide.'
-          : 'HISTORY WORKS — every slug returned distinct bytes, so IEM can back ' +
-            'a 5-minute CONUS timeline.',
+      : hashes.length < 2
+        ? 'INCONCLUSIVE — fewer than two slug fetches succeeded, so nothing was ' +
+          'compared; the ladder rows above show what failed. Re-run when IEM is ' +
+          'reachable.'
+        : distinct <= 1
+          ? 'NO HISTORY — every time slug returned byte-identical bytes on a tile ' +
+            'that HAS echo, so the slugs do not select past imagery. IEM can supply ' +
+            '"now" only, and cannot back a timeline.' + failNote
+          : distinct < hashes.length
+            ? `PARTIAL — ${distinct} distinct payloads across ${hashes.length} slugs. ` +
+              'Some slugs work; the timeline could only use those, at whatever ' +
+              'spacing they actually provide.' + failNote
+            : 'HISTORY WORKS — every slug returned distinct bytes, so IEM can back ' +
+              'a 5-minute CONUS timeline.' + failNote,
   };
 }
 

@@ -140,7 +140,11 @@ async function handle(req: TileRequest): Promise<void> {
     ctx.drawImage(bitmap, 0, 0);
     bitmap.close();
     field = blurField(decodeField(ctx.getImageData(0, 0, w, h).data, w, h), radarBlurSigma(level));
-    cache.set(key, field);
+    const evicted = cache.set(key, field);
+    // Tell the main thread which warm-tile hints just became lies. Without
+    // this, a loop bigger than the budget reports itself warm forever while
+    // the fields quietly rotate out underneath.
+    if (evicted.length > 0) post({ type: 'evicted', keys: evicted });
   }
 
   if (cancelled.has(id)) return;
@@ -322,8 +326,13 @@ async function warp(req: WarpRequest): Promise<void> {
   const { id, frameA, frameB, level, x0, y0, nx, ny, t, palette, flowScale } = req;
   const a = stitchField('a', frameA, level, x0, y0, nx, ny);
   const b = stitchField('b', frameB, level, x0, y0, nx, ny);
-  const total = nx * ny * 2;
-  const coverage = total > 0 ? (a.present + b.present) / total : 0;
+  const total = nx * ny;
+  // The MINIMUM across the pair, not the average: a block fully warm for A and
+  // empty for B averages to 0.5 — indistinguishable from a benignly
+  // half-decoded block — while warping it fades the storm out as t advances,
+  // an invented decay presented as observation. The minimum names the fatal
+  // case for what it is.
+  const coverage = total > 0 ? Math.min(a.present, b.present) / total : 0;
 
   const w = a.field.width;
   const h = a.field.height;

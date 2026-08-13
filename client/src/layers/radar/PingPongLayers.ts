@@ -153,11 +153,22 @@ export class PingPongLayers {
   // Repaint both layers through a new palette. Tiles come back from the
   // worker's field cache, so this costs no network and no decode — and because
   // a reload keeps the old tiles until the new ones are ready, it never blanks.
+  //
+  // The reload must be DRIVEN, not merely requested once: recolored tiles
+  // resolve from the worker with no Cesium Request behind them, so no
+  // requestCompletedEvent ever schedules the next render, and with playback
+  // paused the swap would otherwise sit half-processed until the scene's 1 s
+  // clock heartbeat — an order of magnitude past the <100 ms acceptance mark.
   setPalette(palette: RadarPaletteId): void {
     if (!this.alive()) return;
-    if (this.frontProvider.setPalette(palette)) this.frontProvider.reload();
-    if (this.backProvider.setPalette(palette)) this.backProvider.reload();
+    const changedFront = this.frontProvider.setPalette(palette);
+    const changedBack = this.backProvider.setPalette(palette);
+    if (changedFront) this.frontProvider.reload();
+    if (changedBack) this.backProvider.reload();
     this.viewer.scene.requestRender();
+    // waitForSettled renders every frame until the provider drains, which is
+    // exactly the drive the tile state machine needs; the result is unused.
+    if (changedFront || changedBack) void this.waitForSettled(this.frontProvider);
   }
 
   // Show `frame`, dissolving into it when `fade` is set (playback) or snapping

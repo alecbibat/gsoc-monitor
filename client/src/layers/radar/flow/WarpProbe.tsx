@@ -163,7 +163,12 @@ export function WarpProbe() {
 
         for (const t of SAMPLES) {
           if (disposed || viewer.isDestroyed()) return;
-          const [warped, dissolved] = await Promise.all([
+          // allSettled, not all: if one render of the pair fails (a wedged
+          // worker's 15 s timeout), the sibling that DID resolve is holding a
+          // region-sized ImageBitmap that a rejected Promise.all would orphan
+          // — tens of MB apiece on the diagnostic meant for debugging exactly
+          // that wedged state.
+          const settled = await Promise.allSettled([
             warpRegion(a, b, region.level, region.x0, region.y0, region.nx, region.ny, t,
               palette,
               {
@@ -178,6 +183,18 @@ export function WarpProbe() {
             warpRegion(a, b, region.level, region.x0, region.y0, region.nx, region.ny, t,
               palette, null, flowScale),
           ]);
+          if (settled.some((s) => s.status === 'rejected')) {
+            for (const s of settled) {
+              if (s.status === 'fulfilled') s.value.bitmap.close();
+            }
+            const reason = settled.find(
+              (s): s is PromiseRejectedResult => s.status === 'rejected'
+            )?.reason;
+            throw reason ?? new Error('warp probe render failed');
+          }
+          const [warped, dissolved] = settled.map(
+            (s) => (s as PromiseFulfilledResult<Awaited<ReturnType<typeof warpRegion>>>).value
+          );
           divergence.push({ t, ...alphaDelta(warped.bitmap, dissolved.bitmap) });
           totalMs += warped.ms;
           peakMs = Math.max(peakMs, warped.ms);

@@ -69,8 +69,17 @@ const pending = new Map<number, Pending>();
 const cached: Array<Set<string>> = [];
 let nextId = 1;
 
-function onMessage(e: MessageEvent<RadarWorkerResponse>) {
+function onMessage(worker: number, e: MessageEvent<RadarWorkerResponse>) {
   const msg = e.data;
+
+  // Unsolicited eviction notice — the worker's LRU rotated these fields out.
+  // Repairing the hint here is what keeps `isTileWarm` honest for everything
+  // built on it: prefetch progress, region planning, region warmth.
+  if (msg.type === 'evicted') {
+    for (const key of msg.keys) cached[worker]?.delete(key);
+    return;
+  }
+
   const job = pending.get(msg.id);
   if (!job) {
     // Cancelled between request and reply — close the orphan so its backing
@@ -159,7 +168,8 @@ function ensureWorkers(): Worker[] {
       type: 'module',
       name: 'radar-recolor',
     });
-    w.onmessage = onMessage;
+    const index = i;
+    w.onmessage = (e) => onMessage(index, e);
     w.onerror = (event) => console.error('[radar] recolor worker error', event.message);
     // A reply that fails to deserialize is silently dropped by the platform —
     // the watchdog is what actually rescues those jobs, but log it so the cause
@@ -289,11 +299,11 @@ export function recolorTile(
 // region simply comes back partly transparent and the caller retries once the
 // prefetcher has warmed it.
 //
-// Routed to the worker that owns the block's NORTH-WEST tile. That worker holds
-// only the subset of the block its hash claimed, so coverage is partial by
-// construction; both workers are asked and the caller merges. Keeping the whole
-// composite in one worker would need the tile hash to be block-aware, which is
-// a Stage C decision, not a spike one.
+// Written when tiles were hashed by coordinate and no single worker held a
+// whole block, so the caller asks EVERY worker and merges. Since PR 6 the hash
+// is by zoom level and one worker holds the entire region; the fan-out is now
+// redundant (the non-owner returns an empty share) but harmless, and this is
+// spike-only code — Stage C's warp routes straight to the owner instead.
 export function compositeRegion(
   worker: number,
   framePath: string,

@@ -163,21 +163,33 @@ export function regionWarmth(region: CompositeRegion, framePaths: string[]): num
 
 // Ask every worker for its share of the block and flatten them into one bitmap.
 //
-// Tiles are hashed across workers by coordinate (so a tile's whole time series
-// stays in one worker, which is what Stage C's frame-pair flow needs), which
-// means no single worker holds a whole view block. Each returns its own tiles
-// with the rest transparent, so plain source-over compositing merges them —
-// two GPU blits rather than a per-pixel merge. If this shows up in a profile,
-// the fix is a block-aware tile hash, which is a Stage C decision.
+// Written for the pre-PR6 coordinate hash, when no single worker held a whole
+// block. The hash is by zoom level now, so one worker owns the entire region
+// and the other's share comes back empty — the fan-out is redundant but
+// harmless, and this is Stage B spike code; Stage C's warp routes straight to
+// the owning worker instead (see warpRegion).
 export async function buildComposite(
   region: CompositeRegion,
   framePath: string
 ): Promise<{ bitmap: ImageBitmap; coverage: number }> {
-  const parts = await Promise.all(
+  // allSettled, not all: if one worker's request times out, the other's
+  // already-resolved region bitmap would be orphaned by a rejected
+  // Promise.all with nothing left to close it.
+  const settled = await Promise.allSettled(
     Array.from({ length: WORKER_SLOTS }, (_, w) =>
       compositeRegion(w, framePath, region.level, region.x0, region.y0, region.nx, region.ny)
         .result
     )
+  );
+  const failed = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected');
+  if (failed) {
+    for (const s of settled) {
+      if (s.status === 'fulfilled') s.value.bitmap.close();
+    }
+    throw failed.reason;
+  }
+  const parts = settled.map(
+    (s) => (s as PromiseFulfilledResult<{ bitmap: ImageBitmap; coverage: number }>).value
   );
 
   const canvas = new OffscreenCanvas(region.widthPx, region.heightPx);
