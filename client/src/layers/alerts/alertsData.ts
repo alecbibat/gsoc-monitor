@@ -4,11 +4,21 @@
 // agree on which alerts are active and where. Pure data — colours are returned
 // as hex strings so this module stays free of any Cesium dependency.
 
-// Fetched directly from the browser: NWS sends CORS headers, so this avoids the
-// server-side User-Agent restrictions that block api.weather.gov from a proxy.
-// No query params — exactly like the proven weather-leaflet reference (the
-// /alerts/active endpoint can 400 on some param combinations).
+// Fetched directly from the browser first: NWS sends CORS headers, and the
+// direct path keeps the feed working even when our own server is having a bad
+// day. No query params — exactly like the proven weather-leaflet reference
+// (the /alerts/active endpoint can 400 on some param combinations).
+//
+// When the direct fetch fails — NWS edge instability (e.g. the 2026-08-12
+// AWIPS outage), or a corporate/guest network filtering weather.gov while
+// other alert sources still work — we fall back to our server's proxy, which
+// reaches NWS from the dyno's network with a proper User-Agent.
 export const ALERTS_API = 'https://api.weather.gov/alerts/active';
+const ALERTS_PROXY = '/api/alerts/active';
+
+// A hung national-feed download (multi-MB GeoJSON) should fail over to the
+// proxy rather than stall the 60s poll loop indefinitely.
+const ALERTS_TIMEOUT_MS = 20_000;
 
 // Static US county polygons keyed by 5-digit FIPS (the dataset the proven
 // weather-leaflet app uses). Most non-storm NWS alerts ship geometry: null and
@@ -179,10 +189,45 @@ export function alertRings(
   return rings;
 }
 
-/** Fetch all currently-active NWS alerts. Throws on a non-OK response. */
-export async function fetchActiveAlerts(): Promise<RawAlert[]> {
-  const r = await fetch(ALERTS_API);
+async function fetchAlertsFrom(url: string): Promise<RawAlert[]> {
+  const r = await fetch(url, { signal: AbortSignal.timeout(ALERTS_TIMEOUT_MS) });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const json = (await r.json()) as { features?: RawAlert[] };
   return json.features ?? [];
+}
+
+// After a direct-path failure, prefer the proxy for a while instead of
+// re-burning the 20s timeout on every poll — a firewall that blackholes
+// weather.gov never sends an RST, so each direct attempt only dies at the
+// timeout. The direct path is retried after this window so the feed heals
+// back to direct once the network or the NWS edge recovers.
+const DIRECT_RETRY_MS = 10 * 60_000;
+let directDownSince: number | null = null;
+
+/**
+ * Fetch all currently-active NWS alerts: directly from api.weather.gov, then
+ * through the server proxy if the direct path fails (with the proxy preferred
+ * for a while after a direct failure). Throws only when both paths fail, with
+ * a message naming each path's failure.
+ */
+export async function fetchActiveAlerts(): Promise<RawAlert[]> {
+  const preferProxy =
+    directDownSince !== null && Date.now() - directDownSince < DIRECT_RETRY_MS;
+  let directReason = 'skipped after recent failure';
+  if (!preferProxy) {
+    try {
+      const alerts = await fetchAlertsFrom(ALERTS_API);
+      directDownSince = null;
+      return alerts;
+    } catch (err) {
+      directDownSince = Date.now();
+      directReason = err instanceof Error ? err.message : 'unreachable';
+    }
+  }
+  try {
+    return await fetchAlertsFrom(ALERTS_PROXY);
+  } catch (err) {
+    const proxyReason = err instanceof Error ? err.message : 'unreachable';
+    throw new Error(`direct: ${directReason} · proxy: ${proxyReason}`);
+  }
 }

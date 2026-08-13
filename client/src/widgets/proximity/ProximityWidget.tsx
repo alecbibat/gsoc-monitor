@@ -4,7 +4,7 @@ import { flyToLonLat } from '../../cesium/flyTo';
 import { MILES_TO_M } from '../../lib/geo';
 import { startVisiblePolling } from '../../lib/poll';
 import { usePanelStore } from '../../panels/panelStore';
-import type { PropertyHazards } from './proximityScan';
+import { downFeedNames, type PropertyHazards } from './proximityScan';
 import { useProximityStore } from './proximityStore';
 import { LightningTicker } from './LightningTicker';
 import { HazardRows } from './HazardRows';
@@ -28,13 +28,7 @@ export function ProximityWidget() {
   }, [scan]);
 
   const affected = result?.properties ?? [];
-  const downFeeds = result
-    ? ([
-        result.fireError ? 'fires' : null,
-        result.alertError ? 'alerts' : null,
-        result.quakeError ? 'earthquakes' : null,
-      ].filter(Boolean) as string[])
-    : [];
+  const downFeeds = downFeedNames(result);
   const allDown = downFeeds.length === 3;
 
   const focus = (p: PropertyHazards) => {
@@ -110,8 +104,9 @@ export function ProximityWidget() {
       {/* Live global lightning activity */}
       <LightningTicker />
 
-      {/* Summary banner */}
-      {result && (
+      {/* Summary banner — suppressed when every feed is down: an empty result
+          from three failed fetches is blindness, not an all-clear. */}
+      {result && !allDown && (
         <div
           className={`rounded-lg border px-3 py-2.5 text-[12px] ${
             affected.length === 0
@@ -186,7 +181,7 @@ export function ProximityWidget() {
           </div>
         ))}
 
-        {result && affected.length === 0 && !loading && (
+        {result && affected.length === 0 && !loading && !allDown && (
           <div className="py-6 text-center text-[12px] text-white/30">
             No fires or weather alerts near any property.
           </div>
