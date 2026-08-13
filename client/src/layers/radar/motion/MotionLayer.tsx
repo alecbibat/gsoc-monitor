@@ -18,9 +18,10 @@ import { useCesiumViewer } from '../../../cesium/CesiumContext';
 import { useLayersStore } from '../../../store/layersStore';
 import { getFlow } from '../flow/flowCache';
 import { planWarmRegion, regionKey, regionWarmth } from '../gl/composite';
-import { buildTimeline, framePairAt, useRadarStore } from '../radarStore';
+import { forecastDecay } from '../nowcast/forecast';
+import { buildTimeline, framePairAt, nowIndex, useRadarStore } from '../radarStore';
 import { RADAR_MAX_LEVEL } from '../RainViewerImagery';
-import { warpRegion } from '../worker/pool';
+import { nowcastRegion, warpRegion } from '../worker/pool';
 import { WarpRegionLayer } from './WarpRegionLayer';
 
 // A warped frame is re-uploaded as a whole texture every time it changes, so
@@ -63,6 +64,9 @@ export function motionEnabled(): boolean {
 
 interface MotionStats {
   showing: boolean;
+  /** Whether the last render was an extrapolation rather than an observation. */
+  forecast: boolean;
+  leadMinutes: number;
   region: string | null;
   pair: string | null;
   t: number;
@@ -86,6 +90,8 @@ interface MotionStats {
 
 let stats: MotionStats = {
   showing: false,
+  forecast: false,
+  leadMinutes: 0,
   region: null,
   pair: null,
   t: 0,
@@ -167,13 +173,48 @@ export function MotionLayer() {
             return;
           }
 
-          const a = pair.a.frame.path;
-          const b = pair.b.frame.path;
-          const step = Math.round(pair.t * T_STEPS) / T_STEPS;
+          // ONE rule decides observed from forecast, and it is the clock, not
+          // the frame index: where is the playhead in TIME relative to the
+          // newest observation? Before it, two real frames bracket the moment
+          // and the warp interpolates between them. After it, there is no
+          // second frame to reach toward and the only honest thing to draw is
+          // an extrapolation of the last one.
+          //
+          // Deriving it from time rather than from which frames the pair
+          // happens to name keeps the boundary continuous: the last observed
+          // frame is lead 0, and the playhead slides off the end of the record
+          // into the forecast without a seam.
+          const nIdx = nowIndex(timeline);
+          const observedNow = timeline[nIdx];
+          const targetTime = pair.a.time + (pair.b.time - pair.a.time) * pair.t;
+          const forecast = targetTime > observedNow.time;
+
+          // The flow the whole thing runs on. Observed positions measure it
+          // across the pair they sit between; a forecast measures it across the
+          // last two observations, because that is the most recent thing the
+          // atmosphere has actually told us.
+          const previous = timeline[nIdx - 1];
+          if (forecast && !previous) {
+            standDown('only one observed frame — nothing to measure motion from');
+            return;
+          }
+          const flowA = forecast ? previous.frame.path : pair.a.frame.path;
+          const flowB = forecast ? observedNow.frame.path : pair.b.frame.path;
+
+          // Lead time, in multiples of the interval the flow was measured over.
+          const interval = forecast ? observedNow.time - previous.time : 0;
+          if (forecast && interval <= 0) {
+            standDown('observed frames carry no usable interval');
+            return;
+          }
+          const leadSeconds = forecast ? targetTime - observedNow.time : 0;
+          const rawStep = forecast ? leadSeconds / interval : pair.t;
+          const step = Math.round(rawStep * T_STEPS) / T_STEPS;
+
           // Settle what to draw before doing any work to find out whether it
           // can be drawn. Planning a region walks every recently-requested tile
           // coordinate, and at 60 playhead updates a second that is not free.
-          const target = `${a}>${b}@${step}@${s.palette}`;
+          const target = `${forecast ? 'fc' : 'ob'}:${flowA}>${flowB}@${step}@${s.palette}`;
           if (target === lastAttempt && (stats.showing || performance.now() < retryAfter)) return;
           lastAttempt = target;
 
@@ -183,9 +224,9 @@ export function MotionLayer() {
           // perfectly still — each flip a layer teardown and rebuild.
           const held = layer?.region;
           const region =
-            held && regionWarmth(held, [a, b]) >= REGION_KEEP_COVERAGE
+            held && regionWarmth(held, [flowA, flowB]) >= REGION_KEEP_COVERAGE
               ? held
-              : planWarmRegion(RADAR_MAX_LEVEL, [a, b]);
+              : planWarmRegion(RADAR_MAX_LEVEL, [flowA, flowB]);
           if (!region) {
             standDown('no region decoded for this pair');
             return;
@@ -204,10 +245,20 @@ export function MotionLayer() {
           }
           if (!layer) layer = new WarpRegionLayer(viewer, region);
 
-          const flow = await getFlow(region, a, b);
+          const flow = await getFlow(region, flowA, flowB);
           if (!alive()) return;
           if (!flow) {
-            standDown('no flow for this pair — dissolve fallback');
+            // Observed positions degrade to the dissolve, which is fine — the
+            // frames either side are real. A forecast has nothing to degrade
+            // TO: with no measured motion there is no basis for saying where
+            // the weather goes, so it renders nothing rather than persisting
+            // the current field in place and calling that a prediction.
+            standDown(
+              forecast
+                ? 'no measurable motion — no basis for a forecast'
+                : 'no flow for this pair — dissolve fallback'
+            );
+            if (forecast) useRadarStore.getState().setForecastAvailable(false);
             return;
           }
 
@@ -216,19 +267,35 @@ export function MotionLayer() {
           // re-warping an identical image.
           if (key === shown) return;
 
-          const warped = await warpRegion(
-            a,
-            b,
-            region.level,
-            region.x0,
-            region.y0,
-            region.nx,
-            region.ny,
-            step,
-            s.palette,
-            { cols: flow.cols, rows: flow.rows, u: flow.u, v: flow.v },
-            region.widthPx / flow.planeWidth
-          );
+          const grid = { cols: flow.cols, rows: flow.rows, u: flow.u, v: flow.v };
+          const flowScale = region.widthPx / flow.planeWidth;
+          const warped = forecast
+            ? await nowcastRegion(
+                observedNow.frame.path,
+                region.level,
+                region.x0,
+                region.y0,
+                region.nx,
+                region.ny,
+                step,
+                forecastDecay(leadSeconds / 60),
+                s.palette,
+                grid,
+                flowScale
+              )
+            : await warpRegion(
+                flowA,
+                flowB,
+                region.level,
+                region.x0,
+                region.y0,
+                region.nx,
+                region.ny,
+                step,
+                s.palette,
+                grid,
+                flowScale
+              );
           if (!alive() || !layer) {
             warped.bitmap.close();
             return;
@@ -237,8 +304,10 @@ export function MotionLayer() {
           count++;
           stats = {
             ...stats,
+            forecast,
+            leadMinutes: forecast ? Math.round(leadSeconds / 60) : 0,
             region: regionKey(region),
-            pair: `${a} > ${b}`,
+            pair: forecast ? `${observedNow.frame.path} +${step.toFixed(2)}` : `${flowA} > ${flowB}`,
             t: step,
             frames: count,
             meanMs: Math.round(totalMs / count),
@@ -253,6 +322,7 @@ export function MotionLayer() {
           stats = { ...stats, serveTimeouts: layer.serveTimeouts };
           shown = key;
           reveal();
+          if (forecast) useRadarStore.getState().setForecastAvailable(true);
         }
       } catch (err) {
         // Motion is the enhancement, never the thing that breaks the radar.

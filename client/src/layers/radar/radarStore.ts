@@ -59,6 +59,11 @@ interface RadarState {
   // view, the tile path is dimmed out from under it so one echo is not drawn
   // twice. 1 whenever motion is standing down, which is the normal state.
   motionDim: number;
+  // Whether the forecast zone can currently be drawn. The extrapolation needs a
+  // decoded region and a measurable flow over the newest observed pair, and
+  // neither is guaranteed; the timeline says so rather than leaving the user to
+  // wonder why the hatched stretch is empty.
+  forecastAvailable: boolean;
   setManifest: (host: string, frames: RadarFrame[], nowcastFrames: RadarFrame[]) => void;
   setWindowMinutes: (m: 30 | 60 | 120) => void;
   setCurrentIndex: (i: number) => void;
@@ -72,6 +77,7 @@ interface RadarState {
   setLoopReady: (r: number) => void;
   setGlTileDim: (d: number) => void;
   setMotionDim: (d: number) => void;
+  setForecastAvailable: (a: boolean) => void;
 }
 
 // RainViewer republishes an identical manifest on most polls; comparing
@@ -103,6 +109,7 @@ export const useRadarStore = create<RadarState>((set) => ({
   loopReady: 0,
   glTileDim: 1,
   motionDim: 1,
+  forecastAvailable: false,
   setManifest: (host, frames, nowcastFrames) =>
     set((s) =>
       manifestSig(host, frames, nowcastFrames) === manifestSig(s.host, s.frames, s.nowcastFrames)
@@ -128,6 +135,8 @@ export const useRadarStore = create<RadarState>((set) => ({
   setLoopReady: (loopReady) => set((s) => (s.loopReady === loopReady ? {} : { loopReady })),
   setGlTileDim: (glTileDim) => set((s) => (s.glTileDim === glTileDim ? {} : { glTileDim })),
   setMotionDim: (motionDim) => set((s) => (s.motionDim === motionDim ? {} : { motionDim })),
+  setForecastAvailable: (forecastAvailable) =>
+    set((s) => (s.forecastAvailable === forecastAvailable ? {} : { forecastAvailable })),
 }));
 
 // Playback waits for the loop to be nearly warm rather than fully warm: the

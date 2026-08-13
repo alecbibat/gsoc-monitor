@@ -44,6 +44,7 @@ export function RadarTimeline() {
   const setSpeed = useRadarStore((s) => s.setSpeed);
   const setScrubbing = useRadarStore((s) => s.setScrubbing);
   const loopReady = useRadarStore((s) => s.loopReady);
+  const forecastAvailable = useRadarStore((s) => s.forecastAvailable);
 
   const timeline = useMemo(
     () => buildTimeline({ frames, nowcastFrames, windowMinutes }),
@@ -148,10 +149,14 @@ export function RadarTimeline() {
             {/* Forecast zone (hatched) from "now" to the end */}
             {hasForecast && (
               <div
-                className="absolute inset-y-0 rounded-r-full"
+                className="absolute inset-y-0 rounded-r-full transition-opacity"
                 style={{
                   left: `${nowPct}%`,
                   right: 0,
+                  // Faded while the extrapolation cannot be computed, so the
+                  // stretch of timeline reads as unavailable rather than as
+                  // available-but-empty.
+                  opacity: forecastAvailable ? 1 : 0.35,
                   backgroundImage:
                     'repeating-linear-gradient(45deg, rgba(255,210,80,0.45) 0 4px, rgba(255,210,80,0.12) 4px 8px)',
                 }}
@@ -197,8 +202,27 @@ export function RadarTimeline() {
           <div className="font-mono text-[15px] font-bold leading-none tabular-nums text-white">
             {fmtClock(curTime)}
           </div>
-          <div className={`mt-0.5 text-[10px] ${isForecast ? 'text-amber-300' : 'text-white/45'}`}>
-            {isForecast ? `forecast ${fmtRel(curTime - nowTime)}` : fmtRel(curTime - nowTime)}
+          <div
+            className={`mt-0.5 text-[10px] ${
+              isForecast ? (forecastAvailable ? 'text-amber-300' : 'text-amber-300/45') : 'text-white/45'
+            }`}
+            // Naming the method matters. "forecast +20 min" reads like a
+            // meteorologist's product; this is Lagrangian persistence — the
+            // storms carried along their measured track, nothing more — and the
+            // readout should not imply it knows about growth, decay or turning.
+            title={
+              isForecast
+                ? forecastAvailable
+                  ? 'Advection forecast: recent echoes carried forward along their measured motion. Not a weather model — it cannot predict storms forming, dying or turning.'
+                  : 'The advection forecast needs a decoded view and a measurable storm motion; neither is available right now.'
+                : undefined
+            }
+          >
+            {isForecast
+              ? forecastAvailable
+                ? `advection ${fmtRel(curTime - nowTime)}`
+                : 'forecast unavailable'
+              : fmtRel(curTime - nowTime)}
           </div>
         </div>
       </div>
