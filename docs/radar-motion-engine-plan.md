@@ -574,6 +574,66 @@ honest expectation is between those, and it is conservative in the safe
 direction — the forecast puts a storm slightly short of where it will be — but it
 has not been scored against real radar.
 
+### Stage C PR 9 — source abstraction; IEM still gated (landed, partial)
+
+`radarSource.ts` is the seam C5 asked for. Tile size, deepest useful zoom, how a
+frame becomes a URL, cadence, coverage and which palette the bytes are encoded in
+are now facts about a *source* rather than constants scattered through the
+renderer. `framesInWindow` divides by the source's cadence instead of a hardcoded
+10, which is what lets a 5-minute regional feed put twice as many frames in the
+same two-hour window. `sourceForView` implements regional preference and returns
+the global source while every regional one is unavailable — today's behaviour
+exactly, and one flag away from being a choice.
+
+Behaviour is unchanged: one implemented source, and every synthetic and browser
+check passes identically before and after.
+
+Coverage is `[west, south, east, north]` degrees rather than a
+`Cesium.Rectangle`, so the module that describes where pixels come from does not
+drag a globe engine into the store's dependency tree.
+
+**IEM is described but NOT available, and the gate is still open.** The plan
+makes PR 9 conditional on Stage 0.2, and that condition has not been met. The
+open items, in the order they block:
+
+1. **Can IEM serve history at all?** Stage 0 found `-0`, `-m05m` and `-m50m`
+   returning byte-identical payloads on one tile. That has two very different
+   explanations the sample could not separate — the slugs do not work, or the
+   tile was empty and all three agreed on a picture of nothing. Until this is
+   settled the source cannot back a timeline, and a 5-minute cadence in the UI
+   with one frame behind it would be a lie about the data.
+2. **N0Q needs its own palette inversion.** The existing inverter is calibrated
+   against RainViewer's Universal Blue anchors; pointing it at a different ramp
+   produces confident nonsense. This is why `RadarDecoderId` exists as a named
+   field rather than an assumption.
+3. **IEM's usage policy has not been read** against app-scale traffic. That is a
+   licensing judgement, not an engineering one.
+
+`/api/radar/diag` now answers (1). It scans a band of CONUS for a tile that
+actually has echo — a slug ladder compared on empty sky agrees perfectly and
+proves nothing, which is the trap the Stage 0 sample fell into — then walks the
+full ladder (`-0`, `-m05m`, `-m10m`, `-m15m`, `-m20m`, `-m30m`, `-m45m`, `-m50m`)
+and hashes each payload with its visible-pixel count beside it. Four verdicts:
+
+| `iemHistory.verdict` | What it means for the source |
+|---|---|
+| `HISTORY WORKS` | Every slug distinct — IEM can back a 5-minute CONUS timeline. Proceed to (2) and (3). |
+| `PARTIAL` | Some slugs work. The timeline could use only those, at whatever spacing they really provide. |
+| `NO HISTORY` | Byte-identical on a tile WITH echo — the slugs do not select past imagery. IEM serves "now" only and cannot back a timeline; **drop it as a source** and close C5. |
+| `INCONCLUSIVE` | No echo anywhere in the scanned band. Says nothing either way — re-run when there is weather over the United States. |
+
+The sandbox cannot resolve this: `mesonet.agron.iastate.edu` is refused at the
+egress proxy (403 on CONNECT), which is the same reason Stage 0's probes had to
+run in production.
+
+**What this means for the plan.** The abstraction — the durable half of C5, and
+the piece the risk table actually depends on — has landed. The IEM source itself
+is deliberately unbuilt beyond its description, because building a decoder and a
+selection path for a feed that may not be able to serve history would be building
+the wrong thing. C5 is complete when the verdict comes back, and it may complete
+by *removing* IEM rather than enabling it — which is a legitimate outcome and
+leaves the abstraction, and Option 3's plug point, standing either way.
+
 ### What Stage C takes forward
 
 The fallback keeps weather **below labels at every altitude**, which is the house
