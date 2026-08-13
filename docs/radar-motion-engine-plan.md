@@ -693,6 +693,12 @@ software renderer makes the rebuild timing-dependent, and that the drill needs
 re-running on real hardware before anyone concludes anything about the app's
 watchdog. What can be said is that Stage C did not regress it.
 
+*Correction (2026-08-13):* the "not our code" reading did not survive the
+final review — that exact TypeError is what `RadarLayerV2`'s unguarded
+cleanup throws through Cesium's getter chain after a clean `Viewer.destroy()`.
+See item 3 of the wrap-up section at the end of this document. The radar-off
+failure remains unexplained and the real-GPU re-run still stands.
+
 A harness note worth keeping: `window.__radarMotion()` is a closure over
 whichever mount installed it, so immediately after a rebuild it still answers
 from the torn-down one — reporting `standDown: 'unmounted'` and zero layers.
@@ -915,9 +921,18 @@ re-verified against 1.142 source:
   is unavailable/slow in a worker, and the SVG filter spec defines
   `feGaussianBlur` in terms of exactly this three-box approximation — so this is
   what the main-thread path was already computing. Measured against a true
-  Gaussian on a clamped-edge disc: max error 3.0/255 at σ=1.5, 5.8 at σ=2.0, 5.1
-  at σ=4.0, mass preserved within 0.06%. Running sums make it O(1) per pixel
+  Gaussian on a clamped-edge disc: max error 3.0/255 at σ=1.5, **7.2 at σ=2.0**,
+  5.1 at σ=4.0, mass preserved within 0.06%. Running sums make it O(1) per pixel
   instead of the ~25-tap kernel σ=4 would need.
+
+  *Correction (2026-08-13, on recreating the suite):* the σ=2.0 row originally
+  read 5.8 and does not reproduce — the module measures ~7.2 against the
+  nominal-σ Gaussian while the σ=1.5 and σ=4.0 rows reproduce almost exactly
+  with the same synthesis. The σ=2 box triple (widths 4,4,5) has effective
+  σ≈2.12, the worst variance mismatch of the three schedules; against a
+  Gaussian of σ=2.05 the error is 5.6, so the original 5.8 was almost
+  certainly measured against a slightly off-nominal reference, not different
+  module behavior. The committed suite asserts the corrected number.
 - **No snow plane in the cached field.** The served palette carries no snow
   signal (the v1 snow branch is already dead code), so the field is the planned
   magnitude+presence pair with nothing wasted.
@@ -1074,3 +1089,177 @@ coordinates age out after 90 s, so a camera left untouched eventually plans
 nothing (Cesium has no reason to re-request tiles it already holds). The
 prefetcher deliberately does not report readiness in that state — reporting 0
 would undo a loop that is fully warm — and drops to a 2 s heartbeat.
+
+---
+
+## Final review and wrap-up (2026-08-13)
+
+A closing pass over the whole branch before handoff: a nine-dimension review of
+every radar module against the house rules (each finding then adversarially
+verified by independent checkers), the synthetic suites recreated as committed
+scripts, and a decision recorded for each of the plan's open items. The
+review's doc-truth dimension checked this document's factual claims against the
+code and found **zero mismatches**; the two stale comments it did find (code
+comments still describing the pre-PR6 per-coordinate worker hash) are fixed.
+
+### The synthetic suites are committed now
+
+`client/scripts/radar-checks/{fieldcheck,flowcheck,warpcheck,advectcheck}.ts`,
+run from the repo root as `./node_modules/.bin/tsx client/scripts/radar-checks/<name>.ts`.
+They exercise the REAL modules (nothing under test is reimplemented), assert
+the bounds this document records, print timings without asserting them, and
+skip the browser-only rows by name. Passing state at commit: **fieldcheck
+29/29, flowcheck 24/24, warpcheck 24/24, advectcheck 23/23**.
+
+Recreating them surfaced one recorded number that does not reproduce — the
+σ=2.0 blur error, corrected in the PR 1 section above — and three methodology
+notes worth keeping:
+
+- **Translation accuracy is scene-dependent.** A fine-structured multi-cell
+  field reproduces the recorded 0.07–0.89 px band; a single broad Gaussian
+  recovers only ~85–88% of true displacement — the same broad-feature bias the
+  PR 8 section records for advection distance. The suites document which
+  synthesis each recorded row needs.
+- **The warp's monotonic-advance and tracking-limit exactness hold for the
+  storm core** (squared-alpha centroid). A whole-image centroid is dragged
+  around by the faint sub-visibility skirt and reads up to 1.17× even spacing
+  where the core reads 1.04×.
+- **`maxDisplacement = 40` is load-bearing for safe degradation.** Re-measuring
+  the ratio-3.2 breakdown scene with the cap raised to 96 produces garbage
+  vectors that place mass well outside the travelled span; the production cap
+  is what makes past-the-limit failure degrade toward the dissolve.
+
+### What the review found, and what was fixed here
+
+Thirty-four raw findings, deduplicated to twenty-six and adversarially
+verified — twenty-nine independent verification passes (high-severity
+findings got two, with different lenses), **every one CONFIRMED, none
+refuted**. That unanimity is itself informative: the findings below are not
+speculative. All are fixed on this branch, and they cluster into two families:
+
+**The blank-as-success family** — the same trap shape as PR 8's NaN bug, in
+new places. The worker's LRU quietly rotates fields out while every signal
+upstream keeps calling them warm:
+
+- `warpRegion`/`nowcastRegion` replies carry a `coverage` the caller never
+  read, so a warp stitched from an evicted cache presented a mostly-empty
+  image as success — with the tile path dimmed to zero behind it. Coverage is
+  now the **minimum across the pair's frames** (an average scored a fatal
+  one-sided blank at 0.5, indistinguishable from a benign half-decoded block)
+  and MotionLayer stands down below 0.6.
+- The worker now posts an `evicted` message when its LRU rotates fields out,
+  and the pool deletes those keys from the warm-tile hints — previously the
+  hints only ever grew, so `loopReady`, region planning and region warmth all
+  inherited the lie once a loop outgrew the worker budget. The prefetcher got
+  a 45 s per-key attempt cooldown so an over-budget loop degrades to a trickle
+  instead of a warm/evict/re-warm churn loop.
+- `present()` resolved identically on a real serve and on its 2 s timeout, and
+  MotionLayer revealed either way — dimming the tiles behind a frame the globe
+  never took. The timeout now returns `false` and motion stands down.
+- A flow solved over a 60%-decoded region was cached forever ("the answer
+  cannot change" is only true of fully-decoded input — undecoded tiles read as
+  zero and put fake edges inside echoes). `getFlow` now re-measures once the
+  region warms materially, and an upgraded field carries a new identity so the
+  cached full-resolution expansions cannot serve the stale one.
+- The `/api/radar/diag` IEM verdict hashed every ladder response regardless of
+  HTTP status, so an IEM outage could read as `NO HISTORY` — killing the
+  source on zero comparable payloads. Only 200s with hashable bytes vote now;
+  fewer than two of them is `INCONCLUSIVE`, and excluded failures are named.
+- The timeline readout labelled the first half of each interval past "now" as
+  observed (nearest-frame rule) while the renderer was already drawing
+  extrapolated pixels (time rule). The readout now uses the same one rule the
+  engine records: any moment past the newest observation is a forecast.
+- `forecastAvailable` was cleared on exactly one stand-down path, so a zoom-out
+  past the motion block cap (or any other stand-down) left the timeline
+  advertising a full-strength forecast over a deliberately-empty zone,
+  indefinitely. Every stand-down and the unmount now clear it.
+
+**The lifecycle family** — states that could wedge or briefly lie:
+
+- The held-region preference tested only cache warmth, which never expires
+  under a parked camera — so a pan or zoom-out left motion faithfully warping
+  a rectangle nobody was looking at, with the tile path dimmed to zero
+  everywhere else. MotionLayer now listens to `camera.moveEnd` and drops a
+  held region that no longer intersects the view.
+- A scrub released back onto its own snapped position within the retry window
+  hit the dedupe gate with nothing left to wake the pump — motion stayed down
+  until an unrelated store write (up to the ~2 min manifest poll). The scrub
+  path clears `lastAttempt` now.
+- `RadarTimeline` unmounting (or null-rendering) mid-drag stranded
+  `scrubbing: true` in the store forever — no pointerup ever arrives for a
+  removed element — permanently standing motion down. An effect clears the
+  flag whenever the track leaves the screen.
+- The playback wrap mapped overshoot past the last frame into [-1, 0) instead
+  of [0, 1) — every consumer clamps, so each loop pass froze one full interval
+  on the oldest frame (the exact stutter the adjacent comment promises to
+  avoid) and the store briefly held `currentIndex = -1`.
+- The opacity slider never reached a warp parked on a stationary playhead
+  (reveal-time alpha only, and the dedupe gate swallowed the store write); the
+  radar could not be dimmed or hidden until the playhead moved. The pump now
+  reapplies opacity to a showing layer.
+- `standDown` hid the warp synchronously while the tile path's alpha returned
+  through a React effect that flushes after paint — one painted frame with
+  NEITHER path drawn, the hole the handover rule forbids. The warp now holds
+  for two frames (the allowed overlap direction).
+- A warm-cache palette switch issued one `requestRender` and stopped; tiles
+  answered from the worker with no Cesium Request behind them, so nothing
+  scheduled the next render and the swap sat half-processed until the scene's
+  1 s clock heartbeat — 10× the <100 ms acceptance mark. `setPalette` now
+  drives the reload to settlement the same way frame transitions do.
+- `RadarLayerV2`'s cleanup dereferenced `viewer.camera` unguarded; on the
+  context-loss path the viewer is destroyed before that cleanup runs, and the
+  codebase's own guard pattern was missing at exactly one site. This one
+  corrects an earlier conclusion — see the context-loss note under the open
+  items below. (MotionLayer's new moveEnd cleanup guards the same way.)
+- `sourceForView` containment passed antimeridian-crossing views (west > east
+  satisfies all four comparisons against CONUS); latent today — the function
+  has no callers until a regional source goes live — fixed before it could
+  matter.
+- Diagnostic-path bitmap leaks: `WarpProbe` and `buildComposite` used
+  `Promise.all` over region renders, so one rejection orphaned the sibling's
+  region-sized ImageBitmap (tens of MB) — both now settle and close. The
+  Stage B spike's `WeatherPrimitive` gained `viewer.isDestroyed()` guards on
+  its async continuations, and its first geometry build now starts hidden
+  instead of overruling the coverage gate.
+
+Verification: `npm run lint` clean, production build clean, all four committed
+suites green after every change above.
+
+### The open items, decided or restated
+
+1. **IEM / C5 stays gated, and cannot be resolved from this sandbox.**
+   `mesonet.agron.iastate.edu` is still refused at the egress proxy (403 on
+   CONNECT, re-confirmed 2026-08-13), and no production URL is recorded in the
+   repo. The step remains: deploy this branch, hit `/api/radar/diag`, read
+   `iemHistory.verdict`, and act per the PR 9 table. The usage-policy
+   question is a human judgement either way.
+2. **Real-hardware measurements remain untaken** — this sandbox renders
+   through SwiftShader at ~1.6 s/frame, measured identical with radar
+   disabled. Still owed: Stage A's first-pixel <2 s / zero long tasks /
+   palette <100 ms; Stage C's 60 fps desktop, ≥30 fps mid-range phone,
+   scrub-to-render <16 ms; whether `T_STEPS = 16` is the right cap; and the
+   advection bias scored against real radar (synthetic brackets: 87–99%
+   depending on feature structure).
+3. **Context-loss recovery still needs a real GPU — and the earlier
+   "not radar-attributable" conclusion was partly wrong.** The acceptance
+   sweep recorded 3 of 14 forced losses failing with
+   `Cannot read properties of undefined (reading 'scene')`, stack inside
+   Cesium, and concluded radar was not the cause. The review traced that
+   exact TypeError to `RadarLayerV2`'s unguarded cleanup: Cesium 1.142's
+   `Viewer.destroy()` sets `_cesiumWidget = undefined`, and the `camera`
+   getter chains `this.scene.camera` → `this._cesiumWidget.scene` — so
+   `viewer.camera.moveEnd.removeEventListener(...)` after a CLEAN destroy
+   throws precisely that string from inside Cesium's getters, with this line
+   as the caller. The intermittency matches too: `CesiumGlobe`'s
+   `try { v.destroy() } catch` means a partially-failed destroy leaves
+   `_cesiumWidget` intact and the cleanup succeeds by luck. The stack being
+   inside `Cesium.js` is exactly what this bug looks like — a lesson for the
+   next drill. Caveat kept honest: one of the three failures had the radar
+   layer OFF and cannot be this line; the drill still needs a real-GPU
+   re-run, now with the guard in place.
+4. **Engine v1 stays, deliberately.** The rollout's deletion condition —
+   "after Stage C stabilizes" — is not met while every real-hardware
+   measurement in (2) is open. `RadarLayerV1` costs three call sites and
+   ~190 lines, all isolated behind `radarEngine()`. Delete it when (a) the
+   Stage A and Stage C acceptance numbers pass on real hardware, and (b) one
+   release has shipped default-on-v2 with no one needing `?radar=v1`.
