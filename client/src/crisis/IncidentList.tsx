@@ -1,26 +1,8 @@
 import { useState } from 'react';
-import { useCrisisStore, type Incident, type IncidentStatus, type IncidentType } from './crisisStore';
+import { useCrisisStore, type Incident } from './crisisStore';
+import { incidentStatusDef, incidentTypeDef } from './taxonomy';
 import { useAuthStore } from '../auth/authStore';
 import { CrisisReportModal } from './CrisisReportModal';
-
-const STATUS_BADGE: Record<IncidentStatus, { dot: string; badge: string; label: string }> = {
-  active:    { dot: '#ef4444', badge: 'text-red-400 bg-red-500/15 border-red-500/40',       label: 'Active' },
-  contained: { dot: '#f59e0b', badge: 'text-amber-300 bg-amber-400/15 border-amber-400/40', label: 'Contained' },
-  resolved:  { dot: '#22c55e', badge: 'text-green-400 bg-green-500/15 border-green-500/40', label: 'Resolved' },
-};
-
-const TYPE_LABEL: Record<IncidentType, string> = {
-  wildfire: 'Wildfire',
-  hurricane: 'Hurricane',
-  earthquake: 'Earthquake',
-  flood: 'Flood',
-  chemical: 'Chemical / HazMat',
-  'mass-casualty': 'Mass Casualty',
-  cyber: 'Cyber',
-  security: 'Security Threat',
-  'severe-weather': 'Severe Weather',
-  other: 'Other',
-};
 
 function fmtWhen(iso: string) {
   try {
@@ -45,7 +27,7 @@ function IncidentCard({ incident }: { incident: Incident }) {
   const openIncident   = useCrisisStore((s) => s.openIncident);
   const removeIncident = useCrisisStore((s) => s.removeIncident);
 
-  const sb = STATUS_BADGE[incident.incidentStatus];
+  const sb = incidentStatusDef(incident.incidentStatus);
   const assigned = incident.assignments.filter((a) => !a.endedAt).length;
   const actions  = incident.actionLog.filter((e) => e.entryType === 'action').length;
   const events   = incident.actionLog.filter((e) => e.entryType === 'event').length;
@@ -67,7 +49,7 @@ function IncidentCard({ incident }: { incident: Incident }) {
             {incident.incidentName || <span className="text-white/40">Untitled Incident</span>}
           </h3>
           <div className="mt-0.5 flex items-center gap-2 text-[10px] text-white/40">
-            <span>{TYPE_LABEL[incident.incidentType]}</span>
+            <span>{incidentTypeDef(incident.incidentType).label}</span>
             {incident.incidentLocation && (
               <>
                 <span className="text-white/20">·</span>
@@ -147,7 +129,7 @@ function ArchivedCard({
             {incident.incidentName || <span className="text-white/30">Untitled Incident</span>}
           </h3>
           <div className="mt-0.5 flex items-center gap-2 text-[10px] text-white/30">
-            <span>{TYPE_LABEL[incident.incidentType]}</span>
+            <span>{incidentTypeDef(incident.incidentType).label}</span>
             {incident.incidentLocation && (
               <>
                 <span className="text-white/15">·</span>
@@ -249,8 +231,7 @@ export function IncidentList() {
   const active   = [...incidents]
     .filter((i) => !i.archivedAt)
     .sort((a, b) => {
-      const order: Record<string, number> = { active: 0, contained: 1, resolved: 2 };
-      const d = (order[a.incidentStatus] ?? 3) - (order[b.incidentStatus] ?? 3);
+      const d = incidentStatusDef(a.incidentStatus).listRank - incidentStatusDef(b.incidentStatus).listRank;
       return d !== 0 ? d : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
 

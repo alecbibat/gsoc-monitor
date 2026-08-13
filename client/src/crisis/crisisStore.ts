@@ -1,13 +1,13 @@
 import { create } from 'zustand';
 import type { ShareLiveLayerId } from './shareLiveLayers';
+import { normalizeIncidentFields, type IncidentStatus, type IncidentType } from './taxonomy';
 
 // ── Domain types ─────────────────────────────────────────────────────────────
 
-export type IncidentStatus = 'active' | 'contained' | 'resolved';
-export type IncidentType =
-  | 'wildfire' | 'hurricane' | 'earthquake' | 'flood'
-  | 'chemical' | 'mass-casualty' | 'cyber' | 'security'
-  | 'severe-weather' | 'other';
+// The incident-type taxonomy and state model live in taxonomy.ts (the single
+// source of truth for ids, labels, colors and lifecycle). Re-exported here so
+// existing importers keep working.
+export type { IncidentStatus, IncidentType } from './taxonomy';
 export type CrisisTab = 'situation-report';
 export type ActionEntryType = 'action' | 'event' | 'info';
 
@@ -360,7 +360,11 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
       standDownIncident: (id) =>
         set((s) => ({
           incidents: s.incidents.map((inc) =>
-            inc.id === id ? { ...inc, archivedAt: new Date().toISOString() } : inc
+            // Standing down closes the incident: archived-but-still-"active"
+            // rows are what kept tab badges lit forever.
+            inc.id === id
+              ? { ...inc, archivedAt: new Date().toISOString(), incidentStatus: 'closed' as IncidentStatus }
+              : inc
           ),
           // Navigate back to the list so the archive section is immediately visible.
           activeIncidentId: s.activeIncidentId === id ? null : s.activeIncidentId,
@@ -369,7 +373,11 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
       reopenIncident: (id) =>
         set((s) => ({
           incidents: s.incidents.map((inc) =>
-            inc.id === id ? { ...inc, archivedAt: null } : inc
+            // Reopen conservatively as Monitoring — the operator escalates to
+            // Active if the situation actually warrants it.
+            inc.id === id
+              ? { ...inc, archivedAt: null, incidentStatus: 'monitoring' as IncidentStatus }
+              : inc
           ),
         })),
 
@@ -550,16 +558,21 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
       setActiveDrawLayer: (id) => set({ activeDrawLayerId: id }),
       setPickedLayer: (pickedLayer) => set({ pickedLayer }),
 
-      setIncidents: (incidents) => set({ incidents }),
+      // Both server ingest paths normalize legacy taxonomy values (retired
+      // type/status ids, archived-but-not-closed) on the way into the store.
+      // The sync watcher then sees the normalized incident as "changed" and
+      // writes the canonical values back — lazy, idempotent data migration.
+      setIncidents: (incidents) => set({ incidents: incidents.map(normalizeIncidentFields) }),
       setSyncState: (syncState) => set({ syncState }),
 
       applyRemoteUpsert: (incident) =>
         set((s) => {
-          const exists = s.incidents.some((i) => i.id === incident.id);
+          const inc = normalizeIncidentFields(incident);
+          const exists = s.incidents.some((i) => i.id === inc.id);
           return {
             incidents: exists
-              ? s.incidents.map((i) => (i.id === incident.id ? incident : i))
-              : [...s.incidents, incident],
+              ? s.incidents.map((i) => (i.id === inc.id ? inc : i))
+              : [...s.incidents, inc],
           };
         }),
 

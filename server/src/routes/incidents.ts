@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { pool } from '../db';
 import { wrap } from '../asyncWrap';
 import { requireAuth } from '../middleware/auth';
+import { invalidIncidentReason } from '../incidentTaxonomy';
 
 const router = Router();
 router.use(requireAuth);
@@ -54,7 +55,8 @@ router.get('/', wrap(async (_req, res: Response) => {
 // Upsert an incident (client generates stable IDs, so POST and PUT are the same).
 router.post('/', wrap(async (req: Request, res: Response) => {
   const incident = req.body;
-  if (!incident?.id) { res.status(400).json({ error: 'id is required' }); return; }
+  const invalid = invalidIncidentReason(incident);
+  if (invalid) { res.status(400).json({ error: invalid }); return; }
   const { rows: [row] } = await pool.query(
     `INSERT INTO incidents (id, data)
      VALUES ($1, $2)
@@ -67,10 +69,14 @@ router.post('/', wrap(async (req: Request, res: Response) => {
 }, 'incidents'));
 
 router.put('/:id', wrap(async (req: Request, res: Response) => {
+  // Validate the same shape POST stores — the URL id wins over any body id.
+  const incident = { ...req.body, id: req.params.id };
+  const invalid = invalidIncidentReason(incident);
+  if (invalid) { res.status(400).json({ error: invalid }); return; }
   const { rows: [row] } = await pool.query(
     `UPDATE incidents SET data = $1, updated_at = NOW()
      WHERE id = $2 RETURNING data`,
-    [JSON.stringify({ ...req.body, id: req.params.id }), req.params.id]
+    [JSON.stringify(incident), req.params.id]
   );
   if (!row) { res.status(404).json({ error: 'Incident not found' }); return; }
   broadcast('upsert', row.data);

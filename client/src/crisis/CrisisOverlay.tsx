@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   useCrisisStore, useActiveIncident, extractPublicState, type CrisisTab,
 } from './crisisStore';
+import { incidentStatusDef } from './taxonomy';
 import { useAuthStore } from '../auth/authStore';
 import { SituationReport } from './tabs/SituationReport';
 import { IncidentList } from './IncidentList';
@@ -11,12 +12,6 @@ import { CrisisReportModal } from './CrisisReportModal';
 const TABS: { id: CrisisTab; label: string }[] = [
   { id: 'situation-report', label: 'Situation Report' },
 ];
-
-const STATUS_BADGE: Record<string, { dot: string; badge: string }> = {
-  active:    { dot: '#ef4444', badge: 'text-red-400 bg-red-500/15 border-red-500/40' },
-  contained: { dot: '#f59e0b', badge: 'text-amber-300 bg-amber-400/15 border-amber-400/40' },
-  resolved:  { dot: '#22c55e', badge: 'text-green-400 bg-green-500/15 border-green-500/40' },
-};
 
 // ── Share links panel ─────────────────────────────────────────────────────────
 
@@ -227,7 +222,7 @@ function IncidentDetail() {
   if (!inc) return null;
   const isArchived = !!inc.archivedAt;
   const canDelete  = !isArchived || user?.role === 'admin';
-  const { dot, badge } = STATUS_BADGE[inc.incidentStatus] ?? STATUS_BADGE.active;
+  const { dot, badge, label: statusLabel } = incidentStatusDef(inc.incidentStatus);
 
   return (
     <>
@@ -270,7 +265,7 @@ function IncidentDetail() {
               <div className="truncate text-[13px] font-semibold text-white/90">{inc.incidentName || 'Untitled Incident'}</div>
             </div>
             <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest ${badge}`}>
-              {inc.incidentStatus}
+              {statusLabel}
             </span>
             {isArchived && (
               <span className="shrink-0 rounded-full border border-white/15 bg-white/6 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-white/40">

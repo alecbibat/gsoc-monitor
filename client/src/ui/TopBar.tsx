@@ -392,7 +392,8 @@ function MeasureButton() {
 function CrisisButton() {
   const toggle       = useCrisisStore((s) => s.toggle);
   const open         = useCrisisStore((s) => s.open);
-  const activeCount  = useCrisisStore((s) => s.incidents.filter((i) => i.incidentStatus === 'active').length);
+  // Same rule as TitleBadge: archived incidents never count as active.
+  const activeCount  = useCrisisStore((s) => s.incidents.filter((i) => i.incidentStatus === 'active' && !i.archivedAt).length);
   const isActive     = activeCount > 0;
 
   return (

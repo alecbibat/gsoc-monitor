@@ -1,32 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   useCrisisStore, useActiveIncident,
-  type IncidentType, type IncidentStatus, type DrawLayerType, type DrawGeometry, type DrawLayer,
+  type IncidentType, type DrawLayerType, type DrawGeometry, type DrawLayer,
 } from '../crisisStore';
+import { INCIDENT_CATEGORIES, INCIDENT_STATUSES, incidentTypesInCategory } from '../taxonomy';
 import { IcsOrgChart } from '../IcsOrgChart';
 import { ActionLog } from '../ActionLog';
 import { parseCoords } from '../parseCoords';
 import { SHARE_LIVE_LAYER_GROUPS, isShareLiveLayerId } from '../shareLiveLayers';
 import { LOCATION_GROUPS } from '../../layers/locations/locations';
-
-const STATUS_STYLES: Record<IncidentStatus, string> = {
-  active:    'border-red-500/50 bg-red-500/15 text-red-400',
-  contained: 'border-amber-400/50 bg-amber-400/15 text-amber-300',
-  resolved:  'border-green-500/50 bg-green-500/15 text-green-400',
-};
-
-const INCIDENT_TYPES: { value: IncidentType; label: string }[] = [
-  { value: 'other',          label: 'Other' },
-  { value: 'wildfire',       label: 'Wildfire' },
-  { value: 'hurricane',      label: 'Hurricane / Tropical Storm' },
-  { value: 'earthquake',     label: 'Earthquake' },
-  { value: 'flood',          label: 'Flood' },
-  { value: 'chemical',       label: 'Chemical / HazMat Spill' },
-  { value: 'mass-casualty',  label: 'Mass Casualty Incident' },
-  { value: 'cyber',          label: 'Cyber Incident' },
-  { value: 'security',       label: 'Security / Active Threat' },
-  { value: 'severe-weather', label: 'Severe Weather' },
-];
 
 const DRAW_LAYER_TYPES: { value: DrawLayerType; label: string; color: string }[] = [
   { value: 'fire-perimeter', label: 'Fire Perimeter',  color: '#ef4444' },
@@ -530,25 +512,29 @@ export function SituationReport() {
                 value={inc.incidentType}
                 onChange={(e) => update({ incidentType: e.target.value as IncidentType })}
               >
-                {INCIDENT_TYPES.map(({ value, label }) => (
-                  <option key={value} value={value}>{label}</option>
+                {INCIDENT_CATEGORIES.map((cat) => (
+                  <optgroup key={cat.id} label={cat.label}>
+                    {incidentTypesInCategory(cat.id).map((t) => (
+                      <option key={t.id} value={t.id}>{t.icon} {t.label}</option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </FieldRow>
 
             <FieldRow label="Status">
               <div className="flex flex-wrap gap-2">
-                {(['active', 'contained', 'resolved'] as const).map((s) => (
+                {INCIDENT_STATUSES.map((s) => (
                   <button
-                    key={s}
-                    onClick={() => update({ incidentStatus: s })}
+                    key={s.id}
+                    onClick={() => update({ incidentStatus: s.id })}
                     className={`rounded-full border px-3 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition ${
-                      inc.incidentStatus === s
-                        ? STATUS_STYLES[s]
+                      inc.incidentStatus === s.id
+                        ? s.badge
                         : 'border-white/12 text-white/35 hover:border-white/25 hover:text-white/55'
                     }`}
                   >
-                    {s}
+                    {s.label}
                   </button>
                 ))}
               </div>

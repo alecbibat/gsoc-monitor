@@ -6,18 +6,13 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import type { Incident, IcsRole, PersonnelAssignment } from './crisisStore';
+import { incidentStatusDef, incidentTypeDef } from './taxonomy';
 
 // Lazy so Leaflet (used only by this printable report and the share view)
 // stays out of the main bundle.
 const CrisisShareMap = lazy(() =>
   import('./CrisisShareMap').then((m) => ({ default: m.CrisisShareMap }))
 );
-
-const STATUS_BADGE: Record<string, { dot: string; badge: string }> = {
-  active:    { dot: '#ef4444', badge: 'text-red-400 bg-red-500/15 border-red-500/40' },
-  contained: { dot: '#f59e0b', badge: 'text-amber-300 bg-amber-400/15 border-amber-400/40' },
-  resolved:  { dot: '#22c55e', badge: 'text-green-400 bg-green-500/15 border-green-500/40' },
-};
 
 const ENTRY_STYLES = {
   action: 'text-blue-300 bg-blue-400/15 border-blue-400/30',
@@ -148,7 +143,7 @@ export function CrisisReportModal({ incident, onClose }: Props) {
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  const { dot, badge } = STATUS_BADGE[incident.incidentStatus] ?? STATUS_BADGE.active;
+  const { dot, badge, label: statusLabel } = incidentStatusDef(incident.incidentStatus);
   const roots = incident.roles.filter((r) => r.parentId === null);
   const mapLayers = incident.drawLayers.filter((l) => l.positions.length > 0);
 
@@ -196,7 +191,7 @@ export function CrisisReportModal({ incident, onClose }: Props) {
             <p className="text-[18px] font-semibold text-white/90">{incident.incidentName || 'Unnamed Incident'}</p>
           </div>
           <span className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-widest ${badge}`}>
-            {incident.incidentStatus}
+            {statusLabel}
           </span>
           <span className="shrink-0 rounded-full border border-white/20 bg-white/8 px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-white/50">
             Archived
@@ -229,7 +224,7 @@ export function CrisisReportModal({ incident, onClose }: Props) {
                 ['Location', incident.incidentLocation],
                 ['Start', incident.incidentDatetime ? new Date(incident.incidentDatetime).toLocaleString() : '—'],
                 ['End', incident.incidentEndDatetime ? new Date(incident.incidentEndDatetime).toLocaleString() : '—'],
-                ['Type', incident.incidentType],
+                ['Type', incidentTypeDef(incident.incidentType).label],
                 ['Created', fmtTs(incident.createdAt)],
                 ['Archived', incident.archivedAt ? fmtTs(incident.archivedAt) : '—'],
               ] as [string, string][]).map(([label, value]) => (

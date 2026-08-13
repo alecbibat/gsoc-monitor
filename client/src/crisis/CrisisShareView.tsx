@@ -7,6 +7,9 @@ import { ShareWatchCard } from './ShareWatchCard';
 import { isShareLiveLayerId } from './shareLiveLayers';
 import { ImageLightbox, ZoomableImage } from './ImageLightbox';
 import { TYPE_STYLES, TimelineView, LogShowMore, DEFAULT_LOG_LIMIT } from './logViews';
+// Share snapshots outlive deploys, so status/type may arrive as retired ids —
+// the def lookups normalize them (contained → recovery, chemical → HazMat, …).
+import { incidentStatusDef, incidentTypeDef } from './taxonomy';
 
 // The live globe (Cesium + every layer component) is only loaded when the
 // incident actually prescribes live layers; plain share links keep the light
@@ -14,12 +17,6 @@ import { TYPE_STYLES, TimelineView, LogShowMore, DEFAULT_LOG_LIMIT } from './log
 const CrisisShareGlobe = lazy(() =>
   import('./CrisisShareGlobe').then((m) => ({ default: m.CrisisShareGlobe }))
 );
-
-const STATUS_BADGE: Record<string, { dot: string; badge: string }> = {
-  active:    { dot: '#ef4444', badge: 'text-red-400 bg-red-500/15 border-red-500/40' },
-  contained: { dot: '#f59e0b', badge: 'text-amber-300 bg-amber-400/15 border-amber-400/40' },
-  resolved:  { dot: '#22c55e', badge: 'text-green-400 bg-green-500/15 border-green-500/40' },
-};
 
 function fmtTs(iso: string) {
   try { return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }); }
@@ -314,7 +311,8 @@ export function CrisisShareView({ token }: { token: string }) {
     );
   }
 
-  const { dot, badge } = STATUS_BADGE[data.incidentStatus] ?? STATUS_BADGE.active;
+  const status = incidentStatusDef(data.incidentStatus);
+  const { dot, badge } = status;
   const roots = data.roles.filter((r) => r.parentId === null);
   // Live layers prescribed by the incident team; drop ids this build no longer
   // knows (snapshots outlive deploys). Array.isArray guards because share
@@ -347,14 +345,14 @@ export function CrisisShareView({ token }: { token: string }) {
       <header className="sticky top-0 z-10 border-b border-white/8 bg-ink-900/90 px-8 py-4 backdrop-blur-sm">
         <div className="mx-auto flex max-w-5xl items-center gap-4">
           <div className="relative flex h-2.5 w-2.5 shrink-0">
-            {data.incidentStatus === 'active' && <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-70" style={{ background: dot }} />}
+            {status.id === 'active' && <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-70" style={{ background: dot }} />}
             <span className="relative inline-flex h-2.5 w-2.5 rounded-full" style={{ background: dot }} />
           </div>
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">Live Situation Report</p>
             <p className="text-[20px] font-semibold text-white/95">{data.incidentName || 'Unnamed Incident'}</p>
           </div>
-          <span className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-widest ${badge}`}>{data.incidentStatus}</span>
+          <span className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-widest ${badge}`}>{status.label}</span>
           <div className="ml-auto text-right">
             <p className="text-[10px] text-white/40">Last updated</p>
             <p className="text-[11px] text-white/60">{fmtTs(data.lastUpdated)}</p>
@@ -379,7 +377,7 @@ export function CrisisShareView({ token }: { token: string }) {
                 ['Location', data.incidentLocation],
                 ['Start', data.incidentDatetime ? new Date(data.incidentDatetime).toLocaleString() : '—'],
                 ['End', data.incidentEndDatetime ? new Date(data.incidentEndDatetime).toLocaleString() : '—'],
-                ['Type', data.incidentType],
+                ['Type', incidentTypeDef(data.incidentType).label],
               ].map(([label, value]) => (
                 <div key={label} className="flex gap-3">
                   <span className="w-24 shrink-0 text-[11px] text-white/50">{label}</span>

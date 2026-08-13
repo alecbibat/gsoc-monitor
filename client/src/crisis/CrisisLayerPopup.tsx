@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom';
-import { useCrisisStore, incidentOfLayer, type DrawLayerType, type IncidentStatus } from './crisisStore';
+import { useCrisisStore, incidentOfLayer, type DrawLayerType } from './crisisStore';
+import { incidentStatusDef } from './taxonomy';
 
 const TYPE_LABEL: Record<DrawLayerType, string> = {
   'fire-perimeter': 'Fire Perimeter',
@@ -9,12 +10,6 @@ const TYPE_LABEL: Record<DrawLayerType, string> = {
   'exclusion-zone': 'Exclusion Zone',
   'search-grid': 'Search Grid',
   'other': 'Other',
-};
-
-const STATUS_BADGE: Record<IncidentStatus, string> = {
-  active:    'text-red-400 bg-red-500/15 border-red-500/40',
-  contained: 'text-amber-300 bg-amber-400/15 border-amber-400/40',
-  resolved:  'text-green-400 bg-green-500/15 border-green-500/40',
 };
 
 const POPUP_W = 248;
@@ -72,8 +67,8 @@ export function CrisisLayerPopup() {
             <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-white/85">
               {inc.incidentName || 'Untitled Incident'}
             </span>
-            <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-widest ${STATUS_BADGE[inc.incidentStatus]}`}>
-              {inc.incidentStatus}
+            <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-widest ${incidentStatusDef(inc.incidentStatus).badge}`}>
+              {incidentStatusDef(inc.incidentStatus).label}
             </span>
           </div>
         </div>
