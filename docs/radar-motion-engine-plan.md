@@ -634,6 +634,71 @@ the wrong thing. C5 is complete when the verdict comes back, and it may complete
 by *removing* IEM rather than enabling it — which is a legitimate outcome and
 leaves the abstraction, and Option 3's plug point, standing either way.
 
+### Acceptance sweep — the three checks that could be closed here
+
+Run after PR 9, against the tile fixture in headless Chromium.
+
+**Crisis share page** (Stage A and Stage C acceptance) — `RadarLayer` and
+`RadarTimeline` mount standalone on the public, anonymous share view, and the
+keyless/client-fetched constraint has never been enforced by anything but
+discipline. Now measured:
+
+| Check | Result |
+|---|---|
+| Radar tiles requested on the share page | **46** |
+| Radar timeline mounts standalone | yes |
+| Echo actually drawn on the share globe | **3.7%** of the view |
+| Radar tiles proxied through our own origin | **0** — all 46 went straight to the CDN |
+| Tile requests carrying a key or token | **0** |
+
+One caution for anyone extending that test: an earlier version flagged *any*
+`.png` from our own origin and failed on Cesium's bundled `ion-credit.png`. The
+constraint is about radar tiles, so the check matches the tile URL shape.
+
+**EarthTimeBar coexistence** (Stage C acceptance) — driven against the real
+Earth basemap rather than reasoned about, because `buildTimeline`'s public
+contract has been extended three times since that rule was written (float
+playhead, forecast frames, source cadence).
+
+| Check | Result |
+|---|---|
+| Radar off: date bar in the bottom slot | `bottom-5` |
+| Radar on: date bar steps up | `bottom-[5.75rem]` |
+| Radar on: timeline takes the bottom slot | `bottom-5` |
+| Any two of the three floating bars overlapping | **none** (checked on BOTH axes) |
+| Radar play button reachable, not covered | reachable |
+
+There are *three* bottom-anchored bars, not two — the radar legend sits at
+`bottom-24`. It overlaps the date bar vertically and is clear of it
+horizontally, which is why the collision test has to check both axes; a
+vertical-only test reports a collision that does not exist.
+
+**Context-loss drill** (Stage A acceptance) — re-run because Stage C added a
+third imagery layer with its own tiling scheme, a rAF loop driving renders
+inside `present()`, a flow cache and a store subscription, all of which touch a
+viewer that gets destroyed and rebuilt under them.
+
+**Radar's own recovery is correct.** Whenever the app rebuilt, every radar
+check passed: the motion layer remounted onto the new viewer and re-engaged,
+imagery layers returned to 5 with no accumulation, the forecast zone was rebuilt
+from the manifest, and no error originated in the radar path.
+
+**App-level recovery is intermittent here, and it is not radar's doing.** Across
+14 forced losses in four harnesses, 11 recovered and 3 did not. The failures do
+not correlate with the engine or the motion layer — one of them had the radar
+layer switched off entirely — and the error seen in every failure
+(`Cannot read properties of undefined (reading 'scene')`) has its stack inside
+`cesium/Cesium.js`, not our code. The honest conclusion is that this sandbox's
+software renderer makes the rebuild timing-dependent, and that the drill needs
+re-running on real hardware before anyone concludes anything about the app's
+watchdog. What can be said is that Stage C did not regress it.
+
+A harness note worth keeping: `window.__radarMotion()` is a closure over
+whichever mount installed it, so immediately after a rebuild it still answers
+from the torn-down one — reporting `standDown: 'unmounted'` and zero layers.
+That reads as catastrophic failure and is really an impatient probe; wait for
+the new mount to publish before believing it.
+
 ### What Stage C takes forward
 
 The fallback keeps weather **below labels at every altitude**, which is the house
