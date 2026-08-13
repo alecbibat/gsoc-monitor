@@ -303,6 +303,83 @@ A diagnostic ships behind `?radarflow=1` (`window.__radarFlow()`), because flow
 lands one PR before anything draws it and a wrong field would otherwise first
 appear as a broken warp.
 
+### Stage C PR 6 — the warp-dissolve (landed)
+
+`flow/warp.ts` is a backward (semi-Lagrangian) warp: for each output pixel, pull
+from where the echo *was* in A (back along the flow by `t`) and where it *will
+be* in B (forward by `1−t`), then blend. Backward rather than forward because a
+forward scatter leaves holes wherever the flow diverges. Magnitude and presence
+are blended separately and divided after — the normalized convolution carried
+into the time axis, so echo growing or fading between frames stays truthful
+instead of ghosting.
+
+With `flow` null or all zeros this reduces **byte-for-byte** to the Stage A
+dissolve (asserted, not assumed), which is what makes it the permanent fallback:
+flow failure, an undecoded region, and `prefers-reduced-motion` all land there
+with nothing special to do.
+
+**Deviations and decisions**
+
+- **The warp is region-scoped, not per-tile.** It routinely pulls pixels from
+  across a tile boundary, so a per-tile warp would seam at every edge. It runs
+  over the same stitched block `composite.ts` already plans.
+- **Tiles are now hashed to a worker by ZOOM LEVEL** (`worker/pool.ts`). A region
+  is single-level by construction, so this guarantees one worker holds the entire
+  region for every frame — stitch, flow and warp all read straight from its own
+  cache instead of being gathered and merged across workers. The cost is that
+  decode for the on-screen level lands on one worker; that is not the bottleneck,
+  because tile fetches are throttled to two at a time and the network gates
+  warming long before the decode does.
+- **Rewritten allocation-free** after the first cut measured 536 ms/megapixel —
+  `sampleFlow` returned a tuple per pixel. Inlining the bilinear sample and
+  resolving the coarse flow grid to full resolution once per pair brought it to
+  **61 ms/MP**.
+- **Region reply bitmaps are now closed on the cancelled path.** A composite or
+  warp reply arriving after its job was cancelled leaked its `ImageBitmap`; at a
+  full 8×8 block that is 67 MB apiece.
+
+**Verified** — 20 checks in a synthetic harness plus a browser run on the tile
+fixture:
+
+| Check | Result |
+|---|---|
+| `t=0` / `t=1` reproduce frames A and B exactly | centre within **0.0 px**, single lobe |
+| Broad front (r22, 24 px step): storm at the midpoint | **96.7** vs 96.0 expected, one lobe |
+| …warp stays as sharp as a real frame | core **45 px**, identical to a source frame |
+| …the dissolve smears it | core **53 px**, and peak alpha 210 vs 254 |
+| Compact cell (r6, 20 px step): dissolve ghosts | **2 lobes** — the double exposure this replaces |
+| …warp shows one cell, full strength | 1 lobe, peak **246 vs 103** |
+| Monotonic advance across `t`, both scenes | no reversals, no step past 1.1× even spacing |
+| Zero flow vs plain dissolve | **byte-identical** |
+| `flipY` output | exact vertical mirror |
+| Cost | **61 ms/megapixel** (3.3 ms for 192²) |
+| Browser: endpoints vs dissolve | delta exactly **0** at both ends |
+| Browser: interior vs dissolve | mean **5.7** alpha levels over covered pixels, peak 33 |
+| Browser: divergence profile | 4.8 / **5.7** / 4.8 — peaks mid-interval, as motion must |
+| Browser: cost per warped region frame | **71 ms** peak (1024² block, SwiftShader) |
+
+**The tracking limit, stated rather than discovered later.** What governs the
+warp is displacement ÷ feature radius, not pixels. A window can only measure
+motion it sees in *both* frames, so once an echo travels much past its own
+radius its two positions no longer overlap and nothing links them. Measured on a
+22 px blob: ratio ≤2.0 is exact (≤0.4 px), ~2.4 drifts a few px, ≥3.2 breaks
+down into a ghost. Real frames sit well inside that — 10–25 px per 10-minute
+step at regional zoom against features tens of pixels across. Past the limit the
+warp degrades *toward the dissolve* rather than inventing anything: asserted that
+it never renders brighter than a source frame and never places mass outside the
+span the storm actually travelled.
+
+A diagnostic ships behind `?radarwarp=1` (`window.__radarWarp()`). It reports how
+far the warp departs from a crossfade of the same pair, averaged over the pixels
+either render covers — **not** over the image, because a view is mostly empty sky
+where both are identical, and that denominator reports a number that shrinks as
+you zoom out while saying nothing about whether the storms moved. Zero divergence
+in the interior looks exactly like "the weather is not moving", which is the
+failure this exists to catch.
+
+Nothing draws the warp yet: `t` becomes continuous in PR 7, which is where the
+render wiring belongs.
+
 ### What Stage C takes forward
 
 The fallback keeps weather **below labels at every altitude**, which is the house
