@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { RadarFrame } from '../../types';
 import type { RadarPaletteId } from './palettes';
+import { activeSource } from './radarSource';
 
 // Clouds/Combined are gone: RainViewer's infrared product is discontinued and
 // the manifest now publishes zero `satellite.infrared` frames (Stage 0, Aug
@@ -145,7 +146,10 @@ export const useRadarStore = create<RadarState>((set) => ({
 export const LOOP_READY_THRESHOLD = 0.9;
 
 export function framesInWindow(frames: RadarFrame[], windowMinutes: number): RadarFrame[] {
-  const count = Math.max(1, Math.round(windowMinutes / 10));
+  // How many frames a window holds is a property of the SOURCE's cadence, not a
+  // constant: a 5-minute regional feed puts twice as many frames in the same
+  // two hours as a 10-minute global one.
+  const count = Math.max(1, Math.round(windowMinutes / activeSource().cadenceMinutes));
   return frames.slice(Math.max(0, frames.length - count));
 }
 

@@ -9,22 +9,16 @@ import type { RadarFrame } from '../../types';
 import { radarEngine } from './engineFlag';
 import { getRadarLut, type RadarPaletteId } from './palettes';
 import { isForecastPath } from './nowcast/forecast';
+import { activeSource } from './radarSource';
 import { radarBlurPx, recolorRadarTile } from './recolor';
 import { noteTileRequested } from './visibleTiles';
 import { recolorTile, workerPipelineSupported } from './worker/pool';
 
-// 512px tiles: fewer requests, and declaring the true tile size lets Cesium
-// pick one level coarser for the same screen density — the radar data is far
-// coarser than the basemap anyway.
-const TILE_SIZE = 512;
-// The deepest level RainViewer actually serves data for. Verified against the
-// live CDN (Stage 0, Aug 2026): z6 and z7 return real mosaics that differ from
-// their parents, while z8, z9, z10 and z11 all return the SAME 3269-byte
-// placeholder regardless of coordinates. Requesting past 7 therefore bought
-// nothing but bandwidth and a placeholder image fed through the palette
-// inversion. Beyond this Cesium bilinearly magnifies our smoothed level-7
-// texture, which is the same trick zoom.earth leans on.
-export const RADAR_MAX_LEVEL = 7;
+// Both now come from the active source rather than from constants here — see
+// radarSource.ts, which is where the facts that differ between providers live.
+// Re-exported because half the module tree imports RADAR_MAX_LEVEL from here.
+const TILE_SIZE = activeSource().tileSize;
+export const RADAR_MAX_LEVEL = activeSource().maxLevel;
 
 type Recolor = (img: HTMLImageElement | ImageBitmap, level: number) => HTMLCanvasElement;
 
@@ -74,7 +68,12 @@ export function radarTileUrl(
   x: number | string,
   y: number | string
 ): string {
-  return `${host}${frame.path}/${TILE_SIZE}/${z}/${x}/${y}/2/1_0.png`;
+  if (import.meta.env.DEV && isForecastPath(frame.path)) {
+    // A forecast frame has no bytes anywhere; reaching here means a guard is
+    // missing and the request will 404 against the CDN.
+    console.error('[radar] forecast frame reached radarTileUrl', frame.path);
+  }
+  return activeSource().tileUrl(host, frame, z, x, y);
 }
 
 // A tile we could not recolor renders as nothing. Raw scheme-0 bytes are
