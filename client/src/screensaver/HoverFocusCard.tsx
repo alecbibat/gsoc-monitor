@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useHoverStore } from './hoverStore';
 import { useProximityStore } from '../widgets/proximity/proximityStore';
+import { downFeedNames } from '../widgets/proximity/proximityScan';
 import { HazardRows } from '../widgets/proximity/HazardRows';
 import { LOCATION_GROUPS, type Location, type LocationGroup } from '../layers/locations/locations';
 import { haversineMeters, metersToMiles } from '../lib/geo';
@@ -65,6 +66,9 @@ export function HoverFocusCard() {
         Math.abs(p.location.lon - location.lon) < 1e-4,
     ) ?? null;
   const scanned = result !== null;
+  // A downed feed must never read as "All clear" — no match while blind is
+  // unknown status, not safety.
+  const down = downFeedNames(result);
   const color = group.color;
   const distMi = metersToMiles(meters);
 
@@ -104,13 +108,22 @@ export function HoverFocusCard() {
         <div className="border-t px-5 py-2.5" style={{ borderColor: `${color}25` }}>
           {match ? (
             <HazardRows hazards={match} radiusMi={radiusMi} />
-          ) : scanned ? (
+          ) : !scanned ? (
+            <div className="text-[11px] text-white/40">Scanning nearby hazards…</div>
+          ) : down.length === 3 ? (
+            <div className="text-[11px] text-accent-danger/90">
+              Hazard feeds unreachable — status unknown
+            </div>
+          ) : down.length > 0 ? (
+            <div className="text-[11px] text-accent-warn/90">
+              <span aria-hidden className="mr-1">⚠</span>
+              Partial scan ({down.join(' + ')} down) — nothing found within {radiusMi} mi
+            </div>
+          ) : (
             <div className="flex items-center gap-1.5 text-[11px] text-accent-ok/90">
               <span aria-hidden>✓</span>
               <span>All clear — nothing within {radiusMi} mi</span>
             </div>
-          ) : (
-            <div className="text-[11px] text-white/40">Scanning nearby hazards…</div>
           )}
         </div>
       </div>

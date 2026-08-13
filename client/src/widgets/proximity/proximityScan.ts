@@ -77,6 +77,20 @@ export interface ScanResult {
   updated: number;
 }
 
+/**
+ * Names of the feeds that failed in a scan, in a stable display order. An
+ * "all clear" is only trustworthy when this is empty — surfaces that make the
+ * claim must qualify (or drop) it while any feed is down.
+ */
+export function downFeedNames(result: ScanResult | null): string[] {
+  if (!result) return [];
+  return [
+    result.fireError ? 'fires' : null,
+    result.alertError ? 'alerts' : null,
+    result.quakeError ? 'earthquakes' : null,
+  ].filter((n): n is string => n !== null);
+}
+
 function parseQuakes(fc: GeoJSON.FeatureCollection | null): QuakeRecord[] {
   if (!fc) return [];
   const features = (fc.features ?? []) as unknown as EarthquakeFeature[];
