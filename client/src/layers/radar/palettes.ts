@@ -130,30 +130,3 @@ export function getRadarLut(palette: RadarPaletteId): RadarLut {
   }
   return lut;
 }
-
-// Infrared satellite → cloud overlay: luminance (cold, high tops are bright in
-// RainViewer's IR tiles) keys both the whiteness and the opacity, so clear sky
-// vanishes instead of painting the globe gray, and storm anvils glow white.
-export function getCloudLut(): Uint8ClampedArray {
-  let lut = cloudLutCache;
-  if (!lut) {
-    lut = new Uint8ClampedArray(256 * 4);
-    for (let v = 0; v < 256; v++) {
-      const t = smoothstep(100, 220, v);
-      // Cool gray-blue thin cloud → bright white anvil tops. Thin cloud fades
-      // fast (t²) so the overlay reads as weather, not haze.
-      lut[v * 4] = 175 + 80 * t;
-      lut[v * 4 + 1] = 184 + 71 * t;
-      lut[v * 4 + 2] = 200 + 55 * t;
-      lut[v * 4 + 3] = Math.pow(t, 1.6) * 215;
-    }
-    cloudLutCache = lut;
-  }
-  return lut;
-}
-let cloudLutCache: Uint8ClampedArray | null = null;
-
-function smoothstep(e0: number, e1: number, x: number): number {
-  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
-  return t * t * (3 - 2 * t);
-}

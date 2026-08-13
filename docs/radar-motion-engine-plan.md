@@ -184,6 +184,536 @@ runs in the worker on the equirect composite at reduced cadence (~30 fps view-re
 updates) feeding a single frequently-updated imagery layer. Lower ceiling, same visual
 idea; decision recorded here with the measured reasons.
 
+## Stage B verdict: NO-GO on the draped primitive
+
+**Recommendation: take the worker-composite fallback.** The blocker is
+architectural, not performance — which is why more frame-rate measurement would
+not change the answer.
+
+### The decisive finding: the altitude hybrid is inverted
+
+The plan proposed running the primitive "only above the altitude where labels are
+faded/gone", on the assumption that labels fade out as you zoom out. They do the
+opposite. `labelAlphaAt` in `CesiumGlobe.tsx` returns **0 below `LABELS_FADE.near`
+(55 km)** and ramps to **1 at `far` (80 km)**: labels are invisible close in and
+fully visible zoomed out.
+
+Cesium primitives draw above all imagery, including the label overlay, and
+"labels stay above weather" is a house rule. So the only altitudes where a
+primitive may legally draw are **below ~55 km** — city scale. Animated
+precipitation is watched at regional and continental scale, which is precisely
+where the primitive is forbidden. The GPU path would buy smooth motion in the one
+regime nobody animates radar in.
+
+Everything else follows from that:
+
+- **The 4096-texture criterion is unreachable in the permitted band.** Below
+  55 km the view spans a fraction of one level-7 tile, so the composite planner
+  produces a 512×512 or 1024×1024 block. Measured: `regionKey 7/30/49/1/1`,
+  262 144 px, 2.1 MB of texture. Two 4096-square textures only appear if the
+  ceiling is lifted past the point where labels are visible.
+- **Compositing is per-keyframe CPU work proportional to region area**, which the
+  imagery path does not have at all: 445–765 ms per pair for 0.26–1.0 MP here.
+  That is a software rasterizer in a container and would be far quicker on real
+  hardware, but the *shape* of the cost — O(region) per keyframe, on top of the
+  decode the imagery path already does — is inherent.
+- **The composite and the field cache are awkwardly coupled.** The GPU path needs
+  exactly the tiles the imagery path decoded, and has no authoritative handle on
+  which those are. Three derivations were tried — camera view rectangle, deepest
+  observed level, current display level — and all three produced empty composites
+  while the camera was moving, because they name tiles Cesium has not requested.
+  Solvable (drive compositing from the imagery layer's own tile set, or give the
+  compositor its own decode path), but it is real work the plan did not budget.
+
+### What did work, and is worth keeping
+
+- The custom `Material` fabric **compiles and renders**: no shader compile or link
+  errors, correct drape via `EllipsoidSurfaceAppearance` on `RectangleGeometry`,
+  the palette LUT matching the CPU path, per-pixel alpha, and the mercator
+  reprojection of a latitude-linear `st`.
+- **Texture swapping is leak-free.** Cesium destroys a material's old GPU texture
+  only after the replacement uploads (`Material.update`), and the spike retires
+  its own `ImageBitmap`s three rendered frames after handover: 134 retired,
+  `bitmapsOutstanding` back to 0.
+- Promoting the outgoing B composite into the A slot on a playhead step **halves**
+  the composite work per frame advance (measured 41 reuses across 138 swaps).
+- Blending magnitude and presence separately and dividing afterwards — the
+  normalized convolution carried into the time axis — is the right shape for
+  Stage C and survives unchanged into the fallback.
+
+### Not measured here
+
+Frame rate, GPU memory under real drivers, compositing against the live basemaps
+and the day/night terminator. This sandbox renders through SwiftShader (measured
+2.1 fps, meaningless) and its basemap CDNs are blocked. The harness is shipped —
+`?radargl=1` plus `window.__radarGl()` — so these can be read off real hardware
+if the verdict is worth contesting. Given the label-ordering finding, they would
+have to be extraordinary to change it.
+
+### Stage C PR 5 — optical flow in the worker (landed)
+
+`flow/lk.ts` is dense pyramidal Lucas-Kanade over the cached intensity fields:
+3-level pyramid, per-cell solve over a 13×13 window, Tikhonov regularization
+scaled to the window's own gradient energy, confidence-weighted smoothing, and a
+3×3 median per level. Pure typed arrays, no dependencies.
+
+**Deviations and decisions**
+
+- **Windows are normalized to zero mean and matched energy.** Textbook LK
+  assumes brightness constancy, which radar breaks constantly — cells intensify
+  and decay in place. Before this, a blob growing 30% while standing still
+  reported ~4 px of spurious travel; after, **0.01 px** of net translation. This
+  is the plan's "flow artifacts on growth/decay" risk, closed at the source
+  rather than mitigated downstream.
+- **Gradients are precomputed per pyramid level** and cell centres snap to whole
+  pixels, so only the target frame needs bilinear sampling. Cost fell from
+  **256 ms to 62 ms** per 256² pair — comfortably inside the plan's 30–300 ms.
+- **Flow is solved from a merged mosaic, not per worker.** Tiles are hashed
+  across workers so a tile's whole time series stays together, which means no
+  single worker holds a complete region. Each worker returns its own downsampled
+  partial; because the shares are disjoint and absent tiles read as zero (as does
+  empty sky), a per-pixel maximum merges them. The merged planes are then
+  *transferred* into one worker for the solve, so the hand-off is a pointer, not
+  a copy.
+- **`planWarmRegion` replaces `planRegion` for flow.** "What is on screen" and
+  "what can be measured" are different questions: the level Cesium most recently
+  requested may have nothing decoded yet, and flow measured from holes is worse
+  than no flow. This walks the observed levels finest-first and returns the
+  deepest one whose tiles are genuinely warm for *both* frames. It is also the
+  fix for the empty composites the Stage B spike hit.
+- **Flow is cached per pair per region.** A 13-frame loop is 12 pairs, revisited
+  every few seconds by playback; the frames are historical, so the answer cannot
+  change.
+
+**Verified** — 15 checks in a synthetic harness plus one end-to-end browser run:
+
+| Check | Result |
+|---|---|
+| Pure translations (4–24 px, five directions) | recovered within **0.07–0.89 px** |
+| Growth in place (r ×1.3, amp ×1.35) | **0.01 px** net translation, peak 0.77 px |
+| Decay in place (r ×0.75, amp ×0.7) | **0.02 px** net translation, peak 1.21 px |
+| Identical frames | exactly zero |
+| Opposing halves (±10 px) | signs correct, −8.94 / +9.98 |
+| Empty field | finite, all-zero, no NaNs |
+| Confidence over echo vs empty sky | 0.33 vs 0.00 |
+| Cost per 256² pair | **62 ms** (128²: 34 ms) |
+| End-to-end through decode → cache → merge → solve | expected (5.12, 2.56), got **(5.01, 2.62)** |
+
+A diagnostic ships behind `?radarflow=1` (`window.__radarFlow()`), because flow
+lands one PR before anything draws it and a wrong field would otherwise first
+appear as a broken warp.
+
+### Stage C PR 6 — the warp-dissolve (landed)
+
+`flow/warp.ts` is a backward (semi-Lagrangian) warp: for each output pixel, pull
+from where the echo *was* in A (back along the flow by `t`) and where it *will
+be* in B (forward by `1−t`), then blend. Backward rather than forward because a
+forward scatter leaves holes wherever the flow diverges. Magnitude and presence
+are blended separately and divided after — the normalized convolution carried
+into the time axis, so echo growing or fading between frames stays truthful
+instead of ghosting.
+
+With `flow` null or all zeros this reduces **byte-for-byte** to the Stage A
+dissolve (asserted, not assumed), which is what makes it the permanent fallback:
+flow failure, an undecoded region, and `prefers-reduced-motion` all land there
+with nothing special to do.
+
+**Deviations and decisions**
+
+- **The warp is region-scoped, not per-tile.** It routinely pulls pixels from
+  across a tile boundary, so a per-tile warp would seam at every edge. It runs
+  over the same stitched block `composite.ts` already plans.
+- **Tiles are now hashed to a worker by ZOOM LEVEL** (`worker/pool.ts`). A region
+  is single-level by construction, so this guarantees one worker holds the entire
+  region for every frame — stitch, flow and warp all read straight from its own
+  cache instead of being gathered and merged across workers. The cost is that
+  decode for the on-screen level lands on one worker; that is not the bottleneck,
+  because tile fetches are throttled to two at a time and the network gates
+  warming long before the decode does.
+- **Rewritten allocation-free** after the first cut measured 536 ms/megapixel —
+  `sampleFlow` returned a tuple per pixel. Inlining the bilinear sample and
+  resolving the coarse flow grid to full resolution once per pair brought it to
+  **61 ms/MP**.
+- **Region reply bitmaps are now closed on the cancelled path.** A composite or
+  warp reply arriving after its job was cancelled leaked its `ImageBitmap`; at a
+  full 8×8 block that is 67 MB apiece.
+
+**Verified** — 20 checks in a synthetic harness plus a browser run on the tile
+fixture:
+
+| Check | Result |
+|---|---|
+| `t=0` / `t=1` reproduce frames A and B exactly | centre within **0.0 px**, single lobe |
+| Broad front (r22, 24 px step): storm at the midpoint | **96.7** vs 96.0 expected, one lobe |
+| …warp stays as sharp as a real frame | core **45 px**, identical to a source frame |
+| …the dissolve smears it | core **53 px**, and peak alpha 210 vs 254 |
+| Compact cell (r6, 20 px step): dissolve ghosts | **2 lobes** — the double exposure this replaces |
+| …warp shows one cell, full strength | 1 lobe, peak **246 vs 103** |
+| Monotonic advance across `t`, both scenes | no reversals, no step past 1.1× even spacing |
+| Zero flow vs plain dissolve | **byte-identical** |
+| `flipY` output | exact vertical mirror |
+| Cost | **61 ms/megapixel** (3.3 ms for 192²) |
+| Browser: endpoints vs dissolve | delta exactly **0** at both ends |
+| Browser: interior vs dissolve | mean **5.7** alpha levels over covered pixels, peak 33 |
+| Browser: divergence profile | 4.8 / **5.7** / 4.8 — peaks mid-interval, as motion must |
+| Browser: cost per warped region frame | **71 ms** peak (1024² block, SwiftShader) |
+
+**The tracking limit, stated rather than discovered later.** What governs the
+warp is displacement ÷ feature radius, not pixels. A window can only measure
+motion it sees in *both* frames, so once an echo travels much past its own
+radius its two positions no longer overlap and nothing links them. Measured on a
+22 px blob: ratio ≤2.0 is exact (≤0.4 px), ~2.4 drifts a few px, ≥3.2 breaks
+down into a ghost. Real frames sit well inside that — 10–25 px per 10-minute
+step at regional zoom against features tens of pixels across. Past the limit the
+warp degrades *toward the dissolve* rather than inventing anything: asserted that
+it never renders brighter than a source frame and never places mass outside the
+span the storm actually travelled.
+
+A diagnostic ships behind `?radarwarp=1` (`window.__radarWarp()`). It reports how
+far the warp departs from a crossfade of the same pair, averaged over the pixels
+either render covers — **not** over the image, because a view is mostly empty sky
+where both are identical, and that denominator reports a number that shrinks as
+you zoom out while saying nothing about whether the storms moved. Zero divergence
+in the interior looks exactly like "the weather is not moving", which is the
+failure this exists to catch.
+
+Nothing draws the warp yet: `t` becomes continuous in PR 7, which is where the
+render wiring belongs.
+
+### Stage C PR 7 — continuous timeline, and the warp on screen (landed)
+
+`radarStore.position` is a float index into the timeline; `currentIndex` remains
+as its round, because warming, the Stage A tile path and engine v1 all want a
+single frame. Both setters write both fields, so the two can never disagree.
+`buildTimeline` and `nowIndex` are untouched — `EarthTimeBar` subscribes to them.
+
+Playback advances the playhead on an animation frame instead of stepping an
+index on a timer, at 0.5×/1×/2×. The timeline handle is continuous and its
+readout interpolates.
+
+`motion/WarpRegionLayer.ts` puts the warp on the globe: **one** imagery layer
+pinned to exactly the region, via a `WebMercatorTilingScheme` with a 1×1
+level-zero grid whose bounds are the block's own mercator corners. The block IS
+the level-zero tile and the composite IS its pixels, so nothing is reprojected on
+the way to the screen. Below labels, like everything else.
+
+**Deviations and decisions**
+
+- **A float index, not minutes-relative-to-now.** Every consumer wants a frame
+  pair and a mix; `floor` and `fract` give both directly, where a time needs a
+  search. `framePairAt` clamps rather than extrapolating past the last frame —
+  extrapolation is a forecast and has to be labelled as one (PR 8), so warping
+  past the end would present invented weather as observed.
+- **Scrubbing stands motion down.** The house rule is that the frame under the
+  handle is the frame on screen, immediately; a warp costs tens of milliseconds.
+  A drag renders from cached tiles and stays instant. Pointer-*cancel* clears the
+  flag too — without it a drag interrupted by a browser gesture leaves motion
+  off for good.
+- **`present` drives renders until the globe takes the image.** `requestRenderMode`
+  means the globe will not render on its own, and a tile reload only advances
+  while it renders. One `requestRender()` after the reload is not enough — the
+  tile's state machine needs several passes — and without this the serve
+  reliably expired instead. Same pattern as `PingPongLayers.waitForSettled`.
+- **The region in use is preferred over the best one available** (new
+  `regionWarmth`). `planWarmRegion` returns the *deepest* warm level, and which
+  level qualifies differs from pair to pair, so re-planning on each pair flipped
+  the region back and forth while the camera sat perfectly still — each flip a
+  layer teardown and rebuild. Slightly coarser weather that holds still beats
+  sharper weather that flickers.
+- **The serve valve is 2 s, not 400 ms.** Near the frame time it made a slow
+  device queue a second warp before the first was drawn — the back-to-back
+  reload hazard, plus wasted worker time. At 400 ms a third of all presents
+  expired on the software renderer.
+- **Handover is ordered to overlap, never gap**: show the warp before dimming the
+  tiles, restore the tiles before hiding the warp. A frame where both draw is a
+  momentary brightening of the same weather; a frame where neither draws is a
+  hole in it.
+- **Blocks are capped at 4 tiles a side for motion** (2048², 16 MB an upload),
+  against `composite.ts`'s 8 for the Stage B spike. A warped frame is re-uploaded
+  as a whole texture every time it changes, so block size is a per-frame
+  bandwidth cost rather than a one-off.
+
+**Verified** — browser runs against the tile fixture:
+
+| Check | Result |
+|---|---|
+| Two positions in one interval, stepping path | **byte-identical** screenshots — it cannot tell them apart |
+| Two positions in one interval, motion path | **different** — the storm has moved |
+| Motion engages and holds | `showing`, 16–28 warps per run, 27–82 ms each |
+| Handle advance | 8 distinct positions across 8 samples — continuous, not stepped |
+| Speed control | 2× / 1× ratio **2.00**, 0.5× / 1× ratio **0.53**, strictly ordered |
+| Imagery layers on the globe | **5** — basemap, labels, two tile layers, one motion layer |
+| Region stability, camera still | **0** rebuilds (was flipping before `regionWarmth`) |
+| Scrub | stands down mid-drag, returns after release |
+| Presents reaching the globe | 12 of 19; the rest are the valve pacing to a 1.6 s frame time |
+
+**What this sandbox cannot measure.** It renders through SwiftShader at roughly
+one frame per 1.6 s — measured **identical with `?radarmotion=0`**, so that is
+the software renderer and not this feature. Two consequences are visible in the
+numbers above and would not appear on real hardware: the advance cap makes
+playback run ~16% slow (a frame longer than a whole interval loses the
+remainder, deliberately), and a quarter of presents hit the serve valve. Both
+are the design working as intended under a frame time it was never going to see
+in a browser with a GPU. Absolute frame rate and texture-upload cost still need
+a real device.
+
+The first thing to check on real hardware is whether `T_STEPS = 16` is the right
+granularity — it caps motion at about 20 renders a second, which is a guess, not
+a measurement.
+
+### Stage C PR 8 — advection nowcast (landed)
+
+`flow/advect.ts` is Lagrangian persistence: the newest observed field carried
+forward along the measured flow by backward integration, substepped so a curved
+trajectory curves, with a gentle intensity decay for lead time. It is the
+standard short-range radar nowcast and the baseline pysteps and rainymotion use.
+
+One rule separates observed from forecast, and it is the clock rather than which
+frames a pair happens to name: where is the playhead in TIME relative to the
+newest observation? Before it, two real frames bracket the moment and PR 6's warp
+interpolates. After it, there is no second frame to reach toward, and the only
+honest thing to draw is an extrapolation of the last one. Deriving it from time
+keeps the boundary continuous — the last observed frame is lead 0, and the
+playhead slides off the end of the record without a seam.
+
+**The honesty contract.** The hazard the design had to answer: with the playhead
+in the forecast zone and motion standing down, whatever the tile path shows
+underneath would be the last OBSERVED frame while the readout says "forecast
++20 min". The resolution is that **the tile path renders forecast frames empty**.
+There is no state in which observed pixels can be on screen while the playhead
+names a forecast time, because the only thing that can draw a forecast is the
+region layer. Empty is legible; the hatch fades, the readout says "forecast
+unavailable", and nothing drawn contradicts it. Where nothing could ever draw a
+forecast — engine v1, `?radarmotion=0`, reduced motion — the zone is *absent*
+rather than present and empty.
+
+**Deviations and decisions**
+
+- **Flow must be DENSIFIED before it can be extrapolated along.** LK only knows
+  the motion of things it can see; over empty sky it returns near-zero at
+  near-zero confidence. That is fine for the warp, which only samples where the
+  echo already is, and fatal for a forecast, which traces backwards from a spot
+  that is currently empty. Against a raw field the trace starts in a zero-flow
+  cell, never travels, and reports empty sky forever — a storm bearing down on a
+  city simply never arrives. Measured on a known 18 px/frame track: +1 landed
+  7 px short, +3 landed 27 px short, and the echo tore apart. Spreading the
+  measured vectors outward by normalized convolution fixes it.
+- **The spread weights cells by confidence SQUARED above a floor.** A cell
+  straddling a storm's leading edge half-sees the motion and honestly reports a
+  smaller vector; enough of those averaged in linearly drag the answer below the
+  truth — worth 5–8 percentage points of advected speed, and another 5 for
+  including cells below the floor. Widening or narrowing the spread radius was
+  measured and made things worse in both directions.
+- **A back-trajectory that leaves the region renders TRANSPARENT**, where the
+  warp clamps to the border. There the edge value is real — both frames cover
+  the same ground. Here it is not: upwind of the boundary there is no data, and
+  replicating the edge row would paint a rain shield stretching off the side of
+  the forecast. Invented weather is the one thing a forecast may not do.
+- **Lead times are +10/+20/+30 with a +60 ceiling.** Persistence assumes storms
+  neither grow, decay nor turn; that holds for the first half hour and decays
+  badly after an hour.
+- **The decay is about confidence, not physics.** Persistence does not predict
+  that rain weakens and pysteps applies none. It is there because a forecast
+  drawn at exactly the strength of an observation claims to know as much as one.
+- **Forecast frames are anchored to the newest observed frame's time**, not the
+  wall clock, so a stalled feed pins the forecast to the last thing actually seen
+  instead of drifting into a future built on nothing.
+- **The readout names the method** — `advection +29 min`, with a tooltip saying
+  it cannot predict storms forming, dying or turning. "Forecast" alone reads like
+  a meteorologist's product.
+
+**Verified** — 13 synthetic checks plus 10 in the browser:
+
+| Check | Result |
+|---|---|
+| Lead 0 reproduces the observed frame | exact |
+| +1 / +2 / +3 direction | cosine **1.0000** at every lead |
+| +1 / +2 / +3 distance | **88% / 88% / 87%** of true — a steady, conservative bias |
+| Ground the storm vacated | **0** lit pixels — nothing smeared |
+| Upwind border | **0** lit pixels — nothing invented |
+| Decay | lowers intensity, moves the storm 0 px |
+| No flow | persistence in place, unmoved |
+| **Beats persistence against a HELD-OUT observed frame** | error **1.58 vs 6.09** — **74% better** |
+| Cost | **185 ms/megapixel** at lead 3 |
+| Browser: forecast zone appears after "now" | hatch at 62.5% |
+| Browser: playhead past "now" renders an extrapolation | lead 29 min, `forecast: true` |
+| Browser: the forecast draws real weather | **13.9%** of the view is echo |
+| Browser: forecast vs observation | different images, comparable echo (13.9% vs 16.4%) |
+| Browser: readout | reads `advection +29 min` |
+| Browser: motion disabled | **no forecast zone offered at all** |
+
+The held-out check is the plan's acceptance criterion ("sanity-checked against
+the next observed frames") made numeric: measure flow from frames 0 and 1 only,
+forecast frame 2, and score against the real frame 2 the measurement never saw,
+against the null hypothesis that nothing moves.
+
+**Two bugs this PR shipped and then fixed, both worth recording.**
+
+The first is the reason for the honesty framing above. The worker built its flow
+grid without a confidence plane, because the warp does not read one. The nowcast
+does — `densifyFlow` weights by it — so every vector densified to NaN, and a NaN
+back-trajectory fails its own bounds check (`NaN < 0` is false). Nothing threw,
+nothing logged, and **the forecast rendered completely empty while every status
+field reported success**. The browser test in place at the time passed, because
+it asserted only that the forecast image *differed* from the observed one — and a
+blank image differs from anything. Both were fixed: confidence is now a required
+field of a shared `FlowGrid` type (which turned the bug into three compile
+errors), `densifyFlow` refuses a mismatched plane loudly, and the test now counts
+weather-coloured pixels instead of comparing hashes.
+
+The second: the full-resolution flow expansion cached on OBJECT IDENTITY, which
+can never hit across a `postMessage` — structured clone hands the worker a fresh
+object every message, so it re-expanded a million-pixel field for every frame it
+drew. Keying on a stable token took warp cost per frame from 69–78 ms to **43**.
+
+**What still needs real hardware.** Everything the PR 7 section lists, plus the
+advection bias: the 87–88% figure is measured on a synthetic Gaussian storm
+travelling about its own radius per frame, and real convective fields have finer
+structure that LK tracks better (the smaller-feature case measured 95–99%). The
+honest expectation is between those, and it is conservative in the safe
+direction — the forecast puts a storm slightly short of where it will be — but it
+has not been scored against real radar.
+
+### Stage C PR 9 — source abstraction; IEM still gated (landed, partial)
+
+`radarSource.ts` is the seam C5 asked for. Tile size, deepest useful zoom, how a
+frame becomes a URL, cadence, coverage and which palette the bytes are encoded in
+are now facts about a *source* rather than constants scattered through the
+renderer. `framesInWindow` divides by the source's cadence instead of a hardcoded
+10, which is what lets a 5-minute regional feed put twice as many frames in the
+same two-hour window. `sourceForView` implements regional preference and returns
+the global source while every regional one is unavailable — today's behaviour
+exactly, and one flag away from being a choice.
+
+Behaviour is unchanged: one implemented source, and every synthetic and browser
+check passes identically before and after.
+
+Coverage is `[west, south, east, north]` degrees rather than a
+`Cesium.Rectangle`, so the module that describes where pixels come from does not
+drag a globe engine into the store's dependency tree.
+
+**IEM is described but NOT available, and the gate is still open.** The plan
+makes PR 9 conditional on Stage 0.2, and that condition has not been met. The
+open items, in the order they block:
+
+1. **Can IEM serve history at all?** Stage 0 found `-0`, `-m05m` and `-m50m`
+   returning byte-identical payloads on one tile. That has two very different
+   explanations the sample could not separate — the slugs do not work, or the
+   tile was empty and all three agreed on a picture of nothing. Until this is
+   settled the source cannot back a timeline, and a 5-minute cadence in the UI
+   with one frame behind it would be a lie about the data.
+2. **N0Q needs its own palette inversion.** The existing inverter is calibrated
+   against RainViewer's Universal Blue anchors; pointing it at a different ramp
+   produces confident nonsense. This is why `RadarDecoderId` exists as a named
+   field rather than an assumption.
+3. **IEM's usage policy has not been read** against app-scale traffic. That is a
+   licensing judgement, not an engineering one.
+
+`/api/radar/diag` now answers (1). It scans a band of CONUS for a tile that
+actually has echo — a slug ladder compared on empty sky agrees perfectly and
+proves nothing, which is the trap the Stage 0 sample fell into — then walks the
+full ladder (`-0`, `-m05m`, `-m10m`, `-m15m`, `-m20m`, `-m30m`, `-m45m`, `-m50m`)
+and hashes each payload with its visible-pixel count beside it. Four verdicts:
+
+| `iemHistory.verdict` | What it means for the source |
+|---|---|
+| `HISTORY WORKS` | Every slug distinct — IEM can back a 5-minute CONUS timeline. Proceed to (2) and (3). |
+| `PARTIAL` | Some slugs work. The timeline could use only those, at whatever spacing they really provide. |
+| `NO HISTORY` | Byte-identical on a tile WITH echo — the slugs do not select past imagery. IEM serves "now" only and cannot back a timeline; **drop it as a source** and close C5. |
+| `INCONCLUSIVE` | No echo anywhere in the scanned band. Says nothing either way — re-run when there is weather over the United States. |
+
+The sandbox cannot resolve this: `mesonet.agron.iastate.edu` is refused at the
+egress proxy (403 on CONNECT), which is the same reason Stage 0's probes had to
+run in production.
+
+**What this means for the plan.** The abstraction — the durable half of C5, and
+the piece the risk table actually depends on — has landed. The IEM source itself
+is deliberately unbuilt beyond its description, because building a decoder and a
+selection path for a feed that may not be able to serve history would be building
+the wrong thing. C5 is complete when the verdict comes back, and it may complete
+by *removing* IEM rather than enabling it — which is a legitimate outcome and
+leaves the abstraction, and Option 3's plug point, standing either way.
+
+### Acceptance sweep — the three checks that could be closed here
+
+Run after PR 9, against the tile fixture in headless Chromium.
+
+**Crisis share page** (Stage A and Stage C acceptance) — `RadarLayer` and
+`RadarTimeline` mount standalone on the public, anonymous share view, and the
+keyless/client-fetched constraint has never been enforced by anything but
+discipline. Now measured:
+
+| Check | Result |
+|---|---|
+| Radar tiles requested on the share page | **46** |
+| Radar timeline mounts standalone | yes |
+| Echo actually drawn on the share globe | **3.7%** of the view |
+| Radar tiles proxied through our own origin | **0** — all 46 went straight to the CDN |
+| Tile requests carrying a key or token | **0** |
+
+One caution for anyone extending that test: an earlier version flagged *any*
+`.png` from our own origin and failed on Cesium's bundled `ion-credit.png`. The
+constraint is about radar tiles, so the check matches the tile URL shape.
+
+**EarthTimeBar coexistence** (Stage C acceptance) — driven against the real
+Earth basemap rather than reasoned about, because `buildTimeline`'s public
+contract has been extended three times since that rule was written (float
+playhead, forecast frames, source cadence).
+
+| Check | Result |
+|---|---|
+| Radar off: date bar in the bottom slot | `bottom-5` |
+| Radar on: date bar steps up | `bottom-[5.75rem]` |
+| Radar on: timeline takes the bottom slot | `bottom-5` |
+| Any two of the three floating bars overlapping | **none** (checked on BOTH axes) |
+| Radar play button reachable, not covered | reachable |
+
+There are *three* bottom-anchored bars, not two — the radar legend sits at
+`bottom-24`. It overlaps the date bar vertically and is clear of it
+horizontally, which is why the collision test has to check both axes; a
+vertical-only test reports a collision that does not exist.
+
+**Context-loss drill** (Stage A acceptance) — re-run because Stage C added a
+third imagery layer with its own tiling scheme, a rAF loop driving renders
+inside `present()`, a flow cache and a store subscription, all of which touch a
+viewer that gets destroyed and rebuilt under them.
+
+**Radar's own recovery is correct.** Whenever the app rebuilt, every radar
+check passed: the motion layer remounted onto the new viewer and re-engaged,
+imagery layers returned to 5 with no accumulation, the forecast zone was rebuilt
+from the manifest, and no error originated in the radar path.
+
+**App-level recovery is intermittent here, and it is not radar's doing.** Across
+14 forced losses in four harnesses, 11 recovered and 3 did not. The failures do
+not correlate with the engine or the motion layer — one of them had the radar
+layer switched off entirely — and the error seen in every failure
+(`Cannot read properties of undefined (reading 'scene')`) has its stack inside
+`cesium/Cesium.js`, not our code. The honest conclusion is that this sandbox's
+software renderer makes the rebuild timing-dependent, and that the drill needs
+re-running on real hardware before anyone concludes anything about the app's
+watchdog. What can be said is that Stage C did not regress it.
+
+*Correction (2026-08-13):* the "not our code" reading did not survive the
+final review — that exact TypeError is what `RadarLayerV2`'s unguarded
+cleanup throws through Cesium's getter chain after a clean `Viewer.destroy()`.
+See item 3 of the wrap-up section at the end of this document. The radar-off
+failure remains unexplained and the real-GPU re-run still stands.
+
+A harness note worth keeping: `window.__radarMotion()` is a closure over
+whichever mount installed it, so immediately after a rebuild it still answers
+from the torn-down one — reporting `standDown: 'unmounted'` and zero layers.
+That reads as catastrophic failure and is really an impatient probe; wait for
+the new mount to publish before believing it.
+
+### What Stage C takes forward
+
+The fallback keeps weather **below labels at every altitude**, which is the house
+rule the primitive cannot satisfy. It reuses the Stage A ping-pong and the field
+cache unchanged, and `composite.ts`'s mercator stitch is directly reusable — the
+warp runs in the worker over the same block and the result feeds an imagery
+provider instead of a material. `WeatherMaterial`'s GLSL becomes the reference
+for the worker-side warp math rather than dead code.
+
 ---
 
 ## Stage C — Motion (~10–15 dev-days)
@@ -293,11 +823,473 @@ texture), `imageryOrder.ts`, crisis share components, `EarthTimeBar.tsx`.
 
 ## Stage 0 results
 
-_To be filled in when the diag extension runs in production._
+Run against production 2026-08-12 (`GET /api/radar/diag`). Every expectation in
+the plan was confirmed.
 
-- [ ] Live manifest: nowcast present? IR present? cadence/history:
-- [ ] z8/z9 tile behavior:
-- [ ] Rate-limit observations:
-- [ ] IEM CORS/latency/policy:
-- [ ] `_reload` spike result:
-- [ ] Baseline metrics captured:
+- [x] **Live manifest**: `radar.nowcast` is published but **empty** (0 frames) —
+      nowcast is discontinued. `satellite.infrared` is **absent/empty** (0
+      frames) — infrared is discontinued. Past radar: 13 frames, **10-minute**
+      cadence, **120 minutes** of history, newest frame 5 minutes old.
+- [x] **z8/z9 tile behavior**: z6 and z7 serve real, distinct mosaics (z7 vs its
+      z6 parent upscaled: only 33.6% of pixels identical, mean RGB difference
+      24.8 — genuine new detail). z8, z9, z10 and z11 **all return the same
+      3269-byte payload** regardless of coordinate, a 4-bit paletted PNG that
+      carries no radar data. **There is nothing above z7.** The client had
+      `RADAR_MAX_LEVEL = 9`, so deep zooms were downloading that placeholder and
+      feeding it through the palette inversion; what it rendered as is unknown
+      (the sandbox cannot reach the CDN and the server-side decoder does not
+      handle 4-bit PNGs), but it was never radar.
+- [x] **Rate limits**: a 30-tile concurrent burst returned 30×200, **no 429s**,
+      723 ms wall, 453 ms median per tile, 881 KB total. Tiles carry
+      `Cache-Control: max-age=172800` (48 h), `cf-cache-status: rv_edge` and
+      `Access-Control-Allow-Origin: *` — so the browser HTTP cache absorbs
+      repeat requests, which is why the two ping-pong layers pointing at the
+      same frame cost one download rather than two.
+- [x] **IEM**: all four probes returned 200 with `Access-Control-Allow-Origin: *`
+      and `Cache-Control: public, max-age=300`, 179–413 ms. `q2-hsr-900913` is
+      distinct content and the fastest. **Caveat**: `USCOMP-N0Q-0`, `-m05m` and
+      `-m50m` all returned byte-identical 20480-byte payloads with identical
+      visible-pixel counts, so the time-slugged variants did **not**
+      differentiate in this sample. Before Stage C relies on IEM for history,
+      re-probe those from a browser at spaced intervals — they may be edge-cached
+      or the slugs may no longer work. Usage policy is still unread.
+- [x] **`_reload` spike**: verified against 1.142 source and exercised by PR 2 —
+      see the version-correction notes above.
+- [x] **Baseline metrics**: captured as the v1 column of each PR's table below.
+
+**Decisions recorded**
+
+| Decision | Outcome |
+|---|---|
+| `RADAR_MAX_LEVEL` | **7** (was 9) |
+| Clouds / Combined modes | **Pruned** — the product behind them serves zero frames |
+| Upstream nowcast frames | **Dropped as a source**; the `nowcastFrames` slot and its hatched forecast styling stay for Stage C's advection frames |
+| IEM as Stage C secondary source | **Approved**, subject to re-probing the time-slug variants |
+
+### Cesium version correction (affects the whole plan)
+
+The plan was written against **Cesium 1.121**. The repo's `^1.121.1` range
+actually resolves to **1.142.0 (`@cesium/engine` 26.0.0)**, and that is what
+`package-lock.json` pins and what ships. Every load-bearing claim was therefore
+re-verified against 1.142 source:
+
+- **`_reload` exists and is better than assumed.** `GlobeSurfaceTileProvider`
+  assigns `imageryProvider._reload` when a layer is added and clears it on
+  removal. The reload function inserts NEW `TileImagery` skeletons after the
+  existing ones and frees the old ones only once the new ones are ready
+  (`getTileReadyCallback`). So the in-place frame swap is inherently
+  flicker-free — the old frame stays on screen until the new one can replace it.
+  Two caveats for Stage A PR 2: `_reload` is only assigned if `layer.show` was
+  true at add time, and a reload SKIPS any tile that still has a pending
+  loaded-callback, so rapid successive reloads need re-issuing rather than
+  fire-and-forget.
+- **Toggling `show` really is a full teardown**: `_onLayerShownOrHidden` calls
+  `_onLayerAdded`/`_onLayerRemoved` outright. Alpha stays the only safe knob.
+- **`readyPromise` is gone**, and there is still no public "layer ready" event.
+- **`Resource.fetchBlob` returns `undefined` when throttled**, exactly like
+  `fetchImage`. Imagery requests are created with `throttle: false,
+  throttleByServer: true`, so the undefined case is real (the per-server slot
+  limit) and `requestImage` must propagate it synchronously.
+- **The handoff's "a globe tile is not renderable until ALL layers' imagery is
+  ready" is WRONG for 1.142.** `GlobeSurfaceTile.processStateMachine` computes
+  `isAnyTileLoaded` and sets `tile.renderable = tile.renderable &&
+  (isAnyTileLoaded || isDoneLoading)` — "allow rendering if any available layers
+  are loaded". So one slow or stuck imagery layer does NOT hold up the tile,
+  which is why the two-layer ping-pong does not delay first paint. The corollary
+  still bites, though: a tile with NO layer's imagery ready is not drawn at all,
+  so where radar is the only imagery layer (as in the headless harness, whose
+  basemap CDN is blocked) a stuck radar tile shows as bare globe.
+- **`UNPACK_FLIP_Y_WEBGL` is ignored for `ImageBitmap` sources.** Cesium
+  compensates by decoding imagery with `imageOrientation: 'flipY'` and
+  `premultiplyAlpha: false`. Anything handing Cesium a bitmap must match that
+  convention or every tile renders mirrored. This is why `colorizeField` writes
+  its rows bottom-up (canvas sources, i.e. the v1 fallback, are flipped at
+  upload instead and must NOT be pre-flipped).
+
+## Stage A results
+
+### PR 1 — worker recolor pipeline (landed)
+
+**Deviations from the plan, and why**
+
+- **`radarField.ts` lives at `layers/radar/`, not under `worker/`.** It is
+  shared math: the worker and the v1 main-thread fallback both drive it, so
+  there is exactly one definition of the palette inversion and the blur
+  schedule. `recolor.ts` now imports from it instead of duplicating the anchor
+  table.
+- **The blur is three box passes, not a canvas `filter: blur()`.** `ctx.filter`
+  is unavailable/slow in a worker, and the SVG filter spec defines
+  `feGaussianBlur` in terms of exactly this three-box approximation — so this is
+  what the main-thread path was already computing. Measured against a true
+  Gaussian on a clamped-edge disc: max error 3.0/255 at σ=1.5, **7.2 at σ=2.0**,
+  5.1 at σ=4.0, mass preserved within 0.06%. Running sums make it O(1) per pixel
+  instead of the ~25-tap kernel σ=4 would need.
+
+  *Correction (2026-08-13, on recreating the suite):* the σ=2.0 row originally
+  read 5.8 and does not reproduce — the module measures ~7.2 against the
+  nominal-σ Gaussian while the σ=1.5 and σ=4.0 rows reproduce almost exactly
+  with the same synthesis. The σ=2 box triple (widths 4,4,5) has effective
+  σ≈2.12, the worst variance mismatch of the three schedules; against a
+  Gaussian of σ=2.05 the error is 5.6, so the original 5.8 was almost
+  certainly measured against a slightly off-nominal reference, not different
+  module behavior. The committed suite asserts the corrected number.
+- **No snow plane in the cached field.** The served palette carries no snow
+  signal (the v1 snow branch is already dead code), so the field is the planned
+  magnitude+presence pair with nothing wasted.
+- **Two watchdogs were added that the plan did not call for.** Justified below.
+
+**The hang that forced the watchdogs.** Under stress, a worker occasionally
+stopped answering: one run had worker 0 resolve 0 tiles, another had worker 1
+resolve 25 of 30 and then stall. Because the worker drains its queue serially, a
+single `createImageBitmap` that never settles strands every tile routed to that
+worker. Cesium leaves those tiles in TRANSITIONING and never retries, so radar
+goes missing there for the rest of the session; in the harness — where the
+basemap CDN is blocked and radar is the only imagery layer — the affected globe
+tiles were not drawn at all, which is how it surfaced as a blank globe. Two
+bounds now make that impossible:
+
+- worker side: each decode/encode is raced against `DECODE_TIMEOUT_MS` (8 s) so a
+  hung call throws instead of wedging the queue;
+- main-thread side: every job is bounded by `TILE_TIMEOUT_MS` (15 s), covering a
+  genuinely dead worker or a dropped `messageerror`, and rejecting into the
+  existing "degrade to a transparent tile" contract.
+
+Reproduced on the production build before the fix; 8/8 clean after.
+
+**Measured (headless Chromium against synthetic RainViewer-palette tiles, since
+the sandbox cannot reach the real CDN):**
+
+| Check | v1 | v2 |
+|---|---|---|
+| Palette switch → network tile requests | **36** | **0** |
+| Globe render vs v1 (differing pixels, globe region) | — | **0.67%**, mean 0.61/255 (terminator drift between runs) |
+| Blank/partial globes over 8 consecutive loads | — | **0** |
+
+The zero-network palette switch is the criterion this PR exists to hit: v1 tears
+down and refetches the whole layer stack, v2 re-runs the LUT over cached fields.
+
+**Still open for later PRs**: first-radar-pixel timing and long-task counts
+during playback.
+
+### PR 2 — two-layer ping-pong (landed)
+
+`PingPongLayers` owns exactly two `ImageryLayer`s and walks them through the
+timeline; `RadarFrameProvider` gained a mutable frame/palette plus an in-flight
+tile counter. `RadarLayer` is now a chooser: `RadarLayerV1` is the old
+stack-per-frame implementation, kept verbatim as the kill switch, and
+`RadarLayerV2` is a thin orchestrator over the pair. The pair is created on
+`[viewer, active, host]` only — frames rotating, the window changing and the
+palette changing all flow through the existing pair.
+
+**Deviations**
+
+- **v2 covers the plain radar mode only**; Clouds/Combined still run the v1
+  stack. Both are built on RainViewer's infrared product, which Stage 0 is
+  checking still exists — porting a product that is about to be pruned would be
+  wasted work, so PR 4 decides.
+- **No per-tile cancellation of Cesium-driven requests.** Cancelling would leave
+  the imagery promise unsettled, which is precisely the hang PR 1 had to bound.
+  Superseded tiles are allowed to finish instead (they are cheap, and the field
+  cache keeps them useful). `cancelTile` stays for PR 3's prefetch, where
+  nothing is waiting on the result.
+- **Teardown drains its own waiters.** `destroy()` cancels the rAFs that would
+  have resolved an in-flight transition, so the promises are resolved explicitly;
+  otherwise `pump` parks forever holding the viewer and both layers alive, and
+  StrictMode's double-mount leaks one per mount in dev.
+
+**Measured** (same harness):
+
+| Check | v1 | v2 |
+|---|---|---|
+| Imagery layers for a 6-frame timeline | 6 (one per frame) | **2** (asserted in dev) |
+| Distinct frames' tiles fetched to display ONE frame | 6 of 6 | **3 of 6** — only frames actually shown |
+| Tiles refetched by a manifest rotation | **42** (full teardown + rebuild) | **6** (the one new frame) |
+| Network tiles during a second playback loop | 0 | 0 |
+| Same scrubbed frame rendered vs v1 | — | **0.09%** differing pixels |
+| WebGL context-loss drill | — | **recovers, radar repaints** (chroma 0.62 vs 0.64 before) |
+
+The rotation number is the one that matters: v1 tears the whole stack down and
+re-downloads every frame every two minutes, forever. v2 keeps its two layers and
+pays only for the frame that is genuinely new.
+
+### PR 3 — prefetch + loop warming (landed)
+
+v1's one genuine virtue was instant scrubbing: a layer per frame meant every
+frame was already downloaded. v2 loads lazily, so the replacement is a warmed
+horizon — `prefetch.ts` decodes every timeline frame's copy of the visible tiles
+into the worker field cache, nearest-the-playhead first, and playback waits for
+it. `radarStore` gained `loopReady` (0–1) and `LOOP_READY_THRESHOLD`; the
+timeline shows a conic progress ring on the play button and a buffered bar on
+the track.
+
+**Deviations**
+
+- **The visible tile set is observed, not derived.** The plan called for
+  `camera.computeViewRectangle()` → tiling-scheme tile range at the layer's
+  current level. The level part of that means reimplementing Cesium's private
+  `_getLevelWithMaximumTexelSpacing` and keeping the copy in step with it
+  forever, and a mismatch would silently warm the wrong keys. `visibleTiles.ts`
+  instead records the coordinates Cesium actually requests, which is exact by
+  construction and needs no private API. Entries age out after 90 s so panning
+  away stops warming tiles nobody is looking at.
+- **Warm fetches go through `RequestScheduler` with `throttle: true`**, unlike
+  visible imagery (`throttle: false`). Warming therefore loses the priority
+  contest to tiles someone is looking at, and a declined fetch just backs off.
+  Concurrency is additionally capped at 2 and paused entirely while either
+  visible layer has tiles outstanding.
+- **Playback has a warm-wait safety valve** (`WARM_WAIT_MS`, 8 s). Two deadlocks
+  are otherwise reachable: a plan built before Cesium has requested anything is
+  empty, holds `loopReady` at 0, and — because playback waits on it — never
+  produces the playhead change that would re-plan; and warming that stalls for
+  any reason would freeze the timeline entirely. Radar that plays while still
+  filling in is strictly better than radar that refuses to play, which is what
+  v1 did anyway. The prefetcher also re-plans on its backoff rather than merely
+  resuming, which closes the first deadlock at the source.
+
+**Measured**:
+
+| Check | v1 | v2 |
+|---|---|---|
+| Network tiles from scrubbing the entire track after warm | 0 | **0** |
+| Frames warmed | 6 of 6 | 6 of 6 |
+| Total tiles fetched over the session | 42 | 46 |
+
+Scrub cost is the criterion: v2 reaches v1's zero-network scrubbing without
+v1's layer-per-frame stack. The 4 extra tiles are the overlap between warming
+and the two visible layers racing for the same keys.
+
+### PR 4 — pruning, legend, flag default (landed)
+
+- **`RADAR_MAX_LEVEL` 9 → 7.** Everything above 7 was a placeholder.
+- **Clouds/Combined pruned.** The modes, the mode selector, `makeCloudProvider`,
+  `recolorCloudTile`, `getCloudLut` and v1's combined-mode layer code are gone.
+  Worth noting they were not merely redundant: with zero infrared frames,
+  `buildTimeline` returned an empty array in satellite mode, so picking Clouds
+  blanked the radar and hid the timeline. Controls are now window + palette +
+  opacity + play, as the plan specified.
+- **Upstream nowcast dropped as a source.** `nowcastFrames` and the hatched
+  forecast zone stay — that is where Stage C's advection frames land.
+- **The radar legend** is registered in `layerLegends`, which puts it on the
+  operator app's floating legend stack and under the crisis share globe
+  automatically. Built from the same LUT the tiles are painted with (so it
+  cannot drift) and composites the palette's per-pixel alpha over the panel
+  ground, so the swatches read the way they do over the globe. Per the
+  registry's store-free rule it shows the default Storm ramp.
+- **`radarEngine` now defaults to v2.** `?radar=v1` remains the kill switch for
+  one release.
+
+**Store shape changed** — `mode`, `setMode` and `satelliteFrames` are gone, and
+`setManifest` lost its fourth argument. `buildTimeline`/`nowIndex` keep working
+for `EarthTimeBar`, which passes the whole store state and relies on structural
+typing; `buildTimeline`'s parameter type was narrowed to the three fields it
+actually reads so that stays true as fields come and go.
+
+One consequence of the observation-based prefetch worth knowing: warmed
+coordinates age out after 90 s, so a camera left untouched eventually plans
+nothing (Cesium has no reason to re-request tiles it already holds). The
+prefetcher deliberately does not report readiness in that state — reporting 0
+would undo a loop that is fully warm — and drops to a 2 s heartbeat.
+
+---
+
+## Final review and wrap-up (2026-08-13)
+
+A closing pass over the whole branch before handoff: a nine-dimension review of
+every radar module against the house rules (each finding then adversarially
+verified by independent checkers), the synthetic suites recreated as committed
+scripts, and a decision recorded for each of the plan's open items. The
+review's doc-truth dimension checked this document's factual claims against the
+code and found **zero mismatches**; the two stale comments it did find (code
+comments still describing the pre-PR6 per-coordinate worker hash) are fixed.
+
+### The synthetic suites are committed now
+
+`client/scripts/radar-checks/{fieldcheck,flowcheck,warpcheck,advectcheck}.ts`,
+run from the repo root as `./node_modules/.bin/tsx client/scripts/radar-checks/<name>.ts`.
+They exercise the REAL modules (nothing under test is reimplemented), assert
+the bounds this document records, print timings without asserting them, and
+skip the browser-only rows by name. Passing state at commit: **fieldcheck
+29/29, flowcheck 24/24, warpcheck 24/24, advectcheck 23/23**.
+
+Recreating them surfaced one recorded number that does not reproduce — the
+σ=2.0 blur error, corrected in the PR 1 section above — and three methodology
+notes worth keeping:
+
+- **Translation accuracy is scene-dependent.** A fine-structured multi-cell
+  field reproduces the recorded 0.07–0.89 px band; a single broad Gaussian
+  recovers only ~85–88% of true displacement — the same broad-feature bias the
+  PR 8 section records for advection distance. The suites document which
+  synthesis each recorded row needs.
+- **The warp's monotonic-advance and tracking-limit exactness hold for the
+  storm core** (squared-alpha centroid). A whole-image centroid is dragged
+  around by the faint sub-visibility skirt and reads up to 1.17× even spacing
+  where the core reads 1.04×.
+- **`maxDisplacement = 40` is load-bearing for safe degradation.** Re-measuring
+  the ratio-3.2 breakdown scene with the cap raised to 96 produces garbage
+  vectors that place mass well outside the travelled span; the production cap
+  is what makes past-the-limit failure degrade toward the dissolve.
+
+### What the review found, and what was fixed here
+
+Thirty-four raw findings, deduplicated to twenty-six and adversarially
+verified — twenty-nine independent verification passes (high-severity
+findings got two, with different lenses), **every one CONFIRMED, none
+refuted**. That unanimity is itself informative: the findings below are not
+speculative. All are fixed on this branch, and they cluster into two families:
+
+**The blank-as-success family** — the same trap shape as PR 8's NaN bug, in
+new places. The worker's LRU quietly rotates fields out while every signal
+upstream keeps calling them warm:
+
+- `warpRegion`/`nowcastRegion` replies carry a `coverage` the caller never
+  read, so a warp stitched from an evicted cache presented a mostly-empty
+  image as success — with the tile path dimmed to zero behind it. Coverage is
+  now the **minimum across the pair's frames** (an average scored a fatal
+  one-sided blank at 0.5, indistinguishable from a benign half-decoded block)
+  and MotionLayer stands down below 0.6.
+- The worker now posts an `evicted` message when its LRU rotates fields out,
+  and the pool deletes those keys from the warm-tile hints — previously the
+  hints only ever grew, so `loopReady`, region planning and region warmth all
+  inherited the lie once a loop outgrew the worker budget. The prefetcher got
+  a 45 s per-key attempt cooldown so an over-budget loop degrades to a trickle
+  instead of a warm/evict/re-warm churn loop.
+- `present()` resolved identically on a real serve and on its 2 s timeout, and
+  MotionLayer revealed either way — dimming the tiles behind a frame the globe
+  never took. The timeout now returns `false` and motion stands down.
+- A flow solved over a 60%-decoded region was cached forever ("the answer
+  cannot change" is only true of fully-decoded input — undecoded tiles read as
+  zero and put fake edges inside echoes). `getFlow` now re-measures once the
+  region warms materially, and an upgraded field carries a new identity so the
+  cached full-resolution expansions cannot serve the stale one.
+- The `/api/radar/diag` IEM verdict hashed every ladder response regardless of
+  HTTP status, so an IEM outage could read as `NO HISTORY` — killing the
+  source on zero comparable payloads. Only 200s with hashable bytes vote now;
+  fewer than two of them is `INCONCLUSIVE`, and excluded failures are named.
+- The timeline readout labelled the first half of each interval past "now" as
+  observed (nearest-frame rule) while the renderer was already drawing
+  extrapolated pixels (time rule). The readout now uses the same one rule the
+  engine records: any moment past the newest observation is a forecast.
+- `forecastAvailable` was cleared on exactly one stand-down path, so a zoom-out
+  past the motion block cap (or any other stand-down) left the timeline
+  advertising a full-strength forecast over a deliberately-empty zone,
+  indefinitely. Every stand-down and the unmount now clear it.
+
+**The lifecycle family** — states that could wedge or briefly lie:
+
+- The held-region preference tested only cache warmth, which never expires
+  under a parked camera — so a pan or zoom-out left motion faithfully warping
+  a rectangle nobody was looking at, with the tile path dimmed to zero
+  everywhere else. MotionLayer now listens to `camera.moveEnd` and drops a
+  held region that no longer intersects the view.
+- A scrub released back onto its own snapped position within the retry window
+  hit the dedupe gate with nothing left to wake the pump — motion stayed down
+  until an unrelated store write (up to the ~2 min manifest poll). The scrub
+  path clears `lastAttempt` now.
+- `RadarTimeline` unmounting (or null-rendering) mid-drag stranded
+  `scrubbing: true` in the store forever — no pointerup ever arrives for a
+  removed element — permanently standing motion down. An effect clears the
+  flag whenever the track leaves the screen.
+- The playback wrap mapped overshoot past the last frame into [-1, 0) instead
+  of [0, 1) — every consumer clamps, so each loop pass froze one full interval
+  on the oldest frame (the exact stutter the adjacent comment promises to
+  avoid) and the store briefly held `currentIndex = -1`.
+- The opacity slider never reached a warp parked on a stationary playhead
+  (reveal-time alpha only, and the dedupe gate swallowed the store write); the
+  radar could not be dimmed or hidden until the playhead moved. The pump now
+  reapplies opacity to a showing layer.
+- `standDown` hid the warp synchronously while the tile path's alpha returned
+  through a React effect that flushes after paint — one painted frame with
+  NEITHER path drawn, the hole the handover rule forbids. The warp now holds
+  for two frames (the allowed overlap direction).
+- A warm-cache palette switch issued one `requestRender` and stopped; tiles
+  answered from the worker with no Cesium Request behind them, so nothing
+  scheduled the next render and the swap sat half-processed until the scene's
+  1 s clock heartbeat — 10× the <100 ms acceptance mark. `setPalette` now
+  drives the reload to settlement the same way frame transitions do.
+- `RadarLayerV2`'s cleanup dereferenced `viewer.camera` unguarded; on the
+  context-loss path the viewer is destroyed before that cleanup runs, and the
+  codebase's own guard pattern was missing at exactly one site. This one
+  corrects an earlier conclusion — see the context-loss note under the open
+  items below. (MotionLayer's new moveEnd cleanup guards the same way.)
+- `sourceForView` containment passed antimeridian-crossing views (west > east
+  satisfies all four comparisons against CONUS); latent today — the function
+  has no callers until a regional source goes live — fixed before it could
+  matter.
+- Diagnostic-path bitmap leaks: `WarpProbe` and `buildComposite` used
+  `Promise.all` over region renders, so one rejection orphaned the sibling's
+  region-sized ImageBitmap (tens of MB) — both now settle and close. The
+  Stage B spike's `WeatherPrimitive` gained `viewer.isDestroyed()` guards on
+  its async continuations, and its first geometry build now starts hidden
+  instead of overruling the coverage gate.
+
+Verification: `npm run lint` clean, production build clean, all four committed
+suites green after every change above.
+
+### The open items, decided or restated
+
+1. **IEM / C5 stays gated, and cannot be resolved from this sandbox.**
+   `mesonet.agron.iastate.edu` is still refused at the egress proxy (403 on
+   CONNECT, re-confirmed 2026-08-13), and no production URL is recorded in the
+   repo. The step remains: deploy this branch, hit `/api/radar/diag`, read
+   `iemHistory.verdict`, and act per the PR 9 table. The usage-policy
+   question is a human judgement either way.
+2. **Real-hardware measurements remain untaken** — this sandbox renders
+   through SwiftShader at ~1.6 s/frame, measured identical with radar
+   disabled. Still owed: Stage A's first-pixel <2 s / zero long tasks /
+   palette <100 ms; Stage C's 60 fps desktop, ≥30 fps mid-range phone,
+   scrub-to-render <16 ms; whether `T_STEPS = 16` is the right cap; and the
+   advection bias scored against real radar (synthetic brackets: 87–99%
+   depending on feature structure).
+3. **Context-loss recovery still needs a real GPU — and the earlier
+   "not radar-attributable" conclusion was partly wrong.** The acceptance
+   sweep recorded 3 of 14 forced losses failing with
+   `Cannot read properties of undefined (reading 'scene')`, stack inside
+   Cesium, and concluded radar was not the cause. The review traced that
+   exact TypeError to `RadarLayerV2`'s unguarded cleanup: Cesium 1.142's
+   `Viewer.destroy()` sets `_cesiumWidget = undefined`, and the `camera`
+   getter chains `this.scene.camera` → `this._cesiumWidget.scene` — so
+   `viewer.camera.moveEnd.removeEventListener(...)` after a CLEAN destroy
+   throws precisely that string from inside Cesium's getters, with this line
+   as the caller. The intermittency matches too: `CesiumGlobe`'s
+   `try { v.destroy() } catch` means a partially-failed destroy leaves
+   `_cesiumWidget` intact and the cleanup succeeds by luck. The stack being
+   inside `Cesium.js` is exactly what this bug looks like — a lesson for the
+   next drill. Caveat kept honest: one of the three failures had the radar
+   layer OFF and cannot be this line; the drill still needs a real-GPU
+   re-run, now with the guard in place.
+4. **Engine v1 stays, deliberately.** The rollout's deletion condition —
+   "after Stage C stabilizes" — is not met while every real-hardware
+   measurement in (2) is open. `RadarLayerV1` costs three call sites and
+   ~190 lines, all isolated behind `radarEngine()`. Delete it when (a) the
+   Stage A and Stage C acceptance numbers pass on real hardware, and (b) one
+   release has shipped default-on-v2 with no one needing `?radar=v1`.
+
+### Post-wrap-up tuning (same day): the honesty gates needed hysteresis
+
+The first real-hardware feedback on the wrap-up commits reported the radar
+feeling *worse*: choppy, cutting in and out, flickering between smooth and
+stepped, loading in chunks. That report was correct, the regression was this
+wrap-up's, and it had two layers:
+
+- **The per-worker field budget never caught up with PR 6's routing.** Tiles
+  hash by zoom level, so the whole on-screen level — every frame of the
+  loop — lands on ONE worker: a 13-frame window over ~16 visible tiles is
+  ~208 fields ≈ 104 MB against a 60 MB budget written when tiles spread
+  across both workers. Mid-loop eviction churn was therefore guaranteed;
+  before the wrap-up it was invisible (hollow warps presented as success —
+  the bug fixed above), and after it the coverage gate exposed the churn as
+  visible flapping. Budget is now **120 MB per worker** (45 MB on
+  `deviceMemory ≤ 4`), sized so a full two-hour loop fits with headroom.
+- **A single coverage cutoff with a 250 ms retry is a strobe, not a gate.**
+  Engaging and staying engaged are different questions: motion now engages
+  at ≥ 0.6 stitched, holds until < 0.5, and a coverage stand-down backs off
+  2 s instead of 250 ms — so a device whose loop genuinely cannot fit
+  degrades to steady stepped tiles rather than flicker. Likewise one expired
+  serve while the warp is already on the globe is tolerated (the previous
+  frame is still drawn; the next step retries); only the second consecutive
+  miss stands down.
+
+The honesty contracts all still hold: nothing below half-stitched is ever
+presented, a timeout still never counts as a serve, and the hints still get
+repaired on eviction. What changed is that refusing to lie no longer means
+flapping — the gates gained the hysteresis they should have shipped with.
