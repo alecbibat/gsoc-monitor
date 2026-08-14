@@ -2,8 +2,23 @@ import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useRiskReportStore } from './riskReportStore';
 import { RISK_LEVELS, RISK_RINGS, type RiskLevel, type SectionResult, type WildfireReportData } from './riskTypes';
-import { ForecastStrip, MapFigure, WindChart } from './reportVisuals';
+import { ForecastStrip, LegendRow, MapFigure, OutlookStrip, WindChart, shortDayDate } from './reportVisuals';
+import { FUEL_GROUPS, rgbCss } from '../layers/fuel/fbfm40';
+import { OUTLOOK_LEGEND } from '../layers/fireOutlook/fireOutlookMeta';
 import { usePrintStyles } from '../lib/printStyles';
+
+const SMOKE_LEGEND = [
+  { color: 'rgba(220,200,130,0.85)', label: 'Light smoke' },
+  { color: 'rgba(190,145,60,0.9)', label: 'Medium' },
+  { color: 'rgba(140,80,25,0.95)', label: 'Heavy' },
+];
+
+const LIGHTNING_LEGEND = [
+  { color: '#ffd84d', label: '<1 h' },
+  { color: '#ff9d2e', label: '1–6 h' },
+  { color: '#ff5a3c', label: '6–12 h' },
+  { color: '#d8466e', label: '12–24 h' },
+];
 
 // ── Property wildfire risk report (roadmap Track 3, wildfire end-to-end) ─────
 // Select property → the assembly cross-references every wildfire input at the
@@ -259,6 +274,32 @@ function ReportBody({ data }: { data: WildfireReportData }) {
                 <MapFigure src={data.maps.alerts} caption="Active fire-weather alert areas over the property (NWS polygons / county shapes)" />
               </div>
             )}
+            {id === 'outlook' && (
+              <div className="space-y-2">
+                {data.outlook.days && <OutlookStrip days={data.outlook.days} />}
+                <MapFigure
+                  src={data.maps.outlookDays[0] ?? null}
+                  caption={`Regional significant fire potential — today${data.outlook.days?.[0] ? ` (${data.outlook.days[0].label} at the site)` : ''} · white outline = this property's Predictive Service Area`}
+                />
+                {data.maps.outlookDays.filter((m, i) => i > 0 && m).length > 0 && (
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {data.maps.outlookDays.slice(1).map((src, i) => {
+                      const cell = data.outlook.days?.[i + 1];
+                      return (
+                        <MapFigure
+                          key={i}
+                          src={src}
+                          caption={cell ? `${shortDayDate(cell.date)} — ${cell.label}` : ''}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+                {data.maps.outlookDays.some(Boolean) && (
+                  <LegendRow items={OUTLOOK_LEGEND.map((l) => ({ color: l.hex, label: l.label }))} />
+                )}
+              </div>
+            )}
             {id === 'fuel' && (
               <div className="space-y-2">
                 {data.fuel.topModels && data.fuel.topModels.length > 0 && (
@@ -273,12 +314,53 @@ function ReportBody({ data }: { data: WildfireReportData }) {
                   </div>
                 )}
                 <MapFigure src={data.maps.fuel} caption="LANDFIRE FBFM40 fuel models (30 m) around the property — official colormap, 3 mi analysis ring" />
+                {data.maps.fuel && (
+                  <LegendRow items={FUEL_GROUPS.map((g) => ({ color: rgbCss(g.rgb), label: g.label }))} />
+                )}
               </div>
             )}
             {id === 'wind' && data.windHourly && <WindChart hourly={data.windHourly} />}
           </Section>
         );
       })}
+
+      {/* Smoke — latest HD satellite view (GIBS MODIS) with HMS plumes.
+          The satellite image doesn't depend on the HMS feed, so it still
+          renders below the honest "unavailable" note when HMS is down. */}
+      {byId('smoke') && (
+        <>
+          <Section section={byId('smoke')!}>
+            <div className="space-y-2">
+              <MapFigure
+                src={data.maps.smoke}
+                caption={`MODIS Aqua true color, ${data.smoke.imageryDate ?? 'latest complete day'}${data.smoke.analysisDate ? ` · HMS smoke analysis ${data.smoke.analysisDate}` : ''} · dashed ring = 25 mi`}
+              />
+              {data.maps.smoke && <LegendRow items={SMOKE_LEGEND} />}
+            </div>
+          </Section>
+          {byId('smoke')!.unavailable && data.maps.smoke && (
+            <MapFigure
+              src={data.maps.smoke}
+              caption={`MODIS Aqua true color, ${data.smoke.imageryDate ?? 'latest complete day'} — smoke overlay unavailable, satellite view only · dashed ring = 25 mi`}
+            />
+          )}
+        </>
+      )}
+
+      {/* Lightning — 24 h of strikes, age-tinted */}
+      {byId('lightning') && (
+        <Section section={byId('lightning')!}>
+          <div className="space-y-2">
+            <MapFigure
+              src={data.maps.lightning}
+              caption={`Lightning strikes, past 24 h — dots tinted by age, rings at 25 / 100 mi${
+                data.lightning.strikes100mi !== undefined ? ` · ${data.lightning.strikes100mi.toLocaleString()} within 100 mi` : ''
+              }`}
+            />
+            {data.maps.lightning && <LegendRow items={LIGHTNING_LEGEND} />}
+          </div>
+        </Section>
+      )}
 
       {/* Forecast rainfall — 24/48/72 h accumulation */}
       {(data.maps.qpf24 || data.maps.qpf48 || data.maps.qpf72) && (

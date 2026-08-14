@@ -93,6 +93,15 @@ export interface RingCount {
   namedFires: number;
 }
 
+/** One day of the site PSA's outlook, display-ready (color from outlookStyle). */
+export interface OutlookDayCell {
+  date: string | null;
+  label: string;
+  hex: string;
+  /** Significant fire potential flag (Critical / Ignition). */
+  sig: boolean;
+}
+
 export interface WildfireReportData {
   target: RiskTarget;
   generatedAt: string;
@@ -102,7 +111,28 @@ export interface WildfireReportData {
   hotspots: HotspotHit[];      // nearest first, capped
   namedFires: NamedFireHit[];  // nearest first, capped
   alerts: AlertHit[];          // fire-relevant alerts containing the site
-  outlook: { today?: string; unavailable?: string };
+  outlook: {
+    today?: string;
+    unavailable?: string;
+    /** Today-forward day cells for the site PSA — aligned with maps.outlookDays. */
+    days?: OutlookDayCell[];
+  };
+  smoke: {
+    /** HMS analysis date (ISO) the plumes came from. */
+    analysisDate?: string;
+    /** GIBS mosaic date rendered under the smoke map. */
+    imageryDate?: string;
+    plumeCount?: number;
+    densityAtSite?: 'Light' | 'Medium' | 'Heavy' | null;
+    unavailable?: string;
+  };
+  lightning: {
+    strikes25mi?: number;
+    strikes100mi?: number;
+    /** Server-side history coverage in minutes — may be < the 24 h window. */
+    coverageMin?: number;
+    unavailable?: string;
+  };
   fuel: {
     score?: number;
     level?: string;
@@ -129,6 +159,10 @@ export interface WildfireReportData {
     qpf24: string | null;      // WPC precip accumulation windows
     qpf48: string | null;
     qpf72: string | null;
+    /** Regional outlook maps aligned with outlook.days ([0] = today, larger). */
+    outlookDays: (string | null)[];
+    smoke: string | null;      // GIBS true-color satellite + HMS smoke plumes
+    lightning: string | null;  // age-tinted strikes, past 24 h
   };
   /** 48 h hourly wind window for the chart (mph, "from" bearings). */
   windHourly: { times: string[]; speedMph: number[]; gustMph: number[]; dirDeg: number[] } | null;

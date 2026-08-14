@@ -53,6 +53,15 @@ export interface SnapshotOptions {
   fitRadiusM: number;
   width: number;
   height: number;
+  /**
+   * Alternative base-tile source (slippy XYZ), e.g. NASA GIBS true color.
+   * Defaults to CARTO dark. `maxZoom` caps the chosen zoom for sources with
+   * limited levels.
+   */
+  base?: {
+    url: (z: number, x: number, y: number) => string;
+    maxZoom?: number;
+  };
   /** ArcGIS export URL builders given the bbox/size — drawn over the base. */
   overlayUrl?: (proj: SnapshotProjection) => string;
   overlayAlpha?: number;
@@ -81,11 +90,13 @@ export async function renderMapSnapshot(opts: SnapshotOptions): Promise<string |
     const w = width * scale;
     const h = height * scale;
 
-    // Pick the zoom where the fit radius spans ~38% of the canvas width.
+    // Pick the zoom where the fit radius spans ~38% of the canvas width,
+    // capped for base sources with limited levels (GIBS ends at 9).
     const metersPerPxAt = (z: number) =>
       (156543.03392 * Math.cos((centerLat * Math.PI) / 180)) / 2 ** z;
+    const maxZoom = opts.base?.maxZoom ?? 15;
     let zoom = 3;
-    for (let z = 15; z >= 3; z--) {
+    for (let z = maxZoom; z >= 3; z--) {
       if (fitRadiusM / metersPerPxAt(z) <= w * 0.38) { zoom = z; break; }
     }
 
@@ -136,22 +147,27 @@ export async function renderMapSnapshot(opts: SnapshotOptions): Promise<string |
     const y1 = Math.floor((originY + h) / TILE);
     const maxTile = 2 ** zoom;
 
-    const tileJobs: Promise<void>[] = [];
-    const layers: Array<(s: string, z: number, x: number, y: number) => string> =
-      opts.labels === false ? [BASE_URL] : [BASE_URL, LABELS_URL];
+    // URL builders take slippy (z, x, y); CARTO picks a subdomain by tile hash.
+    const carto = (tpl: typeof BASE_URL) => (z: number, x: number, y: number) =>
+      tpl(SUBDOMAINS[(x + y) % SUBDOMAINS.length], z, x, y);
+    const baseUrlOf = opts.base?.url ?? carto(BASE_URL);
+    const labelsUrlOf = carto(LABELS_URL);
 
-    const drawTile = async (urlOf: typeof BASE_URL, tx: number, ty: number, dx: number, dy: number) => {
+    const drawTile = async (
+      urlOf: (z: number, x: number, y: number) => string,
+      tx: number, ty: number, dx: number, dy: number
+    ) => {
       if (ty < 0 || ty >= maxTile) return;
       const wrapped = ((tx % maxTile) + maxTile) % maxTile;
-      const sub = SUBDOMAINS[(wrapped + ty) % SUBDOMAINS.length];
-      const img = await loadImage(urlOf(sub, zoom, wrapped, ty));
+      const img = await loadImage(urlOf(zoom, wrapped, ty));
       if (img) ctx.drawImage(img, dx, dy, TILE, TILE);
     };
 
     // Base first, awaited fully before labels/overlays for correct stacking.
+    const tileJobs: Promise<void>[] = [];
     for (let tx = x0; tx <= x1; tx++) {
       for (let ty = y0; ty <= y1; ty++) {
-        tileJobs.push(drawTile(BASE_URL, tx, ty, tx * TILE - originX, ty * TILE - originY));
+        tileJobs.push(drawTile(baseUrlOf, tx, ty, tx * TILE - originX, ty * TILE - originY));
       }
     }
     await Promise.allSettled(tileJobs);
@@ -167,11 +183,11 @@ export async function renderMapSnapshot(opts: SnapshotOptions): Promise<string |
     }
 
     // Labels above overlays so place names stay readable.
-    if (layers.includes(LABELS_URL)) {
+    if (opts.labels !== false) {
       const labelJobs: Promise<void>[] = [];
       for (let tx = x0; tx <= x1; tx++) {
         for (let ty = y0; ty <= y1; ty++) {
-          labelJobs.push(drawTile(LABELS_URL, tx, ty, tx * TILE - originX, ty * TILE - originY));
+          labelJobs.push(drawTile(labelsUrlOf, tx, ty, tx * TILE - originX, ty * TILE - originY));
         }
       }
       await Promise.allSettled(labelJobs);
@@ -179,14 +195,16 @@ export async function renderMapSnapshot(opts: SnapshotOptions): Promise<string |
 
     if (opts.draw) opts.draw(ctx, proj);
 
-    // Attribution strip.
-    ctx.font = `${10 * scale}px Inter, sans-serif`;
+    // Attribution strip ('' opts out — tiny multiples carry it in the caption).
     const attr = opts.attribution ?? '© CARTO © OpenStreetMap contributors';
-    const tw = ctx.measureText(attr).width;
-    ctx.fillStyle = 'rgba(5,7,10,0.7)';
-    ctx.fillRect(w - tw - 12 * scale, h - 16 * scale, tw + 12 * scale, 16 * scale);
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
-    ctx.fillText(attr, w - tw - 6 * scale, h - 5 * scale);
+    if (attr) {
+      ctx.font = `${10 * scale}px Inter, sans-serif`;
+      const tw = ctx.measureText(attr).width;
+      ctx.fillStyle = 'rgba(5,7,10,0.7)';
+      ctx.fillRect(w - tw - 12 * scale, h - 16 * scale, tw + 12 * scale, 16 * scale);
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.fillText(attr, w - tw - 6 * scale, h - 5 * scale);
+    }
 
     return canvas.toDataURL('image/png');
   } catch (e) {

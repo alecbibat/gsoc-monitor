@@ -9,10 +9,11 @@ import { haversineMeters, MILES_TO_M, pointInRings } from '../lib/geo';
 import { containmentColor } from '../layers/wildfires/wildfiresData';
 import { QPF_LAYER, type QpfPeriod } from '../layers/precip/precipStore';
 import { drawFlame, drawPin, drawPolygon, drawRing, renderMapSnapshot } from './mapSnapshot';
+import type { SmokePolygon } from '../types';
 import {
   RISK_RINGS, bumpLevel, maxLevel,
-  type AlertHit, type HotspotHit, type NamedFireHit, type RiskLevel,
-  type RiskTarget, type SectionResult, type WildfireReportData,
+  type AlertHit, type HotspotHit, type NamedFireHit, type OutlookDayCell,
+  type RiskLevel, type RiskTarget, type SectionResult, type WildfireReportData,
 } from './riskTypes';
 
 // ── Wildfire report assembly ─────────────────────────────────────────────────
@@ -23,6 +24,12 @@ import {
 
 const MPS_TO_MPH = 2.236936;
 const MAX_RING_MI = RISK_RINGS[RISK_RINGS.length - 1].miles; // 100
+
+// UTC day helpers (mirror cesium/earthBasemap — not imported from there so the
+// lazy risk-report chunk never pulls Cesium in).
+const todayUtcIso = () => new Date().toISOString().slice(0, 10);
+const addDaysIso = (date: string, days: number) =>
+  new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 
 const distMi = (target: RiskTarget, lat: number, lon: number) =>
   haversineMeters(target.lat, target.lon, lat, lon) / MILES_TO_M;
@@ -74,7 +81,7 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
     target.lon >= LANDFIRE_CONUS_RECT.west && target.lon <= LANDFIRE_CONUS_RECT.east &&
     target.lat >= LANDFIRE_CONUS_RECT.south && target.lat <= LANDFIRE_CONUS_RECT.north;
 
-  const [hotspotsRes, namedRes, alertsRes, countiesRes, outlookRes, fuelRes, windRes, dailyRes] = await Promise.all([
+  const [hotspotsRes, namedRes, alertsRes, countiesRes, outlookRes, fuelRes, windRes, dailyRes, smokeRes, lightningRes] = await Promise.all([
     attempt(fetchHotspotsNearPins(MAX_RING_MI * MILES_TO_M)),
     attempt(fetchWildfires()),
     attempt(fetchActiveAlerts()),
@@ -85,6 +92,8 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       : Promise.resolve({ value: null, error: 'outside CONUS' } as FeedOutcome<Awaited<ReturnType<typeof analyzeFuelZone>>>),
     attempt(api.windForecast(target.lat, target.lon)),
     attempt(api.weatherDaily(target.lat, target.lon)),
+    attempt(api.smoke()),
+    attempt(api.lightningHistory(1440)),
   ]);
 
   const sections: SectionResult[] = [];
@@ -237,6 +246,9 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
 
   // ── 7-day fire-potential outlook (site PSA) ───────────────────────────────
   let outlookToday: string | undefined;
+  let outlookDays: OutlookDayCell[] | undefined;
+  let outlookDayIdxs: number[] = [];
+  let sitePsaRings: number[][][] | null = null;
   {
     if (outlookRes.value === null) {
       sections.push({ id: 'outlook', title: '7-day fire-potential outlook', level: 'low', drivers: [], unavailable: `Outlook feed unavailable (${outlookRes.error ?? 'unknown error'})` });
@@ -250,6 +262,14 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       const today = psa?.days[todayIdx] ?? null;
       const style = outlookStyle(today?.dryness ?? null, today?.type ?? null);
       outlookToday = style.label;
+      sitePsaRings = psa?.rings ?? null;
+      // Today-forward day cells for the strip + the regional map series.
+      outlookDayIdxs = [];
+      for (let i = todayIdx; i < 7; i++) outlookDayIdxs.push(i);
+      outlookDays = outlookDayIdxs.map((i) => {
+        const st = outlookStyle(psa?.days[i]?.dryness ?? null, psa?.days[i]?.type ?? null);
+        return { date: dates[i] ?? null, label: st.label, hex: st.hex, sig: st.sig };
+      });
       let level: RiskLevel = 'low';
       const drivers: string[] = [];
       if (today?.type === 'CRITICAL') { level = 'high'; drivers.push('NWCG outlook: CRITICAL fire potential today'); }
@@ -339,6 +359,101 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
         drivers.push(`Breezy: ${Math.round(wind.nowMph!)} mph now, gusts to ${Math.round(wind.peakGust48Mph!)} mph within 48 h`);
       }
       sections.push({ id: 'wind', title: 'Wind', level, drivers });
+    }
+  }
+
+  // ── Smoke (NOAA HMS analyst-drawn plumes) ─────────────────────────────────
+  const smoke: WildfireReportData['smoke'] = {};
+  const smokePolys: SmokePolygon[] = [];
+  {
+    // Like fetchWildfires, the smoke route can resolve with an in-band error
+    // and no polygons — that's an outage, not a verified clear sky.
+    const feedErr = smokeRes.error ?? smokeRes.value?.error ?? null;
+    if (smokeRes.value === null || (feedErr !== null && smokeRes.value.polygons.length === 0)) {
+      smoke.unavailable = `HMS smoke feed unavailable (${feedErr ?? 'unknown error'})`;
+      sections.push({ id: 'smoke', title: 'Smoke (NOAA HMS)', level: 'low', drivers: [], unavailable: smoke.unavailable });
+    } else {
+      const resp = smokeRes.value;
+      smoke.analysisDate = /^\d{8}$/.test(resp.date)
+        ? `${resp.date.slice(0, 4)}-${resp.date.slice(4, 6)}-${resp.date.slice(6, 8)}`
+        : undefined;
+      // Degenerate HMS rings are common — keep only sane vertices.
+      for (const p of resp.polygons) {
+        const ring = p.coords.filter(([lo, la]) =>
+          Number.isFinite(lo) && Number.isFinite(la) && Math.abs(la) <= 90 && Math.abs(lo) <= 180);
+        if (ring.length >= 3) smokePolys.push({ ...p, coords: ring });
+      }
+      smoke.plumeCount = smokePolys.length;
+
+      const DENSITY_RANK: Record<string, number> = { Light: 0, Medium: 1, Heavy: 2 };
+      const overhead = smokePolys
+        .filter((p) => pointInRings(target.lon, target.lat, [p.coords]))
+        .sort((a, b) => (DENSITY_RANK[b.density] ?? 0) - (DENSITY_RANK[a.density] ?? 0));
+      smoke.densityAtSite = overhead[0]?.density ?? null;
+
+      // Nearest plume edge (vertex approximation) for context when clear.
+      let nearestMi = Infinity;
+      for (const p of smokePolys) {
+        for (const [lo, la] of p.coords) {
+          const dm = distMi(target, la, lo);
+          if (dm < nearestMi) nearestMi = dm;
+        }
+      }
+
+      let level: RiskLevel = 'low';
+      const drivers: string[] = [];
+      if (smoke.densityAtSite === 'Heavy') { level = 'elevated'; drivers.push('Heavy smoke over the property in the latest HMS analysis'); }
+      else if (smoke.densityAtSite === 'Medium') { level = 'guarded'; drivers.push('Medium-density smoke over the property'); }
+      else if (smoke.densityAtSite === 'Light') { drivers.push('Light smoke over the property'); }
+      else if (nearestMi <= 100) { drivers.push(`Nearest smoke plume edge ≈${Math.round(nearestMi)} mi away`); }
+      if (smoke.analysisDate && smoke.analysisDate < todayUtcIso()) {
+        drivers.push(`Latest HMS analysis is ${smoke.analysisDate} — plumes move, treat positions as approximate`);
+      }
+      sections.push({
+        id: 'smoke', title: 'Smoke (NOAA HMS)', level, drivers,
+        countLabel: smoke.densityAtSite ? `${smoke.densityAtSite} overhead` : 'None overhead',
+      });
+    }
+  }
+
+  // ── Lightning (Blitzortung network, past 24 h) ────────────────────────────
+  const lightning: WildfireReportData['lightning'] = {};
+  const strikes: { lat: number; lon: number; t: number; distanceMi: number }[] = [];
+  {
+    if (lightningRes.value === null) {
+      lightning.unavailable = `Lightning history unavailable (${lightningRes.error ?? 'unknown error'})`;
+      sections.push({ id: 'lightning', title: 'Lightning (24 h)', level: 'low', drivers: [], unavailable: lightning.unavailable });
+    } else {
+      const lt = lightningRes.value;
+      // Keep everything the 110 mi map view can show (a little past 100 mi).
+      for (let i = 0; i < lt.lat.length; i++) {
+        const dm = distMi(target, lt.lat[i], lt.lon[i]);
+        if (dm <= 130) strikes.push({ lat: lt.lat[i], lon: lt.lon[i], t: lt.t[i], distanceMi: dm });
+      }
+      lightning.strikes25mi = strikes.filter((s) => s.distanceMi <= 25).length;
+      lightning.strikes100mi = strikes.filter((s) => s.distanceMi <= 100).length;
+      lightning.coverageMin = lt.coverageMin;
+
+      const nearestMi = strikes.reduce<number>((m, s) => Math.min(m, s.distanceMi), Infinity);
+      let level: RiskLevel = 'low';
+      const drivers: string[] = [];
+      if (nearestMi <= 5) {
+        level = 'elevated';
+        drivers.push(`Strike ${nearestMi < 1 ? '<1' : Math.round(nearestMi)} mi from the property in the past 24 h — direct ignition source`);
+      } else if (nearestMi <= 25) {
+        level = 'guarded';
+        drivers.push(`Nearest strike ${Math.round(nearestMi)} mi away in the past 24 h`);
+      }
+      if ((lightning.strikes100mi ?? 0) > 0) {
+        drivers.push(`${lightning.strikes100mi!.toLocaleString()} strike${lightning.strikes100mi === 1 ? '' : 's'} within 100 mi in the past 24 h`);
+      }
+      if (lt.coverageMin < 23 * 60) {
+        drivers.push(`⚠ Only ${(lt.coverageMin / 60).toFixed(1)} h of strike history collected — counts undercount the full day`);
+      }
+      sections.push({
+        id: 'lightning', title: 'Lightning (24 h)', level, drivers,
+        countLabel: (lightning.strikes25mi ?? 0) === 0 ? 'None ≤25 mi' : `${lightning.strikes25mi} ≤25 mi`,
+      });
     }
   }
 
@@ -470,9 +585,116 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       },
     });
 
-  const [exposureMap, alertsMap, fuelMap, qpf24, qpf48, qpf72] = await Promise.all([
+  // Regional 7-day outlook: every PSA colored by that day's class, the site's
+  // PSA outlined white — index 0 (today) rendered large, later days as small
+  // multiples. 'No data' PSAs are skipped so they don't gray-blanket the map.
+  const outlookValue = outlookRes.value;
+  const outlookSnapshot = (dayIdx: number, hero: boolean) =>
+    outlookValue === null
+      ? Promise.resolve(null)
+      : renderMapSnapshot({
+          centerLat: target.lat,
+          centerLon: target.lon,
+          fitRadiusM: 250 * MILES_TO_M,
+          width: hero ? MAP_W : 210,
+          height: hero ? 380 : 160,
+          labels: hero,
+          attribution: hero ? '© CARTO © OSM · outlook NWCG Predictive Services' : '',
+          draw: (ctx, proj) => {
+            for (const p of outlookValue.psas) {
+              const st = outlookStyle(p.days[dayIdx]?.dryness ?? null, p.days[dayIdx]?.type ?? null);
+              if (st.label === 'No data') continue;
+              drawPolygon(ctx, proj, p.rings, { fill: `${st.hex}59`, stroke: `${st.hex}cc`, width: hero ? 1.5 : 1 });
+            }
+            if (sitePsaRings) {
+              drawPolygon(ctx, proj, sitePsaRings, { fill: 'rgba(0,0,0,0)', stroke: '#ffffff', width: hero ? 3 : 2 });
+            }
+            drawSite(ctx, proj);
+          },
+        });
+
+  // Smoke over the latest HD satellite image: NASA GIBS MODIS Aqua true color
+  // (the app's "Earth" basemap, afternoon pass — the best smoke view) with the
+  // HMS plumes on top. Match the mosaic to the HMS analysis day when it's a
+  // past day; for a today analysis fall back to yesterday's complete mosaic
+  // (today's fills in swath by swath and shows black wedges).
+  const smokeImageryDate =
+    smoke.analysisDate && smoke.analysisDate < todayUtcIso()
+      ? smoke.analysisDate
+      : addDaysIso(todayUtcIso(), -1);
+  smoke.imageryDate = smokeImageryDate;
+  const SMOKE_STYLE: Record<string, { fill: string; stroke: string }> = {
+    Light:  { fill: 'rgba(220,200,130,0.28)', stroke: 'rgba(220,200,130,0.55)' },
+    Medium: { fill: 'rgba(190,145,60,0.42)',  stroke: 'rgba(190,145,60,0.70)' },
+    Heavy:  { fill: 'rgba(140,80,25,0.60)',   stroke: 'rgba(140,80,25,0.85)' },
+  };
+  const smokeSnapshot = renderMapSnapshot({
+    centerLat: target.lat,
+    centerLon: target.lon,
+    fitRadiusM: 140 * MILES_TO_M,
+    width: MAP_W,
+    height: 400,
+    base: {
+      url: (z, x, y) =>
+        'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Aqua_CorrectedReflectance_TrueColor' +
+        // GIBS WMTS paths are row-before-column: {z}/{y}/{x}.
+        `/default/${smokeImageryDate}/GoogleMapsCompatible_Level9/${z}/${y}/${x}.jpg`,
+      maxZoom: 9,
+    },
+    attribution: 'NASA GIBS MODIS Aqua · smoke NOAA HMS · labels © CARTO',
+    draw: (ctx, proj) => {
+      const DENSITY_RANK: Record<string, number> = { Light: 0, Medium: 1, Heavy: 2 };
+      const ordered = smokePolys.slice().sort((a, b) => (DENSITY_RANK[a.density] ?? 0) - (DENSITY_RANK[b.density] ?? 0));
+      for (const p of ordered) {
+        const st = SMOKE_STYLE[p.density] ?? SMOKE_STYLE.Light;
+        drawPolygon(ctx, proj, [p.coords], { fill: st.fill, stroke: st.stroke, width: 1.5 });
+      }
+      // High-contrast ring — must read over both bright cloud and dark terrain.
+      drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, { stroke: 'rgba(5,7,10,0.85)', width: 6 });
+      drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, { stroke: '#ffffff', width: 2.5, dash: [8, 6], label: '25 mi' });
+      drawSite(ctx, proj);
+    },
+  });
+
+  // Lightning, past 24 h — age-tinted dots (same palette as the globe layer),
+  // oldest drawn first so fresh strikes sit on top.
+  const AGE_TINTS: { maxH: number; color: string }[] = [
+    { maxH: 1, color: 'rgba(255,216,77,0.95)' },
+    { maxH: 6, color: 'rgba(255,157,46,0.82)' },
+    { maxH: 12, color: 'rgba(255,90,60,0.64)' },
+    { maxH: Infinity, color: 'rgba(216,70,110,0.46)' },
+  ];
+  const lightningSnapshot = lightningRes.value === null
+    ? Promise.resolve(null)
+    : renderMapSnapshot({
+        centerLat: target.lat,
+        centerLon: target.lon,
+        fitRadiusM: 110 * MILES_TO_M,
+        width: MAP_W,
+        height: 400,
+        attribution: '© CARTO © OSM · strikes Blitzortung.org',
+        draw: (ctx, proj) => {
+          const nowS = Date.now() / 1000;
+          for (const s of strikes.slice().sort((a, b) => a.t - b.t)) {
+            const ageH = (nowS - s.t) / 3600;
+            const tint = AGE_TINTS.find((a) => ageH < a.maxH) ?? AGE_TINTS[AGE_TINTS.length - 1];
+            const [x, y] = proj.toXY(s.lon, s.lat);
+            ctx.beginPath();
+            ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+            ctx.fillStyle = tint.color;
+            ctx.fill();
+          }
+          drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, { stroke: 'rgba(61,220,255,0.55)', width: 2, dash: [8, 6], label: '25 mi' });
+          drawRing(ctx, proj, target.lat, target.lon, 100 * MILES_TO_M, { stroke: 'rgba(61,220,255,0.4)', width: 2, dash: [8, 6], label: '100 mi' });
+          drawSite(ctx, proj);
+        },
+      });
+
+  const [exposureMap, alertsMap, fuelMap, qpf24, qpf48, qpf72, smokeMap, lightningMap, outlookMaps] = await Promise.all([
     exposureSnapshot, alertsSnapshot, fuelSnapshot,
     qpfSnapshot('24h'), qpfSnapshot('48h'), qpfSnapshot('72h'),
+    smokeSnapshot, lightningSnapshot,
+    Promise.all(outlookDayIdxs.map((dayIdx, k) => outlookSnapshot(dayIdx, k === 0))),
   ]);
 
   // ── 10-day forecast strip data ────────────────────────────────────────────
@@ -515,7 +737,9 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
     hotspots: hotspots.slice(0, 8),
     namedFires,
     alerts,
-    outlook: outlookRes.value === null ? { unavailable: 'feed down' } : { today: outlookToday },
+    outlook: outlookRes.value === null ? { unavailable: 'feed down' } : { today: outlookToday, days: outlookDays },
+    smoke,
+    lightning,
     fuel,
     wind,
     sources: [
@@ -526,6 +750,9 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       { name: 'LANDFIRE LF2024 FBFM40', detail: '30 m fuel models, 3 mi zonal histogram + raster snapshot' },
       { name: 'NOAA GFS · Open-Meteo', detail: 'point wind forecast (48 h) and 10-day daily forecast' },
       { name: 'NOAA WPC', detail: 'quantitative precipitation forecast, 24/48/72 h accumulation' },
+      { name: 'NOAA HMS', detail: 'analyst-drawn smoke plumes from GOES/VIIRS imagery, latest analysis day' },
+      { name: 'NASA GIBS', detail: 'MODIS Aqua true-color daily mosaic (satellite snapshot base)' },
+      { name: 'Blitzortung.org', detail: 'community lightning detection network, past 24 h of strikes' },
       { name: 'CARTO · OpenStreetMap', detail: 'map snapshot base tiles' },
     ],
     gaps,
@@ -534,6 +761,9 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       alerts: alertsMap,
       fuel: fuelMap,
       qpf24, qpf48, qpf72,
+      outlookDays: outlookMaps,
+      smoke: smokeMap,
+      lightning: lightningMap,
     },
     windHourly,
     forecastDaily,
