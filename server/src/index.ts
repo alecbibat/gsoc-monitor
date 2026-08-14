@@ -23,6 +23,7 @@ import newsMapRouter from './routes/newsMap';
 import smokeRouter from './routes/smoke';
 import aqiRouter from './routes/aqi';
 import windRouter, { initWindStream } from './routes/wind';
+import envGridRouter, { initEnvGrid } from './routes/envgrid';
 import lightningRouter, { initLightningStream } from './routes/lightning';
 import riversRouter, { initRiversStream } from './routes/rivers';
 import fireOutlookRouter from './routes/fireOutlook';
@@ -135,6 +136,7 @@ function main() {
   app.use('/api/smoke', smokeRouter);
   app.use('/api/aqi', aqiRouter);
   app.use('/api/wind', windRouter);
+  app.use('/api/envgrid', envGridRouter);
   app.use('/api/lightning', lightningRouter);
   app.use('/api/rivers', riversRouter);
   app.use('/api/fire-outlook', fireOutlookRouter);
@@ -152,6 +154,8 @@ function main() {
   // Keep the wind grid warm in the background; the route always serves the best
   // available grid (live → snapshot → baked-in fallback), never blocking.
   initWindStream();
+  // Same pattern for the CONUS temp/RH/pressure grid (isobar & env overlays).
+  initEnvGrid();
   // Multi-state power-outage aggregator — rebuilt in the background so
   // /api/outages always answers instantly.
   initOutagesStream();

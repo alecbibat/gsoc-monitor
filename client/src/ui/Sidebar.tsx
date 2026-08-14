@@ -38,6 +38,8 @@ import { ScreensaverControls } from './ScreensaverControls';
 import { RadarControls } from '../layers/radar/RadarControls';
 import { PrecipControls } from '../layers/precip/PrecipControls';
 import { usePrecipStore, QPF_PERIOD_LABEL } from '../layers/precip/precipStore';
+import { EnvControls } from '../layers/env/EnvControls';
+import { useEnvStore } from '../layers/env/envStore';
 import { LightningControls } from '../layers/lightning/LightningControls';
 import { useUiStore } from './uiStore';
 import type { SatelliteGroup } from '../types';
@@ -154,6 +156,7 @@ export function Sidebar() {
     }))
   );
   const precipPeriod = usePrecipStore((s) => s.period);
+  const envStatus = useEnvStore((s) => s.status);
   const fireOutlookError = useFireOutlookStore((s) => s.error);
   const fuelError = useFuelStatus((s) => s.error);
   const windStatus = useWindStatus(
@@ -430,6 +433,20 @@ export function Sidebar() {
             statusText={`NOAA QPF accumulation · ${QPF_PERIOD_LABEL[precipPeriod]}`}
           >
             <PrecipControls />
+          </LayerToggle>
+          <LayerToggle
+            label="Isobars (MSL Pressure)"
+            active={(active as Record<string, boolean>).isobars ?? false}
+            onToggle={() => toggleLayer('isobars')}
+            statusText={active.isobars ? envStatus ?? 'loading grid…' : 'GFS surface pressure · 4 hPa contours'}
+          />
+          <LayerToggle
+            label="Surface Temp / Humidity"
+            active={(active as Record<string, boolean>).envField ?? false}
+            onToggle={() => toggleLayer('envField')}
+            statusText={active.envField ? envStatus ?? 'loading grid…' : 'GFS surface fields · CONUS'}
+          >
+            <EnvControls />
           </LayerToggle>
           <LayerToggle
             label="Hurricanes (NHC + JTWC)"

@@ -104,6 +104,7 @@ export const api = {
     getJson<import('../types').WindForecast>(`/api/wind/forecast?lat=${lat}&lon=${lon}`),
   weatherDaily: (lat: number, lon: number) =>
     getJson<import('../types').DailyForecast>(`/api/wind/daily?lat=${lat}&lon=${lon}`),
+  envGrid: () => getJson<import('../types').EnvGridResponse>('/api/envgrid'),
 
   // OSINT intel engine: the public read-only feed + the team-shared watchlist CRUD.
   intel: () => getJson<import('../types').IntelResponse>('/api/intel'),

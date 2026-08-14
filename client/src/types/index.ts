@@ -23,7 +23,9 @@ export type LayerId =
   | 'precip'
   | 'wildfires'
   | 'outages'
-  | 'intel';
+  | 'intel'
+  | 'isobars'
+  | 'envField';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
@@ -534,6 +536,21 @@ export interface IntelResponse {
 }
 
 // A watchlist source row as returned by /api/watchlist.
+// --- Environmental grid (Track 4: isobars / RH / temp overlays) --------------
+export interface EnvGridResponse {
+  nx: number;
+  ny: number;
+  lon0: number;
+  lat0: number;
+  dLon: number;
+  dLat: number;
+  tempC: (number | null)[];
+  rhPct: (number | null)[];
+  mslHpa: (number | null)[];
+  updated: number;
+  stale?: boolean;
+}
+
 // --- Site assets & infrastructure (Track 2) ---------------------------------
 export type AssetCategory =
   | 'building' | 'generator' | 'water-system' | 'fuel-storage'
