@@ -28,13 +28,27 @@ const distMi = (target: RiskTarget, lat: number, lon: number) =>
 // substring, so they're listed explicitly.
 const FIRE_ALERT_RE = /red flag|fire weather|fire warning|extreme fire|smoke|evacuation/;
 
-function hotspotAgeHours(h: FireHotspot): number | undefined {
-  // FIRMS acqDate "YYYY-MM-DD" + acqTime "HHMM" (UTC).
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(h.acqDate ?? '');
-  const t = /^(\d{1,2})(\d{2})$/.exec((h.acqTime ?? '').padStart(4, '0'));
-  if (!m || !t) return undefined;
-  const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +t[1], +t[2]);
-  if (Number.isNaN(ms)) return undefined;
+export function hotspotAgeHours(h: FireHotspot): number | undefined {
+  // FireHotspot declares these as strings, but the Esri service actually
+  // returns acq_date as an epoch-ms date field and acq_time as a NUMBER
+  // (e.g. 134 = 01:34 UTC) — the cast in firesData hides that. Accept both
+  // shapes and never throw: a bad attribute must cost one table cell, not
+  // the whole report.
+  const rawDate: unknown = h.acqDate;
+  const rawTime: unknown = h.acqTime;
+
+  let ms: number | null = null;
+  if (typeof rawDate === 'number' && Number.isFinite(rawDate) && rawDate > 0) {
+    ms = rawDate; // midnight UTC of the acquisition date
+  } else if (typeof rawDate === 'string') {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(rawDate);
+    if (m) ms = Date.UTC(+m[1], +m[2] - 1, +m[3]);
+  }
+  if (ms === null || Number.isNaN(ms)) return undefined;
+
+  const t = /^(\d{2})(\d{2})$/.exec(String(rawTime ?? '').padStart(4, '0'));
+  if (t) ms += +t[1] * 3600_000 + +t[2] * 60_000;
+
   const hours = (Date.now() - ms) / 3600_000;
   return hours >= 0 && hours < 96 ? Math.round(hours) : undefined;
 }
