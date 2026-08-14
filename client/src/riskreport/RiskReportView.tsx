@@ -5,38 +5,69 @@ import { RISK_LEVELS, RISK_RINGS, type RiskLevel, type SectionResult, type Wildf
 import { ChipStrip, ForecastStrip, LegendRow, MapFigure, OutlookStrip, WindChart, type StripCell } from './reportVisuals';
 import { FUEL_GROUPS, rgbCss } from '../layers/fuel/fbfm40';
 import { OUTLOOK_LEGEND } from '../layers/fireOutlook/fireOutlookMeta';
+import { QPF_LEGEND } from '../layers/precip/precipStore';
 import { usePrintStyles } from '../lib/printStyles';
 
-// Plumes are drawn as outlines so the satellite imagery (the smoke itself)
-// stays visible — the legend mirrors that with line swatches.
+// Plumes are drawn as hatching + outlines so the satellite imagery (the smoke
+// itself) stays visible — the legend mirrors that with hatched swatches.
 const SMOKE_LEGEND = [
-  { color: 'rgba(236,222,152,0.95)', label: 'Light smoke (outline)', line: true },
-  { color: 'rgba(245,158,11,0.95)', label: 'Medium', line: true },
-  { color: 'rgba(220,80,20,1)', label: 'Heavy', line: true },
+  { color: 'rgba(236,222,152,0.95)', label: 'Light smoke', hatch: true },
+  { color: 'rgba(245,158,11,0.95)', label: 'Medium', hatch: true },
+  { color: 'rgba(220,80,20,1)', label: 'Heavy', hatch: true },
 ];
 
-// Site rainfall accumulation chip color by depth (loosely WPC-ramp shaped).
-const rainHex = (inches: number) =>
-  inches < 0.005 ? '#4b5563'
-  : inches < 0.1 ? '#7dd3fc'
-  : inches < 0.25 ? '#38bdf8'
-  : inches < 0.5 ? '#0ea5e9'
-  : inches < 1 ? '#2563eb'
-  : inches < 2 ? '#7c3aed'
-  : '#c026d3';
+// Chip color from the exact WPC ramp the map renders — below the first ramp
+// step (0.01 in) the map draws nothing, so the chip goes neutral gray.
+const qpfHex = (inches: number): string => {
+  let rgb: [number, number, number] | null = null;
+  for (const s of QPF_LEGEND) {
+    if (inches >= s.inches) rgb = s.rgb;
+    else break;
+  }
+  return rgb ? `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` : '#4b5563';
+};
 
-// Cumulative 24/48/72 h site totals from the daily point forecast (calendar-
-// day approximation — the footnote says so).
-function rainCells(days: { precipIn: number }[]): StripCell[] {
-  return [1, 2, 3].map((n) => {
-    const v = days.slice(0, n).reduce((a, d) => a + d.precipIn, 0);
-    return {
-      top: `Next ${n * 24} h`,
-      hex: rainHex(v),
-      bottom: v < 0.005 ? 'None' : `${v.toFixed(2)} in`,
+function rainCells(rain: WildfireReportData['rain']): StripCell[] {
+  const windows: Array<[string, number | undefined]> = [
+    ['Next 24 h', rain.in24],
+    ['Next 48 h', rain.in48],
+    ['Next 72 h', rain.in72],
+  ];
+  return windows
+    .filter((w): w is [string, number] => w[1] !== undefined)
+    .map(([top, v]) => ({
+      top,
+      hex: qpfHex(v),
+      bottom: v < 0.005 ? 'None' : v < 0.01 ? '<0.01 in' : `${v.toFixed(2)} in`,
       emph: v >= 0.5,
-    };
-  });
+    }));
+}
+
+// The exact WPC accumulation ramp under the rainfall map (mirrors the globe
+// layer's PrecipLegend; tick labels are approximate positions on the ramp).
+function QpfRampLegend() {
+  return (
+    <div className="px-1">
+      <div className="print-color flex h-2.5 overflow-hidden rounded-sm ring-1 ring-white/10">
+        {QPF_LEGEND.map((s) => (
+          <div
+            key={s.inches}
+            className="flex-1"
+            style={{ background: `rgb(${s.rgb[0]}, ${s.rgb[1]}, ${s.rgb[2]})` }}
+            title={`${s.inches}"`}
+          />
+        ))}
+      </div>
+      <div className="mt-0.5 flex justify-between text-[8px] tabular-nums text-white/40">
+        <span>0.01&quot;</span>
+        <span>0.5</span>
+        <span>1</span>
+        <span>2</span>
+        <span>5</span>
+        <span>20+</span>
+      </div>
+    </div>
+  );
 }
 
 const LIGHTNING_LEGEND = [
@@ -345,7 +376,7 @@ function ReportBody({ data }: { data: WildfireReportData }) {
             <div className="space-y-2">
               <MapFigure
                 src={data.maps.smoke}
-                caption={`MODIS Aqua true color, ${data.smoke.imageryDate ?? 'latest complete day'}${data.smoke.analysisDate ? ` · HMS plume outlines, analysis ${data.smoke.analysisDate}` : ''} — the imagery beneath the outlines is the smoke itself · dashed ring = 25 mi`}
+                caption={`MODIS Aqua true color, ${data.smoke.imageryDate ?? 'latest complete day'}${data.smoke.analysisDate ? ` · HMS plumes hatched by density, analysis ${data.smoke.analysisDate}` : ''} — the imagery beneath the hatching is the smoke itself · dashed ring = 25 mi`}
               />
               {data.maps.smoke && <LegendRow items={SMOKE_LEGEND} />}
             </div>
@@ -381,16 +412,20 @@ function ReportBody({ data }: { data: WildfireReportData }) {
             Forecast rainfall (WPC accumulation)
           </h2>
           <div className="space-y-2">
-            {'days' in data.forecastDaily && data.forecastDaily.days.length > 0 && (
-              <ChipStrip cells={rainCells(data.forecastDaily.days)} />
+            {!data.rain.unavailable && rainCells(data.rain).length > 0 && (
+              <ChipStrip cells={rainCells(data.rain)} />
             )}
             <MapFigure
               src={data.maps.qpf}
               caption="Regional accumulation over the next 72 h — official WPC color ramp · dashed ring = 25 mi"
             />
+            {data.maps.qpf && <QpfRampLegend />}
           </div>
           <p className="mt-1.5 text-[9px] text-white/30 print-muted">
-            Site totals approximated from the daily point forecast (calendar days) · rain on fuels beats any suppression asset
+            {data.rain.source === 'wpc'
+              ? 'Chips are the WPC forecast at the property point — the same product the map renders'
+              : 'Chips approximated from the daily point forecast (calendar days) — may differ from the WPC map'}
+            {' '}· rain on fuels beats any suppression asset
           </p>
         </section>
       )}

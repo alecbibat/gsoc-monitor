@@ -8,7 +8,7 @@ import { analyzeFuelZone } from '../fuelzone/zonalStats';
 import { haversineMeters, MILES_TO_M, pointInRings } from '../lib/geo';
 import { containmentColor } from '../layers/wildfires/wildfiresData';
 import { QPF_LAYER } from '../layers/precip/precipStore';
-import { drawFlame, drawPin, drawPolygon, drawRing, renderMapSnapshot } from './mapSnapshot';
+import { drawFlame, drawHatchedPolygon, drawPin, drawPolygon, drawRing, renderMapSnapshot } from './mapSnapshot';
 import type { SmokePolygon } from '../types';
 import {
   RISK_RINGS, bumpLevel, maxLevel,
@@ -30,6 +30,59 @@ const MAX_RING_MI = RISK_RINGS[RISK_RINGS.length - 1].miles; // 100
 const todayUtcIso = () => new Date().toISOString().slice(0, 10);
 const addDaysIso = (date: string, days: number) =>
   new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+
+const WPC_QPF_MAPSERVER =
+  'https://mapservices.weather.noaa.gov/vector/rest/services/precip/wpc_qpf/MapServer';
+
+// WPC QPF at the property point, read from the SAME MapServer the rainfall map
+// renders — the chip strip and the map must agree on source (a point forecast
+// from a different model regularly disagrees with WPC and reads as a bug).
+// Identify returns each window's contour polygon containing the point; an
+// empty result set means the point is outside every contour (< 0.01 in).
+// Attribute values arrive as strings.
+async function fetchWpcSiteQpf(
+  lat: number,
+  lon: number
+): Promise<{ in24: number; in48: number; in72: number }> {
+  const layers = [QPF_LAYER['24h'], QPF_LAYER['48h'], QPF_LAYER['72h']];
+  const url =
+    `${WPC_QPF_MAPSERVER}/identify?f=json&geometryType=esriGeometryPoint` +
+    `&geometry=${lon.toFixed(4)},${lat.toFixed(4)}&sr=4326` +
+    `&layers=all:${layers.join(',')}&tolerance=0&returnGeometry=false` +
+    `&mapExtent=${(lon - 0.5).toFixed(2)},${(lat - 0.5).toFixed(2)},${(lon + 0.5).toFixed(2)},${(lat + 0.5).toFixed(2)}` +
+    '&imageDisplay=400,400,96';
+  const res = await fetch(url, { signal: AbortSignal.timeout(12_000) });
+  if (!res.ok) throw new Error(`WPC identify HTTP ${res.status}`);
+  const j = (await res.json()) as {
+    results?: Array<{ layerId?: number; attributes?: Record<string, unknown> }>;
+    error?: { message?: string };
+  };
+  if (j.error) throw new Error(`WPC identify: ${j.error.message ?? 'service error'}`);
+  if (!Array.isArray(j.results)) throw new Error('WPC identify: malformed response');
+
+  // The value field is named `qpf` today; scan defensively so a rename
+  // degrades to the daily-forecast fallback instead of silently zeroing.
+  const byLayer: Record<number, number> = {};
+  let foundAny = false;
+  for (const r of j.results) {
+    if (r.layerId === undefined) continue;
+    for (const [k, raw] of Object.entries(r.attributes ?? {})) {
+      if (!/qpf/i.test(k)) continue;
+      const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
+      if (!Number.isFinite(n)) continue;
+      foundAny = true;
+      // Nested contours stack — the highest containing value wins.
+      byLayer[r.layerId] = Math.max(byLayer[r.layerId] ?? 0, n);
+      break;
+    }
+  }
+  if (j.results.length > 0 && !foundAny) throw new Error('WPC identify: no qpf attribute found');
+  return {
+    in24: byLayer[QPF_LAYER['24h']] ?? 0,
+    in48: byLayer[QPF_LAYER['48h']] ?? 0,
+    in72: byLayer[QPF_LAYER['72h']] ?? 0,
+  };
+}
 
 const distMi = (target: RiskTarget, lat: number, lon: number) =>
   haversineMeters(target.lat, target.lon, lat, lon) / MILES_TO_M;
@@ -81,7 +134,7 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
     target.lon >= LANDFIRE_CONUS_RECT.west && target.lon <= LANDFIRE_CONUS_RECT.east &&
     target.lat >= LANDFIRE_CONUS_RECT.south && target.lat <= LANDFIRE_CONUS_RECT.north;
 
-  const [hotspotsRes, namedRes, alertsRes, countiesRes, outlookRes, fuelRes, windRes, dailyRes, smokeRes, lightningRes] = await Promise.all([
+  const [hotspotsRes, namedRes, alertsRes, countiesRes, outlookRes, fuelRes, windRes, dailyRes, smokeRes, lightningRes, wpcQpfRes] = await Promise.all([
     attempt(fetchHotspotsNearPins(MAX_RING_MI * MILES_TO_M)),
     attempt(fetchWildfires()),
     attempt(fetchActiveAlerts()),
@@ -96,6 +149,7 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
     // Radius-filtered on the server so local strikes arrive unthinned — a
     // global 24 h window would be stride-sampled to ~nothing near any point.
     attempt(api.lightningHistory(1440, { lat: target.lat, lon: target.lon, radiusMi: 130 })),
+    attempt(fetchWpcSiteQpf(target.lat, target.lon)),
   ]);
 
   const sections: SectionResult[] = [];
@@ -491,8 +545,6 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
   }));
 
   // ── Map snapshots (parallel, best effort — null just hides that map) ──────
-  const WPC_QPF_MAPSERVER =
-    'https://mapservices.weather.noaa.gov/vector/rest/services/precip/wpc_qpf/MapServer';
   const MAP_W = 660;
 
   const drawSite = (ctx: CanvasRenderingContext2D, proj: Parameters<NonNullable<Parameters<typeof renderMapSnapshot>[0]['draw']>>[1]) =>
@@ -650,15 +702,15 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       ? smoke.analysisDate
       : addDaysIso(todayUtcIso(), -1);
   smoke.imageryDate = smokeImageryDate;
-  // Plumes as density-colored OUTLINES over the imagery, not fills — the
-  // satellite picture already shows the smoke itself, and a filled Heavy
-  // plume would paint over exactly the thing worth looking at. Dark casing
-  // keeps the outline readable over bright cloud; Heavy gets a whisper of
-  // tint so an enclosed area still reads when its boundary runs off-canvas.
-  const SMOKE_STYLE: Record<string, { stroke: string; width: number; fill: string }> = {
-    Light:  { stroke: 'rgba(236,222,152,0.95)', width: 2,   fill: 'rgba(0,0,0,0)' },
-    Medium: { stroke: 'rgba(245,158,11,0.95)',  width: 2.5, fill: 'rgba(0,0,0,0)' },
-    Heavy:  { stroke: 'rgba(220,80,20,1)',      width: 3.5, fill: 'rgba(220,80,20,0.10)' },
+  // Plumes as density-colored HATCHING + cased outlines — solid fills painted
+  // over exactly the smoke the imagery shows, while bare outlines were too
+  // easy to confuse with cloud edges. A drawn 45° texture reads unmistakably
+  // as "analyst region" and still leaves most of the imagery visible; hatch
+  // density scales with smoke density.
+  const SMOKE_STYLE: Record<string, { stroke: string; width: number; hatch: string; spacing: number; hatchW: number }> = {
+    Light:  { stroke: 'rgba(236,222,152,0.95)', width: 2,   hatch: 'rgba(236,222,152,0.5)', spacing: 30, hatchW: 2 },
+    Medium: { stroke: 'rgba(245,158,11,0.95)',  width: 2.5, hatch: 'rgba(245,158,11,0.55)', spacing: 20, hatchW: 2.5 },
+    Heavy:  { stroke: 'rgba(220,80,20,1)',      width: 3.5, hatch: 'rgba(220,80,20,0.6)',   spacing: 12, hatchW: 3 },
   };
   const smokeSnapshot = renderMapSnapshot({
     centerLat: target.lat,
@@ -679,8 +731,14 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       const ordered = smokePolys.slice().sort((a, b) => (DENSITY_RANK[a.density] ?? 0) - (DENSITY_RANK[b.density] ?? 0));
       for (const p of ordered) {
         const st = SMOKE_STYLE[p.density] ?? SMOKE_STYLE.Light;
-        drawPolygon(ctx, proj, [p.coords], { fill: st.fill, stroke: 'rgba(5,7,10,0.6)', width: st.width + 2.5 });
-        drawPolygon(ctx, proj, [p.coords], { fill: 'rgba(0,0,0,0)', stroke: st.stroke, width: st.width });
+        drawHatchedPolygon(ctx, proj, [p.coords], {
+          color: st.stroke,
+          width: st.width,
+          hatchColor: st.hatch,
+          hatchSpacing: st.spacing,
+          hatchWidth: st.hatchW,
+          casing: 'rgba(5,7,10,0.55)',
+        });
       }
       // High-contrast ring — must read over both bright cloud and dark terrain.
       drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, { stroke: 'rgba(5,7,10,0.85)', width: 6 });
@@ -748,6 +806,18 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
     };
   })();
 
+  // ── Site rainfall chips — WPC point values first (same product as the map),
+  // daily point forecast as a clearly-labeled fallback ──────────────────────
+  const rain: WildfireReportData['rain'] = (() => {
+    if (wpcQpfRes.value) return { ...wpcQpfRes.value, source: 'wpc' as const };
+    if ('days' in forecastDaily && forecastDaily.days.length > 0) {
+      const sum = (n: number) =>
+        forecastDaily.days.slice(0, n).reduce((a, d) => a + d.precipIn, 0);
+      return { in24: sum(1), in48: sum(2), in72: sum(3), source: 'daily' as const };
+    }
+    return { unavailable: `Rainfall point values unavailable (${wpcQpfRes.error ?? 'unknown error'})` };
+  })();
+
   const available = sections.filter((s) => !s.unavailable);
   if (available.length === 0) {
     throw new Error('All wildfire feeds are unavailable — cannot assemble a report');
@@ -798,5 +868,6 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
     },
     windHourly,
     forecastDaily,
+    rain,
   };
 }

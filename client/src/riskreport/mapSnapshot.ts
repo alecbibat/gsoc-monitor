@@ -307,6 +307,68 @@ export function drawFlame(ctx: CanvasRenderingContext2D, x: number, y: number, r
   ctx.restore();
 }
 
+/**
+ * Hatched polygon: 45° lines clipped to the rings plus a cased outline. Marks
+ * an analysis region unmistakably (a drawn texture can't be confused with
+ * imagery content) while leaving most of what's beneath visible — used for
+ * HMS smoke plumes over true-color satellite, where a solid fill would paint
+ * over exactly the smoke the imagery shows.
+ */
+export function drawHatchedPolygon(
+  ctx: CanvasRenderingContext2D,
+  proj: SnapshotProjection,
+  rings: number[][][],
+  style: {
+    color: string;
+    width?: number;
+    hatchColor: string;
+    hatchSpacing: number;
+    hatchWidth: number;
+    casing?: string;
+  }
+) {
+  const path = () => {
+    ctx.beginPath();
+    for (const ring of rings) {
+      if (ring.length < 3) continue;
+      ring.forEach(([lon, lat], i) => {
+        const [x, y] = proj.toXY(lon, lat);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+    }
+  };
+
+  // Hatch pass — clip to the polygon, run diagonals across the whole canvas.
+  ctx.save();
+  path();
+  ctx.clip();
+  ctx.strokeStyle = style.hatchColor;
+  ctx.lineWidth = style.hatchWidth;
+  ctx.beginPath();
+  for (let d = -proj.height; d < proj.width + proj.height; d += style.hatchSpacing) {
+    ctx.moveTo(d, 0);
+    ctx.lineTo(d + proj.height, proj.height);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  // Outline pass — dark casing under the density color for cloud contrast.
+  ctx.save();
+  if (style.casing) {
+    path();
+    ctx.strokeStyle = style.casing;
+    ctx.lineWidth = (style.width ?? 2) + 2.5;
+    ctx.stroke();
+  }
+  path();
+  ctx.strokeStyle = style.color;
+  ctx.lineWidth = style.width ?? 2;
+  ctx.stroke();
+  ctx.restore();
+}
+
 export function drawPolygon(
   ctx: CanvasRenderingContext2D,
   proj: SnapshotProjection,

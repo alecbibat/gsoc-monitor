@@ -189,9 +189,10 @@ export const shortDayDate = (iso: string | null) => {
 };
 
 // A compact swatch legend row — fuel groups, outlook classes, smoke density,
-// lightning age. `line: true` renders a short bar instead of a square (for
-// outline-styled overlays). Print-safe: swatches keep their colors on paper.
-export function LegendRow({ items, className }: { items: { color: string; label: string; line?: boolean }[]; className?: string }) {
+// lightning age. `line: true` renders a short bar; `hatch: true` renders a
+// diagonally-hatched square (matches drawHatchedPolygon overlays). Print-safe:
+// swatches keep their colors on paper.
+export function LegendRow({ items, className }: { items: { color: string; label: string; line?: boolean; hatch?: boolean }[]; className?: string }) {
   return (
     <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-1 ${className ?? ''}`}>
       {items.map((it) => (
@@ -200,7 +201,11 @@ export function LegendRow({ items, className }: { items: { color: string; label:
             className={`print-color inline-block shrink-0 ${
               it.line ? 'h-1 w-4 rounded-full' : 'h-2.5 w-2.5 rounded-[2px] ring-1 ring-white/15'
             }`}
-            style={{ background: it.color }}
+            style={{
+              background: it.hatch
+                ? `repeating-linear-gradient(45deg, ${it.color} 0 2px, transparent 2px 6px)`
+                : it.color,
+            }}
           />
           {it.label}
         </span>

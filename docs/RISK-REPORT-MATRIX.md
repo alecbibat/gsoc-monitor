@@ -41,12 +41,13 @@ formula gets revisited with that QA bar.)
 Section list in the report: BLUF (overall + drivers) · hero exposure map ·
 key stat cards · ring exposure table · hotspots · named incidents · alerts ·
 outlook (7-day PSA chip strip above one regional today-map + legend) · fuels
-(raster map + fuel-group legend) · wind chart · smoke (density-colored HMS
-plume OUTLINES over the GIBS MODIS true-color mosaic — outlines, not fills,
-so heavy smoke never obscures the imagery that shows it) · lightning
-(age-tinted strike map) · rainfall (site 24/48/72 h accumulation chip strip
-above one regional WPC 72 h map) · 10-day forecast strip · sources with
-retrieval timestamps.
+(raster map + fuel-group legend) · wind chart · smoke (HMS plumes as 45°
+HATCHING + cased outlines over the GIBS MODIS true-color mosaic — hatch
+density scales with smoke density, and the imagery beneath stays visible) ·
+lightning (age-tinted strike map) · rainfall (site 24/48/72 h chip strip —
+WPC identify at the property point, same product as the map, daily-forecast
+fallback labeled as such — above one regional WPC 72 h map + exact WPC ramp
+legend) · 10-day forecast strip · sources with retrieval timestamps.
 
 Known gaps (listed in the report footer): RH/fuel-moisture not yet ingested
 (needs an RH grid — Track 4); terrain slope not factored (needs DEM sampling —

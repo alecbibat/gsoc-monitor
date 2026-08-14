@@ -163,6 +163,18 @@ export interface WildfireReportData {
   };
   /** 48 h hourly wind window for the chart (mph, "from" bearings). */
   windHourly: { times: string[]; speedMph: number[]; gustMph: number[]; dirDeg: number[] } | null;
+  /**
+   * Forecast accumulation at the property for the chip strip. source 'wpc' =
+   * identify on the same MapServer the rainfall map renders (chips and map
+   * can't disagree); 'daily' = point-forecast fallback, labeled as such.
+   */
+  rain: {
+    in24?: number;
+    in48?: number;
+    in72?: number;
+    source?: 'wpc' | 'daily';
+    unavailable?: string;
+  };
   /** 10-day daily forecast (display-ready units) for the forecast strip. */
   forecastDaily: {
     days: {
