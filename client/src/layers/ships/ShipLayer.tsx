@@ -5,7 +5,17 @@ import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { startVisiblePolling } from '../../lib/poll';
+import type { ShipState } from '../../types';
 import { useShipsStatus } from './shipsStore';
+import {
+  SHIP_MARKER_STYLE,
+  pingAlpha,
+  pingScale,
+  prefersReducedMotion,
+  shipBaseUri,
+  shipIconUri,
+  shipPingUri,
+} from './shipMarkers';
 
 function shipColor(type: number | null): string {
   if (type === null) return '#8fc7d9';
@@ -19,23 +29,34 @@ function shipColor(type: number | null): string {
   return '#8fc7d9';
 }
 
-function shipIconDataUri(color: string, favorite: boolean): string {
-  const hull = 'M32 4 L46 20 L46 58 L18 58 L18 20 Z';
-  const bridge = '<rect x="24" y="28" width="16" height="12" fill="rgba(5,34,43,0.55)" rx="2"/>';
-  const outline = favorite ? '#ffb84d' : '#05222b';
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="${hull}" fill="${color}" stroke="${outline}" stroke-width="${favorite ? 3 : 2}"/>${bridge}</svg>`;
-  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
-}
-
-const iconCache = new Map<string, string>();
-function cachedIcon(color: string, favorite: boolean): string {
-  const key = `${color}-${favorite}`;
-  if (!iconCache.has(key)) iconCache.set(key, shipIconDataUri(color, favorite));
-  return iconCache.get(key)!;
+// Every billboard stacked on a ship — hull, furniture and rings — opens the same
+// panel, so the whole marker footprint is one click target.
+function shipPanelData(ship: ShipState) {
+  return {
+    id: `ship-${ship.mmsi}`,
+    kind: 'ships' as const,
+    title: ship.name?.trim() || `MMSI ${ship.mmsi}`,
+    subtitle: [shipTypeLabel(ship.shipType), ship.callsign].filter(Boolean).join(' · '),
+    payload: { ...ship },
+  };
 }
 
 // How far ahead to project the dead-reckoning "future path".
 const FUTURE_HOURS = 6;
+
+// Sub-metre altitude lifts that break the depth tie between the three billboards
+// stacked on a ship's position, so the hull always draws over its own furniture.
+// Far too small to see at any real viewing distance (cf. the lightning layer).
+const ALT_PING = 0;
+const ALT_BASE = 1;
+const ALT_ICON = 2;
+
+// Render pacing for the ping. The globe runs in requestRenderMode, so an
+// animated CallbackProperty only advances when something asks for a frame —
+// this layer pumps its own while at least one ship is on screen. A ring takes
+// seconds to expand, so ~22fps is indistinguishable from full rate and costs
+// a third of the frames.
+const PING_FRAME_MS = 45;
 
 // Fade ships sitting at a stale last-known position so it's clear they aren't
 // reporting live (e.g. out of coastal AIS range).
@@ -99,6 +120,53 @@ export function ShipLayer() {
 
     let cancelled = false;
 
+    // --- Ping render pump ----------------------------------------------------
+    // The ring billboards read their own scale/alpha off the clock; this loop
+    // only asks Cesium for frames, and idles the moment no marker is on screen —
+    // so a fleet parked on the far side of the globe costs nothing.
+    let pingRaf: number | null = null;
+    let lastPingFrame = 0;
+    let shipPositions: Array<{ lon: number; lat: number }> = [];
+    let viewRect: Cesium.Rectangle | null = null;
+    const scratchCarto = new Cesium.Cartographic();
+
+    const anyShipInView = (): boolean => {
+      if (!shipPositions.length) return false;
+      if (!viewRect) return true; // can't tell — keep animating
+      return shipPositions.some(({ lon, lat }) => {
+        Cesium.Cartographic.fromDegrees(lon, lat, 0, scratchCarto);
+        return Cesium.Rectangle.contains(viewRect!, scratchCarto);
+      });
+    };
+
+    const pingFrame = () => {
+      if (cancelled) {
+        pingRaf = null;
+        return;
+      }
+      if (!anyShipInView()) {
+        pingRaf = null;
+        return;
+      }
+      const now = performance.now();
+      if (now - lastPingFrame >= PING_FRAME_MS) {
+        lastPingFrame = now;
+        viewer.scene.requestRender();
+      }
+      pingRaf = requestAnimationFrame(pingFrame);
+    };
+
+    const ensurePing = () => {
+      if (prefersReducedMotion()) return; // rings are frozen — no frames needed
+      if (pingRaf == null && anyShipInView()) pingRaf = requestAnimationFrame(pingFrame);
+    };
+
+    viewRect = viewer.camera.computeViewRectangle() ?? null;
+    const offCamera = viewer.camera.changed.addEventListener(() => {
+      viewRect = viewer.camera.computeViewRectangle() ?? null;
+      ensurePing();
+    });
+
     const load = async () => {
       try {
         const data = await api.ships();
@@ -135,16 +203,20 @@ export function ShipLayer() {
           visible
             .map(
               (s) =>
-                `${s.mmsi}:${s.latitude}:${s.longitude}:${s.heading}:${s.course}:${shipAlpha(s.lastSeenSec)}`
+                `${s.mmsi}:${s.name}:${s.latitude}:${s.longitude}:${s.heading}:${s.course}:${shipAlpha(s.lastSeenSec)}`
             )
             .join('|');
         if (sig === lastSigRef.current) {
           setStatus();
+          ensurePing();
           return;
         }
         lastSigRef.current = sig;
 
         ds.entities.removeAll();
+        shipPositions = visible.map((s) => ({ lon: s.longitude, lat: s.latitude }));
+
+        const style = SHIP_MARKER_STYLE;
 
         for (const ship of visible) {
           const isFavorite = favorites.includes(ship.mmsi);
@@ -152,28 +224,89 @@ export function ShipLayer() {
           const bearing = ship.heading ?? ship.course ?? 0;
 
           const alpha = shipAlpha(ship.lastSeenSec);
+          const tint = Cesium.Color.WHITE.withAlpha(alpha);
+          const iconSize = isFavorite ? style.icon.favoriteSizePx : style.icon.sizePx;
+
+          // Rings first: they expand out from under the marker and must not
+          // cover it, so they sit lowest in the stack.
+          const pingImage = shipPingUri(color);
+          for (let i = 0; i < style.ping.count; i++) {
+            const ring = i;
+            const ringEntity = ds.entities.add({
+              id: `ship-${ship.mmsi}-ping-${i}`,
+              position: Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude, ALT_PING),
+              billboard: {
+                image: pingImage,
+                width: style.ping.sizePx,
+                height: style.ping.sizePx,
+                scale: new Cesium.CallbackProperty(() => pingScale(ring), false),
+                color: new Cesium.CallbackProperty(
+                  () => Cesium.Color.WHITE.withAlpha(pingAlpha(ring, alpha)),
+                  false
+                ),
+                scaleByDistance: style.scaleByDistance,
+                // Default depth test so far-side rings stay hidden behind the globe.
+              },
+            });
+            // The rings are the marker's outer edge — clicking one should open
+            // the ship, not fall through to whatever is underneath.
+            attachPanelData(ringEntity, shipPanelData(ship));
+          }
+
+          const baseImage = shipBaseUri(color, isFavorite);
+          if (style.base && baseImage) {
+            const baseEntity = ds.entities.add({
+              id: `ship-${ship.mmsi}-base`,
+              position: Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude, ALT_BASE),
+              billboard: {
+                image: baseImage,
+                width: style.base.widthPx,
+                height: style.base.heightPx,
+                verticalOrigin: style.base.verticalOrigin,
+                color: tint,
+                scaleByDistance: style.scaleByDistance,
+              },
+              label: style.showLabel
+                ? {
+                    text: ship.name?.trim() || `MMSI ${ship.mmsi}`,
+                    font: 'bold 11px sans-serif',
+                    fillColor: Cesium.Color.fromCssColorString(color),
+                    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                    outlineWidth: 2,
+                    outlineColor: Cesium.Color.fromCssColorString('#04181f').withAlpha(0.9),
+                    verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                    pixelOffset: new Cesium.Cartesian2(0, style.icon.offsetY - iconSize / 2 - 6),
+                    // Billboards shrink with distance but pixel offsets don't,
+                    // so the offset needs the same ramp or the label drifts off
+                    // the marker as the camera pulls back.
+                    pixelOffsetScaleByDistance: style.scaleByDistance,
+                    showBackground: true,
+                    backgroundColor: Cesium.Color.fromCssColorString('#04181f').withAlpha(0.72),
+                    backgroundPadding: new Cesium.Cartesian2(5, 3),
+                  }
+                : undefined,
+            });
+            attachPanelData(baseEntity, shipPanelData(ship));
+          }
 
           const entity = ds.entities.add({
             id: `ship-${ship.mmsi}`,
-            position: Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude, 0),
+            position: Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude, ALT_ICON),
             billboard: {
-              image: cachedIcon(color, isFavorite),
-              width: isFavorite ? 28 : 22,
-              height: isFavorite ? 28 : 22,
+              image: shipIconUri(color, isFavorite),
+              width: iconSize,
+              height: iconSize,
               rotation: Cesium.Math.toRadians(-bearing),
               alignedAxis: Cesium.Cartesian3.UNIT_Z,
-              color: Cesium.Color.WHITE.withAlpha(alpha),
+              color: tint,
+              pixelOffset: new Cesium.Cartesian2(0, style.icon.offsetY),
+              pixelOffsetScaleByDistance: style.scaleByDistance,
+              scaleByDistance: style.scaleByDistance,
               // Default depth test so ships on the far side of the globe stay hidden.
             },
           });
 
-          attachPanelData(entity, {
-            id: `ship-${ship.mmsi}`,
-            kind: 'ships',
-            title: ship.name?.trim() || `MMSI ${ship.mmsi}`,
-            subtitle: [shipTypeLabel(ship.shipType), ship.callsign].filter(Boolean).join(' · '),
-            payload: { ...ship },
-          });
+          attachPanelData(entity, shipPanelData(ship));
 
           if (!showPaths) continue;
           const cesColor = Cesium.Color.fromCssColorString(color);
@@ -229,6 +362,7 @@ export function ShipLayer() {
         }
 
         setStatus();
+        ensurePing();
         viewer.scene.requestRender();
       } catch (err) {
         if (cancelled) return;
@@ -242,6 +376,8 @@ export function ShipLayer() {
     return () => {
       cancelled = true;
       stopPolling();
+      offCamera();
+      if (pingRaf != null) cancelAnimationFrame(pingRaf);
     };
   }, [viewer, active, favoritesOnly, favorites, showPaths]);
 

@@ -1,0 +1,555 @@
+<title>Fleet Marker Studies</title>
+<style>
+:root{
+  --abyss:#04121a; --deep:#08202c; --chart:#0e3446; --rule:#16455a;
+  --foam:#e4f2f7; --wake:#8fb3c1; --dim:#5d818f;
+  --sonar:#3ddcff; --amber:#ffb84d; --passenger:#4dff91;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --pad: clamp(18px, 4vw, 44px);
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--abyss); color:var(--foam);
+  font-family:var(--sans); font-size:16px; line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px; margin:0 auto; padding:0 var(--pad) 96px}
+
+/* ---- instrument type ---- */
+.mono{font-family:var(--mono); font-variant-numeric:tabular-nums}
+.eyebrow{
+  font-family:var(--mono); font-size:11px; font-weight:700;
+  letter-spacing:.22em; text-transform:uppercase; color:var(--sonar);
+}
+h1{
+  font-family:var(--mono); font-weight:700;
+  font-size:clamp(30px,5.4vw,54px); line-height:1.02; letter-spacing:-.025em;
+  margin:14px 0 0; text-wrap:balance;
+}
+h2{
+  font-family:var(--mono); font-weight:700;
+  font-size:clamp(21px,2.6vw,28px); line-height:1.15; letter-spacing:-.02em;
+  margin:0;
+}
+h3{
+  font-family:var(--mono); font-size:11px; font-weight:700;
+  letter-spacing:.2em; text-transform:uppercase; color:var(--dim);
+  margin:0 0 8px;
+}
+p{margin:0}
+.lede{color:var(--wake); font-size:17px; max-width:64ch}
+a{color:var(--sonar)}
+
+/* ---- masthead ---- */
+header{
+  padding:clamp(40px,7vw,80px) 0 clamp(26px,4vw,40px);
+  border-bottom:1px solid var(--rule);
+  display:flex; flex-direction:column; gap:20px;
+}
+.tick-rule{
+  height:9px; margin-top:6px;
+  background:repeating-linear-gradient(90deg,var(--rule) 0 1px,transparent 1px 22px);
+  opacity:.75;
+}
+
+/* ---- shared blocks ---- */
+section{padding:clamp(38px,6vw,68px) 0; border-bottom:1px solid var(--rule)}
+.sec-head{display:flex; flex-direction:column; gap:10px; margin-bottom:26px}
+
+/* ---- ocean stage ---- */
+.stage{
+  position:relative; overflow:hidden; border:1px solid var(--rule);
+  background:
+    radial-gradient(120% 90% at 18% 12%, #0a2b3d 0%, #061c28 46%, #04121a 100%);
+}
+.stage::after{ /* faint bathymetric banding, keeps the water from reading flat */
+  content:""; position:absolute; inset:0; pointer-events:none;
+  background:repeating-linear-gradient(114deg,rgba(61,220,255,.035) 0 2px,transparent 2px 15px);
+}
+.land{position:absolute; inset:0; width:100%; height:100%}
+.stage-label,.stage-note{
+  position:absolute; z-index:6;
+  font-family:var(--mono); font-size:10px; letter-spacing:.14em;
+  color:var(--wake); background:rgba(4,18,26,.82);
+  padding:3px 7px; border-radius:2px;
+}
+.stage-label{left:10px; top:9px; font-weight:700; text-transform:uppercase}
+.stage-note{right:10px; bottom:9px; color:var(--dim)}
+
+/* ---- marker assembly: everything positions off a single anchor point ---- */
+.marker{position:absolute; width:0; height:0}
+.marker > *{position:absolute; left:0; top:0; display:block}
+.ping{transform-origin:50% 50%; will-change:transform,opacity}
+.base-c{transform:translate(-50%,-50%)}
+.base-b{transform:translate(-50%,-100%)}
+.hull{transform-origin:50% 50%}
+.name{
+  transform:translate(-50%,-100%);
+  font-family:var(--mono); font-size:11px; font-weight:700; white-space:nowrap;
+  padding:2px 5px; border-radius:2px;
+  background:rgba(4,24,31,.72);
+  text-shadow:0 0 2px #04181f, 0 0 2px #04181f;
+}
+
+/* ---- option cards ---- */
+.option{display:grid; gap:22px; grid-template-columns:minmax(0,320px) minmax(0,1fr)}
+@media (max-width:860px){ .option{grid-template-columns:minmax(0,1fr)} }
+.option-id{
+  display:flex; align-items:baseline; gap:12px; margin-bottom:6px;
+}
+.badge{
+  font-family:var(--mono); font-size:12px; font-weight:700; letter-spacing:.14em;
+  color:var(--abyss); background:var(--sonar);
+  padding:3px 9px; border-radius:2px;
+}
+.brief{display:flex; flex-direction:column; gap:20px}
+.brief p{color:var(--wake); font-size:15px}
+.judgement{display:flex; flex-direction:column; gap:9px; margin:0; padding:0; list-style:none}
+.judgement li{
+  display:grid; grid-template-columns:16px minmax(0,1fr); gap:10px;
+  font-size:14.5px; color:var(--wake); line-height:1.5;
+}
+.judgement .sign{font-family:var(--mono); font-weight:700; line-height:1.5}
+.plus .sign{color:var(--passenger)}
+.minus .sign{color:var(--amber)}
+.spec{
+  border-top:1px solid var(--rule); padding-top:14px;
+  display:grid; grid-template-columns:auto auto; gap:5px 18px;
+  font-family:var(--mono); font-size:12px; font-variant-numeric:tabular-nums;
+}
+.spec dt{color:var(--dim); letter-spacing:.06em}
+.spec dd{margin:0; color:var(--foam); text-align:right}
+.stages{display:flex; flex-direction:column; gap:12px; height:100%}
+.stage-main{height:288px}
+.stage-small{height:168px}
+.option .stage-main{flex:2 1 288px; height:auto; min-height:288px}
+.option .stage-small{flex:1 1 168px; height:auto; min-height:168px}
+
+/* ---- comparison table ---- */
+.table-scroll{overflow-x:auto; border:1px solid var(--rule)}
+table{border-collapse:collapse; width:100%; min-width:640px; font-size:14px}
+caption{
+  text-align:left; padding:14px 16px; border-bottom:1px solid var(--rule);
+  font-family:var(--mono); font-size:11px; font-weight:700;
+  letter-spacing:.2em; text-transform:uppercase; color:var(--dim);
+}
+th,td{padding:11px 16px; text-align:left; border-bottom:1px solid var(--chart)}
+thead th{
+  font-family:var(--mono); font-size:11px; font-weight:700;
+  letter-spacing:.14em; text-transform:uppercase; color:var(--dim);
+  background:var(--deep);
+}
+tbody th{
+  font-family:var(--mono); font-size:12px; font-weight:400; color:var(--wake);
+  letter-spacing:.04em; white-space:nowrap;
+}
+td{color:var(--foam); font-variant-numeric:tabular-nums}
+tbody tr:last-child th, tbody tr:last-child td{border-bottom:none}
+td.win{color:var(--passenger)}
+td em{color:var(--dim); font-style:normal}
+
+/* ---- recommendation ---- */
+.rec{
+  border:1px solid var(--sonar); background:linear-gradient(180deg,#0a2836,#071e29);
+  padding:clamp(22px,3.4vw,34px);
+  display:grid; gap:22px; grid-template-columns:minmax(0,1fr) 260px;
+}
+@media (max-width:760px){ .rec{grid-template-columns:minmax(0,1fr)} }
+.rec p{color:var(--wake); max-width:60ch}
+.rec .kicker{
+  font-family:var(--mono); font-size:11px; font-weight:700;
+  letter-spacing:.2em; text-transform:uppercase; color:var(--sonar); margin-bottom:10px;
+}
+.rec-stage{height:300px; align-self:center}
+.stack{display:flex; flex-direction:column; gap:14px}
+
+/* ---- how to view ---- */
+code{
+  font-family:var(--mono); font-size:.92em;
+  background:var(--chart); color:var(--foam);
+  padding:2px 6px; border-radius:2px;
+}
+.foot{padding-top:34px; color:var(--dim); font-size:14px; display:flex; flex-direction:column; gap:12px}
+.foot strong{color:var(--wake); font-weight:600}
+
+@media (prefers-reduced-motion:reduce){
+  .ping{animation:none !important}
+}
+</style>
+
+<div class="wrap">
+
+<header>
+  <div>
+    <div class="eyebrow">GSOC Monitor &middot; Ship layer</div>
+    <h1>Fleet Marker Studies</h1>
+  </div>
+  <p class="lede">
+    Seven Windstar hulls on a night globe, currently drawn as a 22&nbsp;px silhouette with a
+    near-black outline &mdash; the same value as the water behind it. Three replacements,
+    each built from a static base, a heading-rotated hull, and a ring that pulses off the
+    ship&rsquo;s position. Everything below is the real artwork and the real animation
+    timings, pulled straight out of <span class="mono">shipMarkers.ts</span>.
+  </p>
+  <div class="tick-rule"></div>
+</header>
+
+<section id="today">
+  <div class="sec-head">
+    <h2>Where it stands</h2>
+    <p class="lede">
+      The problem isn&rsquo;t the shape, it&rsquo;s the mass and the contrast. At globe zoom the
+      hull is a few pixels of green, and its dark outline disappears into open water &mdash;
+      so a ship reads as a speck until you already know where to look.
+    </p>
+  </div>
+  <div class="stage stage-main" data-stage="today"></div>
+</section>
+
+<section id="options">
+  <div class="sec-head">
+    <h2>Three studies</h2>
+    <p class="lede">
+      Each stage below is live: the marker at regional zoom on the left, and the whole
+      seven-ship fleet at globe zoom (0.78&times;) crossing from open ocean onto a lit
+      coastline &mdash; the case where a dark outline fails today.
+    </p>
+  </div>
+  <div class="stack" id="option-cards"></div>
+</section>
+
+<section id="compare">
+  <div class="sec-head"><h2>Side by side</h2></div>
+  <div class="table-scroll">
+    <table>
+      <caption>Measured against the current 22&nbsp;px marker</caption>
+      <thead>
+        <tr><th scope="col">&nbsp;</th><th scope="col">A &mdash; Halo</th><th scope="col">B &mdash; Sonar</th><th scope="col">C &mdash; Beacon</th></tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">Marker footprint</th><td>54&nbsp;px</td><td>60&nbsp;px</td><td>46&nbsp;px + 39&nbsp;px stem</td></tr>
+        <tr><th scope="row">Hull, drawn size</th><td class="win">~46&nbsp;px</td><td>26&nbsp;px</td><td>~40&nbsp;px</td></tr>
+        <tr><th scope="row">Ping reach</th><td>115&nbsp;px</td><td class="win">135&nbsp;px</td><td>128&nbsp;px</td></tr>
+        <tr><th scope="row">Ping cadence</th><td>2.8&nbsp;s &times;2</td><td class="win">2.0&nbsp;s &times;3</td><td>3.0&nbsp;s &times;1</td></tr>
+        <tr><th scope="row">Holds up over land</th><td><em>soft edges dissolve</em></td><td class="win">yes &mdash; hard brackets</td><td class="win">yes &mdash; dark under-stroke</td></tr>
+        <tr><th scope="row">Heading still readable</th><td class="win">yes</td><td class="win">yes</td><td>yes, but lifted off the water</td></tr>
+        <tr><th scope="row">Identifies the ship</th><td>no</td><td>no</td><td class="win">yes &mdash; name always on</td></tr>
+        <tr><th scope="row">Marks true position</th><td class="win">yes</td><td class="win">yes</td><td>at the stem foot, not the hull</td></tr>
+        <tr><th scope="row">Billboards per ship</th><td>3</td><td>5</td><td>3 + label</td></tr>
+        <tr><th scope="row">Visual noise at 7 ships</th><td class="win">low</td><td>moderate</td><td>high</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="recommend">
+  <div class="rec">
+    <div>
+      <div class="kicker">Recommendation</div>
+      <h2 style="margin-bottom:14px">B &mdash; Sonar Contact</h2>
+      <p style="margin-bottom:14px">
+        It buys the most legibility per pixel. The reticle is the only one of the three
+        built from straight lines and right angles, and a map of coastlines, weather cells
+        and storm cones has almost none of those &mdash; so the eye finds it immediately,
+        over water and over land alike. The brackets also stay upright while the hull
+        rotates inside them, which keeps heading readable instead of turning the whole
+        marker into a spinning blob.
+      </p>
+      <p style="margin-bottom:14px">
+        It is also already the console&rsquo;s own language. The screensaver fires a cyan
+        sonar shockwave when it orbits a ship; making that the resting state of every
+        contact means the globe and the screensaver finally say the same thing. Three
+        rings on a 2&nbsp;s loop reads as an active sweep rather than a slow throb.
+      </p>
+      <p>
+        <strong style="color:var(--foam)">If you want more than that:</strong> B and C are not
+        exclusive. Turning on C&rsquo;s always-visible name label under B&rsquo;s reticle is a
+        one-line change (<span class="mono">showLabel: true</span>) and is the single biggest
+        win for finding a <em>specific</em> ship &mdash; seven labels never crowd a world view.
+        I&rsquo;d start with B alone and add labels if you find yourself hovering to identify.
+      </p>
+    </div>
+    <div class="stage rec-stage" data-stage="rec"></div>
+  </div>
+</section>
+
+<div class="foot">
+  <p><strong>All three are already in the branch.</strong> The globe ships with B. To compare on the
+  live map without a rebuild, append <code>?shipMarker=halo</code>, <code>?shipMarker=sonar</code>,
+  or <code>?shipMarker=beacon</code> to the URL.</p>
+  <p>Rings freeze mid-expansion &mdash; keeping the extra presence, dropping the motion &mdash; for
+  anyone with <span class="mono">prefers-reduced-motion</span> set, and the render pump idles
+  whenever no ship is on screen.</p>
+</div>
+
+</div>
+<script>
+const SPECS = {"halo":{"blurb":"Glowing plate under an enlarged hull, with two slow soft rings.","showLabel":false,"icon":{"svg":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 96 96\"><defs><radialGradient id=\"h\"><stop offset=\"0.28\" stop-color=\"SHIPCOLOR\" stop-opacity=\"0.36\"/><stop offset=\"0.60\" stop-color=\"SHIPCOLOR\" stop-opacity=\"0.14\"/><stop offset=\"1\" stop-color=\"SHIPCOLOR\" stop-opacity=\"0\"/></radialGradient></defs><circle cx=\"48\" cy=\"48\" r=\"48\" fill=\"url(#h)\"/><circle cx=\"48\" cy=\"48\" r=\"29\" fill=\"#04181f\" fill-opacity=\"0.68\" stroke=\"SHIPCOLOR\" stroke-opacity=\"0.45\" stroke-width=\"1.5\"/><g transform=\"translate(20.8 20.8) scale(0.85)\"><path d=\"M32 4 L46 20 L46 58 L18 58 L18 20 Z\" fill=\"SHIPCOLOR\" stroke=\"#ffffff\" stroke-width=\"2.59\" stroke-linejoin=\"round\"/><rect x=\"24\" y=\"28\" width=\"16\" height=\"12\" fill=\"#04181f\" fill-opacity=\"0.5\" rx=\"2\"/></g></svg>","favSvg":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 96 96\"><defs><radialGradient id=\"h\"><stop offset=\"0.28\" stop-color=\"SHIPCOLOR\" stop-opacity=\"0.36\"/><stop offset=\"0.60\" stop-color=\"SHIPCOLOR\" stop-opacity=\"0.14\"/><stop offset=\"1\" stop-color=\"SHIPCOLOR\" stop-opacity=\"0\"/></radialGradient></defs><circle cx=\"48\" cy=\"48\" r=\"48\" fill=\"url(#h)\"/><circle cx=\"48\" cy=\"48\" r=\"29\" fill=\"#04181f\" fill-opacity=\"0.68\" stroke=\"SHIPCOLOR\" stroke-opacity=\"0.45\" stroke-width=\"1.5\"/><g transform=\"translate(20.8 20.8) scale(0.85)\"><path d=\"M32 4 L46 20 L46 58 L18 58 L18 20 Z\" fill=\"SHIPCOLOR\" stroke=\"#ffb84d\" stroke-width=\"3.53\" stroke-linejoin=\"round\"/><rect x=\"24\" y=\"28\" width=\"16\" height=\"12\" fill=\"#04181f\" fill-opacity=\"0.5\" rx=\"2\"/></g></svg>","sizePx":54,"favoriteSizePx":66,"offsetY":0},"base":null,"ping":{"svg":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 128 128\"><defs><radialGradient id=\"r\"><stop offset=\"0.48\" stop-color=\"SHIPCOLOR\" stop-opacity=\"0\"/><stop offset=\"0.79\" stop-color=\"SHIPCOLOR\" stop-opacity=\"0.85\"/><stop offset=\"0.93\" stop-color=\"SHIPCOLOR\" stop-opacity=\"0.28\"/><stop offset=\"1\" stop-color=\"SHIPCOLOR\" stop-opacity=\"0\"/></radialGradient></defs><circle cx=\"64\" cy=\"64\" r=\"64\" fill=\"url(#r)\"/></svg>","sizePx":46,"count":2,"periodMs":2800,"from":0.55,"to":2.5,"peakAlpha":0.6,"fadePower":1.35}},"sonar":{"blurb":"Hull inside a fixed targeting reticle, with three fast sonar rings.","showLabel":false,"icon":{"svg":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\"><g transform=\"translate(0 0) scale(1)\"><path d=\"M32 4 L46 20 L46 58 L18 58 L18 20 Z\" fill=\"SHIPCOLOR\" stroke=\"#eaf7ff\" stroke-width=\"2.20\" stroke-linejoin=\"round\"/><rect x=\"24\" y=\"28\" width=\"16\" height=\"12\" fill=\"#04181f\" fill-opacity=\"0.5\" rx=\"2\"/></g></svg>","favSvg":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\"><g transform=\"translate(0 0) scale(1)\"><path d=\"M32 4 L46 20 L46 58 L18 58 L18 20 Z\" fill=\"SHIPCOLOR\" stroke=\"#ffb84d\" stroke-width=\"3.00\" stroke-linejoin=\"round\"/><rect x=\"24\" y=\"28\" width=\"16\" height=\"12\" fill=\"#04181f\" fill-opacity=\"0.5\" rx=\"2\"/></g></svg>","sizePx":26,"favoriteSizePx":32,"offsetY":0},"base":{"svg":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 96 96\"><circle cx=\"48\" cy=\"48\" r=\"36\" fill=\"#04181f\" fill-opacity=\"0.34\" stroke=\"SHIPCOLOR\" stroke-opacity=\"0.5\" stroke-width=\"1.4\"/><g fill=\"none\" stroke=\"SHIPCOLOR\" stroke-opacity=\"0.95\" stroke-width=\"2.6\" stroke-linecap=\"square\"><path d=\"M10 21 L10 10 L21 10\"/><path d=\"M86 21 L86 10 L75 10\"/><path d=\"M10 75 L10 86 L21 86\"/><path d=\"M86 75 L86 86 L75 86\"/></g></svg>","widthPx":60,"heightPx":60,"bottom":false},"ping":{"svg":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 128 128\"><g fill=\"none\" stroke=\"SHIPCOLOR\"><circle cx=\"64\" cy=\"64\" r=\"56\" stroke-width=\"12\" stroke-opacity=\"0.16\"/><circle cx=\"64\" cy=\"64\" r=\"56\" stroke-width=\"3.2\" stroke-opacity=\"0.95\"/></g></svg>","sizePx":52,"count":3,"periodMs":2000,"from":0.5,"to":2.6,"peakAlpha":0.9,"fadePower":1.7}},"beacon":{"blurb":"Hull raised on a stem over a waterline ring, name always visible.","showLabel":true,"icon":{"svg":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 80 80\"><circle cx=\"40\" cy=\"40\" r=\"31\" fill=\"#04181f\" fill-opacity=\"0.8\" stroke=\"SHIPCOLOR\" stroke-width=\"2.4\"/><g transform=\"translate(12.48 12.48) scale(0.86)\"><path d=\"M32 4 L46 20 L46 58 L18 58 L18 20 Z\" fill=\"SHIPCOLOR\" stroke=\"#ffffff\" stroke-width=\"2.33\" stroke-linejoin=\"round\"/><rect x=\"24\" y=\"28\" width=\"16\" height=\"12\" fill=\"#04181f\" fill-opacity=\"0.5\" rx=\"2\"/></g></svg>","favSvg":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 80 80\"><circle cx=\"40\" cy=\"40\" r=\"31\" fill=\"#04181f\" fill-opacity=\"0.8\" stroke=\"SHIPCOLOR\" stroke-width=\"2.4\"/><g transform=\"translate(12.48 12.48) scale(0.86)\"><path d=\"M32 4 L46 20 L46 58 L18 58 L18 20 Z\" fill=\"SHIPCOLOR\" stroke=\"#ffb84d\" stroke-width=\"3.26\" stroke-linejoin=\"round\"/><rect x=\"24\" y=\"28\" width=\"16\" height=\"12\" fill=\"#04181f\" fill-opacity=\"0.5\" rx=\"2\"/></g></svg>","sizePx":46,"favoriteSizePx":56,"offsetY":-28},"base":{"svg":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 96\"><g fill=\"none\" stroke=\"#04181f\" stroke-opacity=\"0.75\" stroke-linecap=\"round\"><path d=\"M32 88 L32 24\" stroke-width=\"6\"/><ellipse cx=\"32\" cy=\"88\" rx=\"11\" ry=\"4.5\" stroke-width=\"6\"/></g><g fill=\"none\" stroke=\"SHIPCOLOR\" stroke-linecap=\"round\"><path d=\"M32 88 L32 24\" stroke-width=\"2.2\" stroke-opacity=\"0.8\"/><ellipse cx=\"32\" cy=\"88\" rx=\"11\" ry=\"4.5\" stroke-width=\"2.4\" stroke-opacity=\"0.9\"/></g><circle cx=\"32\" cy=\"88\" r=\"2.6\" fill=\"SHIPCOLOR\"/></svg>","widthPx":26,"heightPx":39,"bottom":true},"ping":{"svg":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 128 128\"><defs><radialGradient id=\"b\"><stop offset=\"0\" stop-color=\"SHIPCOLOR\" stop-opacity=\"0.3\"/><stop offset=\"0.72\" stop-color=\"SHIPCOLOR\" stop-opacity=\"0.1\"/><stop offset=\"1\" stop-color=\"SHIPCOLOR\" stop-opacity=\"0\"/></radialGradient></defs><circle cx=\"64\" cy=\"64\" r=\"60\" fill=\"url(#b)\"/><circle cx=\"64\" cy=\"64\" r=\"56\" fill=\"none\" stroke=\"SHIPCOLOR\" stroke-opacity=\"0.9\" stroke-width=\"4\"/></svg>","sizePx":44,"count":1,"periodMs":3000,"from":0.45,"to":2.9,"peakAlpha":0.85,"fadePower":1.2}}};
+
+const SHIP_GREEN = '#4dff91';   // AIS passenger class - what the Windstar fleet reports
+const AMBER = '#ffb84d';
+
+const uri = (svg, color) =>
+  'data:image/svg+xml,' + encodeURIComponent(svg.split('SHIPCOLOR').join(color));
+
+/* ---- Ping keyframes, generated from the same numbers the layer animates on:
+       eased = 1-(1-p)^2 ; scale = from + (to-from)*eased ; alpha = peak*(1-p)^power ---- */
+const REST_PHASE = 0.45;
+function ringAt(spec, p){
+  const eased = 1 - (1 - p) * (1 - p);
+  return {
+    scale: spec.from + (spec.to - spec.from) * eased,
+    alpha: spec.peakAlpha * Math.pow(1 - p, spec.fadePower),
+  };
+}
+function keyframesFor(name, spec){
+  const stops = [];
+  for (let i = 0; i <= 20; i++){
+    const p = i / 20;
+    const { scale, alpha } = ringAt(spec, p);
+    stops.push(`${(p*100).toFixed(0)}%{transform:translate(-50%,-50%) scale(${scale.toFixed(3)});opacity:${alpha.toFixed(3)}}`);
+  }
+  return `@keyframes ping-${name}{${stops.join('')}}`;
+}
+const sheet = document.createElement('style');
+sheet.textContent = Object.entries(SPECS).map(([n, s]) => keyframesFor(n, s.ping)).join('\n')
+  + '\n@media (prefers-reduced-motion:reduce){'
+  + Object.entries(SPECS).map(([n, s]) => {
+      const { scale, alpha } = ringAt(s.ping, REST_PHASE);
+      return `.ping-${n}{transform:translate(-50%,-50%) scale(${scale.toFixed(3)});opacity:${alpha.toFixed(3)}}`;
+    }).join('')
+  + '}';
+document.head.appendChild(sheet);
+
+/* ---- One marker, assembled the way ShipLayer stacks its billboards ---- */
+function marker({ style, x, y, zoom = 1, heading = 0, color = SHIP_GREEN, favorite = false, name = null }){
+  const s = SPECS[style];
+  const el = document.createElement('div');
+  el.className = 'marker';
+  el.style.left = x; el.style.top = y;
+
+  if (style !== 'today'){
+    const ping = s.ping;
+    for (let i = 0; i < ping.count; i++){
+      const r = document.createElement('img');
+      r.className = 'ping ping-' + style;
+      r.alt = '';
+      r.src = uri(ping.svg, color);
+      r.style.width = r.style.height = (ping.sizePx * zoom) + 'px';
+      r.style.animation = `ping-${style} ${ping.periodMs}ms linear infinite`;
+      // Negative delay reproduces the layer's shared epoch: every ring in the
+      // fleet is already mid-flight, staggered by period/count.
+      r.style.animationDelay = `-${Math.round((i * ping.periodMs) / ping.count)}ms`;
+      el.appendChild(r);
+    }
+    if (s.base){
+      const b = document.createElement('img');
+      b.className = 'base-' + (s.base.bottom ? 'b' : 'c');
+      b.alt = '';
+      b.src = uri(s.base.svg, favorite ? AMBER : color);
+      b.style.width = (s.base.widthPx * zoom) + 'px';
+      b.style.height = (s.base.heightPx * zoom) + 'px';
+      el.appendChild(b);
+    }
+  }
+
+  const size = (style === 'today' ? (favorite ? 28 : 22)
+                                  : (favorite ? s.icon.favoriteSizePx : s.icon.sizePx)) * zoom;
+  const offsetY = (style === 'today' ? 0 : s.icon.offsetY) * zoom;
+  const hull = document.createElement('img');
+  hull.className = 'hull';
+  hull.alt = '';
+  hull.src = style === 'today'
+    ? uri(TODAY_SVG, color).replace('OUTLINE', favorite ? '%23ffb84d' : '%2305222b')
+    : uri(favorite ? s.icon.favSvg : s.icon.svg, color);
+  hull.style.width = hull.style.height = size + 'px';
+  hull.style.transform =
+    `translate(-50%,-50%) translateY(${offsetY}px) rotate(${heading}deg)`;
+  el.appendChild(hull);
+
+  if (name && style !== 'today' && SPECS[style].showLabel){
+    const n = document.createElement('span');
+    n.className = 'name';
+    n.textContent = name;
+    n.style.color = color;
+    n.style.transform = `translate(-50%,-100%) translateY(${offsetY - size / 2 - 6 * zoom}px)`;
+    el.appendChild(n);
+  }
+  return el;
+}
+
+/* Today's marker, lifted verbatim from the pre-change ShipLayer source. */
+const TODAY_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+  + '<path d="M32 4 L46 20 L46 58 L18 58 L18 20 Z" fill="SHIPCOLOR" stroke="OUTLINE" stroke-width="2"/>'
+  + '<rect x="24" y="28" width="16" height="12" fill="rgba(5,34,43,0.55)" rx="2"/></svg>';
+
+/* ---- A lit coastline on the right third of a stage: the contrast test ---- */
+function coastline(){
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('class', 'land');
+  svg.setAttribute('viewBox', '0 0 400 200');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.innerHTML =
+    '<path d="M262 0 C250 34, 286 62, 268 98 C252 132, 288 160, 274 200 L400 200 L400 0 Z" fill="#123a2a"/>'
+    + '<path d="M272 0 C262 34, 296 62, 279 98 C264 132, 299 160, 286 200 L400 200 L400 0 Z" fill="#3f5136"/>'
+    + '<path d="M292 0 C286 40, 314 70, 300 112 C288 148, 318 172, 308 200 L400 200 L400 0 Z" fill="#6b6b48"/>'
+    + '<path d="M330 0 C328 44, 348 78, 338 118 C330 152, 352 178, 346 200 L400 200 L400 0 Z" fill="#8e8560"/>'
+    + '<path d="M262 0 C250 34, 286 62, 268 98 C252 132, 288 160, 274 200" fill="none" stroke="#7fe8ff" stroke-opacity="0.35" stroke-width="1.5"/>';
+  return svg;
+}
+
+/* ---- Stage builders ---- */
+const FLEET = [
+  { name:'Star Breeze',  x:'13%', y:'40%', h:  62 },
+  { name:'Star Legend',  x:'24%', y:'72%', h: 148 },
+  { name:'Star Pride',   x:'36%', y:'33%', h: 285 },
+  { name:'Star Seeker',  x:'47%', y:'60%', h:  10, fav:true },
+  { name:'Wind Spirit',  x:'58%', y:'82%', h: 210 },
+  { name:'Wind Star',    x:'68%', y:'43%', h: 118 },
+  { name:'Wind Surf',    x:'80%', y:'68%', h: 330 },
+];
+
+function fillStage(stage, style, mode){
+  stage.querySelectorAll('.marker,.land,.stage-label,.stage-note').forEach(n => n.remove());
+  if (mode !== 'solo') stage.appendChild(coastline());
+
+  const label = document.createElement('div');
+  label.className = 'stage-label';
+  const note = document.createElement('div');
+  note.className = 'stage-note';
+
+  if (mode === 'solo'){
+    label.textContent = 'Regional zoom · 1.00×';
+    note.textContent = style === 'today' ? '22 px' : 'single contact';
+    stage.appendChild(marker({ style, x:'50%', y:'52%', zoom:1, heading:38, name:'Star Pride' }));
+  } else {
+    label.textContent = 'Globe zoom · 0.78× · seven contacts crossing a coastline';
+    note.textContent = 'amber = favourited';
+    for (const f of FLEET){
+      stage.appendChild(marker({
+        style, x:f.x, y:f.y, zoom:0.78, heading:f.h,
+        favorite:!!f.fav, color:SHIP_GREEN, name:f.name,
+      }));
+    }
+  }
+  stage.appendChild(label);
+  stage.appendChild(note);
+}
+
+/* ---- Today ---- */
+const today = document.querySelector('[data-stage="today"]');
+today.appendChild(coastline());
+{
+  const label = document.createElement('div');
+  label.className = 'stage-label';
+  label.textContent = 'Current marker · globe zoom · seven contacts';
+  today.appendChild(label);
+  const note = document.createElement('div');
+  note.className = 'stage-note';
+  note.textContent = '22 px hull, #05222b outline, no ping';
+  today.appendChild(note);
+  for (const f of FLEET){
+    today.appendChild(marker({ style:'today', x:f.x, y:f.y, zoom:1, heading:f.h, favorite:!!f.fav }));
+  }
+}
+
+/* ---- Option cards ---- */
+const COPY = {
+  halo: {
+    id:'A', title:'Halo',
+    pitch:'The hull grows to fill the marker and sits on a dark plate inside a soft radial glow. Two wide, soft-edged rings breathe outward every 2.8 seconds.',
+    plus:[
+      'Biggest hull of the three — the ship itself is what got bigger, not the furniture around it.',
+      'The dark plate guarantees contrast under the hull whatever the basemap is doing.',
+      'Slowest, softest ping. Seven of these on one screen still feels calm.',
+    ],
+    minus:[
+      'Soft edges are exactly what a satellite basemap is already full of — over bright coastline the glow dissolves into the terrain.',
+      'No hard shape means nothing for the eye to snap to during a fast scan.',
+    ],
+  },
+  sonar: {
+    id:'B', title:'Sonar Contact',
+    pitch:'A fixed reticle — four corner brackets and a thin range ring — holds the hull, which keeps rotating to heading inside it. Three hard-edged rings sweep out every 2 seconds.',
+    plus:[
+      'Straight lines and right angles: the only geometry on the map that nothing else produces, so it reads instantly over water and over land.',
+      'The reticle never rotates, so the marker stays a stable target while the hull inside it turns.',
+      'Matches the cyan sonar shockwave the screensaver already fires at a ship.',
+      'Fastest cadence — reads as an active sweep, not a slow throb.',
+    ],
+    minus:[
+      'Smallest hull of the three; the presence comes from the reticle, not the ship.',
+      'Five billboards per ship, the heaviest of the three (still trivial at seven ships).',
+    ],
+  },
+  beacon: {
+    id:'C', title:'Beacon',
+    pitch:'The hull is lifted off the water on a stem, a ring at the foot marks the true position, and the ship’s name is on at every zoom. One bold ring blooms out of the waterline every 3 seconds.',
+    plus:[
+      'The only study you can read without hovering — seven names never crowd a world view.',
+      'Tallest silhouette, and the dark under-stroke on the stem holds up over any basemap.',
+      'The waterline ring keeps the exact position marked even though the hull floats above it.',
+    ],
+    minus:[
+      'The hull no longer sits where the ship is — you read position at the stem foot instead.',
+      'Most screen real estate by a wide margin; in a busy port two ships will overlap.',
+      'Labels compete with every other named layer on the map.',
+    ],
+  },
+};
+
+const specRow = (s, style) => {
+  const rows = [
+    ['hull', (style==='beacon' ? '46' : style==='halo' ? '54' : '26') + ' px'],
+    ['base', s.base ? `${s.base.widthPx}×${s.base.heightPx} px` : '—'],
+    ['rings', `${s.ping.count} × ${(s.ping.periodMs/1000).toFixed(1)}s`],
+    ['ring scale', `${s.ping.from}→${s.ping.to}×`],
+    ['ring reach', Math.round(s.ping.sizePx * s.ping.to) + ' px'],
+    ['label', s.showLabel ? 'always on' : 'on click'],
+  ];
+  return rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+};
+
+const host = document.getElementById('option-cards');
+for (const style of ['halo','sonar','beacon']){
+  const s = SPECS[style], c = COPY[style];
+  const card = document.createElement('article');
+  card.className = 'option';
+  card.innerHTML = `
+    <div class="brief">
+      <div>
+        <div class="option-id"><span class="badge">${c.id}</span><h2>${c.title}</h2></div>
+        <p>${c.pitch}</p>
+      </div>
+      <div>
+        <h3>Reads well</h3>
+        <ul class="judgement">${c.plus.map(t => `<li class="plus"><span class="sign">+</span><span>${t}</span></li>`).join('')}</ul>
+      </div>
+      <div>
+        <h3>Costs you</h3>
+        <ul class="judgement">${c.minus.map(t => `<li class="minus"><span class="sign">−</span><span>${t}</span></li>`).join('')}</ul>
+      </div>
+      <dl class="spec">${specRow(s, style)}</dl>
+    </div>
+    <div class="stages">
+      <div class="stage stage-main" data-fleet="${style}"></div>
+      <div class="stage stage-small" data-solo="${style}"></div>
+    </div>`;
+  host.appendChild(card);
+  fillStage(card.querySelector(`[data-fleet="${style}"]`), style, 'fleet');
+  fillStage(card.querySelector(`[data-solo="${style}"]`), style, 'solo');
+}
+
+/* ---- Recommendation stage ---- */
+const rec = document.querySelector('[data-stage="rec"]');
+rec.appendChild(marker({ style:'sonar', x:'50%', y:'30%', zoom:0.78, heading:196, favorite:true }));
+rec.appendChild(marker({ style:'sonar', x:'50%', y:'74%', zoom:1, heading:24 }));
+{
+  const label = document.createElement('div');
+  label.className = 'stage-label';
+  label.textContent = 'B · 0.78× and 1.00×';
+  rec.appendChild(label);
+}
+</script>

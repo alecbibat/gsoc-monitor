@@ -71,14 +71,22 @@ export function ShipModelLayer() {
       v.scene.primitives.add(coll);
       collRef.current = coll;
 
-      // Hide the flat ship icon while the model is shown.
+      // Hide the whole flat marker — hull, furniture and ping rings — while the
+      // model is shown; the screensaver draws its own sonar shockwave instead.
       const dsArr = v.dataSources.getByName('ships');
-      const ent = mmsi ? dsArr[0]?.entities.getById(`ship-${mmsi}`) : undefined;
-      if (ent?.billboard) {
-        const prev = ent.billboard.show;
-        ent.billboard.show = new Cesium.ConstantProperty(false);
-        restoreRef.current = () => { if (ent.billboard) ent.billboard.show = prev ?? new Cesium.ConstantProperty(true); };
-      }
+      const marker = mmsi
+        ? dsArr[0]?.entities.values.filter(
+            (e) => e.id === `ship-${mmsi}` || String(e.id).startsWith(`ship-${mmsi}-`)
+          ) ?? []
+        : [];
+      const restores = marker
+        .filter((e) => e.billboard)
+        .map((e) => {
+          const prev = e.billboard!.show;
+          e.billboard!.show = new Cesium.ConstantProperty(false);
+          return () => { if (e.billboard) e.billboard.show = prev ?? new Cesium.ConstantProperty(true); };
+        });
+      if (restores.length) restoreRef.current = () => restores.forEach((r) => r());
 
       v.scene.requestRender();
     });
