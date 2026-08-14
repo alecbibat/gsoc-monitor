@@ -14,20 +14,53 @@ const TABS: { id: CrisisTab; label: string }[] = [
   { id: 'situation-report', label: 'Situation Report' },
 ];
 
+// "expires in 51h" / "expires in 40m" / "expired"
+function fmtExpiry(iso: string): string {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (Number.isNaN(ms)) return '';
+  if (ms <= 0) return 'expired';
+  const h = Math.floor(ms / 3600_000);
+  if (h >= 1) return `expires in ${h}h`;
+  return `expires in ${Math.max(1, Math.round(ms / 60_000))}m`;
+}
+
 // ── Share links panel ─────────────────────────────────────────────────────────
 
 function ShareLinksPanel() {
   const inc = useActiveIncident();
   const addShareLink = useCrisisStore((s) => s.addShareLink);
   const deactivateShareLink = useCrisisStore((s) => s.deactivateShareLink);
+  const renewShareLink = useCrisisStore((s) => s.renewShareLink);
   const [open, setOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [copiedPwToken, setCopiedPwToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [label, setLabel] = useState('');
+  // Access stats per token, fetched when the panel opens ("opened N× · last …").
+  const [access, setAccess] = useState<Record<string, { count: number; viewers: number; lastAt: string | null }>>({});
 
   const shareLinks = inc?.shareLinks ?? [];
   const activeLinks = shareLinks.filter((l) => l.active);
+
+  useEffect(() => {
+    if (!open || shareLinks.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(
+        shareLinks.map(async (l) => {
+          try {
+            const r = await fetch(`/api/crisis/share/${l.token}/access`, { credentials: 'include' });
+            if (!r.ok) return null;
+            return [l.token, await r.json()] as const;
+          } catch { return null; }
+        })
+      );
+      if (!cancelled) setAccess(Object.fromEntries(entries.filter((e): e is NonNullable<typeof e> => e !== null)));
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, shareLinks.length]);
 
   const handleCreate = async () => {
     if (!inc) return;
@@ -37,7 +70,9 @@ function ShareLinksPanel() {
       const res = await fetch('/api/crisis/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(extractPublicState(inc)),
+        // incidentId ties the link to the incident server-side (so deleting
+        // the incident revokes it); label names the audience.
+        body: JSON.stringify({ ...extractPublicState(inc), incidentId: inc.id, label: label.trim() || undefined }),
       });
       if (res.status === 413) throw new Error('Incident is too large to share (too many images/attachments).');
       if (!res.ok) {
@@ -47,15 +82,29 @@ function ShareLinksPanel() {
         try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not JSON */ }
         throw new Error(`Could not create link (${res.status}${detail ? `: ${detail}` : ''}) — please try again.`);
       }
-      const { token, url, password } = await res.json() as { token: string; url: string; password?: string };
+      const { token, url, password, expiresAt } = await res.json() as {
+        token: string; url: string; password?: string; expiresAt?: string;
+      };
       const fullUrl = `${window.location.origin}${url}`;
-      addShareLink(token, fullUrl, password);
+      addShareLink(token, fullUrl, password, label.trim() || undefined, expiresAt);
+      setLabel('');
       setOpen(true);
     } catch (err) {
       console.error('[crisis] publish failed', err);
       setError(err instanceof Error ? err.message : 'Could not create link.');
     } finally {
       setPublishing(false);
+    }
+  };
+
+  const handleRenew = async (token: string) => {
+    try {
+      const res = await fetch(`/api/crisis/share/${token}/renew`, { method: 'POST', credentials: 'include' });
+      if (!res.ok) throw new Error(String(res.status));
+      const { expiresAt } = await res.json() as { expiresAt: string };
+      renewShareLink(token, expiresAt);
+    } catch (err) {
+      console.warn('[crisis] renew failed', err);
     }
   };
 
@@ -118,9 +167,31 @@ function ShareLinksPanel() {
                     <div className="flex items-center gap-1.5 mb-1">
                       <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${link.active ? 'bg-green-500' : 'bg-white/20'}`} />
                       <span className="text-[11px] text-white/60">
+                        {link.label && <span className="font-semibold text-white/80">{link.label} · </span>}
                         {link.active ? 'Active' : 'Revoked'} · {new Date(link.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                       </span>
+                      {link.active && link.expiresAt && (
+                        <span
+                          className={`ml-auto flex items-center gap-1 text-[10px] ${new Date(link.expiresAt).getTime() - Date.now() < 12 * 3600_000 ? 'text-amber-300/80' : 'text-white/35'}`}
+                          title={`Expires ${new Date(link.expiresAt).toLocaleString()}`}
+                        >
+                          {fmtExpiry(link.expiresAt)}
+                          <button
+                            onClick={() => handleRenew(link.token)}
+                            className="rounded border border-white/15 px-1.5 py-0.5 text-[9px] text-white/50 transition hover:border-white/30 hover:text-white/80"
+                            title="Extend by 72 hours"
+                          >
+                            Renew
+                          </button>
+                        </span>
+                      )}
                     </div>
+                    {access[link.token] && access[link.token].count > 0 && (
+                      <div className="mb-1 text-[10px] text-white/35">
+                        Opened {access[link.token].count}× by ~{access[link.token].viewers} viewer{access[link.token].viewers === 1 ? '' : 's'}
+                        {access[link.token].lastAt && ` · last ${new Date(access[link.token].lastAt!).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}
+                      </div>
+                    )}
                     <div className="flex items-center gap-1.5">
                       <code className="min-w-0 flex-1 truncate rounded bg-white/10 px-1.5 py-1 text-[11px] text-white/70">
                         {link.url}
@@ -165,18 +236,27 @@ function ShareLinksPanel() {
           </div>
 
           <div className="border-t border-white/10 px-3.5 py-2.5">
-            <button
-              onClick={handleCreate}
-              disabled={publishing}
-              className="w-full rounded bg-accent/15 py-2 text-[12px] font-medium text-accent transition hover:bg-accent/25 disabled:opacity-40"
-            >
-              {publishing ? 'Creating…' : '+ Create new link'}
-            </button>
+            <div className="mb-1.5 flex items-center gap-1.5">
+              <input
+                className="min-w-0 flex-1 rounded border border-white/10 bg-white/8 px-2 py-1.5 text-[11px] text-white/80 placeholder-white/30 outline-none focus:border-white/25"
+                placeholder="Audience label (optional) — e.g. Executives"
+                value={label}
+                maxLength={80}
+                onChange={(e) => setLabel(e.target.value)}
+              />
+              <button
+                onClick={handleCreate}
+                disabled={publishing}
+                className="shrink-0 rounded bg-accent/15 px-3 py-1.5 text-[12px] font-medium text-accent transition hover:bg-accent/25 disabled:opacity-40"
+              >
+                {publishing ? 'Creating…' : '+ Create link'}
+              </button>
+            </div>
             {error ? (
-              <p className="mt-1.5 text-center text-[10px] text-red-400/80">{error}</p>
+              <p className="text-center text-[10px] text-red-400/80">{error}</p>
             ) : (
-              <p className="mt-1.5 text-center text-[10px] text-white/40">
-                Viewers need the link password · links stay active until revoked
+              <p className="text-center text-[10px] text-white/40">
+                Viewers need the link password · links expire after 72 h unless renewed
               </p>
             )}
           </div>

@@ -52,6 +52,25 @@ export async function migrate() {
       -- NULL = legacy link created before passwords existed — stays open.
       ALTER TABLE share_links ADD COLUMN IF NOT EXISTS password_hash TEXT;
 
+      -- Share-link lifecycle (W4): default TTL, audience label, revocation
+      -- stamp. Links must not outlive an incident just because nobody
+      -- remembered to stand it down.
+      ALTER TABLE share_links ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+      ALTER TABLE share_links ADD COLUMN IF NOT EXISTS label      TEXT;
+      ALTER TABLE share_links ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
+
+      -- Who opened each share link, and when — a security control, and the
+      -- AAR's "did the right people actually see the picture" metric.
+      CREATE TABLE IF NOT EXISTS share_access_log (
+        id         BIGSERIAL   PRIMARY KEY,
+        token      TEXT        NOT NULL,
+        at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        ip         TEXT,
+        user_agent TEXT
+      );
+      CREATE INDEX IF NOT EXISTS share_access_log_token_idx
+        ON share_access_log (token, at DESC);
+
       -- Team-shared OSINT watchlist. Each row is one intel source (news site,
       -- Google-News topic, scanner agency, crime dataset, social account) the
       -- background ingest engine polls. Items themselves are never stored — they
@@ -114,6 +133,14 @@ export async function migrate() {
         console.log(`[migrate] initial signup code: ${code}`);
       }
     }
+
+    // Sunset pre-W4 links (including legacy passwordless ones, which are open
+    // to anyone holding the URL): give them one 72h grace window from this
+    // deploy. Only NULL rows are touched, so re-running never extends anything.
+    await client.query(`
+      UPDATE share_links SET expires_at = NOW() + interval '72 hours'
+      WHERE expires_at IS NULL AND active = TRUE
+    `);
 
     await client.query('COMMIT');
     console.log('[migrate] schema up to date');

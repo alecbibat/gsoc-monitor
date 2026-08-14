@@ -23,6 +23,54 @@ function fmtTs(iso: string) {
   catch { return iso; }
 }
 
+// ── Stand-down page for revoked/expired links ────────────────────────────────
+
+interface GonePayload {
+  gone: true;
+  reason: 'revoked' | 'expired';
+  revokedAt?: string | null;
+  expiresAt?: string | null;
+  incidentName?: string | null;
+  incidentStatus?: string | null;
+  executiveSummary?: string | null;
+  lastUpdated?: string | null;
+}
+
+function ClosurePage({ payload }: { payload: GonePayload }) {
+  const status = incidentStatusDef(payload.incidentStatus);
+  const closedAt = payload.revokedAt ?? payload.expiresAt ?? payload.lastUpdated;
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 p-6 text-white">
+      <div className="w-full max-w-lg rounded-xl border border-white/10 bg-ink-900/70 p-6">
+        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/40">Situation Report — Concluded</p>
+        <div className="mt-2 flex items-center gap-3">
+          <span className="h-2.5 w-2.5 rounded-full" style={{ background: status.dot }} />
+          <h1 className="text-[20px] font-semibold text-white/95">{payload.incidentName || 'Incident'}</h1>
+          <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-widest ${status.badge}`}>
+            {status.label}
+          </span>
+        </div>
+        {closedAt && (
+          <p className="mt-2 text-[12px] text-white/45">
+            {payload.reason === 'revoked' ? 'Stood down' : 'Report closed'} · {fmtTs(closedAt)}
+          </p>
+        )}
+        {payload.executiveSummary && (
+          <p className="mt-4 whitespace-pre-wrap rounded-lg border border-white/8 bg-white/4 px-4 py-3 text-[13px] leading-relaxed text-white/75">
+            {payload.executiveSummary}
+          </p>
+        )}
+        <p className="mt-4 text-[11px] text-white/35">
+          {payload.reason === 'revoked'
+            ? 'This share link was closed by the incident team when the incident concluded.'
+            : 'This share link has expired.'}{' '}
+          If you need continued access, contact the GSOC for a new link.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ── Read-only org chart ───────────────────────────────────────────────────────
 
 const WIRE = 'rgba(255,255,255,0.12)';
@@ -177,6 +225,9 @@ function PasswordGate({ onSubmit, error, checking }: {
 export function CrisisShareView({ token }: { token: string }) {
   const [data, setData] = useState<CrisisPublicState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Closure payload from a revoked/expired link (HTTP 410) — the viewer gets
+  // a stand-down page with the incident's conclusion instead of a dead end.
+  const [gone, setGone] = useState<GonePayload | null>(null);
   // null = no key yet; '' = tried without a key (legacy open links)
   const [viewKey, setViewKey] = useState<string | null>(
     () => sessionStorage.getItem(keyStorageId(token)),
@@ -241,6 +292,11 @@ export function CrisisShareView({ token }: { token: string }) {
           setChecking(false);
           return;
         }
+        if (r.status === 410) {
+          const g = (await r.json()) as GonePayload;
+          if (!cancelled) { setGone(g); setLocked(false); setChecking(false); }
+          return;
+        }
         if (!r.ok) throw new Error('Share link not found');
         const d = (await r.json()) as CrisisPublicState;
         if (cancelled) return;
@@ -262,7 +318,18 @@ export function CrisisShareView({ token }: { token: string }) {
     const es = new EventSource(`/api/crisis/share/${token}/events${qs}`);
     es.addEventListener('connected', (e) => setData(JSON.parse((e as MessageEvent).data) as CrisisPublicState));
     es.addEventListener('update',    (e) => setData(JSON.parse((e as MessageEvent).data) as CrisisPublicState));
-    es.addEventListener('revoked',   () => { es.close(); setError('This link has been revoked by the incident owner.'); });
+    es.addEventListener('revoked',   () => {
+      es.close();
+      // Refetch to pick up the closure payload (410) so the viewer lands on
+      // the stand-down page rather than a bare revocation notice.
+      const kq = viewKey ? `?k=${viewKey}` : '';
+      fetch(`/api/crisis/share/${token}${kq}`)
+        .then(async (r) => {
+          if (r.status === 410) setGone((await r.json()) as GonePayload);
+          else setError('This link has been revoked by the incident owner.');
+        })
+        .catch(() => setError('This link has been revoked by the incident owner.'));
+    });
     es.onerror = () => { /* reconnects automatically */ };
     return () => es.close();
   }, [token, viewKey, unlocked]);
@@ -288,12 +355,16 @@ export function CrisisShareView({ token }: { token: string }) {
       .catch(() => { setChecking(false); setGateError('Could not verify the password in this browser — try a current browser over HTTPS.'); });
   };
 
+  if (gone) {
+    return <ClosurePage payload={gone} />;
+  }
+
   if (error) {
     return (
       <div className="flex h-screen items-center justify-center bg-ink-950">
         <div className="text-center">
           <p className="text-[16px] text-white/50">{error}</p>
-          <p className="mt-2 text-[12px] text-white/25">This link may have expired or is invalid.</p>
+          <p className="mt-2 text-[12px] text-white/25">This link may have been revoked or is invalid.</p>
         </div>
       </div>
     );

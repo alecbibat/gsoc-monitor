@@ -3,6 +3,7 @@ import { pool } from '../db';
 import { wrap } from '../asyncWrap';
 import { requireAuth } from '../middleware/auth';
 import { invalidIncidentReason, invalidLogEntryReason, ACTION_ENTRY_TYPES } from '../incidentTaxonomy';
+import { revokeShareLinksForIncident } from './crisis';
 
 const router = Router();
 router.use(requireAuth);
@@ -105,7 +106,7 @@ router.put('/:id', wrap(async (req: Request, res: Response) => {
 // the merged incident — concurrent appends from different operators serialize
 // on the row lock instead of overwriting each other.
 
-type LogMutResult = 'changed' | 'noop' | 'missing';
+type LogMutResult = 'changed' | 'noop' | 'missing' | 'forbidden';
 
 async function mutateIncidentLog(
   incidentId: string,
@@ -129,6 +130,11 @@ async function mutateIncidentLog(
     if (result === 'missing') {
       await client.query('ROLLBACK');
       res.status(404).json({ error: 'Log entry not found' });
+      return;
+    }
+    if (result === 'forbidden') {
+      await client.query('ROLLBACK');
+      res.status(403).json({ error: 'System entries are immutable' });
       return;
     }
     if (result === 'changed') {
@@ -181,6 +187,9 @@ router.patch('/:id/log/:entryId', wrap(async (req: Request, res: Response) => {
     const log = logOf(data);
     const idx = log.findIndex((e) => e?.id === req.params.entryId);
     if (idx === -1) return 'missing';
+    // Auto-generated audit events are tamper-evident: the client hides the
+    // affordance, and the server enforces it.
+    if (log[idx].system) return 'forbidden';
     const entry = { ...log[idx] };
     for (const key of ['description', 'entryType', 'attachmentName', 'attachmentData'] as const) {
       if (patch[key] === undefined) continue;
@@ -218,9 +227,13 @@ router.delete('/:id', wrap(async (req: Request, res: Response) => {
   }
   await pool.query('DELETE FROM incidents WHERE id = $1', [req.params.id]);
   broadcast('delete', { id: req.params.id });
-  // Leave share_links rows in place — active ones stay accessible to current viewers
-  // until they expire or are explicitly revoked.
-  res.json({ ok: true });
+  // A deleted incident's links must not keep serving its last snapshot forever
+  // (they used to). Viewers land on the closure page instead.
+  const revoked = await revokeShareLinksForIncident(req.params.id).catch((e) => {
+    console.warn('[incidents] share-link revocation on delete failed:', e?.message ?? e);
+    return 0;
+  });
+  res.json({ ok: true, revokedShareLinks: revoked });
 }, 'incidents'));
 
 export default router;
