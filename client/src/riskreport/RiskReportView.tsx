@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useRiskReportStore } from './riskReportStore';
 import { RISK_LEVELS, RISK_RINGS, type RiskLevel, type SectionResult, type WildfireReportData } from './riskTypes';
+import { ForecastStrip, MapFigure, WindChart } from './reportVisuals';
 import { usePrintStyles } from '../lib/printStyles';
 
 // ── Property wildfire risk report (roadmap Track 3, wildfire end-to-end) ─────
@@ -99,6 +100,12 @@ function ReportBody({ data }: { data: WildfireReportData }) {
           )}
         </ul>
       </section>
+
+      {/* Hero exposure map: every ring, hotspot, and named incident at once */}
+      <MapFigure
+        src={data.maps.exposure}
+        caption={`Exposure map — analysis rings (${RISK_RINGS.map((r) => r.label).join(' / ')}), VIIRS hotspots (sized by fire radiative power), named incidents (colored by containment)`}
+      />
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
@@ -225,22 +232,58 @@ function ReportBody({ data }: { data: WildfireReportData }) {
                     {a.expires && <span className="ml-auto text-white/45">until {fmtTs(a.expires)}</span>}
                   </div>
                 ))}
+                <MapFigure src={data.maps.alerts} caption="Active fire-weather alert areas over the property (NWS polygons / county shapes)" />
               </div>
             )}
-            {id === 'fuel' && data.fuel.topModels && data.fuel.topModels.length > 0 && (
-              <div className="space-y-1">
-                {data.fuel.topModels.map((m) => (
-                  <div key={m.code} className="flex items-center gap-2 text-[11px] text-white/60">
-                    <span className="w-10 font-mono text-white/80">{m.code}</span>
-                    <span className="min-w-0 flex-1 truncate">{m.name}</span>
-                    <span>{num(m.pct, 1)}%</span>
+            {id === 'fuel' && (
+              <div className="space-y-2">
+                {data.fuel.topModels && data.fuel.topModels.length > 0 && (
+                  <div className="space-y-1">
+                    {data.fuel.topModels.map((m) => (
+                      <div key={m.code} className="flex items-center gap-2 text-[11px] text-white/60">
+                        <span className="w-10 font-mono text-white/80">{m.code}</span>
+                        <span className="min-w-0 flex-1 truncate">{m.name}</span>
+                        <span>{num(m.pct, 1)}%</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
+                <MapFigure src={data.maps.fuel} caption="LANDFIRE FBFM40 fuel models (30 m) around the property — official colormap, 3 mi analysis ring" />
               </div>
             )}
+            {id === 'wind' && data.windHourly && <WindChart hourly={data.windHourly} />}
           </Section>
         );
       })}
+
+      {/* Forecast rainfall — 24/48/72 h accumulation */}
+      {(data.maps.qpf24 || data.maps.qpf48 || data.maps.qpf72) && (
+        <section className="print-card">
+          <h2 className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-white/50">
+            Forecast rainfall (WPC accumulation)
+          </h2>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <MapFigure src={data.maps.qpf24} caption="Next 24 h" />
+            <MapFigure src={data.maps.qpf48} caption="Next 48 h" />
+            <MapFigure src={data.maps.qpf72} caption="Next 72 h" />
+          </div>
+          <p className="mt-1.5 text-[9px] text-white/30 print-muted">
+            Official WPC color ramp · dashed ring = 25 mi · rain on fuels beats any suppression asset
+          </p>
+        </section>
+      )}
+
+      {/* 10-day forecast strip */}
+      <section className="print-card">
+        <h2 className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-white/50">10-day forecast</h2>
+        {'days' in data.forecastDaily ? (
+          <ForecastStrip forecast={data.forecastDaily} />
+        ) : (
+          <p className="rounded-lg border border-white/8 bg-white/4 px-4 py-3 text-[12px] text-white/45">
+            {data.forecastDaily.unavailable}
+          </p>
+        )}
+      </section>
 
       {/* Sources + gaps */}
       <section className="print-card border-t border-white/8 pt-4">

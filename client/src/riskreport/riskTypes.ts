@@ -67,6 +67,8 @@ export interface HotspotHit {
 
 export interface NamedFireHit {
   name: string;
+  lat: number;
+  lon: number;
   distanceMi: number;
   acres?: number;
   containmentPct?: number;
@@ -110,4 +112,30 @@ export interface WildfireReportData {
   };
   sources: { name: string; detail: string }[];
   gaps: string[];
+
+  // ── Visual layer ───────────────────────────────────────────────────────────
+  /** Data-URL map snapshots; null = that snapshot failed to render. */
+  maps: {
+    exposure: string | null;   // rings + hotspots + named fires
+    alerts: string | null;     // alert polygons at the site (null when no alerts)
+    fuel: string | null;       // LANDFIRE fuel raster, 3 mi ring
+    qpf24: string | null;      // WPC precip accumulation windows
+    qpf48: string | null;
+    qpf72: string | null;
+  };
+  /** 48 h hourly wind window for the chart (mph, "from" bearings). */
+  windHourly: { times: string[]; speedMph: number[]; gustMph: number[]; dirDeg: number[] } | null;
+  /** 10-day daily forecast (display-ready units) for the forecast strip. */
+  forecastDaily: {
+    days: {
+      date: string;
+      code: number;
+      tMaxF: number;
+      tMinF: number;
+      precipIn: number;
+      precipProbPct: number;
+      windMaxMph: number;
+      gustMaxMph: number;
+    }[];
+  } | { unavailable: string };
 }

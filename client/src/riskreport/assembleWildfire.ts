@@ -1,11 +1,14 @@
 import { api } from '../api/client';
 import { fetchHotspotsNearPins, type FireHotspot } from '../layers/fires/firesData';
 import { fetchWildfires, type NamedFire } from '../layers/wildfires/wildfiresData';
-import { fetchActiveAlerts, loadCounties, alertRings, severityRank, type RawAlert } from '../layers/alerts/alertsData';
+import { fetchActiveAlerts, loadCounties, alertRings, severityRank, alertColorHex, type RawAlert } from '../layers/alerts/alertsData';
 import { fmtOutlookDate, outlookStyle } from '../layers/fireOutlook/fireOutlookMeta';
-import { LANDFIRE_CONUS_RECT } from '../layers/fuel/landfireService';
+import { LANDFIRE_CONUS_RECT, LANDFIRE_FBFM40_IMAGESERVER } from '../layers/fuel/landfireService';
 import { analyzeFuelZone } from '../fuelzone/zonalStats';
 import { haversineMeters, MILES_TO_M, pointInRings } from '../lib/geo';
+import { containmentColor } from '../layers/wildfires/wildfiresData';
+import { QPF_LAYER, type QpfPeriod } from '../layers/precip/precipStore';
+import { drawPin, drawPolygon, drawRing, renderMapSnapshot } from './mapSnapshot';
 import {
   RISK_RINGS, bumpLevel, maxLevel,
   type AlertHit, type HotspotHit, type NamedFireHit, type RiskLevel,
@@ -71,7 +74,7 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
     target.lon >= LANDFIRE_CONUS_RECT.west && target.lon <= LANDFIRE_CONUS_RECT.east &&
     target.lat >= LANDFIRE_CONUS_RECT.south && target.lat <= LANDFIRE_CONUS_RECT.north;
 
-  const [hotspotsRes, namedRes, alertsRes, countiesRes, outlookRes, fuelRes, windRes] = await Promise.all([
+  const [hotspotsRes, namedRes, alertsRes, countiesRes, outlookRes, fuelRes, windRes, dailyRes] = await Promise.all([
     attempt(fetchHotspotsNearPins(MAX_RING_MI * MILES_TO_M)),
     attempt(fetchWildfires()),
     attempt(fetchActiveAlerts()),
@@ -81,6 +84,7 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       ? attempt(analyzeFuelZone({ lon: target.lon, lat: target.lat }, 3 * MILES_TO_M))
       : Promise.resolve({ value: null, error: 'outside CONUS' } as FeedOutcome<Awaited<ReturnType<typeof analyzeFuelZone>>>),
     attempt(api.windForecast(target.lat, target.lon)),
+    attempt(api.weatherDaily(target.lat, target.lon)),
   ]);
 
   const sections: SectionResult[] = [];
@@ -143,6 +147,8 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       const withDist = namedRes.value.fires
         .map((f: NamedFire) => ({
           name: f.name,
+          lat: f.lat,
+          lon: f.lon,
           distanceMi: distMi(target, f.lat, f.lon),
           acres: f.acres ?? undefined,
           containmentPct: f.contained ?? undefined,
@@ -173,6 +179,7 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
 
   // ── Fire-weather alerts at the site ───────────────────────────────────────
   let alerts: AlertHit[] = [];
+  const alertShapes: { rings: number[][][]; colorHex: string }[] = [];
   {
     if (alertsRes.value === null) {
       sections.push({ id: 'alerts', title: 'Fire-weather alerts at site', level: 'low', drivers: [], unavailable: `NWS alert feed unavailable (${alertsRes.error ?? 'unknown error'})` });
@@ -188,6 +195,12 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
         severity: a.properties.severity,
         expires: a.properties.expires,
       }));
+      for (const { a, rings } of hits) {
+        alertShapes.push({
+          rings,
+          colorHex: alertColorHex(a.properties.event ?? '', a.properties.severity ?? ''),
+        });
+      }
 
       let level: RiskLevel = 'low';
       const drivers: string[] = [];
@@ -276,6 +289,7 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
 
   // ── Wind now / 48 h ───────────────────────────────────────────────────────
   const wind: WildfireReportData['wind'] = {};
+  let windHourly: WildfireReportData['windHourly'] = null;
   {
     if (windRes.value === null) {
       wind.unavailable = `Wind forecast unavailable (${windRes.error ?? 'unknown error'})`;
@@ -294,6 +308,12 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       wind.dirDeg = fc.hourly.dir[idx];
       wind.peak48Mph = Math.max(...window, 0) * MPS_TO_MPH;
       wind.peakGust48Mph = Math.max(...gustWindow, 0) * MPS_TO_MPH;
+      windHourly = {
+        times: fc.hourly.time.slice(idx, idx + 48),
+        speedMph: window.map((v) => v * MPS_TO_MPH),
+        gustMph: gustWindow.map((v) => v * MPS_TO_MPH),
+        dirDeg: fc.hourly.dir.slice(idx, idx + 48),
+      };
 
       let level: RiskLevel = 'low';
       const drivers: string[] = [];
@@ -314,6 +334,153 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
     hotspots: hotspots.filter((h) => h.distanceMi <= ring.miles).length,
     namedFires: namedFiresAll.filter((f) => f.distanceMi <= ring.miles).length,
   }));
+
+  // ── Map snapshots (parallel, best effort — null just hides that map) ──────
+  const WPC_QPF_MAPSERVER =
+    'https://mapservices.weather.noaa.gov/vector/rest/services/precip/wpc_qpf/MapServer';
+  const MAP_W = 660;
+
+  const drawSite = (ctx: CanvasRenderingContext2D, proj: Parameters<NonNullable<Parameters<typeof renderMapSnapshot>[0]['draw']>>[1]) =>
+    drawPin(ctx, proj, target.lat, target.lon);
+
+  const exposureSnapshot = renderMapSnapshot({
+    centerLat: target.lat,
+    centerLon: target.lon,
+    fitRadiusM: MAX_RING_MI * MILES_TO_M,
+    width: MAP_W,
+    height: 420,
+    attribution: '© CARTO © OSM · hotspots NASA FIRMS · incidents NIFC',
+    draw: (ctx, proj) => {
+      for (const ring of RISK_RINGS) {
+        drawRing(ctx, proj, target.lat, target.lon, ring.miles * MILES_TO_M, {
+          stroke: 'rgba(61,220,255,0.55)', width: 2, dash: [8, 6], label: ring.label,
+        });
+      }
+      for (const h of hotspots.slice().reverse()) {
+        const [x, y] = proj.toXY(h.lon, h.lat);
+        const r = 5 + Math.min(9, ((h.frp ?? 0) / 60) * 9);
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,93,46,0.85)';
+        ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+        ctx.lineWidth = 1.5;
+        ctx.fill();
+        ctx.stroke();
+      }
+      namedFires.slice(0, 5).forEach((f, i) => {
+        const [x, y] = proj.toXY(f.lon, f.lat);
+        const c = containmentColor(f.containmentPct ?? null);
+        ctx.beginPath();
+        ctx.moveTo(x, y - 11); ctx.lineTo(x + 10, y + 7); ctx.lineTo(x - 10, y + 7);
+        ctx.closePath();
+        ctx.fillStyle = c;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.fill(); ctx.stroke();
+        if (i < 3) {
+          ctx.font = '600 18px Inter, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.fillStyle = 'rgba(5,7,10,0.75)';
+          const tw = ctx.measureText(f.name).width;
+          ctx.fillRect(x + 12, y - 12, tw + 8, 24);
+          ctx.fillStyle = '#fff';
+          ctx.fillText(f.name, x + 16, y + 5);
+        }
+      });
+      drawSite(ctx, proj);
+    },
+  });
+
+  const alertsSnapshot = alertShapes.length === 0
+    ? Promise.resolve(null)
+    : renderMapSnapshot({
+        centerLat: target.lat,
+        centerLon: target.lon,
+        fitRadiusM: 60 * MILES_TO_M,
+        width: MAP_W,
+        height: 340,
+        attribution: '© CARTO © OSM · alerts NWS',
+        draw: (ctx, proj) => {
+          for (const s of alertShapes) {
+            drawPolygon(ctx, proj, s.rings, { fill: `${s.colorHex}38`, stroke: s.colorHex, width: 3 });
+          }
+          drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, {
+            stroke: 'rgba(61,220,255,0.45)', width: 2, dash: [8, 6], label: '25 mi',
+          });
+          drawSite(ctx, proj);
+        },
+      });
+
+  const fuelSnapshot = !inConus || fuel.unavailable
+    ? Promise.resolve(null)
+    : renderMapSnapshot({
+        centerLat: target.lat,
+        centerLon: target.lon,
+        fitRadiusM: 3.4 * MILES_TO_M,
+        width: MAP_W,
+        height: 340,
+        overlayAlpha: 0.72,
+        overlayUrl: (proj) =>
+          `${LANDFIRE_FBFM40_IMAGESERVER}/exportImage` +
+          `?bbox=${proj.bbox3857.join(',')}` +
+          `&bboxSR=3857&imageSR=3857&size=${proj.width},${proj.height}` +
+          '&format=png32&transparent=true&f=image',
+        attribution: '© CARTO © OSM · fuels LANDFIRE LF2024 FBFM40',
+        draw: (ctx, proj) => {
+          drawRing(ctx, proj, target.lat, target.lon, 3 * MILES_TO_M, {
+            stroke: 'rgba(255,255,255,0.85)', width: 3, label: '3 mi analysis ring',
+          });
+          drawSite(ctx, proj);
+        },
+      });
+
+  const qpfSnapshot = (period: QpfPeriod) =>
+    renderMapSnapshot({
+      centerLat: target.lat,
+      centerLon: target.lon,
+      fitRadiusM: 220 * MILES_TO_M,
+      width: 420,
+      height: 300,
+      overlayAlpha: 0.68,
+      overlayUrl: (proj) =>
+        `${WPC_QPF_MAPSERVER}/export` +
+        `?bbox=${proj.bbox3857.join(',')}` +
+        `&bboxSR=3857&imageSR=3857&size=${proj.width},${proj.height}` +
+        `&layers=show:${QPF_LAYER[period]}` +
+        '&format=png32&transparent=true&f=image',
+      attribution: '© CARTO © OSM · QPF NOAA/WPC',
+      draw: (ctx, proj) => {
+        drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, {
+          stroke: 'rgba(61,220,255,0.5)', width: 2, dash: [6, 5],
+        });
+        drawSite(ctx, proj);
+      },
+    });
+
+  const [exposureMap, alertsMap, fuelMap, qpf24, qpf48, qpf72] = await Promise.all([
+    exposureSnapshot, alertsSnapshot, fuelSnapshot,
+    qpfSnapshot('24h'), qpfSnapshot('48h'), qpfSnapshot('72h'),
+  ]);
+
+  // ── 10-day forecast strip data ────────────────────────────────────────────
+  const forecastDaily: WildfireReportData['forecastDaily'] = (() => {
+    const d = dailyRes.value?.daily;
+    if (!d || d.time.length === 0) {
+      return { unavailable: `Daily forecast unavailable (${dailyRes.error ?? 'unknown error'})` };
+    }
+    return {
+      days: d.time.map((date, i) => ({
+        date,
+        code: d.weatherCode[i] ?? 0,
+        tMaxF: d.tMaxF[i] ?? NaN,
+        tMinF: d.tMinF[i] ?? NaN,
+        precipIn: d.precipIn[i] ?? 0,
+        precipProbPct: d.precipProbPct[i] ?? 0,
+        windMaxMph: d.windMaxMph[i] ?? 0,
+        gustMaxMph: d.gustMaxMph[i] ?? 0,
+      })),
+    };
+  })();
 
   const available = sections.filter((s) => !s.unavailable);
   if (available.length === 0) {
@@ -343,9 +510,19 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       { name: 'NIFC / WFIGS', detail: 'named incidents ≥5 acres, acreage and containment' },
       { name: 'NWS api.weather.gov', detail: 'active alerts, county geometry resolved for zone-based alerts' },
       { name: 'NWCG Predictive Services', detail: '7-day significant fire potential by PSA' },
-      { name: 'LANDFIRE LF2024 FBFM40', detail: '30 m fuel models, 3 mi zonal histogram' },
-      { name: 'NOAA GFS · Open-Meteo', detail: 'point wind forecast (48 h window shown)' },
+      { name: 'LANDFIRE LF2024 FBFM40', detail: '30 m fuel models, 3 mi zonal histogram + raster snapshot' },
+      { name: 'NOAA GFS · Open-Meteo', detail: 'point wind forecast (48 h) and 10-day daily forecast' },
+      { name: 'NOAA WPC', detail: 'quantitative precipitation forecast, 24/48/72 h accumulation' },
+      { name: 'CARTO · OpenStreetMap', detail: 'map snapshot base tiles' },
     ],
     gaps,
+    maps: {
+      exposure: exposureMap,
+      alerts: alertsMap,
+      fuel: fuelMap,
+      qpf24, qpf48, qpf72,
+    },
+    windHourly,
+    forecastDaily,
   };
 }

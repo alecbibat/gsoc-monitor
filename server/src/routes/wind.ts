@@ -444,6 +444,90 @@ async function fetchForecast(lat: number, lon: number): Promise<WindForecast> {
   }
 }
 
+// ── 10-day daily forecast (risk report / dashboards) ─────────────────────────
+// Display-ready units (°F, mph, inches) straight from Open-Meteo so the
+// client renders without conversions. Same cache/rounding discipline as the
+// hourly wind forecast above.
+
+export interface DailyForecast {
+  latitude: number;
+  longitude: number;
+  timezone: string;
+  daily: {
+    time: string[];              // local ISO dates
+    weatherCode: number[];       // WMO codes
+    tMaxF: number[];
+    tMinF: number[];
+    precipIn: number[];
+    precipProbPct: number[];
+    windMaxMph: number[];
+    gustMaxMph: number[];
+  };
+  updated: number;
+}
+
+async function fetchDaily(lat: number, lon: number): Promise<DailyForecast> {
+  const url =
+    'https://api.open-meteo.com/v1/forecast' +
+    `?latitude=${lat}&longitude=${lon}` +
+    '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max' +
+    '&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch' +
+    '&forecast_days=10&timezone=auto';
+  const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  if (!res.ok) throw new Error(`Open-Meteo daily HTTP ${res.status}`);
+  const j = await res.json() as {
+    timezone?: string;
+    daily?: {
+      time?: string[]; weather_code?: number[];
+      temperature_2m_max?: number[]; temperature_2m_min?: number[];
+      precipitation_sum?: number[]; precipitation_probability_max?: number[];
+      wind_speed_10m_max?: number[]; wind_gusts_10m_max?: number[];
+    };
+  };
+  const d = j.daily;
+  if (!d?.time?.length) throw new Error('Open-Meteo daily: empty response');
+  return {
+    latitude: lat,
+    longitude: lon,
+    timezone: j.timezone ?? 'UTC',
+    daily: {
+      time: d.time,
+      weatherCode: d.weather_code ?? [],
+      tMaxF: d.temperature_2m_max ?? [],
+      tMinF: d.temperature_2m_min ?? [],
+      precipIn: d.precipitation_sum ?? [],
+      precipProbPct: d.precipitation_probability_max ?? [],
+      windMaxMph: d.wind_speed_10m_max ?? [],
+      gustMaxMph: d.wind_gusts_10m_max ?? [],
+    },
+    updated: Date.now(),
+  };
+}
+
+router.get('/daily', async (req, res) => {
+  const lat = Number(req.query.lat);
+  const lon = Number(req.query.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    res.status(400).json({ error: 'valid lat and lon query params required' });
+    return;
+  }
+  const latR = Math.round(lat * 10) / 10;
+  const lonR = Math.round(lon * 10) / 10;
+  try {
+    const data = await cache.getOrFetch<DailyForecast>(
+      `wind-daily:${latR},${lonR}`,
+      FORECAST_TTL_MS,
+      () => fetchDaily(latR, lonR),
+      { staleOnError: true }
+    );
+    res.json(data);
+  } catch (err) {
+    console.error('Daily forecast route error', err);
+    res.status(502).json({ error: 'Daily forecast unavailable' });
+    return;
+  }
+});
+
 router.get('/forecast', async (req, res) => {
   const lat = Number(req.query.lat);
   const lon = Number(req.query.lon);
