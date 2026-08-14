@@ -8,6 +8,7 @@ import { downFeedNames } from './proximityScan';
 import { HazardRows } from './HazardRows';
 import { expiresText, fmtMiles, quakeColor, timeAgo } from './format';
 import { downloadPropertyReport } from './reportCanvas';
+import { useRiskReportStore } from '../../riskreport/riskReportStore';
 
 const REFRESH_MS = 5 * 60_000;
 
@@ -86,6 +87,22 @@ export function PropertyDetail({ payload }: { payload: PropertyDetailPayload }) 
             title="Fly to property"
           >
             Fly to
+          </button>
+          <button
+            onClick={() =>
+              useRiskReportStore.getState().open({
+                key: payload.key,
+                name: payload.name,
+                lat: payload.lat,
+                lon: payload.lon,
+                groupName: payload.groupName,
+                groupIcon: payload.groupIcon,
+              })
+            }
+            className="rounded-md border border-orange-400/35 bg-orange-400/10 px-2 py-1 text-[11px] font-semibold text-orange-300/90 transition hover:border-orange-400/55 hover:bg-orange-400/20"
+            title="Wildfire risk report — cross-references every fire feed at fixed analysis rings"
+          >
+            🔥 Risk
           </button>
           <button
             onClick={handleDownload}

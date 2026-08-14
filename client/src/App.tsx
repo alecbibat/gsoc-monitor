@@ -67,6 +67,7 @@ import { CrisisLayerPopup } from './crisis/CrisisLayerPopup';
 import { IncidentSync } from './crisis/IncidentSync';
 import { useCrisisStore } from './crisis/crisisStore';
 import { useDashboardStore } from './dashboard/dashboardStore';
+import { useRiskReportStore } from './riskreport/riskReportStore';
 import { AuthGate } from './auth/AuthGate';
 
 // Detect share link — renders a completely separate read-only view. Lazy so the
@@ -87,6 +88,9 @@ const CrisisOverlay = lazy(() =>
 const DashboardView = lazy(() =>
   import('./dashboard/DashboardView').then((m) => ({ default: m.DashboardView }))
 );
+const RiskReportHost = lazy(() =>
+  import('./riskreport/RiskReportHost').then((m) => ({ default: m.RiskReportHost }))
+);
 
 function CrisisOverlayGate() {
   const open = useCrisisStore((s) => s.open);
@@ -104,6 +108,16 @@ function DashboardGate() {
   return (
     <Suspense fallback={null}>
       <DashboardView />
+    </Suspense>
+  );
+}
+
+function RiskReportGate() {
+  const target = useRiskReportStore((s) => s.target);
+  if (!target) return null;
+  return (
+    <Suspense fallback={null}>
+      <RiskReportHost />
     </Suspense>
   );
 }
@@ -205,6 +219,7 @@ export default function App() {
         <CrisisLayerPopup />
         <IncidentSync />
         <DashboardGate />
+        <RiskReportGate />
       </div>
     </CesiumContext.Provider>
     </AuthGate>
