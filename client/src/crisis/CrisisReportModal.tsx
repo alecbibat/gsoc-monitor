@@ -5,19 +5,16 @@
 
 import { lazy, Suspense, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import type { Incident, IcsRole, PersonnelAssignment } from './crisisStore';
+import { useCrisisStore, type Incident, type IcsRole, type PersonnelAssignment } from './crisisStore';
+import { incidentStatusDef, incidentTypeDef } from './taxonomy';
+import { usePrintStyles } from '../lib/printStyles';
+import { CorrectiveActions, FourQuestions, IcsSwimlane, ResponseMetrics, RosterTable } from './AarSections';
 
 // Lazy so Leaflet (used only by this printable report and the share view)
 // stays out of the main bundle.
 const CrisisShareMap = lazy(() =>
   import('./CrisisShareMap').then((m) => ({ default: m.CrisisShareMap }))
 );
-
-const STATUS_BADGE: Record<string, { dot: string; badge: string }> = {
-  active:    { dot: '#ef4444', badge: 'text-red-400 bg-red-500/15 border-red-500/40' },
-  contained: { dot: '#f59e0b', badge: 'text-amber-300 bg-amber-400/15 border-amber-400/40' },
-  resolved:  { dot: '#22c55e', badge: 'text-green-400 bg-green-500/15 border-green-500/40' },
-};
 
 const ENTRY_STYLES = {
   action: 'text-blue-300 bg-blue-400/15 border-blue-400/30',
@@ -69,14 +66,23 @@ function ConnectorRow({ children, dashed = false }: { children: React.ReactNode;
 }
 
 function OrgNode({ role, assignments }: { role: IcsRole; assignments: PersonnelAssignment[] }) {
-  const active = assignments.find((a) => a.roleId === role.id && !a.endedAt);
+  // Stand-down releases every assignment, so an archived org chart has no
+  // "active" holder — show the LAST person who held the seat instead of the
+  // dash the old active-only lookup produced on every node (finding 6).
+  const history = assignments
+    .filter((a) => a.roleId === role.id)
+    .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+  const latest = history.find((a) => !a.endedAt) ?? history[0];
   return (
     <div className="rounded-md border bg-ink-900/80 text-center" style={{ minWidth: role.parentId === null ? '160px' : '110px', borderColor: `${role.color}40` }}>
       <div className="h-0.5 w-full rounded-t-md" style={{ background: role.color }} />
       <div className="px-2 py-2">
         {role.abbrev && <p className="mb-0.5 text-[8px] font-bold uppercase tracking-[0.14em]" style={{ color: role.color }}>{role.abbrev}</p>}
         <p className={`font-semibold leading-tight text-white/85 ${role.parentId === null ? 'text-[11px]' : 'text-[9px]'}`}>{role.title}</p>
-        <p className="mt-1 text-[8px] text-white/35">{active ? active.name : '—'}</p>
+        <p className="mt-1 text-[8px] text-white/35">
+          {latest ? latest.name : '—'}
+          {latest?.endedAt && <span className="text-white/25"> · released</span>}
+        </p>
       </div>
     </div>
   );
@@ -126,21 +132,16 @@ interface Props {
   onClose: () => void;
 }
 
-export function CrisisReportModal({ incident, onClose }: Props) {
-  // Inject print CSS: hide everything except this modal when Ctrl-P fires.
-  useEffect(() => {
-    const style = document.createElement('style');
-    style.id = 'crisis-report-print-css';
-    style.textContent = `
-      @media print {
-        body > *:not(.crisis-report-root) { display: none !important; }
-        .crisis-report-root { position: static !important; overflow: visible !important; }
-        .crisis-report-no-print { display: none !important; }
-      }
-    `;
-    document.head.appendChild(style);
-    return () => style.remove();
-  }, []);
+export function CrisisReportModal({ incident: incidentProp, onClose }: Props) {
+  // Shared report print stylesheet: paper-light theme, page-break discipline,
+  // repeating page header (see lib/printStyles.ts).
+  usePrintStyles('crisis-report-root');
+
+  // The prop is a snapshot captured when the modal opened; AAR edits mutate
+  // the store, so render the LIVE incident (falling back to the prop if it
+  // was deleted mid-view).
+  const incident =
+    useCrisisStore((s) => s.incidents.find((i) => i.id === incidentProp.id)) ?? incidentProp;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -148,7 +149,7 @@ export function CrisisReportModal({ incident, onClose }: Props) {
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  const { dot, badge } = STATUS_BADGE[incident.incidentStatus] ?? STATUS_BADGE.active;
+  const { dot, badge, label: statusLabel } = incidentStatusDef(incident.incidentStatus);
   const roots = incident.roles.filter((r) => r.parentId === null);
   const mapLayers = incident.drawLayers.filter((l) => l.positions.length > 0);
 
@@ -156,9 +157,9 @@ export function CrisisReportModal({ incident, onClose }: Props) {
     <div className="crisis-report-root fixed inset-0 z-[3000] overflow-y-auto bg-ink-950 text-white">
 
       {/* Top bar — hidden when printing */}
-      <div className="crisis-report-no-print sticky top-0 z-10 flex items-center gap-4 border-b border-white/8 bg-ink-900/90 px-8 py-3 backdrop-blur-sm">
+      <div className="print-hide sticky top-0 z-10 flex items-center gap-4 border-b border-white/8 bg-ink-900/90 px-8 py-3 backdrop-blur-sm">
         <div>
-          <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/30">Incident Archive Report</p>
+          <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/30">After-Action Report</p>
           <p className="text-[15px] font-semibold text-white/85">{incident.incidentName || 'Untitled Incident'}</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
@@ -192,11 +193,11 @@ export function CrisisReportModal({ incident, onClose }: Props) {
             <span className="relative inline-flex h-2.5 w-2.5 rounded-full" style={{ background: dot }} />
           </div>
           <div>
-            <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/30">Incident Archive Report</p>
+            <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/30">After-Action Report</p>
             <p className="text-[18px] font-semibold text-white/90">{incident.incidentName || 'Unnamed Incident'}</p>
           </div>
-          <span className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-widest ${badge}`}>
-            {incident.incidentStatus}
+          <span className={`print-color shrink-0 rounded-full border px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-widest ${badge}`}>
+            {statusLabel}
           </span>
           <span className="shrink-0 rounded-full border border-white/20 bg-white/8 px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-white/50">
             Archived
@@ -212,10 +213,27 @@ export function CrisisReportModal({ incident, onClose }: Props) {
         </div>
       </header>
 
+      {/* Table wrap: in print the thead repeats the page header on every page
+          (reserving its space); on screen everything is display:block. */}
+      <table className="print-page-table block w-full">
+        <thead className="print-page-thead block">
+          <tr className="block">
+            <td className="block">
+              <div className="print-page-header hidden">
+                <span className="font-bold uppercase tracking-widest">GSOC Monitor · After-Action Report</span>
+                <span>{incident.incidentName || 'Untitled Incident'}</span>
+                <span className="ml-auto">Generated {new Date().toLocaleString()}</span>
+              </div>
+            </td>
+          </tr>
+        </thead>
+        <tbody className="print-page-tbody block">
+          <tr className="block">
+            <td className="block">
       <main className="mx-auto max-w-5xl space-y-8 px-8 py-8">
 
         {/* Summary + details */}
-        <div className="grid grid-cols-2 gap-6">
+        <div className="grid gap-6 sm:grid-cols-2">
           <div>
             <h2 className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-white/30">Executive Summary</h2>
             <p className="whitespace-pre-wrap rounded-lg border border-white/8 bg-white/4 px-4 py-3 text-[13px] leading-relaxed text-white/75">
@@ -229,9 +247,11 @@ export function CrisisReportModal({ incident, onClose }: Props) {
                 ['Location', incident.incidentLocation],
                 ['Start', incident.incidentDatetime ? new Date(incident.incidentDatetime).toLocaleString() : '—'],
                 ['End', incident.incidentEndDatetime ? new Date(incident.incidentEndDatetime).toLocaleString() : '—'],
-                ['Type', incident.incidentType],
+                ['Type', incidentTypeDef(incident.incidentType).label],
                 ['Created', fmtTs(incident.createdAt)],
                 ['Archived', incident.archivedAt ? fmtTs(incident.archivedAt) : '—'],
+                ...(incident.closedBy ? [['Stood down by', incident.closedBy]] : []),
+                ...(incident.standDownReason ? [['Reason', incident.standDownReason]] : []),
               ] as [string, string][]).map(([label, value]) => (
                 <div key={label} className="flex gap-3">
                   <span className="w-20 shrink-0 text-[10px] text-white/35">{label}</span>
@@ -241,6 +261,9 @@ export function CrisisReportModal({ incident, onClose }: Props) {
             </div>
           </div>
         </div>
+
+        {/* Response metrics — every number computed from the captured record */}
+        <ResponseMetrics incident={incident} />
 
         {/* Org chart */}
         {roots.length > 0 && (
@@ -256,6 +279,15 @@ export function CrisisReportModal({ incident, onClose }: Props) {
           </div>
         )}
 
+        {/* ICS progression + full staffing record (finding 6: the old report
+            dropped every ended assignment) */}
+        <IcsSwimlane incident={incident} />
+        <RosterTable incident={incident} />
+
+        {/* The four-question AAR + corrective actions — post-incident editable */}
+        <FourQuestions incident={incident} />
+        <CorrectiveActions incident={incident} />
+
         {/* Action log */}
         {incident.actionLog.length > 0 && (
           <div>
@@ -268,12 +300,16 @@ export function CrisisReportModal({ incident, onClose }: Props) {
                 .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
                 .map((entry) => (
                   <div key={entry.id} className="flex items-start gap-3 px-4 py-3">
-                    <span className={`mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-widest ${ENTRY_STYLES[entry.entryType ?? 'action']}`}>
+                    <span className={`print-color mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-widest ${ENTRY_STYLES[entry.entryType ?? 'action']}`}>
                       {entry.entryType ?? 'action'}
                     </span>
-                    <span className="w-36 shrink-0 text-[10px] text-white/30">{fmtTs(entry.timestamp)}</span>
+                    <span className="w-36 shrink-0 text-[10px] text-white/30">
+                      {fmtTs(entry.timestamp)}
+                      {entry.actor && <span className="block text-white/40">{entry.actor}</span>}
+                    </span>
                     <p className="flex-1 text-[12px] leading-snug text-white/70">
                       {entry.description || <span className="text-white/25 italic">No description</span>}
+                      {entry.system && <span className="ml-1.5 text-[9px] uppercase tracking-wider text-white/25">auto</span>}
                     </p>
                     {entry.attachmentData && (
                       <img
@@ -327,6 +363,10 @@ export function CrisisReportModal({ incident, onClose }: Props) {
           {' · '}Report generated {new Date().toLocaleString()}
         </p>
       </main>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 

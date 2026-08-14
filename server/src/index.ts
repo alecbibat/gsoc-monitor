@@ -173,7 +173,14 @@ function main() {
       },
     })
   );
-  app.get('*', (_req, res) => {
+  app.get('*', (req, res) => {
+    // A missing hashed chunk (stale tab requesting assets from a previous
+    // deploy) must 404, not serve index.html — a 200 text/html response to a
+    // module import makes React.lazy throw and blank the whole page.
+    if (req.path.startsWith('/assets/')) {
+      res.status(404).type('text/plain').send('Not found');
+      return;
+    }
     res.setHeader('Cache-Control', 'no-cache');
     res.sendFile(path.join(clientDist, 'index.html'));
   });

@@ -9,8 +9,10 @@ const BASE_TITLE = 'GSOC Monitor';
 // "(214) …"). An active crisis outranks the alert count.
 export function TitleBadge() {
   const alertCount = useAlertsStatus((s) => s.count);
+  // Archived (stood-down) incidents never count, even if their stored status
+  // was left 'active' — that combination kept the ⚠ CRISIS badge lit forever.
   const activeCrises = useCrisisStore(
-    (s) => s.incidents.filter((i) => i.incidentStatus === 'active').length
+    (s) => s.incidents.filter((i) => i.incidentStatus === 'active' && !i.archivedAt).length
   );
 
   useEffect(() => {

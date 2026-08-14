@@ -301,6 +301,25 @@ export interface WindForecast {
   fallback?: boolean; // served by the backup provider (approximate local times)
 }
 
+// 10-day daily forecast (Open-Meteo via /api/wind/daily) in display-ready
+// units: °F, mph, inches. Arrays are parallel with daily.time.
+export interface DailyForecast {
+  latitude: number;
+  longitude: number;
+  timezone: string;
+  daily: {
+    time: string[];
+    weatherCode: number[];
+    tMaxF: number[];
+    tMinF: number[];
+    precipIn: number[];
+    precipProbPct: number[];
+    windMaxMph: number[];
+    gustMaxMph: number[];
+  };
+  updated: number;
+}
+
 export interface RouteStep {
   instruction: string;
   distanceM: number;

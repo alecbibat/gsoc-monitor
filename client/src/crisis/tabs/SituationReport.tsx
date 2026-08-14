@@ -1,32 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   useCrisisStore, useActiveIncident,
-  type IncidentType, type IncidentStatus, type DrawLayerType, type DrawGeometry, type DrawLayer,
+  type IncidentType, type DrawLayerType, type DrawGeometry, type DrawLayer,
 } from '../crisisStore';
+import { INCIDENT_CATEGORIES, INCIDENT_STATUSES, incidentTypesInCategory } from '../taxonomy';
 import { IcsOrgChart } from '../IcsOrgChart';
 import { ActionLog } from '../ActionLog';
 import { parseCoords } from '../parseCoords';
 import { SHARE_LIVE_LAYER_GROUPS, isShareLiveLayerId } from '../shareLiveLayers';
 import { LOCATION_GROUPS } from '../../layers/locations/locations';
-
-const STATUS_STYLES: Record<IncidentStatus, string> = {
-  active:    'border-red-500/50 bg-red-500/15 text-red-400',
-  contained: 'border-amber-400/50 bg-amber-400/15 text-amber-300',
-  resolved:  'border-green-500/50 bg-green-500/15 text-green-400',
-};
-
-const INCIDENT_TYPES: { value: IncidentType; label: string }[] = [
-  { value: 'other',          label: 'Other' },
-  { value: 'wildfire',       label: 'Wildfire' },
-  { value: 'hurricane',      label: 'Hurricane / Tropical Storm' },
-  { value: 'earthquake',     label: 'Earthquake' },
-  { value: 'flood',          label: 'Flood' },
-  { value: 'chemical',       label: 'Chemical / HazMat Spill' },
-  { value: 'mass-casualty',  label: 'Mass Casualty Incident' },
-  { value: 'cyber',          label: 'Cyber Incident' },
-  { value: 'security',       label: 'Security / Active Threat' },
-  { value: 'severe-weather', label: 'Severe Weather' },
-];
 
 const DRAW_LAYER_TYPES: { value: DrawLayerType; label: string; color: string }[] = [
   { value: 'fire-perimeter', label: 'Fire Perimeter',  color: '#ef4444' },
@@ -462,12 +444,25 @@ export function SituationReport() {
   const update = useCrisisStore((s) => s.update);
 
   if (!inc) return null;
+  // Stood-down incidents are a frozen record (F3): the fieldset disables every
+  // input and button in the edit surfaces below (the store no-ops archived
+  // edits too — this is the visible half of that guarantee). The action log
+  // handles its own freeze so its viewing controls stay usable.
+  const isArchived = !!inc.archivedAt;
 
   return (
     <div className="space-y-6">
 
+      {isArchived && (
+        <div className="rounded-lg border border-white/12 bg-white/5 px-4 py-2.5 text-[11px] text-white/50">
+          This incident is archived — the record is frozen. Reopen it to make changes.
+          {inc.closedBy && <span className="text-white/35"> Stood down by {inc.closedBy}.</span>}
+          {inc.standDownReason && <span className="text-white/35"> Reason: {inc.standDownReason}</span>}
+        </div>
+      )}
+
       {/* Row 1: Executive Summary + Incident Information */}
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+      <fieldset disabled={isArchived} className="m-0 grid min-w-0 grid-cols-1 gap-5 border-0 p-0 xl:grid-cols-2">
 
         <section className="flex flex-col">
           <h3 className="mb-2.5 text-[13px] font-bold uppercase tracking-[0.14em] text-white/65">Executive Summary</h3>
@@ -511,8 +506,11 @@ export function SituationReport() {
             </FieldRow>
 
             <FieldRow label="Property">
+              {/* min-w-0: a select's minimum width is its longest option, and
+                  without this the flex item refuses to shrink and overflows
+                  the card border. */}
               <select
-                className="flex-1 rounded border border-white/10 bg-ink-900 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25"
+                className="min-w-0 flex-1 rounded border border-white/10 bg-ink-900 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25"
                 value={inc.locationGroupId ?? ''}
                 onChange={(e) => update({ locationGroupId: e.target.value || null })}
                 title="Property group affected by this incident — its pins appear on the share-link map and scope the shared Property Watch"
@@ -526,56 +524,76 @@ export function SituationReport() {
 
             <FieldRow label="Type">
               <select
-                className="flex-1 rounded border border-white/10 bg-ink-900 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25"
+                className="min-w-0 flex-1 rounded border border-white/10 bg-ink-900 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25"
                 value={inc.incidentType}
                 onChange={(e) => update({ incidentType: e.target.value as IncidentType })}
               >
-                {INCIDENT_TYPES.map(({ value, label }) => (
-                  <option key={value} value={value}>{label}</option>
+                {INCIDENT_CATEGORIES.map((cat) => (
+                  <optgroup key={cat.id} label={cat.label}>
+                    {incidentTypesInCategory(cat.id).map((t) => (
+                      <option key={t.id} value={t.id}>{t.icon} {t.label}</option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </FieldRow>
 
             <FieldRow label="Status">
-              <div className="flex flex-wrap gap-2">
-                {(['active', 'contained', 'resolved'] as const).map((s) => (
+              <div className="flex flex-wrap items-center gap-2">
+                {INCIDENT_STATUSES.map((s) => (
                   <button
-                    key={s}
-                    onClick={() => update({ incidentStatus: s })}
-                    className={`rounded-full border px-3 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition ${
-                      inc.incidentStatus === s
-                        ? STATUS_STYLES[s]
+                    key={s.id}
+                    // Archived incidents are Closed by definition (stand-down
+                    // forces it, and every client re-normalizes archived
+                    // incidents to closed) — a chip change here would only
+                    // flicker and revert. Reopen first.
+                    disabled={!!inc.archivedAt}
+                    onClick={() => update({ incidentStatus: s.id })}
+                    className={`rounded-full border px-3 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                      inc.incidentStatus === s.id
+                        ? s.badge
                         : 'border-white/12 text-white/35 hover:border-white/25 hover:text-white/55'
                     }`}
                   >
-                    {s}
+                    {s.label}
                   </button>
                 ))}
+                {!!inc.archivedAt && (
+                  <span className="text-[9px] text-white/30">Reopen the incident to change status</span>
+                )}
               </div>
             </FieldRow>
+
+            {/* ICS complexity selector removed from the UI for now (the
+                store/type support stays for the future AAR escalation band —
+                see COMPLEXITY_TYPES in crisisStore). */}
           </div>
         </section>
-      </div>
+      </fieldset>
 
       {/* ICS / NIMS Org Chart */}
-      <section>
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/65">ICS / NIMS Organizational Structure</h3>
-          <span className="text-[11px] text-white/40">Click any role to assign personnel or edit</span>
-        </div>
-        <div className="rounded-lg border border-white/8 bg-ink-950/60 px-6 py-5">
-          <IcsOrgChart />
-        </div>
-      </section>
+      <fieldset disabled={isArchived} className="m-0 min-w-0 border-0 p-0">
+        <section>
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/65">ICS / NIMS Organizational Structure</h3>
+            <span className="text-[11px] text-white/40">
+              {isArchived ? 'Frozen — final structure at stand-down' : 'Click any role to assign personnel or edit'}
+            </span>
+          </div>
+          <div className="rounded-lg border border-white/8 bg-ink-950/60 px-6 py-5">
+            <IcsOrgChart />
+          </div>
+        </section>
+      </fieldset>
 
-      {/* Actions & Events Log */}
+      {/* Actions & Events Log — freezes itself so log viewing stays usable */}
       <ActionLog />
 
-      {/* Map Layers */}
-      <MapLayersSection />
-
-      {/* Live data layers for the share-link map */}
-      <LiveLayersSection />
+      {/* Map Layers + share-map live layers */}
+      <fieldset disabled={isArchived} className="m-0 min-w-0 space-y-6 border-0 p-0">
+        <MapLayersSection />
+        <LiveLayersSection />
+      </fieldset>
 
     </div>
   );

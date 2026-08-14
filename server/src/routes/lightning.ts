@@ -329,20 +329,48 @@ export function initLightningStream(): void {
 // parallel arrays. The response is capped at MAX_RESPONSE points; if the window
 // holds more, it's uniformly strided (thinned) so the payload and the client's
 // point cloud stay bounded regardless of storm intensity.
+//
+// Optional &lat=&lon=&radiusMi= applies a spatial filter BEFORE the cap, so a
+// "near this property" query (the risk report) gets every buffered strike in
+// its radius instead of a stride-thinned global sample — a 24 h global window
+// holds ~1M+ strikes and global thinning would sample local storms down to
+// nothing while the report presents the numbers as true counts.
 const MAX_RESPONSE = 20_000;
+
+function haversineM(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const R = 6_371_000;
+  const dLat = ((bLat - aLat) * Math.PI) / 180;
+  const dLon = ((bLon - aLon) * Math.PI) / 180;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((aLat * Math.PI) / 180) * Math.cos((bLat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
 
 // Identical windows are requested by every polling dashboard — memoize the
 // serialized body briefly so a 24h query (a walk over up to ~1.4M ring slots)
 // runs once per interval, not once per client.
 const MEMO_TTL_MS = 10_000;
-const queryMemo = new Map<number, { at: number; body: string }>();
+const queryMemo = new Map<string, { at: number; body: string }>();
 
 router.get('/', (req, res) => {
   const minutes = Math.min(1440, Math.max(1, Math.round(Number(req.query.minutes)) || 60));
+  const qLat = Number(req.query.lat);
+  const qLon = Number(req.query.lon);
+  const qRad = Number(req.query.radiusMi);
+  const hasFilter =
+    Number.isFinite(qLat) && Math.abs(qLat) <= 90 &&
+    Number.isFinite(qLon) && Math.abs(qLon) <= 180 &&
+    Number.isFinite(qRad) && qRad > 0;
+  const radiusMi = hasFilter ? Math.min(500, qRad) : 0;
+
   const now = Date.now();
   const cutoff = now - minutes * 60_000;
 
-  const memo = queryMemo.get(minutes);
+  const memoKey = hasFilter
+    ? `${minutes}:${qLat.toFixed(3)},${qLon.toFixed(3)},${radiusMi}`
+    : String(minutes);
+  const memo = queryMemo.get(memoKey);
   if (memo && now - memo.at < MEMO_TTL_MS) {
     res.type('application/json').send(memo.body);
     return;
@@ -377,20 +405,50 @@ router.get('/', (req, res) => {
     if (at(mid) < cutoff) lo = mid + 1;
     else hi = mid;
   }
-  const totalInWindow = count - lo;
-
-  // Emit every `stride`-th strike (anchored at the newest, matching the old
-  // newest→oldest walk) so the result is ≤ MAX_RESPONSE and evenly spread.
-  const stride = Math.max(1, Math.ceil(totalInWindow / MAX_RESPONSE));
   const lat: number[] = [];
   const lon: number[] = [];
   const t: number[] = [];
-  for (let j = lo; j < count; j++) {
-    if ((count - 1 - j) % stride !== 0) continue;
-    const idx = (oldestIdx + j) % CAP;
+  const pushIdx = (idx: number) => {
     lat.push(Math.round(latBuf[idx] * 1000) / 1000);
     lon.push(Math.round(lonBuf[idx] * 1000) / 1000);
     t.push(Math.round(tBuf[idx] / 1000)); // epoch seconds (smaller payload)
+  };
+
+  let totalInWindow: number;
+  let stride: number;
+  if (!hasFilter) {
+    totalInWindow = count - lo;
+    // Emit every `stride`-th strike (anchored at the newest, matching the old
+    // newest→oldest walk) so the result is ≤ MAX_RESPONSE and evenly spread.
+    stride = Math.max(1, Math.ceil(totalInWindow / MAX_RESPONSE));
+    for (let j = lo; j < count; j++) {
+      if ((count - 1 - j) % stride !== 0) continue;
+      pushIdx((oldestIdx + j) % CAP);
+    }
+  } else {
+    // Spatial filter first (cheap bounding-box reject before the haversine),
+    // THEN the response cap — totalInWindow/thinned describe the filtered set.
+    const dLatMax = radiusMi / 69;
+    const dLonMax = radiusMi / (69 * Math.max(0.05, Math.cos((qLat * Math.PI) / 180)));
+    const radiusM = radiusMi * 1609.344;
+    const matches: number[] = []; // buffer slot indices, oldest→newest
+    for (let j = lo; j < count; j++) {
+      const idx = (oldestIdx + j) % CAP;
+      const dla = latBuf[idx] - qLat;
+      if (dla > dLatMax || dla < -dLatMax) continue;
+      let dlo = lonBuf[idx] - qLon;
+      if (dlo > 180) dlo -= 360;
+      else if (dlo < -180) dlo += 360;
+      if (dlo > dLonMax || dlo < -dLonMax) continue;
+      if (haversineM(qLat, qLon, latBuf[idx], lonBuf[idx]) > radiusM) continue;
+      matches.push(idx);
+    }
+    totalInWindow = matches.length;
+    stride = Math.max(1, Math.ceil(totalInWindow / MAX_RESPONSE));
+    for (let k = 0; k < matches.length; k++) {
+      if ((matches.length - 1 - k) % stride !== 0) continue;
+      pushIdx(matches[k]);
+    }
   }
 
   const body = JSON.stringify({
@@ -405,7 +463,7 @@ router.get('/', (req, res) => {
     connected,
     updated: Math.round(now / 1000),
   });
-  queryMemo.set(minutes, { at: now, body });
+  queryMemo.set(memoKey, { at: now, body });
   res.type('application/json').send(body);
 });
 

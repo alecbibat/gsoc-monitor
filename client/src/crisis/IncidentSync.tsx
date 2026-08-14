@@ -1,26 +1,17 @@
 import { useEffect, useRef } from 'react';
 import { useAuthStore } from '../auth/authStore';
 import { useCrisisStore, useActiveIncident, extractPublicState, type Incident } from './crisisStore';
+// serverCanon normalizes before serializing and EXCLUDES the action log.
+// Server-origin blobs may carry retired taxonomy values that the store
+// rewrites on ingest — canonicalizing both sides identically is what keeps
+// that rewrite from registering as a local edit (see syncCanon.ts for why a
+// phantom edit here is dangerous). The log is excluded because it syncs
+// through its own append-only endpoints (see logSync.ts), never via blob PUT.
+import { entryCanon, mergeActionLogs, serverCanon } from './syncCanon';
+import * as logSync from './logSync';
 
-// ── Canonical serialization ───────────────────────────────────────────────────
-// The change-watcher and the live-sync merge both need to answer "is this
-// incident different from what the server has?". A plain JSON.stringify can't:
-// Postgres JSONB doesn't preserve key order, so an incident that round-trips
-// through the DB (or arrives as our own SSE echo) serializes to different bytes
-// despite identical data. stableStringify sorts object keys and drops undefined
-// keys — mirroring JSON/JSONB semantics — so equal data always compares equal.
-function stableStringify(v: unknown): string | undefined {
-  if (v === undefined || typeof v === 'function') return undefined;
-  if (v === null || typeof v !== 'object') return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map((x) => stableStringify(x) ?? 'null').join(',')}]`;
-  const parts: string[] = [];
-  for (const k of Object.keys(v as Record<string, unknown>).sort()) {
-    const sv = stableStringify((v as Record<string, unknown>)[k]);
-    if (sv === undefined) continue; // omit undefined-valued keys, like JSON does
-    parts.push(`${JSON.stringify(k)}:${sv}`);
-  }
-  return `{${parts.join(',')}}`;
-}
+// "Saved" is only truthful when the log engine is also idle (and vice versa).
+logSync.registerBlobIdleCheck(() => pending.size === 0);
 
 // Server-known state per incident id — the baseline the watcher diffs against.
 // Populated on load, after each successful push, and whenever a peer's change
@@ -36,18 +27,38 @@ const setSync = (s: 'idle' | 'saving' | 'saved' | 'error') =>
 
 function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
   const url = method === 'POST' ? '/api/incidents' : `/api/incidents/${incident.id}`;
-  serverState.set(incident.id, stableStringify(incident)!); // optimistic baseline
+  const isCreate = method === 'POST';
+  serverState.set(incident.id, serverCanon(incident)); // optimistic baseline
   setSync('saving');
+  // Updates omit the action log: the server preserves its own copy on blob
+  // writes (log changes travel through the append endpoints), so sending it
+  // would only waste the 5 MB body budget. Creates keep it — the insert seeds
+  // the server log with the client's initial entries.
+  const body = isCreate ? incident : { ...incident, actionLog: undefined };
   return fetch(url, {
     method,
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify(incident),
+    body: JSON.stringify(body),
   })
-    .then((res) => {
+    .then(async (res) => {
       if (!res.ok) throw new Error(String(res.status));
-      // Only clear to "saved" if nothing newer is queued.
-      if (!pending.has(incident.id)) setSync('saved');
+      if (isCreate) {
+        // Baseline the log from the server's RESPONSE, not from what we sent:
+        // if this POST hit the upsert path (retry after a lost response, or
+        // the tab-close beacon), the server kept its own log and the sent one
+        // never landed. In-flight local entries keep their unsynced state so
+        // the log watcher still pushes them.
+        try {
+          const data = await res.json() as Incident;
+          const remoteLog = Array.isArray(data?.actionLog) ? data.actionLog : [];
+          logSync.applyRemoteLog(incident.id, remoteLog, logSync.keepLocalEntryIds());
+        } catch {
+          /* body unavailable — the next SSE echo rebuilds the baseline */
+        }
+      }
+      // Only clear to "saved" if nothing newer is queued anywhere.
+      if (!pending.has(incident.id) && !logSync.hasPendingWork()) setSync('saved');
     })
     .catch((e) => {
       // Roll the baseline back so the next edit re-attempts the push.
@@ -77,7 +88,7 @@ function flushPending() {
     try {
       const blob = new Blob([JSON.stringify(incident)], { type: 'application/json' });
       const ok = navigator.sendBeacon('/api/incidents', blob);
-      if (ok) serverState.set(incident.id, stableStringify(incident)!);
+      if (ok) serverState.set(incident.id, serverCanon(incident));
     } catch {
       /* best effort — nothing more we can do as the page unloads */
     }
@@ -138,7 +149,10 @@ export function IncidentSync() {
         return r.json() as Promise<Incident[]>;
       })
       .then((incidents) => {
-        for (const inc of incidents) serverState.set(inc.id, stableStringify(inc)!);
+        for (const inc of incidents) {
+          serverState.set(inc.id, serverCanon(inc));
+          logSync.seedBaseline(inc);
+        }
         setIncidents(incidents);
       })
       .catch((e) => console.error('[incident-sync] initial load failed:', e));
@@ -158,7 +172,7 @@ export function IncidentSync() {
       const nextIds = new Set(next.map((i) => i.id));
 
       for (const inc of next) {
-        const canon = stableStringify(inc)!;
+        const canon = serverCanon(inc);
         const known = serverState.get(inc.id);
         if (known === canon) continue; // matches server / just applied from a peer
         if (known === undefined) {
@@ -168,9 +182,13 @@ export function IncidentSync() {
         }
       }
 
+      // Log changes sync separately, per entry, through the append endpoints.
+      logSync.syncLogsFromStore(next);
+
       for (const id of [...serverState.keys()]) {
         if (!nextIds.has(id)) {
           serverState.delete(id);
+          logSync.dropIncident(id);
           const p = pending.get(id);
           if (p) { clearTimeout(p.timer); pending.delete(id); }
           fetch(`/api/incidents/${id}`, { method: 'DELETE', credentials: 'include' })
@@ -191,12 +209,25 @@ export function IncidentSync() {
       let inc: Incident;
       try { inc = JSON.parse((e as MessageEvent).data); } catch { return; }
       if (!inc?.id) return;
-      // Don't stomp an edit we're still saving locally — our write wins.
+      // Don't stomp a blob edit we're still saving locally — our write wins,
+      // and its echo (which carries the server's merged log) converges us.
       if (pending.has(inc.id)) return;
-      const canon = stableStringify(inc)!;
-      if (serverState.get(inc.id) === canon) return; // our own echo / no change
+
+      const remoteLog = Array.isArray(inc.actionLog) ? inc.actionLog : [];
+      const local = useCrisisStore.getState().incidents.find((i) => i.id === inc.id);
+      // The server log wins except for local entries whose push is still in
+      // flight — those keep their local version until their own echo lands.
+      const keep = logSync.keepLocalEntryIds();
+      const mergedLog = mergeActionLogs(remoteLog, local?.actionLog ?? [], keep);
+
+      const canon = serverCanon(inc);
+      const blobSame = serverState.get(inc.id) === canon;
+      const logSame = local !== undefined && entryCanon(mergedLog) === entryCanon(local.actionLog);
+      if (blobSame && logSame) return; // our own echo / no change
+
       serverState.set(inc.id, canon);
-      useCrisisStore.getState().applyRemoteUpsert(inc);
+      logSync.applyRemoteLog(inc.id, remoteLog, keep);
+      useCrisisStore.getState().applyRemoteUpsert({ ...inc, actionLog: mergedLog });
     });
 
     es.addEventListener('delete', (e) => {
@@ -204,6 +235,7 @@ export function IncidentSync() {
       try { id = JSON.parse((e as MessageEvent).data).id; } catch { return; }
       if (!id || pending.has(id)) return;
       serverState.delete(id);
+      logSync.dropIncident(id);
       useCrisisStore.getState().applyRemoteDelete(id);
     });
 
@@ -216,11 +248,12 @@ export function IncidentSync() {
   // Flush unsaved edits before the tab goes away.
   useEffect(() => {
     if (!user) return;
-    const onVisibility = () => { if (document.visibilityState === 'hidden') flushPending(); };
-    window.addEventListener('pagehide', flushPending);
+    const flushAll = () => { flushPending(); logSync.flushLogPatches(); };
+    const onVisibility = () => { if (document.visibilityState === 'hidden') flushAll(); };
+    window.addEventListener('pagehide', flushAll);
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
-      window.removeEventListener('pagehide', flushPending);
+      window.removeEventListener('pagehide', flushAll);
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [user]);

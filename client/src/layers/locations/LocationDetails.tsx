@@ -5,11 +5,15 @@ import { flyToLonLat } from '../../cesium/flyTo';
 import { fetchDirections, fetchDriveRoute } from './directionsClient';
 import { PulseLineMaterialProperty } from './pulseLineMaterial';
 import { LOCATION_GROUPS } from './locations';
+import { useRiskReportStore } from '../../riskreport/riskReportStore';
 import type { DirectionsResponse, DirectionsLeg, DriveResult } from '../../types';
 
 export interface LocationPayload {
   name: string;
   group: string;
+  /** Group ID — the layer has always sent it; older payload shapes may lack
+   * it, so consumers fall back to a name lookup. */
+  groupId?: string;
   lat: number;
   lon: number;
   altitudeM: number;
@@ -636,12 +640,30 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
         loading={loading}
       />
 
-      <button
-        onClick={() => viewer && flyToLonLat(viewer, payload.lon, payload.lat, payload.altitudeM)}
-        className="w-full rounded-lg border border-white/10 bg-white/5 py-2 text-[12px] font-medium text-white/60 transition hover:border-white/20 hover:bg-white/10 hover:text-white/90"
-      >
-        ↗ Fly here
-      </button>
+      <div className="flex gap-2">
+        <button
+          onClick={() => viewer && flyToLonLat(viewer, payload.lon, payload.lat, payload.altitudeM)}
+          className="flex-1 rounded-lg border border-white/10 bg-white/5 py-2 text-[12px] font-medium text-white/60 transition hover:border-white/20 hover:bg-white/10 hover:text-white/90"
+        >
+          ↗ Fly here
+        </button>
+        <button
+          onClick={() =>
+            useRiskReportStore.getState().open({
+              key: `${payload.group}::${payload.name}`,
+              name: payload.name,
+              lat: payload.lat,
+              lon: payload.lon,
+              groupName: payload.group,
+              groupIcon: payload.icon,
+            })
+          }
+          className="flex-1 rounded-lg border border-orange-400/30 bg-orange-400/8 py-2 text-[12px] font-medium text-orange-300/80 transition hover:border-orange-400/50 hover:bg-orange-400/15 hover:text-orange-200"
+          title="Wildfire risk report — cross-references every fire feed at fixed analysis rings"
+        >
+          🔥 Wildfire risk
+        </button>
+      </div>
 
       {/* Hospital & Hotel directions (A/B/C) */}
       <div className="border-t border-white/8 pt-3">

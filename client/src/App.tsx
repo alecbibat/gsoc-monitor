@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import type * as Cesium from 'cesium';
+import { ShareErrorBoundary } from './crisis/ShareErrorBoundary';
 import { CesiumContext } from './cesium/CesiumContext';
 import { CesiumGlobe } from './cesium/CesiumGlobe';
 import { EarthquakeLayer } from './layers/earthquakes/EarthquakeLayer';
@@ -66,6 +67,7 @@ import { CrisisLayerPopup } from './crisis/CrisisLayerPopup';
 import { IncidentSync } from './crisis/IncidentSync';
 import { useCrisisStore } from './crisis/crisisStore';
 import { useDashboardStore } from './dashboard/dashboardStore';
+import { useRiskReportStore } from './riskreport/riskReportStore';
 import { AuthGate } from './auth/AuthGate';
 
 // Detect share link — renders a completely separate read-only view. Lazy so the
@@ -85,6 +87,9 @@ const CrisisOverlay = lazy(() =>
 );
 const DashboardView = lazy(() =>
   import('./dashboard/DashboardView').then((m) => ({ default: m.DashboardView }))
+);
+const RiskReportHost = lazy(() =>
+  import('./riskreport/RiskReportHost').then((m) => ({ default: m.RiskReportHost }))
 );
 
 function CrisisOverlayGate() {
@@ -107,20 +112,32 @@ function DashboardGate() {
   );
 }
 
+function RiskReportGate() {
+  const target = useRiskReportStore((s) => s.target);
+  if (!target) return null;
+  return (
+    <Suspense fallback={null}>
+      <RiskReportHost />
+    </Suspense>
+  );
+}
+
 export default function App() {
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
 
   if (shareToken) {
     return (
-      <Suspense
-        fallback={
-          <div className="grid h-full place-items-center bg-black text-sm text-white/40">
-            Loading shared view…
-          </div>
-        }
-      >
-        <CrisisShareView token={shareToken} />
-      </Suspense>
+      <ShareErrorBoundary>
+        <Suspense
+          fallback={
+            <div className="grid h-full place-items-center bg-black text-sm text-white/40">
+              Loading shared view…
+            </div>
+          }
+        >
+          <CrisisShareView token={shareToken} />
+        </Suspense>
+      </ShareErrorBoundary>
     );
   }
 
@@ -202,6 +219,7 @@ export default function App() {
         <CrisisLayerPopup />
         <IncidentSync />
         <DashboardGate />
+        <RiskReportGate />
       </div>
     </CesiumContext.Provider>
     </AuthGate>
