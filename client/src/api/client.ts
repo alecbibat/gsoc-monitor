@@ -87,8 +87,11 @@ export const api = {
   smoke: () => getJson<import('../types').SmokeResponse>('/api/smoke'),
   aqi: () => getJson<import('../types').AqiResponse>('/api/aqi'),
   wind: () => getJson<import('../types').WindGrid>('/api/wind'),
-  lightningHistory: (minutes: number) =>
-    getJson<import('../types').LightningHistoryResponse>(`/api/lightning?minutes=${minutes}`),
+  lightningHistory: (minutes: number, near?: { lat: number; lon: number; radiusMi: number }) =>
+    getJson<import('../types').LightningHistoryResponse>(
+      `/api/lightning?minutes=${minutes}` +
+        (near ? `&lat=${near.lat.toFixed(3)}&lon=${near.lon.toFixed(3)}&radiusMi=${near.radiusMi}` : '')
+    ),
   rivers: () => getJson<import('../types').RiversResponse>('/api/rivers'),
   fireOutlook: () => getJson<import('../types').FireOutlookResponse>('/api/fire-outlook'),
   jtwcInvests: () => getJson<import('../types').JtwcInvestsResponse>('/api/jtwc-invests'),

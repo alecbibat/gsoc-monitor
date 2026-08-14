@@ -93,7 +93,9 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
     attempt(api.windForecast(target.lat, target.lon)),
     attempt(api.weatherDaily(target.lat, target.lon)),
     attempt(api.smoke()),
-    attempt(api.lightningHistory(1440)),
+    // Radius-filtered on the server so local strikes arrive unthinned — a
+    // global 24 h window would be stride-sampled to ~nothing near any point.
+    attempt(api.lightningHistory(1440, { lat: target.lat, lon: target.lon, radiusMi: 130 })),
   ]);
 
   const sections: SectionResult[] = [];
@@ -363,13 +365,22 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
   }
 
   // ── Smoke (NOAA HMS analyst-drawn plumes) ─────────────────────────────────
+  // HMS analysts cover North America only — outside that domain an empty
+  // point-in-polygon result is absence of coverage, not a verified clear sky.
+  const HMS_RECT = { west: -170, east: -50, south: 5, north: 72 };
+  const inHmsCoverage =
+    target.lon >= HMS_RECT.west && target.lon <= HMS_RECT.east &&
+    target.lat >= HMS_RECT.south && target.lat <= HMS_RECT.north;
   const smoke: WildfireReportData['smoke'] = {};
   const smokePolys: SmokePolygon[] = [];
   {
     // Like fetchWildfires, the smoke route can resolve with an in-band error
     // and no polygons — that's an outage, not a verified clear sky.
     const feedErr = smokeRes.error ?? smokeRes.value?.error ?? null;
-    if (smokeRes.value === null || (feedErr !== null && smokeRes.value.polygons.length === 0)) {
+    if (!inHmsCoverage) {
+      smoke.unavailable = 'Property is outside NOAA HMS smoke coverage (North America)';
+      sections.push({ id: 'smoke', title: 'Smoke (NOAA HMS)', level: 'low', drivers: [], unavailable: smoke.unavailable });
+    } else if (smokeRes.value === null || (feedErr !== null && smokeRes.value.polygons.length === 0)) {
       smoke.unavailable = `HMS smoke feed unavailable (${feedErr ?? 'unknown error'})`;
       sections.push({ id: 'smoke', title: 'Smoke (NOAA HMS)', level: 'low', drivers: [], unavailable: smoke.unavailable });
     } else {
@@ -430,8 +441,17 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
         const dm = distMi(target, lt.lat[i], lt.lon[i]);
         if (dm <= 130) strikes.push({ lat: lt.lat[i], lon: lt.lon[i], t: lt.t[i], distanceMi: dm });
       }
-      lightning.strikes25mi = strikes.filter((s) => s.distanceMi <= 25).length;
-      lightning.strikes100mi = strikes.filter((s) => s.distanceMi <= 100).length;
+      // The radius-filtered request normally arrives unthinned, so these are
+      // exact (of collected strikes). If the response WAS stride-sampled (a
+      // pre-filter server, or a truly extreme local storm), scale the sampled
+      // counts back up and say so — never present a sample as a census.
+      const sampled = lt.thinned && lt.returned > 0;
+      const scale = sampled ? lt.totalInWindow / lt.returned : 1;
+      const approx = (n: number) => Math.round(n * scale);
+      const n25 = strikes.filter((s) => s.distanceMi <= 25).length;
+      const n100 = strikes.filter((s) => s.distanceMi <= 100).length;
+      lightning.strikes25mi = approx(n25);
+      lightning.strikes100mi = approx(n100);
       lightning.coverageMin = lt.coverageMin;
 
       const nearestMi = strikes.reduce<number>((m, s) => Math.min(m, s.distanceMi), Infinity);
@@ -442,17 +462,23 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
         drivers.push(`Strike ${nearestMi < 1 ? '<1' : Math.round(nearestMi)} mi from the property in the past 24 h — direct ignition source`);
       } else if (nearestMi <= 25) {
         level = 'guarded';
-        drivers.push(`Nearest strike ${Math.round(nearestMi)} mi away in the past 24 h`);
+        drivers.push(`Nearest ${sampled ? 'sampled ' : ''}strike ${Math.round(nearestMi)} mi away in the past 24 h`);
       }
       if ((lightning.strikes100mi ?? 0) > 0) {
-        drivers.push(`${lightning.strikes100mi!.toLocaleString()} strike${lightning.strikes100mi === 1 ? '' : 's'} within 100 mi in the past 24 h`);
+        drivers.push(`${sampled ? '≈' : ''}${lightning.strikes100mi!.toLocaleString()} strike${lightning.strikes100mi === 1 ? '' : 's'} within 100 mi in the past 24 h`);
+      }
+      if (sampled) {
+        drivers.push(`⚠ Strike data was sampled (${lt.returned.toLocaleString()} of ${lt.totalInWindow.toLocaleString()} returned) — counts are estimates and sparse nearby activity can be missed`);
       }
       if (lt.coverageMin < 23 * 60) {
         drivers.push(`⚠ Only ${(lt.coverageMin / 60).toFixed(1)} h of strike history collected — counts undercount the full day`);
       }
       sections.push({
         id: 'lightning', title: 'Lightning (24 h)', level, drivers,
-        countLabel: (lightning.strikes25mi ?? 0) === 0 ? 'None ≤25 mi' : `${lightning.strikes25mi} ≤25 mi`,
+        countLabel:
+          n25 === 0
+            ? sampled ? 'None sampled ≤25 mi' : 'None ≤25 mi'
+            : `${sampled ? '≈' : ''}${lightning.strikes25mi} ≤25 mi`,
       });
     }
   }

@@ -35,8 +35,8 @@ formula gets revisited with that QA bar.)
 | 7-day fire-potential outlook | NWCG PSA layer (site containment) | Critical → high · Elevated/Ignition → elevated · normal-dry → guarded |
 | Fuel conditions | LANDFIRE zonal histogram, 3 mi ring (existing analyzer) | FBP score ≥70 → elevated driver · ≥85 → high driver (standard-conditions caveat printed) |
 | Wind now / 48 h peak | wind point-forecast route | sustained ≥25 mph or gusts ≥35 → elevated driver · sustained ≥35 / gusts ≥50 → high driver |
-| Smoke (HMS plumes) | `/api/smoke` (NOAA HMS, analyst-drawn from GOES/VIIRS) | Heavy plume over the site → elevated · Medium → guarded · Light → low with driver; count-framed ("None / Light / Medium / Heavy overhead"); stale-analysis caveat printed when the latest HMS day is not today |
-| Lightning (24 h strikes) | `/api/lightning?minutes=1440` (Blitzortung) | nearest strike ≤5 mi → elevated (ignition source) · ≤25 mi → guarded; count-framed ("N ≤25 mi"); partial-coverage caveat when server history < ~23 h |
+| Smoke (HMS plumes) | `/api/smoke` (NOAA HMS, analyst-drawn from GOES/VIIRS) | Heavy plume over the site → elevated · Medium → guarded · Light → low with driver; count-framed ("None / Light / Medium / Heavy overhead"); stale-analysis caveat printed when the latest HMS day is not today; outside North America → unavailable (HMS coverage), satellite snapshot still rendered |
+| Lightning (24 h strikes) | `/api/lightning?minutes=1440&lat&lon&radiusMi=130` (Blitzortung) | nearest strike ≤5 mi → elevated (ignition source) · ≤25 mi → guarded; count-framed ("N ≤25 mi"); the server filters to the 130 mi radius BEFORE its 20k response cap so local counts arrive unthinned; if a response is still stride-sampled, counts are scaled estimates marked "≈" with an explicit sampling caveat; partial-coverage caveat when server history < ~23 h |
 
 Section list in the report: BLUF (overall + drivers) · hero exposure map ·
 key stat cards · ring exposure table · hotspots · named incidents · alerts ·
