@@ -22,6 +22,7 @@ interface StepState {
 export function StandDownModal({ incident, onClose }: { incident: Incident; onClose: () => void }) {
   const standDownIncident = useCrisisStore((s) => s.standDownIncident);
   const deactivateShareLink = useCrisisStore((s) => s.deactivateShareLink);
+  const backToList = useCrisisStore((s) => s.backToList);
 
   const activeLinks = (incident.shareLinks ?? []).filter((l) => l.active);
   const openAssignments = incident.assignments.filter((a) => !a.endedAt).length;
@@ -155,7 +156,12 @@ export function StandDownModal({ incident, onClose }: { incident: Incident; onCl
             </ul>
             <div className="mt-4 flex justify-end">
               <button
-                onClick={onClose}
+                onClick={() => {
+                  onClose();
+                  // Back to the list so the archive section (and its PDF
+                  // report button) is immediately visible.
+                  backToList();
+                }}
                 disabled={!finished}
                 className="rounded border border-white/12 px-4 py-1.5 text-[11px] text-white/60 transition hover:border-white/25 hover:text-white disabled:opacity-40"
               >

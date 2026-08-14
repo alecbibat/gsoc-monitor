@@ -469,8 +469,9 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
               ],
             };
           }),
-          // Navigate back to the list so the archive section is immediately visible.
-          activeIncidentId: s.activeIncidentId === id ? null : s.activeIncidentId,
+          // Navigation stays with the caller: the stand-down checklist modal
+          // lives inside the incident view, and yanking activeIncidentId here
+          // unmounted it mid-sequence. Its Done button calls backToList().
         })),
 
       reopenIncident: (id) =>

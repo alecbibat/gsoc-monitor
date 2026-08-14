@@ -32,3 +32,21 @@ export const useSectionsStore = create<SectionsState>()(
     { name: 'gsoc-sidebar-sections' }
   )
 );
+
+// Width of the crisis incident-editor panel (px), persisted. null = the
+// default responsive width (46vw clamped). Set by the panel's drag handle and
+// expand toggle; ignored on mobile where the panel is always full-width.
+interface CrisisPanelState {
+  widthPx: number | null;
+  setWidthPx: (px: number | null) => void;
+}
+
+export const useCrisisPanelStore = create<CrisisPanelState>()(
+  persist(
+    (set) => ({
+      widthPx: null,
+      setWidthPx: (widthPx) => set({ widthPx }),
+    }),
+    { name: 'gsoc-crisis-panel' }
+  )
+);

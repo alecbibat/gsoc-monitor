@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import {
-  useCrisisStore, useActiveIncident, COMPLEXITY_TYPES,
+  useCrisisStore, useActiveIncident,
   type IncidentType, type DrawLayerType, type DrawGeometry, type DrawLayer,
 } from '../crisisStore';
 import { INCIDENT_CATEGORIES, INCIDENT_STATUSES, incidentTypesInCategory } from '../taxonomy';
@@ -506,8 +506,11 @@ export function SituationReport() {
             </FieldRow>
 
             <FieldRow label="Property">
+              {/* min-w-0: a select's minimum width is its longest option, and
+                  without this the flex item refuses to shrink and overflows
+                  the card border. */}
               <select
-                className="flex-1 rounded border border-white/10 bg-ink-900 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25"
+                className="min-w-0 flex-1 rounded border border-white/10 bg-ink-900 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25"
                 value={inc.locationGroupId ?? ''}
                 onChange={(e) => update({ locationGroupId: e.target.value || null })}
                 title="Property group affected by this incident — its pins appear on the share-link map and scope the shared Property Watch"
@@ -521,7 +524,7 @@ export function SituationReport() {
 
             <FieldRow label="Type">
               <select
-                className="flex-1 rounded border border-white/10 bg-ink-900 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25"
+                className="min-w-0 flex-1 rounded border border-white/10 bg-ink-900 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25"
                 value={inc.incidentType}
                 onChange={(e) => update({ incidentType: e.target.value as IncidentType })}
               >
@@ -561,30 +564,9 @@ export function SituationReport() {
               </div>
             </FieldRow>
 
-            <FieldRow label="Complexity">
-              <div
-                className="flex flex-wrap items-center gap-2"
-                title="ICS incident complexity — Type 5 (initial/minor) to Type 1 (most complex). Changes are recorded in the log."
-              >
-                {COMPLEXITY_TYPES.map((c) => (
-                  <button
-                    key={c.id}
-                    // Toggle off by clicking the selected chip again.
-                    onClick={() => update({ complexityType: inc.complexityType === c.id ? null : c.id })}
-                    className={`rounded-full border px-3 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition ${
-                      inc.complexityType === c.id
-                        ? 'border-violet-400/50 bg-violet-400/15 text-violet-300'
-                        : 'border-white/12 text-white/35 hover:border-white/25 hover:text-white/55'
-                    }`}
-                  >
-                    {c.label}
-                  </button>
-                ))}
-                {!inc.complexityType && (
-                  <span className="text-[9px] text-white/25">Not set</span>
-                )}
-              </div>
-            </FieldRow>
+            {/* ICS complexity selector removed from the UI for now (the
+                store/type support stays for the future AAR escalation band —
+                see COMPLEXITY_TYPES in crisisStore). */}
           </div>
         </section>
       </fieldset>

@@ -6,6 +6,8 @@ import {
 import { incidentStatusDef, incidentTypeDef } from './taxonomy';
 import { StandDownModal } from './StandDownModal';
 import { useAuthStore } from '../auth/authStore';
+import { useIsMobile } from '../ui/useIsMobile';
+import { useCrisisPanelStore } from '../ui/uiStore';
 import { SituationReport } from './tabs/SituationReport';
 import { IncidentList } from './IncidentList';
 import { CrisisReportModal } from './CrisisReportModal';
@@ -299,6 +301,29 @@ function IncidentDetail() {
   const user             = useAuthStore((s) => s.user);
   const [showReport, setShowReport] = useState(false);
   const [showStandDown, setShowStandDown] = useState(false);
+  const isMobile = useIsMobile();
+  const panelWidth = useCrisisPanelStore((s) => s.widthPx);
+  const setPanelWidth = useCrisisPanelStore((s) => s.setWidthPx);
+
+  // Left-edge drag: the panel is right-anchored, so its width is the distance
+  // from the pointer to the right viewport edge.
+  const startResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const move = (ev: PointerEvent) => {
+      const max = Math.round(window.innerWidth * 0.96);
+      setPanelWidth(Math.min(Math.max(460, window.innerWidth - ev.clientX), max));
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  const isWide = panelWidth !== null && panelWidth > window.innerWidth * 0.7;
+  const toggleWide = () =>
+    setPanelWidth(isWide ? null : Math.round(window.innerWidth * 0.94));
 
   if (!inc) return null;
   const isArchived = !!inc.archivedAt;
@@ -317,11 +342,26 @@ function IncidentDetail() {
         </div>
       </div>
 
-      {/* Right: opaque editing panel — kept under half-width so the globe's
-          centre stays visible in the reserved segment on the left */}
+      {/* Right: opaque editing panel. Default width keeps the globe's centre
+          visible; the left-edge drag handle and the expand button let the
+          operator take as much room as the work needs (persisted). */}
       {/* /95 (not /98): Tailwind's default opacity scale has no 98 step, so
           bg-ink-950/98 silently compiled to no background at all. */}
-      <div className="pointer-events-auto flex h-full w-full flex-col border-l border-white/10 bg-ink-950/95 pb-safe shadow-2xl backdrop-blur-sm md:w-[46vw] md:min-w-[460px] md:max-w-[720px]">
+      <div
+        className="pointer-events-auto relative flex h-full w-full flex-col border-l border-white/10 bg-ink-950/95 pb-safe shadow-2xl backdrop-blur-sm md:w-[46vw] md:min-w-[460px]"
+        style={!isMobile && panelWidth !== null ? { width: panelWidth, minWidth: 460, maxWidth: '96vw' } : { maxWidth: isMobile ? undefined : 720 }}
+      >
+        {/* Drag-to-resize handle (desktop) */}
+        {!isMobile && (
+          <div
+            onPointerDown={startResize}
+            onDoubleClick={() => setPanelWidth(null)}
+            title="Drag to resize · double-click to reset"
+            className="group absolute inset-y-0 left-0 z-10 w-2 cursor-col-resize"
+          >
+            <div className="mx-auto h-full w-0.5 bg-transparent transition group-hover:bg-accent/40" />
+          </div>
+        )}
         {/* Header */}
         <header className="flex shrink-0 items-center gap-3 border-b border-white/10 bg-ink-900/70 px-5 py-3">
           <button
@@ -335,7 +375,11 @@ function IncidentDetail() {
             Incidents
           </button>
 
-          <div className="flex min-w-0 items-center gap-2.5">
+          {/* flex-1 + min-w-0 so long names/types truncate instead of pushing
+              into (or under) the action buttons on the right. The incident
+              type lives in the eyebrow line — a chip here kept colliding with
+              its neighbors at narrow widths. */}
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
             <div className="relative flex h-2.5 w-2.5 shrink-0">
               {inc.incidentStatus === 'active' && !isArchived && (
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-70" style={{ background: dot }} />
@@ -343,16 +387,13 @@ function IncidentDetail() {
               <span className="relative inline-flex h-2.5 w-2.5 rounded-full" style={{ background: isArchived ? '#4b5563' : dot }} />
             </div>
             <div className="min-w-0">
-              <div className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/35">Situation Report</div>
+              <div className="truncate text-[9px] font-bold uppercase tracking-[0.18em] text-white/35">
+                Situation Report
+                <span className="text-white/20"> · </span>
+                <span style={{ color: td.color }} title={`Incident type: ${td.label}`}>{td.icon} {td.label}</span>
+              </div>
               <div className="truncate text-[13px] font-semibold text-white/90">{inc.incidentName || 'Untitled Incident'}</div>
             </div>
-            <span
-              className="shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest"
-              style={{ color: td.color, background: `${td.color}20`, borderColor: `${td.color}55` }}
-              title={`Incident type: ${td.label}`}
-            >
-              {td.icon} {td.label}
-            </span>
             <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest ${badge}`}>
               {statusLabel}
             </span>
@@ -414,6 +455,32 @@ function IncidentDetail() {
               </button>
             )}
 
+            {!isMobile && (
+              <button
+                onClick={toggleWide}
+                className="flex items-center gap-1.5 rounded border border-white/12 px-2.5 py-1.5 text-[11px] text-white/50 transition hover:border-white/22 hover:text-white"
+                title={isWide ? 'Restore split view (map + report)' : 'Expand the workspace (map stays live behind it)'}
+                aria-label={isWide ? 'Restore split view' : 'Expand workspace'}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  {isWide ? (
+                    <>
+                      <polyline points="10 4 4 4 4 10" />
+                      <polyline points="14 20 20 20 20 14" />
+                      <line x1="4" y1="4" x2="10" y2="10" />
+                      <line x1="20" y1="20" x2="14" y2="14" />
+                    </>
+                  ) : (
+                    <>
+                      <polyline points="15 3 21 3 21 9" />
+                      <polyline points="9 21 3 21 3 15" />
+                      <line x1="21" y1="3" x2="14" y2="10" />
+                      <line x1="3" y1="21" x2="10" y2="14" />
+                    </>
+                  )}
+                </svg>
+              </button>
+            )}
             <button
               onClick={close}
               className="flex items-center gap-1.5 rounded border border-white/12 px-3 py-1.5 text-[11px] text-white/50 transition hover:border-white/22 hover:text-white"
