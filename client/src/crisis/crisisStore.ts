@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { ShareLiveLayerId } from './shareLiveLayers';
-import { normalizeIncidentFields, type IncidentStatus, type IncidentType } from './taxonomy';
+import { normalizeIncidentFields, incidentStatusDef, type IncidentStatus, type IncidentType } from './taxonomy';
+import { useAuthStore } from '../auth/authStore';
 
 // ── Domain types ─────────────────────────────────────────────────────────────
 
@@ -53,14 +54,48 @@ export interface PersonnelAssignment extends PersonnelDetails {
   endedAt?: string;
 }
 
+// Auto-generated log entries: the discriminant for entries the app writes on
+// the operator's behalf when incident state changes. These are what the AAR's
+// ICS-progression graphic and response metrics will be computed from, so they
+// carry a machine-readable kind + meta payload alongside the human sentence.
+export type SystemEventKind =
+  | 'created'
+  | 'status-change'
+  | 'complexity-change'
+  | 'assignment'
+  | 'assignment-ended'
+  | 'role-added'
+  | 'role-removed'
+  | 'share-created'
+  | 'share-revoked'
+  | 'stood-down'
+  | 'reopened';
+
 export interface ActionLogEntry {
   id: string;
   timestamp: string;
   description: string;
   attachmentName?: string;
-  attachmentData?: string;  // base64 data URL for images; stored compressed (≤1200px JPEG)
+  attachmentData?: string;  // Cloudinary URL (legacy entries: base64 ≤1200px JPEG)
   entryType: ActionEntryType;
+  /** Display name of whoever created the entry (from the signed-in user). */
+  actor?: string;
+  /** Present on auto-generated entries; absent on hand-written ones. */
+  system?: SystemEventKind;
+  /** Structured payload for system entries (roleId, from/to, token label, …). */
+  meta?: Record<string, string>;
 }
+
+// ICS complexity type — Type 5 (initial/minor) escalating to Type 1. Optional:
+// unset means nobody has made the call yet.
+export type ComplexityType = 'type-5' | 'type-4' | 'type-3' | 'type-2' | 'type-1';
+export const COMPLEXITY_TYPES: { id: ComplexityType; label: string }[] = [
+  { id: 'type-5', label: 'Type 5' },
+  { id: 'type-4', label: 'Type 4' },
+  { id: 'type-3', label: 'Type 3' },
+  { id: 'type-2', label: 'Type 2' },
+  { id: 'type-1', label: 'Type 1' },
+];
 
 export type DrawLayerType =
   | 'fire-perimeter' | 'burned-area' | 'flood-zone'
@@ -105,6 +140,9 @@ export interface Incident {
   incidentLocation: string;
   incidentType: IncidentType;
   incidentStatus: IncidentStatus;
+  // ICS complexity call, when made. Changes are logged as system events so the
+  // AAR can render the Type 5 → 4 → 3 escalation band.
+  complexityType?: ComplexityType | null;
   executiveSummary: string;
   roles: IcsRole[];
   assignments: PersonnelAssignment[];
@@ -135,6 +173,7 @@ export interface CrisisPublicState {
   incidentLocation: string;
   incidentType: IncidentType;
   incidentStatus: IncidentStatus;
+  complexityType?: ComplexityType | null;
   executiveSummary: string;
   roles: IcsRole[];
   assignments: PersonnelAssignment[];
@@ -191,6 +230,31 @@ export const DEFAULT_ROLES: IcsRole[] = [
 const uid = () =>
   `c-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
 
+// Who to attribute a log entry to — the signed-in user's display name.
+const currentActor = (): string | undefined =>
+  useAuthStore.getState().user?.name || undefined;
+
+// Auto-generated log entry for a state change. Prepended like manual entries;
+// the log sync layer pushes it through the append-only endpoint like any other.
+function sysEntry(
+  system: SystemEventKind,
+  description: string,
+  meta?: Record<string, string>
+): ActionLogEntry {
+  return {
+    id: uid(),
+    timestamp: new Date().toISOString(),
+    description,
+    entryType: 'event',
+    actor: currentActor(),
+    system,
+    ...(meta ? { meta } : {}),
+  };
+}
+
+const COMPLEXITY_LABEL = (c: ComplexityType | null | undefined) =>
+  COMPLEXITY_TYPES.find((t) => t.id === c)?.label ?? 'unset';
+
 function newIncident(type: IncidentType = 'other'): Incident {
   return {
     id: uid(),
@@ -201,11 +265,12 @@ function newIncident(type: IncidentType = 'other'): Incident {
     incidentLocation: '',
     incidentType: type,
     incidentStatus: 'active',
+    complexityType: null,
     executiveSummary: '',
     roles: DEFAULT_ROLES,
     assignments: [],
     personnel: [],
-    actionLog: [],
+    actionLog: [sysEntry('created', 'Incident created')],
     drawLayers: [],
     liveLayers: [],
     locationGroupId: null,
@@ -224,6 +289,7 @@ interface CrisisFields {
   incidentLocation: string;
   incidentType: IncidentType;
   incidentStatus: IncidentStatus;
+  complexityType: ComplexityType | null;
   executiveSummary: string;
   locationGroupId: string | null;
 }
@@ -363,7 +429,12 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
             // Standing down closes the incident: archived-but-still-"active"
             // rows are what kept tab badges lit forever.
             inc.id === id
-              ? { ...inc, archivedAt: new Date().toISOString(), incidentStatus: 'closed' as IncidentStatus }
+              ? {
+                  ...inc,
+                  archivedAt: new Date().toISOString(),
+                  incidentStatus: 'closed' as IncidentStatus,
+                  actionLog: [sysEntry('stood-down', 'Incident stood down and archived'), ...inc.actionLog],
+                }
               : inc
           ),
           // Navigate back to the list so the archive section is immediately visible.
@@ -376,12 +447,41 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
             // Reopen conservatively as Monitoring — the operator escalates to
             // Active if the situation actually warrants it.
             inc.id === id
-              ? { ...inc, archivedAt: null, incidentStatus: 'monitoring' as IncidentStatus }
+              ? {
+                  ...inc,
+                  archivedAt: null,
+                  incidentStatus: 'monitoring' as IncidentStatus,
+                  actionLog: [sysEntry('reopened', 'Incident reopened (status: Monitoring)'), ...inc.actionLog],
+                }
               : inc
           ),
         })),
 
-      update: (patch) => set((s) => patchActive(s, (inc) => ({ ...inc, ...patch }))),
+      update: (patch) =>
+        set((s) => patchActive(s, (inc) => {
+          // Lifecycle fields get a system log entry alongside the change, so
+          // the AAR can reconstruct when the incident escalated and who did it.
+          const events: ActionLogEntry[] = [];
+          if (patch.incidentStatus !== undefined && patch.incidentStatus !== inc.incidentStatus) {
+            events.push(sysEntry(
+              'status-change',
+              `Status changed: ${incidentStatusDef(inc.incidentStatus).label} → ${incidentStatusDef(patch.incidentStatus).label}`,
+              { from: inc.incidentStatus, to: patch.incidentStatus }
+            ));
+          }
+          if (patch.complexityType !== undefined && patch.complexityType !== (inc.complexityType ?? null)) {
+            events.push(sysEntry(
+              'complexity-change',
+              `Complexity changed: ${COMPLEXITY_LABEL(inc.complexityType)} → ${COMPLEXITY_LABEL(patch.complexityType)}`,
+              { from: inc.complexityType ?? '', to: patch.complexityType ?? '' }
+            ));
+          }
+          return {
+            ...inc,
+            ...patch,
+            ...(events.length ? { actionLog: [...events, ...inc.actionLog] } : {}),
+          };
+        })),
       setShareToken: (token) => set((s) => patchActive(s, (inc) => ({ ...inc, shareToken: token }))),
 
       addShareLink: (token, url, password) =>
@@ -392,6 +492,10 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
             ...(inc.shareLinks ?? []),
             { token, url, createdAt: new Date().toISOString(), active: true, password },
           ],
+          actionLog: [
+            sysEntry('share-created', 'Public share link published', { token }),
+            ...inc.actionLog,
+          ],
         }))),
 
       deactivateShareLink: (token) =>
@@ -400,7 +504,15 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
             l.token === token ? { ...l, active: false } : l
           );
           const anyActive = updated.find((l) => l.active);
-          return { ...inc, shareToken: anyActive?.token ?? null, shareLinks: updated };
+          return {
+            ...inc,
+            shareToken: anyActive?.token ?? null,
+            shareLinks: updated,
+            actionLog: [
+              sysEntry('share-revoked', 'Public share link revoked', { token }),
+              ...inc.actionLog,
+            ],
+          };
         })),
 
       addPersonnelMember: (name, details) =>
@@ -416,7 +528,14 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
         }))),
 
       addRole: (role) =>
-        set((s) => patchActive(s, (inc) => ({ ...inc, roles: [...inc.roles, { ...role, id: uid(), builtin: false }] }))),
+        set((s) => patchActive(s, (inc) => ({
+          ...inc,
+          roles: [...inc.roles, { ...role, id: uid(), builtin: false }],
+          actionLog: [
+            sysEntry('role-added', `ICS role added: ${role.title}`, { roleTitle: role.title }),
+            ...inc.actionLog,
+          ],
+        }))),
 
       updateRole: (id, patch) =>
         set((s) => patchActive(s, (inc) => ({ ...inc, roles: inc.roles.map((r) => (r.id === id ? { ...r, ...patch } : r)) }))),
@@ -429,10 +548,20 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
             inc.roles.filter((r) => r.parentId === pid).forEach((c) => collect(c.id));
           };
           collect(id);
+          const title = inc.roles.find((r) => r.id === id)?.title ?? 'role';
+          const subCount = toRemove.size - 1;
           return {
             ...inc,
             roles: inc.roles.filter((r) => !toRemove.has(r.id)),
             assignments: inc.assignments.filter((a) => !toRemove.has(a.roleId)),
+            actionLog: [
+              sysEntry(
+                'role-removed',
+                `ICS role removed: ${title}${subCount > 0 ? ` (and ${subCount} sub-role${subCount === 1 ? '' : 's'})` : ''}`,
+                { roleTitle: title, subRoles: String(subCount) }
+              ),
+              ...inc.actionLog,
+            ],
           };
         })),
 
@@ -480,26 +609,55 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
             }
             return a;
           });
+          // Command-transfer history is AAR gold: record who took the role and
+          // whom they replaced, as a structured system event.
+          const displaced = inc.assignments.find(
+            (a) => !a.endedAt && a.roleId === roleId && !samePerson(a)
+          );
+          const roleTitle = role?.title ?? 'role';
           return {
             ...inc,
             assignments: [
               ...assignments,
               { id: uid(), roleId, personnelId, name, ...details, startedAt: now },
             ],
+            actionLog: [
+              sysEntry(
+                'assignment',
+                `${name} assigned as ${roleTitle}${displaced && endPrevious ? ` (replacing ${displaced.name})` : ''}`,
+                { roleId, roleTitle, name, ...(displaced && endPrevious ? { replaced: displaced.name } : {}) }
+              ),
+              ...inc.actionLog,
+            ],
           };
         })),
 
       endAssignment: (id) =>
-        set((s) => patchActive(s, (inc) => ({
-          ...inc,
-          assignments: inc.assignments.map((a) => (a.id === id ? { ...a, endedAt: new Date().toISOString() } : a)),
-        }))),
+        set((s) => patchActive(s, (inc) => {
+          const target = inc.assignments.find((a) => a.id === id);
+          const roleTitle = target ? inc.roles.find((r) => r.id === target.roleId)?.title ?? 'role' : 'role';
+          return {
+            ...inc,
+            assignments: inc.assignments.map((a) => (a.id === id ? { ...a, endedAt: new Date().toISOString() } : a)),
+            actionLog: target && !target.endedAt
+              ? [
+                  sysEntry('assignment-ended', `${target.name} released from ${roleTitle}`, {
+                    roleId: target.roleId, roleTitle, name: target.name,
+                  }),
+                  ...inc.actionLog,
+                ]
+              : inc.actionLog,
+          };
+        })),
 
       addActionEntry: (type = 'action') => {
         const id = uid();
         set((s) => patchActive(s, (inc) => ({
           ...inc,
-          actionLog: [{ id, timestamp: new Date().toISOString(), description: '', entryType: type }, ...inc.actionLog],
+          actionLog: [
+            { id, timestamp: new Date().toISOString(), description: '', entryType: type, actor: currentActor() },
+            ...inc.actionLog,
+          ],
         })));
         return id;
       },
@@ -599,6 +757,7 @@ export function extractPublicState(inc: Incident, publishedAt?: string): CrisisP
     incidentLocation: inc.incidentLocation,
     incidentType: inc.incidentType,
     incidentStatus: inc.incidentStatus,
+    complexityType: inc.complexityType ?? null,
     executiveSummary: inc.executiveSummary,
     roles: inc.roles,
     // Strip personnel contact details (title/phone/email) from the public share

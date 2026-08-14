@@ -3,6 +3,7 @@ import {
   INCIDENT_STATUS_IDS,
   INCIDENT_TYPE_IDS,
   invalidIncidentReason,
+  invalidLogEntryReason,
 } from './incidentTaxonomy';
 
 const valid = { id: 'c-123', incidentType: 'wildfire', incidentStatus: 'active' };
@@ -47,5 +48,31 @@ describe('invalidIncidentReason', () => {
     expect(INCIDENT_TYPE_IDS.has('chemical')).toBe(true);
     expect(INCIDENT_STATUS_IDS.has('resolved')).toBe(true);
     expect(INCIDENT_TYPE_IDS.size).toBeGreaterThan(20);
+  });
+});
+
+describe('invalidLogEntryReason', () => {
+  const entry = {
+    id: 'c-e1',
+    timestamp: '2026-08-14T00:00:00.000Z',
+    description: 'Evacuated lodge',
+    entryType: 'action',
+  };
+
+  it('accepts a plain entry and a system entry', () => {
+    expect(invalidLogEntryReason(entry)).toBeNull();
+    expect(
+      invalidLogEntryReason({ ...entry, actor: 'Alec', system: 'status-change', meta: { from: 'active', to: 'closed' } })
+    ).toBeNull();
+  });
+
+  it('rejects malformed bodies', () => {
+    expect(invalidLogEntryReason(null)).toMatch(/log-entry object/);
+    expect(invalidLogEntryReason([entry])).toMatch(/log-entry object/);
+    expect(invalidLogEntryReason({ ...entry, id: '' })).toMatch(/id/);
+    expect(invalidLogEntryReason({ ...entry, timestamp: 'yesterday' })).toMatch(/timestamp/);
+    expect(invalidLogEntryReason({ ...entry, description: 7 })).toMatch(/description/);
+    expect(invalidLogEntryReason({ ...entry, entryType: 'note' })).toMatch(/entryType/);
+    expect(invalidLogEntryReason({ ...entry, actor: 42 })).toMatch(/actor/);
   });
 });

@@ -31,6 +31,31 @@ export const INCIDENT_STATUS_IDS: ReadonlySet<string> = new Set([
   'contained', 'resolved',
 ]);
 
+export const ACTION_ENTRY_TYPES: ReadonlySet<string> = new Set(['action', 'event', 'info']);
+
+/**
+ * Validate an action-log entry for the append endpoint. Identity and typing
+ * only — descriptions are free text and `system`/`meta` are client-defined.
+ */
+export function invalidLogEntryReason(body: unknown): string | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return 'body must be a log-entry object';
+  }
+  const e = body as Record<string, unknown>;
+  if (typeof e.id !== 'string' || e.id.length === 0) return 'entry id is required';
+  if (typeof e.timestamp !== 'string' || Number.isNaN(Date.parse(e.timestamp))) {
+    return 'entry timestamp must be an ISO datetime';
+  }
+  if (typeof e.description !== 'string') return 'entry description must be a string';
+  if (typeof e.entryType !== 'string' || !ACTION_ENTRY_TYPES.has(e.entryType)) {
+    return `unknown entryType ${JSON.stringify(e.entryType ?? null)}`;
+  }
+  for (const key of ['actor', 'system', 'attachmentName', 'attachmentData'] as const) {
+    if (e[key] !== undefined && typeof e[key] !== 'string') return `${key} must be a string`;
+  }
+  return null;
+}
+
 /**
  * Validate an incident write body. Returns a human-readable reason when the
  * body is unacceptable, or null when it is fine. Only identity and taxonomy

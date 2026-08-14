@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { pool } from '../db';
 import { wrap } from '../asyncWrap';
 import { requireAuth } from '../middleware/auth';
-import { invalidIncidentReason } from '../incidentTaxonomy';
+import { invalidIncidentReason, invalidLogEntryReason, ACTION_ENTRY_TYPES } from '../incidentTaxonomy';
 
 const router = Router();
 router.use(requireAuth);
@@ -53,6 +53,12 @@ router.get('/', wrap(async (_req, res: Response) => {
 }, 'incidents'));
 
 // Upsert an incident (client generates stable IDs, so POST and PUT are the same).
+//
+// Both write paths preserve the row's EXISTING actionLog: the log is
+// append-only and owned by the /:id/log endpoints below, so a whole-blob
+// last-write-wins update must never be able to erase entries another
+// responder appended concurrently. A brand-new row takes the client's log
+// (it seeds the incident's initial entries).
 router.post('/', wrap(async (req: Request, res: Response) => {
   const incident = req.body;
   const invalid = invalidIncidentReason(incident);
@@ -60,7 +66,12 @@ router.post('/', wrap(async (req: Request, res: Response) => {
   const { rows: [row] } = await pool.query(
     `INSERT INTO incidents (id, data)
      VALUES ($1, $2)
-     ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
+     ON CONFLICT (id) DO UPDATE SET
+       data = EXCLUDED.data || jsonb_build_object(
+         'actionLog',
+         COALESCE(incidents.data->'actionLog', EXCLUDED.data->'actionLog', '[]'::jsonb)
+       ),
+       updated_at = NOW()
      RETURNING data`,
     [incident.id, JSON.stringify(incident)]
   );
@@ -74,13 +85,122 @@ router.put('/:id', wrap(async (req: Request, res: Response) => {
   const invalid = invalidIncidentReason(incident);
   if (invalid) { res.status(400).json({ error: invalid }); return; }
   const { rows: [row] } = await pool.query(
-    `UPDATE incidents SET data = $1, updated_at = NOW()
+    `UPDATE incidents SET
+       data = $1::jsonb || jsonb_build_object(
+         'actionLog',
+         COALESCE(incidents.data->'actionLog', $1::jsonb->'actionLog', '[]'::jsonb)
+       ),
+       updated_at = NOW()
      WHERE id = $2 RETURNING data`,
     [JSON.stringify(incident), req.params.id]
   );
   if (!row) { res.status(404).json({ error: 'Incident not found' }); return; }
   broadcast('upsert', row.data);
   res.json(row.data);
+}, 'incidents'));
+
+// ── Action log (append-only sync path) ──────────────────────────────────────
+// Log entries never travel inside the blob writes above. Each mutation locks
+// the incident row, applies the change to the JSONB in place, and broadcasts
+// the merged incident — concurrent appends from different operators serialize
+// on the row lock instead of overwriting each other.
+
+type LogMutResult = 'changed' | 'noop' | 'missing';
+
+async function mutateIncidentLog(
+  incidentId: string,
+  res: Response,
+  fn: (data: Record<string, unknown>) => LogMutResult
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [row] } = await client.query<{ data: Record<string, unknown> }>(
+      'SELECT data FROM incidents WHERE id = $1 FOR UPDATE',
+      [incidentId]
+    );
+    if (!row) {
+      await client.query('ROLLBACK');
+      res.status(404).json({ error: 'Incident not found' });
+      return;
+    }
+    const data = row.data;
+    const result = fn(data);
+    if (result === 'missing') {
+      await client.query('ROLLBACK');
+      res.status(404).json({ error: 'Log entry not found' });
+      return;
+    }
+    if (result === 'changed') {
+      await client.query(
+        'UPDATE incidents SET data = $1, updated_at = NOW() WHERE id = $2',
+        [JSON.stringify(data), incidentId]
+      );
+    }
+    await client.query('COMMIT');
+    if (result === 'changed') broadcast('upsert', data);
+    res.json(data);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => { /* connection already gone */ });
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+const logOf = (data: Record<string, unknown>): Record<string, unknown>[] =>
+  Array.isArray(data.actionLog) ? (data.actionLog as Record<string, unknown>[]) : [];
+
+// Append an entry (idempotent by entry id — retries must not duplicate).
+router.post('/:id/log', wrap(async (req: Request, res: Response) => {
+  const entry = req.body;
+  const invalid = invalidLogEntryReason(entry);
+  if (invalid) { res.status(400).json({ error: invalid }); return; }
+  await mutateIncidentLog(req.params.id, res, (data) => {
+    const log = logOf(data);
+    if (log.some((e) => e?.id === entry.id)) return 'noop';
+    data.actionLog = [entry, ...log];
+    return 'changed';
+  });
+}, 'incidents'));
+
+// Edit an entry's editable fields. `null` clears an optional field.
+router.patch('/:id/log/:entryId', wrap(async (req: Request, res: Response) => {
+  const patch = req.body ?? {};
+  if (patch.entryType !== undefined && !ACTION_ENTRY_TYPES.has(patch.entryType)) {
+    res.status(400).json({ error: `unknown entryType ${JSON.stringify(patch.entryType)}` });
+    return;
+  }
+  for (const key of ['description', 'attachmentName', 'attachmentData'] as const) {
+    if (patch[key] !== undefined && patch[key] !== null && typeof patch[key] !== 'string') {
+      res.status(400).json({ error: `${key} must be a string or null` });
+      return;
+    }
+  }
+  await mutateIncidentLog(req.params.id, res, (data) => {
+    const log = logOf(data);
+    const idx = log.findIndex((e) => e?.id === req.params.entryId);
+    if (idx === -1) return 'missing';
+    const entry = { ...log[idx] };
+    for (const key of ['description', 'entryType', 'attachmentName', 'attachmentData'] as const) {
+      if (patch[key] === undefined) continue;
+      if (patch[key] === null) delete entry[key];
+      else entry[key] = patch[key];
+    }
+    data.actionLog = [...log.slice(0, idx), entry, ...log.slice(idx + 1)];
+    return 'changed';
+  });
+}, 'incidents'));
+
+// Remove an entry (idempotent — deleting an absent entry is a no-op).
+router.delete('/:id/log/:entryId', wrap(async (req: Request, res: Response) => {
+  await mutateIncidentLog(req.params.id, res, (data) => {
+    const log = logOf(data);
+    const next = log.filter((e) => e?.id !== req.params.entryId);
+    if (next.length === log.length) return 'noop';
+    data.actionLog = next;
+    return 'changed';
+  });
 }, 'incidents'));
 
 router.delete('/:id', wrap(async (req: Request, res: Response) => {

@@ -1,11 +1,14 @@
 import { useEffect, useRef } from 'react';
 import { useAuthStore } from '../auth/authStore';
 import { useCrisisStore, useActiveIncident, extractPublicState, type Incident } from './crisisStore';
-// serverCanon normalizes before serializing. Server-origin blobs may carry
-// retired taxonomy values that the store rewrites on ingest — canonicalizing
-// both sides identically is what keeps that rewrite from registering as a
-// local edit (see syncCanon.ts for why a phantom edit here is dangerous).
-import { serverCanon } from './syncCanon';
+// serverCanon normalizes before serializing and EXCLUDES the action log.
+// Server-origin blobs may carry retired taxonomy values that the store
+// rewrites on ingest — canonicalizing both sides identically is what keeps
+// that rewrite from registering as a local edit (see syncCanon.ts for why a
+// phantom edit here is dangerous). The log is excluded because it syncs
+// through its own append-only endpoints (see logSync.ts), never via blob PUT.
+import { entryCanon, mergeActionLogs, serverCanon } from './syncCanon';
+import * as logSync from './logSync';
 
 // Server-known state per incident id — the baseline the watcher diffs against.
 // Populated on load, after each successful push, and whenever a peer's change
@@ -21,16 +24,25 @@ const setSync = (s: 'idle' | 'saving' | 'saved' | 'error') =>
 
 function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
   const url = method === 'POST' ? '/api/incidents' : `/api/incidents/${incident.id}`;
+  const isCreate = method === 'POST';
   serverState.set(incident.id, serverCanon(incident)); // optimistic baseline
   setSync('saving');
+  // Updates omit the action log: the server preserves its own copy on blob
+  // writes (log changes travel through the append endpoints), so sending it
+  // would only waste the 5 MB body budget. Creates keep it — the insert seeds
+  // the server log with the client's initial entries.
+  const body = isCreate ? incident : { ...incident, actionLog: undefined };
   return fetch(url, {
     method,
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify(incident),
+    body: JSON.stringify(body),
   })
     .then((res) => {
       if (!res.ok) throw new Error(String(res.status));
+      // The insert carried this exact log — record it as the synced baseline
+      // so the log watcher only pushes entries added after this snapshot.
+      if (isCreate) logSync.seedBaseline(incident);
       // Only clear to "saved" if nothing newer is queued.
       if (!pending.has(incident.id)) setSync('saved');
     })
@@ -123,7 +135,10 @@ export function IncidentSync() {
         return r.json() as Promise<Incident[]>;
       })
       .then((incidents) => {
-        for (const inc of incidents) serverState.set(inc.id, serverCanon(inc));
+        for (const inc of incidents) {
+          serverState.set(inc.id, serverCanon(inc));
+          logSync.seedBaseline(inc);
+        }
         setIncidents(incidents);
       })
       .catch((e) => console.error('[incident-sync] initial load failed:', e));
@@ -153,9 +168,13 @@ export function IncidentSync() {
         }
       }
 
+      // Log changes sync separately, per entry, through the append endpoints.
+      logSync.syncLogsFromStore(next, (id) => serverState.has(id));
+
       for (const id of [...serverState.keys()]) {
         if (!nextIds.has(id)) {
           serverState.delete(id);
+          logSync.dropIncident(id);
           const p = pending.get(id);
           if (p) { clearTimeout(p.timer); pending.delete(id); }
           fetch(`/api/incidents/${id}`, { method: 'DELETE', credentials: 'include' })
@@ -176,12 +195,25 @@ export function IncidentSync() {
       let inc: Incident;
       try { inc = JSON.parse((e as MessageEvent).data); } catch { return; }
       if (!inc?.id) return;
-      // Don't stomp an edit we're still saving locally — our write wins.
+      // Don't stomp a blob edit we're still saving locally — our write wins,
+      // and its echo (which carries the server's merged log) converges us.
       if (pending.has(inc.id)) return;
+
+      const remoteLog = Array.isArray(inc.actionLog) ? inc.actionLog : [];
+      const local = useCrisisStore.getState().incidents.find((i) => i.id === inc.id);
+      // The server log wins except for local entries whose push is still in
+      // flight — those keep their local version until their own echo lands.
+      const keep = logSync.keepLocalEntryIds();
+      const mergedLog = mergeActionLogs(remoteLog, local?.actionLog ?? [], keep);
+
       const canon = serverCanon(inc);
-      if (serverState.get(inc.id) === canon) return; // our own echo / no change
+      const blobSame = serverState.get(inc.id) === canon;
+      const logSame = local !== undefined && entryCanon(mergedLog) === entryCanon(local.actionLog);
+      if (blobSame && logSame) return; // our own echo / no change
+
       serverState.set(inc.id, canon);
-      useCrisisStore.getState().applyRemoteUpsert(inc);
+      logSync.applyRemoteLog(inc.id, remoteLog, keep);
+      useCrisisStore.getState().applyRemoteUpsert({ ...inc, actionLog: mergedLog });
     });
 
     es.addEventListener('delete', (e) => {
@@ -189,6 +221,7 @@ export function IncidentSync() {
       try { id = JSON.parse((e as MessageEvent).data).id; } catch { return; }
       if (!id || pending.has(id)) return;
       serverState.delete(id);
+      logSync.dropIncident(id);
       useCrisisStore.getState().applyRemoteDelete(id);
     });
 
@@ -201,11 +234,12 @@ export function IncidentSync() {
   // Flush unsaved edits before the tab goes away.
   useEffect(() => {
     if (!user) return;
-    const onVisibility = () => { if (document.visibilityState === 'hidden') flushPending(); };
-    window.addEventListener('pagehide', flushPending);
+    const flushAll = () => { flushPending(); logSync.flushLogPatches(); };
+    const onVisibility = () => { if (document.visibilityState === 'hidden') flushAll(); };
+    window.addEventListener('pagehide', flushAll);
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
-      window.removeEventListener('pagehide', flushPending);
+      window.removeEventListener('pagehide', flushAll);
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [user]);

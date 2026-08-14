@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import {
-  useCrisisStore, useActiveIncident,
+  useCrisisStore, useActiveIncident, COMPLEXITY_TYPES,
   type IncidentType, type DrawLayerType, type DrawGeometry, type DrawLayer,
 } from '../crisisStore';
 import { INCIDENT_CATEGORIES, INCIDENT_STATUSES, incidentTypesInCategory } from '../taxonomy';
@@ -544,6 +544,31 @@ export function SituationReport() {
                 ))}
                 {!!inc.archivedAt && (
                   <span className="text-[9px] text-white/30">Reopen the incident to change status</span>
+                )}
+              </div>
+            </FieldRow>
+
+            <FieldRow label="Complexity">
+              <div
+                className="flex flex-wrap items-center gap-2"
+                title="ICS incident complexity — Type 5 (initial/minor) to Type 1 (most complex). Changes are recorded in the log."
+              >
+                {COMPLEXITY_TYPES.map((c) => (
+                  <button
+                    key={c.id}
+                    // Toggle off by clicking the selected chip again.
+                    onClick={() => update({ complexityType: inc.complexityType === c.id ? null : c.id })}
+                    className={`rounded-full border px-3 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition ${
+                      inc.complexityType === c.id
+                        ? 'border-violet-400/50 bg-violet-400/15 text-violet-300'
+                        : 'border-white/12 text-white/35 hover:border-white/25 hover:text-white/55'
+                    }`}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+                {!inc.complexityType && (
+                  <span className="text-[9px] text-white/25">Not set</span>
                 )}
               </div>
             </FieldRow>

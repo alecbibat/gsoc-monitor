@@ -21,8 +21,8 @@ export function stableStringify(v: unknown): string | undefined {
 }
 
 /**
- * Canonical form of an incident for sync comparisons: normalized taxonomy
- * values, stable key order.
+ * Canonical form of an incident's BLOB for sync comparisons: normalized
+ * taxonomy values, stable key order, and the action log excluded.
  *
  * Server-origin data must ALWAYS be canonicalized through here, never through
  * bare stableStringify. The store normalizes legacy taxonomy values on ingest
@@ -35,7 +35,46 @@ export function stableStringify(v: unknown): string | undefined {
  * resurrect an admin-deleted incident. Normalizing the baseline instead means
  * legacy data looks unchanged until a person actually edits it, and the edit
  * itself carries the canonical values to the server.
+ *
+ * The action log is excluded because it does not sync as part of the blob at
+ * all: entries go through the server's append-only log endpoints, and the
+ * server preserves its own actionLog on blob writes. Log changes therefore
+ * must never make the blob look edited (that PUT couldn't carry them anyway).
  */
-export function serverCanon(incident: { incidentType: string; incidentStatus: string; archivedAt?: string | null }): string {
-  return stableStringify(normalizeIncidentFields(incident))!;
+export function serverCanon(incident: {
+  incidentType: string; incidentStatus: string; archivedAt?: string | null; actionLog?: unknown;
+}): string {
+  const { actionLog: _log, ...rest } = normalizeIncidentFields(incident);
+  return stableStringify(rest)!;
+}
+
+/** Canonical form of one log entry, for per-entry change detection. */
+export function entryCanon(entry: unknown): string {
+  return stableStringify(entry) ?? 'null';
+}
+
+interface LogEntryLike { id: string }
+
+/**
+ * Reconcile the server's copy of an action log with local state when a remote
+ * upsert arrives. The server log wins, with two exceptions:
+ * - entries whose ids are in `keepLocal` (local appends/edits whose push is
+ *   still in flight) keep their LOCAL version — the push will land and
+ *   rebroadcast them;
+ * - local-only `keepLocal` entries missing from the server log are prepended
+ *   so an in-flight append doesn't flicker out of the UI.
+ */
+export function mergeActionLogs<E extends LogEntryLike>(
+  remote: E[],
+  local: E[],
+  keepLocal: ReadonlySet<string>
+): E[] {
+  if (keepLocal.size === 0 || local.length === 0) return remote;
+  const localById = new Map(local.map((e) => [e.id, e]));
+  const remoteIds = new Set(remote.map((e) => e.id));
+  const merged = remote.map((e) =>
+    keepLocal.has(e.id) && localById.has(e.id) ? localById.get(e.id)! : e
+  );
+  const localOnly = local.filter((e) => keepLocal.has(e.id) && !remoteIds.has(e.id));
+  return localOnly.length ? [...localOnly, ...merged] : merged;
 }
