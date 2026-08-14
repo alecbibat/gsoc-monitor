@@ -1,4 +1,9 @@
+import { useState } from 'react';
 import { rgbCss } from '../layers/fuel/fbfm40';
+import {
+  BEHAVIOR_CLASSES, BENCHMARK_NOTE, FUEL_BEHAVIOR_REF,
+  suppressionBandsForFlameClass,
+} from '../layers/fuel/fuelBehaviorRef';
 import { formatRadius } from './fuelZoneStore';
 import type { FuelZoneResult, FuelRisk, RiskLevel } from './zonalStats';
 
@@ -113,6 +118,8 @@ function RiskCard({ risk }: { risk: FuelRisk | null }) {
 
 export function FuelZoneDetails({ payload }: Props) {
   const { totalPixels, areaM2, burnablePct, classes, groups, risk } = payload;
+  // Tap-to-pin published-behavior card (8a) — one pinned model at a time.
+  const [pinned, setPinned] = useState<number | null>(null);
 
   if (totalPixels === 0) {
     return (
@@ -181,15 +188,25 @@ export function FuelZoneDetails({ payload }: Props) {
         </div>
       </div>
 
-      {/* Individual fuel models */}
+      {/* Individual fuel models — tap to pin the published reference card
+          (hover-only tooltips are invisible on touch; roadmap 8a). */}
       <div>
-        <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-white/30">
-          Fuel models ({classes.length})
+        <div className="mb-1.5 flex items-baseline gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-white/30">
+            Fuel models ({classes.length})
+          </span>
+          <span className="text-[9px] text-white/25">tap a model for published behavior</span>
         </div>
         <div className="space-y-1.5">
           {classes.map((c) => (
             <div key={c.value} className="space-y-0.5">
-              <div className="flex items-center gap-2 text-[12px]">
+              <button
+                onClick={() => setPinned((p) => (p === c.value ? null : c.value))}
+                className={`flex w-full items-center gap-2 rounded px-0.5 text-left text-[12px] transition ${
+                  pinned === c.value ? 'bg-white/6' : 'hover:bg-white/4'
+                }`}
+                aria-expanded={pinned === c.value}
+              >
                 <span
                   className="h-3 w-3 shrink-0 rounded-[2px] ring-1 ring-white/10"
                   style={{ backgroundColor: rgbCss(c.rgb) }}
@@ -199,19 +216,69 @@ export function FuelZoneDetails({ payload }: Props) {
                   {c.name}
                 </span>
                 <span className="font-mono tabular-nums text-white/70">{fmtPct(c.pct)}</span>
-              </div>
+              </button>
               <div className="ml-5 h-1 w-full overflow-hidden rounded-full bg-white/5">
                 <div
                   className="h-full rounded-full"
                   style={{ width: `${c.pct}%`, backgroundColor: rgbCss(c.rgb) }}
                 />
               </div>
+              {pinned === c.value && <FuelRefCard value={c.value} code={c.code} name={c.name} />}
             </div>
           ))}
         </div>
       </div>
 
       <Footer payload={payload} />
+    </div>
+  );
+}
+
+// ── Published fire-behavior reference card (RMRS-GTR-153) ────────────────────
+
+function FuelRefCard({ value, code, name }: { value: number; code: string; name: string }) {
+  const ref = FUEL_BEHAVIOR_REF[value];
+  if (!ref) {
+    return (
+      <div className="ml-5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/45">
+        Nonburnable ({code}) — no wildland fire spread expected (RMRS-GTR-153).
+      </div>
+    );
+  }
+  const ros = BEHAVIOR_CLASSES[ref.ros];
+  const fl = BEHAVIOR_CLASSES[ref.fl];
+  const bands = suppressionBandsForFlameClass(ref.fl);
+  return (
+    <div className="ml-5 space-y-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2.5">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-white/35">
+        {code} · {name}
+      </div>
+      <div className="flex gap-5">
+        <div>
+          <div className="text-[9px] uppercase tracking-wider text-white/30">Spread rate</div>
+          <div className="text-[12px] font-semibold" style={{ color: ros.color }}>
+            {ros.label} <span className="font-normal text-white/40">({ros.rosChHr})</span>
+          </div>
+        </div>
+        <div>
+          <div className="text-[9px] uppercase tracking-wider text-white/30">Flame length</div>
+          <div className="text-[12px] font-semibold" style={{ color: fl.color }}>
+            {fl.label} <span className="font-normal text-white/40">({fl.flFt})</span>
+          </div>
+        </div>
+      </div>
+      {ref.note && <p className="text-[10px] leading-snug text-amber-300/80">⚠ {ref.note}</p>}
+      <div className="space-y-1 border-t border-white/6 pt-1.5">
+        <div className="text-[9px] uppercase tracking-wider text-white/30">Suppression interpretation</div>
+        {bands.map((b) => (
+          <p key={b.flFt} className="text-[10px] leading-snug text-white/55">
+            <span className="font-semibold text-white/70">{b.flFt}:</span> {b.detail}
+          </p>
+        ))}
+      </div>
+      <p className="text-[8px] leading-snug text-white/25">
+        {BENCHMARK_NOTE} · suppression bands: NWCG Fireline Handbook App. B (PMS 410-2), Table 14
+      </p>
     </div>
   );
 }
