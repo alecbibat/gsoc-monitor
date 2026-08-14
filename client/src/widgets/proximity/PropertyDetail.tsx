@@ -4,6 +4,7 @@ import { flyToLonLat } from '../../cesium/flyTo';
 import { MILES_TO_M } from '../../lib/geo';
 import { startVisiblePolling } from '../../lib/poll';
 import { useProximityStore } from './proximityStore';
+import { downFeedNames } from './proximityScan';
 import { HazardRows } from './HazardRows';
 import { expiresText, fmtMiles, quakeColor, timeAgo } from './format';
 import { downloadPropertyReport } from './reportCanvas';
@@ -45,6 +46,10 @@ export function PropertyDetail({ payload }: { payload: PropertyDetailPayload }) 
   }, [scan]);
 
   const hazards = result?.properties.find((p) => p.key === payload.key) ?? null;
+  // A downed feed must never read as "no active hazards" — an absent entry
+  // while blind is unknown status, not safety.
+  const down = downFeedNames(result);
+  const allDown = down.length === 3;
 
   const fly = () => {
     if (!viewer) return;
@@ -96,6 +101,8 @@ export function PropertyDetail({ payload }: { payload: PropertyDetailPayload }) 
       <div className="flex items-center gap-1.5 text-[11px]">
         {loading && !result ? (
           <span className="text-white/40">Scanning…</span>
+        ) : allDown ? (
+          <span className="text-accent-danger">Hazard feeds unreachable</span>
         ) : (
           <span className="flex items-center gap-1.5 text-accent-ok">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-ok" />
@@ -105,10 +112,23 @@ export function PropertyDetail({ payload }: { payload: PropertyDetailPayload }) 
         {result && <span className="text-white/25">· updated {timeAgo(result.updated)}</span>}
       </div>
 
-      {!hazards ? (
-        <div className="rounded-lg border border-accent-ok/30 bg-accent-ok/10 px-3 py-3 text-[12px] text-accent-ok">
-          <span aria-hidden>✓</span> No active hazards within {radiusMi} mi.
+      {/* Partial-failure note */}
+      {result && !allDown && down.length > 0 && (
+        <div className="text-[10px] text-white/30">
+          {down.join(' + ')} feed{down.length > 1 ? 's' : ''} unavailable — partial results.
         </div>
+      )}
+
+      {!hazards ? (
+        allDown ? (
+          <div className="rounded-lg border border-accent-danger/30 bg-accent-danger/10 px-3 py-3 text-[12px] text-accent-danger">
+            Hazard status unknown — live feeds unreachable.
+          </div>
+        ) : (
+          <div className="rounded-lg border border-accent-ok/30 bg-accent-ok/10 px-3 py-3 text-[12px] text-accent-ok">
+            <span aria-hidden>✓</span> No active hazards within {radiusMi} mi.
+          </div>
+        )
       ) : (
         <>
           {/* Compact summary */}

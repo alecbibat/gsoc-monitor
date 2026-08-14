@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useProximityStore } from '../widgets/proximity/proximityStore';
+import { downFeedNames } from '../widgets/proximity/proximityScan';
 import { quakeColor } from '../widgets/proximity/format';
 import {
   summarize,
@@ -68,6 +69,12 @@ export function PinsWatchCluster() {
   const shown: GroupSummary | null =
     groups.length > 0 ? groups[((idx % groups.length) + groups.length) % groups.length] : null;
   const byId = new Map(groups.map((g) => [g.group.id, g]));
+
+  // A downed feed must never read as "All clear" — an empty result while blind
+  // is unknown status, not safety. (All three feeds down with hazards shown
+  // can't happen: hazards only come from feed data.)
+  const down = downFeedNames(result);
+  const allDown = down.length === 3;
 
   return (
     <div className="mt-1.5 w-[248px]">
@@ -145,6 +152,13 @@ export function PinsWatchCluster() {
           </div>
         ) : result === null ? (
           <span className="text-[10px] text-white/40">Scanning properties…</span>
+        ) : allDown ? (
+          <span className="text-[10px] text-accent-danger/80">Hazard feeds unreachable</span>
+        ) : down.length > 0 ? (
+          <span className="text-[10px] text-accent-warn/80">
+            <span aria-hidden className="mr-1">⚠</span>
+            {down.join(' + ')} feed{down.length > 1 ? 's' : ''} down — partial coverage
+          </span>
         ) : (
           <span className="text-[10px] text-accent-ok/80">
             <span aria-hidden className="mr-1">✓</span>
@@ -152,6 +166,15 @@ export function PinsWatchCluster() {
           </span>
         )}
       </div>
+
+      {/* Feed trouble while hazards are showing — flag the gap under the ledger
+          so the visible hazards aren't mistaken for the whole picture. */}
+      {shown !== null && down.length > 0 && (
+        <div className="mt-1 text-right text-[9px] text-accent-warn/70">
+          <span aria-hidden>⚠</span> {down.join(' + ')} feed{down.length > 1 ? 's' : ''} down —
+          partial
+        </div>
+      )}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { startVisiblePolling } from '../lib/poll';
 import type { LocationGroup } from '../layers/locations/locations';
 import { useProximityStore } from '../widgets/proximity/proximityStore';
+import { downFeedNames } from '../widgets/proximity/proximityScan';
 import { HazardRows } from '../widgets/proximity/HazardRows';
 import { timeAgo } from '../widgets/proximity/format';
 
@@ -26,13 +27,7 @@ export function ShareWatchCard({ groups }: { groups: LocationGroup[] }) {
   const groupIds = new Set(groups.map((g) => g.id));
   const monitoredCount = groups.reduce((n, g) => n + g.locations.length, 0);
   const affected = (result?.properties ?? []).filter((p) => groupIds.has(p.group.id));
-  const downFeeds = result
-    ? ([
-        result.fireError ? 'fires' : null,
-        result.alertError ? 'alerts' : null,
-        result.quakeError ? 'earthquakes' : null,
-      ].filter(Boolean) as string[])
-    : [];
+  const downFeeds = downFeedNames(result);
   const allDown = downFeeds.length === 3;
 
   return (
@@ -52,8 +47,9 @@ export function ShareWatchCard({ groups }: { groups: LocationGroup[] }) {
         {result && <span className="text-[11px] text-white/40">Updated {timeAgo(result.updated)}</span>}
       </div>
 
-      {/* Summary banner */}
-      {result && (
+      {/* Summary banner — suppressed when every feed is down: an empty result
+          from three failed fetches is blindness, not an all-clear. */}
+      {result && !allDown && (
         <div
           className={`rounded-lg border px-3 py-2.5 text-[13px] ${
             affected.length === 0
