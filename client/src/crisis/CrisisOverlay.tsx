@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   useCrisisStore, useActiveIncident, extractPublicState, type CrisisTab,
 } from './crisisStore';
-import { incidentStatusDef } from './taxonomy';
+import { incidentStatusDef, incidentTypeDef } from './taxonomy';
 import { publishShareSnapshots } from './publishSnapshot';
 import { useAuthStore } from '../auth/authStore';
 import { SituationReport } from './tabs/SituationReport';
@@ -224,6 +224,7 @@ function IncidentDetail() {
   const isArchived = !!inc.archivedAt;
   const canDelete  = !isArchived || user?.role === 'admin';
   const { dot, badge, label: statusLabel } = incidentStatusDef(inc.incidentStatus);
+  const td = incidentTypeDef(inc.incidentType);
 
   return (
     <>
@@ -265,6 +266,13 @@ function IncidentDetail() {
               <div className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/35">Situation Report</div>
               <div className="truncate text-[13px] font-semibold text-white/90">{inc.incidentName || 'Untitled Incident'}</div>
             </div>
+            <span
+              className="shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest"
+              style={{ color: td.color, background: `${td.color}20`, borderColor: `${td.color}55` }}
+              title={`Incident type: ${td.label}`}
+            >
+              {td.icon} {td.label}
+            </span>
             <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest ${badge}`}>
               {statusLabel}
             </span>

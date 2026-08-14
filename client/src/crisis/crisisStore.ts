@@ -191,7 +191,7 @@ export const DEFAULT_ROLES: IcsRole[] = [
 const uid = () =>
   `c-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
 
-function newIncident(): Incident {
+function newIncident(type: IncidentType = 'other'): Incident {
   return {
     id: uid(),
     createdAt: new Date().toISOString(),
@@ -199,7 +199,7 @@ function newIncident(): Incident {
     incidentDatetime: '',
     incidentEndDatetime: '',
     incidentLocation: '',
-    incidentType: 'other',
+    incidentType: type,
     incidentStatus: 'active',
     executiveSummary: '',
     roles: DEFAULT_ROLES,
@@ -250,7 +250,7 @@ interface CrisisState {
   setTab: (tab: CrisisTab) => void;
 
   // Incident lifecycle
-  createIncident: () => string;
+  createIncident: (type?: IncidentType) => string;
   openIncident: (id: string) => void;
   backToList: () => void;
   removeIncident: (id: string) => void;
@@ -344,8 +344,8 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
       setOpen: (open) => set({ open }),
       setTab: (activeTab) => set({ activeTab }),
 
-      createIncident: () => {
-        const inc = newIncident();
+      createIncident: (type) => {
+        const inc = newIncident(type);
         set((s) => ({ incidents: [...s.incidents, inc], activeIncidentId: inc.id, open: true }));
         return inc.id;
       },

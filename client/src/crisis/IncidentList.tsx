@@ -1,9 +1,68 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useCrisisStore, type Incident } from './crisisStore';
-import { incidentStatusDef, incidentTypeDef } from './taxonomy';
+import {
+  INCIDENT_CATEGORIES, incidentStatusDef, incidentTypeDef, incidentTypesInCategory,
+  type IncidentType,
+} from './taxonomy';
 import { publishShareSnapshots } from './publishSnapshot';
 import { useAuthStore } from '../auth/authStore';
 import { CrisisReportModal } from './CrisisReportModal';
+
+// ── New-incident type picker ──────────────────────────────────────────────────
+// Creation starts from the taxonomy (roadmap S3): picking a type first means
+// the incident lands with its category color and sensible defaults instead of
+// everything starting as "Other".
+
+function NewIncidentPicker({ onClose }: { onClose: () => void }) {
+  const createIncident = useCrisisStore((s) => s.createIncident);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  const pick = (type: IncidentType) => {
+    createIncident(type);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[2600] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div
+        className="max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-white/12 bg-ink-950 p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h3 className="text-[15px] font-semibold text-white/90">New Incident</h3>
+            <p className="mt-0.5 text-[11px] text-white/40">What kind of incident is this? You can change it later.</p>
+          </div>
+          <button onClick={onClose} className="rounded px-2 py-1 text-[12px] text-white/30 hover:text-white/60">✕</button>
+        </div>
+        <div className="space-y-4">
+          {INCIDENT_CATEGORIES.map((cat) => (
+            <div key={cat.id}>
+              <div className="mb-1.5 text-[9px] font-bold uppercase tracking-[0.16em] text-white/30">{cat.label}</div>
+              <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+                {incidentTypesInCategory(cat.id).map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => pick(t.id)}
+                    className="flex items-center gap-2 rounded-lg border border-white/8 bg-white/4 px-2.5 py-2 text-left text-[12px] text-white/75 transition hover:border-white/25 hover:bg-white/8"
+                  >
+                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: t.color }} />
+                    <span className="truncate">{t.icon} {t.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function fmtWhen(iso: string) {
   try {
@@ -29,6 +88,7 @@ function IncidentCard({ incident }: { incident: Incident }) {
   const removeIncident = useCrisisStore((s) => s.removeIncident);
 
   const sb = incidentStatusDef(incident.incidentStatus);
+  const td = incidentTypeDef(incident.incidentType);
   const assigned = incident.assignments.filter((a) => !a.endedAt).length;
   const actions  = incident.actionLog.filter((e) => e.entryType === 'action').length;
   const events   = incident.actionLog.filter((e) => e.entryType === 'event').length;
@@ -37,6 +97,7 @@ function IncidentCard({ incident }: { incident: Incident }) {
     <button
       onClick={() => openIncident(incident.id)}
       className="group flex flex-col rounded-xl border border-white/10 bg-ink-900/80 p-4 text-left transition hover:border-white/25 hover:bg-ink-900"
+      style={{ borderLeft: `3px solid ${td.color}` }}
     >
       <div className="flex items-start gap-2.5">
         <div className="relative mt-1 flex h-2.5 w-2.5 shrink-0">
@@ -50,7 +111,7 @@ function IncidentCard({ incident }: { incident: Incident }) {
             {incident.incidentName || <span className="text-white/40">Untitled Incident</span>}
           </h3>
           <div className="mt-0.5 flex items-center gap-2 text-[10px] text-white/40">
-            <span>{incidentTypeDef(incident.incidentType).label}</span>
+            <span style={{ color: td.color }}>{td.icon} {td.label}</span>
             {incident.incidentLocation && (
               <>
                 <span className="text-white/20">·</span>
@@ -130,7 +191,7 @@ function ArchivedCard({
             {incident.incidentName || <span className="text-white/30">Untitled Incident</span>}
           </h3>
           <div className="mt-0.5 flex items-center gap-2 text-[10px] text-white/30">
-            <span>{incidentTypeDef(incident.incidentType).label}</span>
+            <span>{incidentTypeDef(incident.incidentType).icon} {incidentTypeDef(incident.incidentType).label}</span>
             {incident.incidentLocation && (
               <>
                 <span className="text-white/15">·</span>
@@ -226,12 +287,12 @@ function ArchivedCard({
 
 export function IncidentList() {
   const incidents      = useCrisisStore((s) => s.incidents);
-  const createIncident = useCrisisStore((s) => s.createIncident);
   const user           = useAuthStore((s) => s.user);
   const isAdmin        = user?.role === 'admin';
 
   const [archiveOpen, setArchiveOpen] = useState(true);
   const [reportIncident, setReportIncident] = useState<Incident | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const active   = [...incidents]
     .filter((i) => !i.archivedAt)
@@ -259,7 +320,7 @@ export function IncidentList() {
           </p>
         </div>
         <button
-          onClick={() => createIncident()}
+          onClick={() => setPickerOpen(true)}
           className="flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-red-500/12 px-4 py-2 text-[12px] font-semibold text-red-400 transition hover:border-red-500/60 hover:bg-red-500/20"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
@@ -273,7 +334,7 @@ export function IncidentList() {
       {/* Active grid */}
       {active.length === 0 ? (
         <button
-          onClick={() => createIncident()}
+          onClick={() => setPickerOpen(true)}
           className="flex w-full flex-col items-center justify-center rounded-xl border border-dashed border-white/15 bg-white/3 py-16 text-center transition hover:border-white/30 hover:bg-white/5"
         >
           <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full border border-white/15 bg-white/5">
@@ -334,6 +395,9 @@ export function IncidentList() {
           )}
         </div>
       )}
+
+      {/* New-incident type picker */}
+      {pickerOpen && <NewIncidentPicker onClose={() => setPickerOpen(false)} />}
 
       {/* PDF report modal */}
       {reportIncident && (
