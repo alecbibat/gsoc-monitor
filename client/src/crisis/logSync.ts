@@ -12,28 +12,54 @@ import { entryCanon } from './syncCanon';
 // This module diffs the store's logs against a per-entry baseline and pushes
 // the difference. IncidentSync calls into it from its store watcher and its
 // SSE handlers.
+//
+// Failure-handling rules (each closes a reviewed lost-update path):
+// - An entry is only ever APPENDed when it has no baseline AND its incident's
+//   baseline map exists (i.e. the incident itself is known to the server via a
+//   confirmed response). Entries created while the incident's create-POST is
+//   in flight simply wait for the confirmation.
+// - A failed PATCH leaves the baseline untouched, so the retry is another
+//   PATCH — never a re-POST (the server no-ops duplicate ids, which would
+//   swallow the edit while reporting success).
+// - A PATCH that 404s means a peer deleted the entry: the edit yields
+//   deterministically (delete wins) — mark the entry synced so nothing
+//   re-appends it; the next broadcast drops it from the local store.
 
 const baselines = new Map<string, Map<string, string>>(); // incidentId → entryId → canon
-const inflight = new Set<string>();                       // entry ids with an append in flight
+const inflight = new Set<string>();                       // appends in flight
+const patchInflight = new Set<string>();                  // PATCHes in flight
+const pendingDeletes = new Set<string>();                 // deletes deferred behind an in-flight append
 const pendingPatches = new Map<string, { incidentId: string; timer: ReturnType<typeof setTimeout> }>();
 const PATCH_DEBOUNCE_MS = 800;
 
 const setSync = (s: 'saving' | 'saved' | 'error') => useCrisisStore.getState().setSyncState(s);
 
+// The blob-sync side registers a check so "saved" is only shown when BOTH
+// modules are quiet.
+let blobIdle: () => boolean = () => true;
+export function registerBlobIdleCheck(fn: () => boolean) {
+  blobIdle = fn;
+}
+
+/** True while any log write is queued or in flight. */
+export function hasPendingWork(): boolean {
+  return inflight.size > 0 || patchInflight.size > 0 || pendingPatches.size > 0;
+}
+
 const quietIfIdle = () => {
-  if (inflight.size === 0 && pendingPatches.size === 0) setSync('saved');
+  if (!hasPendingWork() && blobIdle()) setSync('saved');
 };
 
 /**
- * Entry ids whose local state has not reached the server yet (append in
- * flight, or an edit waiting in the patch debounce). When a remote upsert
+ * Entry ids whose local state has not reached the server yet (append or edit
+ * in flight, or an edit waiting in the patch debounce). When a remote upsert
  * arrives, these local versions must survive the merge.
  */
 export function keepLocalEntryIds(): Set<string> {
-  return new Set([...inflight, ...pendingPatches.keys()]);
+  return new Set([...inflight, ...patchInflight, ...pendingPatches.keys()]);
 }
 
-/** Record `incident`'s log as known-synced (initial load / post-insert). */
+/** Record `incident`'s log as known-synced (initial load). */
 export function seedBaseline(incident: Incident) {
   const m = new Map<string, string>();
   for (const e of incident.actionLog ?? []) m.set(e.id, entryCanon(e));
@@ -41,7 +67,8 @@ export function seedBaseline(incident: Incident) {
 }
 
 /**
- * Rebuild the baseline from a remote log, except entries whose local changes
+ * Rebuild the baseline from a server-confirmed log (SSE upsert, or the
+ * response to the incident's create-POST), except entries whose local changes
  * are still in flight — those keep their previous baseline state so the
  * push/retry logic still sees them as unsynced.
  */
@@ -83,11 +110,21 @@ function postEntry(incidentId: string, entry: ActionLogEntry) {
     .then((res) => {
       if (!res.ok) throw new Error(String(res.status));
       inflight.delete(entry.id);
+      // A delete clicked while this append was in flight was deferred — honor
+      // it now so the entry doesn't silently resurrect.
+      if (pendingDeletes.has(entry.id)) {
+        pendingDeletes.delete(entry.id);
+        baselines.get(incidentId)?.delete(entry.id);
+        deleteEntry(incidentId, entry.id);
+        return;
+      }
       quietIfIdle();
     })
     .catch((err) => {
       inflight.delete(entry.id);
-      // Roll the baseline back so the next store change retries the append.
+      pendingDeletes.delete(entry.id);
+      // Roll the baseline back so the next store change retries the append
+      // (safe: POST is idempotent by entry id).
       baselines.get(incidentId)?.delete(entry.id);
       setSync('error');
       console.warn('[log-sync] append failed:', err);
@@ -108,6 +145,7 @@ function firePatch(incidentId: string, entryId: string, keepalive = false) {
   const entry = inc?.actionLog.find((e) => e.id === entryId);
   if (!entry) return;
   const sentCanon = entryCanon(entry);
+  patchInflight.add(entryId);
   fetch(`/api/incidents/${incidentId}/log/${encodeURIComponent(entryId)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -116,20 +154,38 @@ function firePatch(incidentId: string, entryId: string, keepalive = false) {
     keepalive,
   })
     .then((res) => {
-      if (!res.ok) throw new Error(String(res.status));
-      baselines.get(incidentId)?.set(entryId, sentCanon);
-      quietIfIdle();
+      patchInflight.delete(entryId);
+      if (res.ok) {
+        baselines.get(incidentId)?.set(entryId, sentCanon);
+        quietIfIdle();
+        return;
+      }
+      if (res.status === 404) {
+        // A peer deleted this entry while we were editing it: the delete wins.
+        // Mark the entry synced so nothing re-appends it; the next broadcast
+        // removes it from the local store.
+        baselines.get(incidentId)?.set(entryId, sentCanon);
+        console.warn('[log-sync] edit target was deleted by a peer; keeping the delete');
+        return;
+      }
+      // Transient failure: leave the baseline at its pre-edit value, so the
+      // next store change re-schedules another PATCH (never a POST).
+      setSync('error');
+      console.warn('[log-sync] edit failed:', res.status);
     })
     .catch((err) => {
-      baselines.get(incidentId)?.delete(entryId); // retry on next store change
+      patchInflight.delete(entryId);
       setSync('error');
       console.warn('[log-sync] edit failed:', err);
     });
 }
 
 function schedulePatch(incidentId: string, entryId: string) {
-  const existing = pendingPatches.get(entryId);
-  if (existing) clearTimeout(existing.timer);
+  // Do NOT reset an armed timer: the watcher re-runs on every store change
+  // (any field, any incident), and re-arming would starve the save while the
+  // operator keeps typing anywhere. firePatch reads the store at fire time,
+  // so the content is fresh regardless of when the timer was armed.
+  if (pendingPatches.has(entryId)) return;
   setSync('saving');
   const timer = setTimeout(() => {
     pendingPatches.delete(entryId);
@@ -156,29 +212,24 @@ function deleteEntry(incidentId: string, entryId: string) {
 
 /**
  * Diff every incident's log against its baseline and push local changes.
- * Incidents the server doesn't know yet are skipped — their log travels with
- * the initial blob POST, and `seedBaseline` records it on success.
+ * Incidents without a baseline map are skipped: the baseline appears when the
+ * server confirms the incident (initial load, create-POST response, or a
+ * peer's SSE upsert) — entries added before that simply wait their turn.
  */
-export function syncLogsFromStore(incidents: Incident[], isServerKnown: (id: string) => boolean) {
+export function syncLogsFromStore(incidents: Incident[]) {
   const liveIds = new Set(incidents.map((i) => i.id));
   for (const id of [...baselines.keys()]) {
     if (!liveIds.has(id)) dropIncident(id);
   }
 
   for (const inc of incidents) {
-    if (!isServerKnown(inc.id)) continue;
     const base = baselines.get(inc.id);
-    if (!base) {
-      // First sight of a server-known incident (e.g. another tab created it
-      // and the blob arrived via SSE before any log diff ran here).
-      seedBaseline(inc);
-      continue;
-    }
+    if (!base) continue;
 
     const seen = new Set<string>();
     for (const e of inc.actionLog ?? []) {
       seen.add(e.id);
-      if (inflight.has(e.id)) continue; // append in flight — reconciles on echo
+      if (inflight.has(e.id) || patchInflight.has(e.id)) continue; // reconciles on settle
       const canon = entryCanon(e);
       const known = base.get(e.id);
       if (known === canon) continue;
@@ -191,7 +242,13 @@ export function syncLogsFromStore(incidents: Incident[], isServerKnown: (id: str
     }
 
     for (const id of [...base.keys()]) {
-      if (seen.has(id) || inflight.has(id)) continue;
+      if (seen.has(id)) continue;
+      if (inflight.has(id)) {
+        // Deleted while its append is still in flight — defer the delete
+        // until the append settles instead of forgetting it.
+        pendingDeletes.add(id);
+        continue;
+      }
       base.delete(id);
       const p = pendingPatches.get(id);
       if (p) {

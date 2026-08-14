@@ -10,6 +10,9 @@ import { useCrisisStore, useActiveIncident, extractPublicState, type Incident } 
 import { entryCanon, mergeActionLogs, serverCanon } from './syncCanon';
 import * as logSync from './logSync';
 
+// "Saved" is only truthful when the log engine is also idle (and vice versa).
+logSync.registerBlobIdleCheck(() => pending.size === 0);
+
 // Server-known state per incident id — the baseline the watcher diffs against.
 // Populated on load, after each successful push, and whenever a peer's change
 // arrives, so replaying a remote edit into the store never echoes back out.
@@ -38,13 +41,24 @@ function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
     credentials: 'include',
     body: JSON.stringify(body),
   })
-    .then((res) => {
+    .then(async (res) => {
       if (!res.ok) throw new Error(String(res.status));
-      // The insert carried this exact log — record it as the synced baseline
-      // so the log watcher only pushes entries added after this snapshot.
-      if (isCreate) logSync.seedBaseline(incident);
-      // Only clear to "saved" if nothing newer is queued.
-      if (!pending.has(incident.id)) setSync('saved');
+      if (isCreate) {
+        // Baseline the log from the server's RESPONSE, not from what we sent:
+        // if this POST hit the upsert path (retry after a lost response, or
+        // the tab-close beacon), the server kept its own log and the sent one
+        // never landed. In-flight local entries keep their unsynced state so
+        // the log watcher still pushes them.
+        try {
+          const data = await res.json() as Incident;
+          const remoteLog = Array.isArray(data?.actionLog) ? data.actionLog : [];
+          logSync.applyRemoteLog(incident.id, remoteLog, logSync.keepLocalEntryIds());
+        } catch {
+          /* body unavailable — the next SSE echo rebuilds the baseline */
+        }
+      }
+      // Only clear to "saved" if nothing newer is queued anywhere.
+      if (!pending.has(incident.id) && !logSync.hasPendingWork()) setSync('saved');
     })
     .catch((e) => {
       // Roll the baseline back so the next edit re-attempts the push.
@@ -169,7 +183,7 @@ export function IncidentSync() {
       }
 
       // Log changes sync separately, per entry, through the append endpoints.
-      logSync.syncLogsFromStore(next, (id) => serverState.has(id));
+      logSync.syncLogsFromStore(next);
 
       for (const id of [...serverState.keys()]) {
         if (!nextIds.has(id)) {
