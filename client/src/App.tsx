@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import type * as Cesium from 'cesium';
+import { ShareErrorBoundary } from './crisis/ShareErrorBoundary';
 import { CesiumContext } from './cesium/CesiumContext';
 import { CesiumGlobe } from './cesium/CesiumGlobe';
 import { EarthquakeLayer } from './layers/earthquakes/EarthquakeLayer';
@@ -112,15 +113,17 @@ export default function App() {
 
   if (shareToken) {
     return (
-      <Suspense
-        fallback={
-          <div className="grid h-full place-items-center bg-black text-sm text-white/40">
-            Loading shared view…
-          </div>
-        }
-      >
-        <CrisisShareView token={shareToken} />
-      </Suspense>
+      <ShareErrorBoundary>
+        <Suspense
+          fallback={
+            <div className="grid h-full place-items-center bg-black text-sm text-white/40">
+              Loading shared view…
+            </div>
+          }
+        >
+          <CrisisShareView token={shareToken} />
+        </Suspense>
+      </ShareErrorBoundary>
     );
   }
 

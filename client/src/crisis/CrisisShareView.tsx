@@ -13,9 +13,29 @@ import { incidentStatusDef, incidentTypeDef } from './taxonomy';
 
 // The live globe (Cesium + every layer component) is only loaded when the
 // incident actually prescribes live layers; plain share links keep the light
-// Leaflet map.
+// Leaflet map. The import can be triggered mid-session by an SSE update — in
+// a tab that outlived a redeploy, that chunk no longer exists, and without
+// the catch the rejection would take down the whole page instead of just the
+// map area.
+function GlobeUnavailable() {
+  return (
+    <div className="flex h-full min-h-[240px] items-center justify-center rounded-lg border border-white/10 bg-white/4 p-6 text-center">
+      <div>
+        <p className="text-[13px] text-white/60">The live map can’t load — the app was updated while this page was open.</p>
+        <button
+          onClick={() => window.location.reload()}
+          className="mt-3 rounded border border-white/20 bg-white/8 px-3 py-1.5 text-[11px] text-white/75 transition hover:border-white/35"
+        >
+          Reload to update
+        </button>
+      </div>
+    </div>
+  );
+}
 const CrisisShareGlobe = lazy(() =>
-  import('./CrisisShareGlobe').then((m) => ({ default: m.CrisisShareGlobe }))
+  import('./CrisisShareGlobe')
+    .then((m) => ({ default: m.CrisisShareGlobe }))
+    .catch(() => ({ default: GlobeUnavailable as unknown as typeof import('./CrisisShareGlobe').CrisisShareGlobe }))
 );
 
 function fmtTs(iso: string) {
@@ -330,7 +350,20 @@ export function CrisisShareView({ token }: { token: string }) {
         })
         .catch(() => setError('This link has been revoked by the incident owner.'));
     });
-    es.onerror = () => { /* reconnects automatically */ };
+    es.onerror = () => {
+      // Transient drops reconnect automatically. A CLOSED stream is terminal —
+      // the server now refuses the connection (e.g. the link expired, or it
+      // was revoked while this tab's stream was already dead) — so resync via
+      // the snapshot: a 410 lands the viewer on the closure page instead of a
+      // silently frozen "live" report.
+      if (es.readyState !== EventSource.CLOSED) return;
+      const kq = viewKey ? `?k=${viewKey}` : '';
+      fetch(`/api/crisis/share/${token}${kq}`)
+        .then(async (r) => {
+          if (r.status === 410) setGone((await r.json()) as GonePayload);
+        })
+        .catch(() => { /* still offline — the viewer can reload manually */ });
+    };
     return () => es.close();
   }, [token, viewKey, unlocked]);
 
