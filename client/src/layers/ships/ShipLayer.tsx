@@ -8,13 +8,13 @@ import { startVisiblePolling } from '../../lib/poll';
 import type { ShipState } from '../../types';
 import { useShipsStatus } from './shipsStore';
 import {
-  SHIP_MARKER_STYLE,
+  SHIP_MARKER,
   pingAlpha,
   pingScale,
   prefersReducedMotion,
-  shipBaseUri,
-  shipIconUri,
+  shipHullUri,
   shipPingUri,
+  shipReticleUri,
 } from './shipMarkers';
 
 function shipColor(type: number | null): string {
@@ -44,12 +44,12 @@ function shipPanelData(ship: ShipState) {
 // How far ahead to project the dead-reckoning "future path".
 const FUTURE_HOURS = 6;
 
-// Sub-metre altitude lifts that break the depth tie between the three billboards
-// stacked on a ship's position, so the hull always draws over its own furniture.
-// Far too small to see at any real viewing distance (cf. the lightning layer).
+// Sub-metre altitude lifts that break the depth tie between the billboards
+// stacked on a ship's position, so the hull always draws over its own reticle
+// and rings. Far too small to see at any real viewing distance.
 const ALT_PING = 0;
-const ALT_BASE = 1;
-const ALT_ICON = 2;
+const ALT_RETICLE = 1;
+const ALT_HULL = 2;
 
 // Render pacing for the ping. The globe runs in requestRenderMode, so an
 // animated CallbackProperty only advances when something asks for a frame —
@@ -203,7 +203,7 @@ export function ShipLayer() {
           visible
             .map(
               (s) =>
-                `${s.mmsi}:${s.name}:${s.latitude}:${s.longitude}:${s.heading}:${s.course}:${shipAlpha(s.lastSeenSec)}`
+                `${s.mmsi}:${s.latitude}:${s.longitude}:${s.heading}:${s.course}:${shipAlpha(s.lastSeenSec)}`
             )
             .join('|');
         if (sig === lastSigRef.current) {
@@ -216,8 +216,6 @@ export function ShipLayer() {
         ds.entities.removeAll();
         shipPositions = visible.map((s) => ({ lon: s.longitude, lat: s.latitude }));
 
-        const style = SHIP_MARKER_STYLE;
-
         for (const ship of visible) {
           const isFavorite = favorites.includes(ship.mmsi);
           const color = shipColor(ship.shipType);
@@ -225,26 +223,26 @@ export function ShipLayer() {
 
           const alpha = shipAlpha(ship.lastSeenSec);
           const tint = Cesium.Color.WHITE.withAlpha(alpha);
-          const iconSize = isFavorite ? style.icon.favoriteSizePx : style.icon.sizePx;
+          const position = Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude, ALT_PING);
 
           // Rings first: they expand out from under the marker and must not
           // cover it, so they sit lowest in the stack.
           const pingImage = shipPingUri(color);
-          for (let i = 0; i < style.ping.count; i++) {
+          for (let i = 0; i < SHIP_MARKER.ping.count; i++) {
             const ring = i;
             const ringEntity = ds.entities.add({
               id: `ship-${ship.mmsi}-ping-${i}`,
-              position: Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude, ALT_PING),
+              position,
               billboard: {
                 image: pingImage,
-                width: style.ping.sizePx,
-                height: style.ping.sizePx,
+                width: SHIP_MARKER.ping.sizePx,
+                height: SHIP_MARKER.ping.sizePx,
                 scale: new Cesium.CallbackProperty(() => pingScale(ring), false),
                 color: new Cesium.CallbackProperty(
                   () => Cesium.Color.WHITE.withAlpha(pingAlpha(ring, alpha)),
                   false
                 ),
-                scaleByDistance: style.scaleByDistance,
+                scaleByDistance: SHIP_MARKER.scaleByDistance,
                 // Default depth test so far-side rings stay hidden behind the globe.
               },
             });
@@ -253,55 +251,33 @@ export function ShipLayer() {
             attachPanelData(ringEntity, shipPanelData(ship));
           }
 
-          const baseImage = shipBaseUri(color, isFavorite);
-          if (style.base && baseImage) {
-            const baseEntity = ds.entities.add({
-              id: `ship-${ship.mmsi}-base`,
-              position: Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude, ALT_BASE),
-              billboard: {
-                image: baseImage,
-                width: style.base.widthPx,
-                height: style.base.heightPx,
-                verticalOrigin: style.base.verticalOrigin,
-                color: tint,
-                scaleByDistance: style.scaleByDistance,
-              },
-              label: style.showLabel
-                ? {
-                    text: ship.name?.trim() || `MMSI ${ship.mmsi}`,
-                    font: 'bold 11px sans-serif',
-                    fillColor: Cesium.Color.fromCssColorString(color),
-                    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-                    outlineWidth: 2,
-                    outlineColor: Cesium.Color.fromCssColorString('#04181f').withAlpha(0.9),
-                    verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                    pixelOffset: new Cesium.Cartesian2(0, style.icon.offsetY - iconSize / 2 - 6),
-                    // Billboards shrink with distance but pixel offsets don't,
-                    // so the offset needs the same ramp or the label drifts off
-                    // the marker as the camera pulls back.
-                    pixelOffsetScaleByDistance: style.scaleByDistance,
-                    showBackground: true,
-                    backgroundColor: Cesium.Color.fromCssColorString('#04181f').withAlpha(0.72),
-                    backgroundPadding: new Cesium.Cartesian2(5, 3),
-                  }
-                : undefined,
-            });
-            attachPanelData(baseEntity, shipPanelData(ship));
-          }
+          const reticle = ds.entities.add({
+            id: `ship-${ship.mmsi}-reticle`,
+            position: Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude, ALT_RETICLE),
+            billboard: {
+              image: shipReticleUri(color, isFavorite),
+              width: SHIP_MARKER.reticlePx,
+              height: SHIP_MARKER.reticlePx,
+              color: tint,
+              scaleByDistance: SHIP_MARKER.scaleByDistance,
+              // Deliberately not rotated: the reticle stays a stable target
+              // while the hull turns inside it.
+            },
+          });
+          attachPanelData(reticle, shipPanelData(ship));
 
+          const hullSize = isFavorite ? SHIP_MARKER.favoriteHullPx : SHIP_MARKER.hullPx;
           const entity = ds.entities.add({
             id: `ship-${ship.mmsi}`,
-            position: Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude, ALT_ICON),
+            position: Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude, ALT_HULL),
             billboard: {
-              image: shipIconUri(color, isFavorite),
-              width: iconSize,
-              height: iconSize,
+              image: shipHullUri(color, isFavorite),
+              width: hullSize,
+              height: hullSize,
               rotation: Cesium.Math.toRadians(-bearing),
               alignedAxis: Cesium.Cartesian3.UNIT_Z,
               color: tint,
-              pixelOffset: new Cesium.Cartesian2(0, style.icon.offsetY),
-              pixelOffsetScaleByDistance: style.scaleByDistance,
-              scaleByDistance: style.scaleByDistance,
+              scaleByDistance: SHIP_MARKER.scaleByDistance,
               // Default depth test so ships on the far side of the globe stay hidden.
             },
           });

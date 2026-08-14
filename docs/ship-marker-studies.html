@@ -189,10 +189,11 @@ code{
   </div>
   <p class="lede">
     Seven Windstar hulls on a night globe, currently drawn as a 22&nbsp;px silhouette with a
-    near-black outline &mdash; the same value as the water behind it. Three replacements,
-    each built from a static base, a heading-rotated hull, and a ring that pulses off the
-    ship&rsquo;s position. Everything below is the real artwork and the real animation
-    timings, pulled straight out of <span class="mono">shipMarkers.ts</span>.
+    near-black outline &mdash; the same value as the water behind it. Three replacements
+    were drafted, each built from a static base, a heading-rotated hull, and a ring that
+    pulses off the ship&rsquo;s position. <strong style="color:var(--foam)">B shipped.</strong>
+    A and C were stripped from the codebase; this page is the record of what they looked
+    like and why they lost.
   </p>
   <div class="tick-rule"></div>
 </header>
@@ -248,7 +249,7 @@ code{
 <section id="recommend">
   <div class="rec">
     <div>
-      <div class="kicker">Recommendation</div>
+      <div class="kicker">Decision &middot; shipped</div>
       <h2 style="margin-bottom:14px">B &mdash; Sonar Contact</h2>
       <p style="margin-bottom:14px">
         It buys the most legibility per pixel. The reticle is the only one of the three
@@ -265,11 +266,11 @@ code{
         rings on a 2&nbsp;s loop reads as an active sweep rather than a slow throb.
       </p>
       <p>
-        <strong style="color:var(--foam)">If you want more than that:</strong> B and C are not
-        exclusive. Turning on C&rsquo;s always-visible name label under B&rsquo;s reticle is a
-        one-line change (<span class="mono">showLabel: true</span>) and is the single biggest
-        win for finding a <em>specific</em> ship &mdash; seven labels never crowd a world view.
-        I&rsquo;d start with B alone and add labels if you find yourself hovering to identify.
+        <strong style="color:var(--foam)">Still on the table:</strong> B and C were never
+        exclusive. Adding C&rsquo;s always-visible name label under B&rsquo;s reticle is a small
+        change &mdash; a Cesium <span class="mono">label</span> on the reticle entity &mdash; and
+        it is the single biggest win for finding a <em>specific</em> ship, since seven labels
+        never crowd a world view. Worth doing if you catch yourself hovering to identify.
       </p>
     </div>
     <div class="stage rec-stage" data-stage="rec"></div>
@@ -277,9 +278,9 @@ code{
 </section>
 
 <div class="foot">
-  <p><strong>All three are already in the branch.</strong> The globe ships with B. To compare on the
-  live map without a rebuild, append <code>?shipMarker=halo</code>, <code>?shipMarker=sonar</code>,
-  or <code>?shipMarker=beacon</code> to the URL.</p>
+  <p><strong>B is what the globe draws now.</strong> Its artwork and timings live in
+  <code>client/src/layers/ships/shipMarkers.ts</code>; the reticle, hull and rings are assembled
+  as three stacked billboards in <code>ShipLayer.tsx</code>. A and C survive only in this page.</p>
   <p>Rings freeze mid-expansion &mdash; keeping the extra presence, dropping the motion &mdash; for
   anyone with <span class="mono">prefers-reduced-motion</span> set, and the render pump idles
   whenever no ship is on screen.</p>
