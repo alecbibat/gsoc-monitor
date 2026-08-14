@@ -79,7 +79,9 @@ section{padding:clamp(38px,6vw,68px) 0; border-bottom:1px solid var(--rule)}
 
 /* ---- marker assembly: everything positions off a single anchor point ---- */
 .marker{position:absolute; width:0; height:0}
-.marker > *{position:absolute; left:0; top:0; display:block}
+/* The anchor is 0x0 on purpose, so an inherited `img{max-width:100%}` would
+   resolve to 0 and collapse every piece of the marker. Opt out explicitly. */
+.marker > *{position:absolute; left:0; top:0; display:block; max-width:none; max-height:none}
 .ping{transform-origin:50% 50%; will-change:transform,opacity}
 .base-c{transform:translate(-50%,-50%)}
 .base-b{transform:translate(-50%,-100%)}
