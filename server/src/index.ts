@@ -34,6 +34,7 @@ import authRouter from './routes/auth';
 import adminRouter from './routes/admin';
 import incidentsRouter from './routes/incidents';
 import watchlistRouter from './routes/watchlist';
+import assetsRouter from './routes/assets';
 import intelRouter from './routes/intel';
 import { initIntelStream } from './intel/service';
 
@@ -109,6 +110,7 @@ function main() {
 
   // Team-shared OSINT watchlist CRUD (requireAuth applied inside router)
   app.use('/api/watchlist', watchlistRouter);
+  app.use('/api/assets', assetsRouter);
   // Public read-only intel feed (the ingested Dataminr-style buffer)
   app.use('/api/intel', intelRouter);
 

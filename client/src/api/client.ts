@@ -118,4 +118,16 @@ export const api = {
     authJson<import('../types').WatchlistSource>(`/api/watchlist/${id}`, 'PATCH', { active }),
   deleteWatchSource: (id: string) =>
     authJson<{ ok: boolean }>(`/api/watchlist/${id}`, 'DELETE'),
+
+  // Site assets & infrastructure register (Track 2).
+  assets: (groupId: string, locationName: string) =>
+    authJson<import('../types').PropertyAsset[]>(
+      `/api/assets?groupId=${encodeURIComponent(groupId)}&locationName=${encodeURIComponent(locationName)}`,
+      'GET'
+    ),
+  addAsset: (body: Partial<import('../types').PropertyAsset>) =>
+    authJson<import('../types').PropertyAsset>('/api/assets', 'POST', body),
+  updateAsset: (id: string, body: Partial<import('../types').PropertyAsset>) =>
+    authJson<import('../types').PropertyAsset>(`/api/assets/${id}`, 'PUT', body),
+  deleteAsset: (id: string) => authJson<{ ok: boolean }>(`/api/assets/${id}`, 'DELETE'),
 };

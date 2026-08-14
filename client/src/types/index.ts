@@ -534,6 +534,30 @@ export interface IntelResponse {
 }
 
 // A watchlist source row as returned by /api/watchlist.
+// --- Site assets & infrastructure (Track 2) ---------------------------------
+export type AssetCategory =
+  | 'building' | 'generator' | 'water-system' | 'fuel-storage'
+  | 'comms' | 'vehicle' | 'medical' | 'other';
+export type AssetCondition = 'good' | 'fair' | 'poor' | 'failed';
+
+export interface PropertyAsset {
+  id: string;
+  groupId: string;       // LOCATION_GROUPS id (stable external key)
+  locationName: string;  // property identity today is group id + location name
+  name: string;
+  category: AssetCategory;
+  lat: number | null;
+  lon: number | null;
+  notes: string;
+  condition: AssetCondition | null;
+  lastInspected: string | null; // YYYY-MM-DD
+  nextDue: string | null;       // YYYY-MM-DD
+  responsibleParty: string | null;
+  addedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface WatchlistSource {
   id: string;
   kind: SourceKind;

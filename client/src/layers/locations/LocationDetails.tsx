@@ -6,11 +6,15 @@ import { fetchDirections, fetchDriveRoute } from './directionsClient';
 import { PulseLineMaterialProperty } from './pulseLineMaterial';
 import { LOCATION_GROUPS } from './locations';
 import { useRiskReportStore } from '../../riskreport/riskReportStore';
+import { PropertyAssets } from '../../assets/PropertyAssets';
 import type { DirectionsResponse, DirectionsLeg, DriveResult } from '../../types';
 
 export interface LocationPayload {
   name: string;
   group: string;
+  /** Group ID — the layer has always sent it; older payload shapes may lack
+   * it, so consumers fall back to a name lookup. */
+  groupId?: string;
   lat: number;
   lon: number;
   altitudeM: number;
@@ -661,6 +665,17 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
           🔥 Wildfire risk
         </button>
       </div>
+
+      {/* Asset register (Track 2) — needs the group ID; resolve by name for
+          any pre-groupId payload shape. */}
+      {(() => {
+        const gid = payload.groupId ?? LOCATION_GROUPS.find((g) => g.name === payload.group)?.id;
+        return gid ? (
+          <div className="border-t border-white/8 pt-3">
+            <PropertyAssets groupId={gid} locationName={payload.name} />
+          </div>
+        ) : null;
+      })()}
 
       {/* Hospital & Hotel directions (A/B/C) */}
       <div className="border-t border-white/8 pt-3">

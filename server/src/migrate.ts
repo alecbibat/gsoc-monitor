@@ -107,6 +107,31 @@ export async function migrate() {
         data       JSONB       NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      -- Track 2: site assets & infrastructure, keyed to a monitored property.
+      -- Property identity today is the curated LOCATION_GROUPS list (group id +
+      -- location name); a future locations table can FK these columns without
+      -- rewriting rows. Compliance fields exist from day one — the point is to
+      -- let data collection start now, ahead of any dashboard consuming them.
+      CREATE TABLE IF NOT EXISTS property_assets (
+        id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        group_id          TEXT        NOT NULL,
+        location_name     TEXT        NOT NULL,
+        name              TEXT        NOT NULL,
+        category          TEXT        NOT NULL DEFAULT 'building',
+        lat               DOUBLE PRECISION,
+        lon               DOUBLE PRECISION,
+        notes             TEXT        NOT NULL DEFAULT '',
+        condition         TEXT,
+        last_inspected    DATE,
+        next_due          DATE,
+        responsible_party TEXT,
+        added_by          UUID,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS property_assets_loc_idx
+        ON property_assets (group_id, location_name);
     `);
 
     // Signup code. If SIGNUP_CODE is set in the environment it is authoritative
