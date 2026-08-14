@@ -54,6 +54,11 @@ export interface SectionResult {
   drivers: string[];
   /** Set when the input feed is unavailable — shown honestly, never as Low. */
   unavailable?: string;
+  /**
+   * Count framing shown beside/instead of the level chip when the section is
+   * really answering "how many / none" (e.g. alerts: "None active").
+   */
+  countLabel?: string;
 }
 
 export interface HotspotHit {
@@ -72,6 +77,8 @@ export interface NamedFireHit {
   distanceMi: number;
   acres?: number;
   containmentPct?: number;
+  /** WFIGS record last-modified (epoch ms) — staleness context. */
+  updatedAt?: number;
 }
 
 export interface AlertHit {

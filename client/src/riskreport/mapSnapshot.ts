@@ -247,6 +247,48 @@ export function drawPin(
   ctx.restore();
 }
 
+/**
+ * A fire-hotspot flame marker: soft orange glow, red-orange flame body with a
+ * flickering tip, yellow inner core. `r` is the flame's half-height.
+ */
+export function drawFlame(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) {
+  ctx.save();
+
+  // Glow
+  const glow = ctx.createRadialGradient(x, y, r * 0.2, x, y, r * 1.9);
+  glow.addColorStop(0, 'rgba(255,120,40,0.5)');
+  glow.addColorStop(1, 'rgba(255,120,40,0)');
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(x, y, r * 1.9, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Flame body — teardrop with a leaning tip
+  const flame = (scale: number, fill: string) => {
+    const h = r * 2 * scale;
+    const w = r * 1.25 * scale;
+    const baseY = y + r * 0.9;
+    ctx.beginPath();
+    ctx.moveTo(x, baseY - h);                       // tip
+    ctx.bezierCurveTo(x + w * 0.15, baseY - h * 0.75, x + w * 0.62, baseY - h * 0.62, x + w * 0.5, baseY - h * 0.28);
+    ctx.bezierCurveTo(x + w * 0.62, baseY - h * 0.1, x + w * 0.4, baseY, x, baseY);
+    ctx.bezierCurveTo(x - w * 0.55, baseY, x - w * 0.62, baseY - h * 0.35, x - w * 0.38, baseY - h * 0.55);
+    ctx.bezierCurveTo(x - w * 0.25, baseY - h * 0.72, x - w * 0.08, baseY - h * 0.85, x, baseY - h);
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+  };
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = 1.5;
+  flame(1, '#ff4d1c');
+  ctx.stroke();
+  flame(0.55, '#ffb020');
+  flame(0.28, '#ffe66b');
+
+  ctx.restore();
+}
+
 export function drawPolygon(
   ctx: CanvasRenderingContext2D,
   proj: SnapshotProjection,

@@ -87,9 +87,9 @@ export function WindChart({ hourly }: { hourly: NonNullable<WildfireReportData['
   const n = hourly.speedMph.length;
   if (n === 0) return null;
   const W = 640;
-  const H = 150;
+  const H = 164;
   const PAD_L = 30;
-  const PAD_B = 18;
+  const PAD_B = 30; // two axis rows: hours + day labels
   const PAD_T = 22;
   const plotW = W - PAD_L - 6;
   const plotH = H - PAD_T - PAD_B;
@@ -108,6 +108,19 @@ export function WindChart({ hourly }: { hourly: NonNullable<WildfireReportData['
     if (hh === 12) return '12p';
     return hh < 12 ? `${hh}a` : `${hh - 12}p`;
   };
+  // "Today" / "Fri 8/15" for a local ISO hour string.
+  const todayLocal = hourly.times[0]?.slice(0, 10);
+  const dayLabel = (iso: string) => {
+    if (iso.slice(0, 10) === todayLocal) return 'Today';
+    const d = new Date(`${iso.slice(0, 10)}T12:00:00`);
+    return Number.isNaN(d.getTime())
+      ? iso.slice(5, 10)
+      : d.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' });
+  };
+  // Day boundaries (local midnight) for separators + the start of each day span.
+  const dayStarts = hourly.times
+    .map((t, i) => ({ t, i }))
+    .filter(({ t, i }) => i === 0 || t.slice(11, 13) === '00');
 
   const gridLines = [0.25, 0.5, 0.75, 1].map((f) => Math.round(maxV * f));
 
@@ -120,10 +133,17 @@ export function WindChart({ hourly }: { hourly: NonNullable<WildfireReportData['
             <text x={PAD_L - 4} y={y(v) + 3} textAnchor="end" fontSize="8" fill="rgba(255,255,255,0.4)">{v}</text>
           </g>
         ))}
+        {/* Day separators at local midnight */}
+        {dayStarts.map(({ t, i }) =>
+          i === 0 ? null : (
+            <line key={`sep-${t}`} x1={x(i)} x2={x(i)} y1={PAD_T - 14} y2={H - PAD_B} stroke="rgba(255,255,255,0.14)" strokeWidth="1" strokeDasharray="2 3" />
+          )
+        )}
         <path d={areaPath} fill="rgba(61,220,255,0.14)" />
         <path d={speedPath} fill="none" stroke="#3ddcff" strokeWidth="2" />
         <path d={gustPath} fill="none" stroke="#fbbf24" strokeWidth="1.5" strokeDasharray="4 3" />
-        {/* Direction arrows every 4 h — pointing where the wind blows TOWARD */}
+        {/* Direction arrows every 4 h — pointing where the wind blows TOWARD.
+            The legend lives below the chart in HTML so nothing overlaps them. */}
         {hourly.dirDeg.map((deg, i) =>
           i % 4 === 0 ? (
             <g key={i} transform={`translate(${x(i)}, ${PAD_T - 10}) rotate(${(deg + 180) % 360})`}>
@@ -131,20 +151,30 @@ export function WindChart({ hourly }: { hourly: NonNullable<WildfireReportData['
             </g>
           ) : null
         )}
+        {/* Hour ticks */}
         {hourly.times.map((t, i) =>
           i % 8 === 0 ? (
-            <text key={t} x={x(i)} y={H - 5} textAnchor="middle" fontSize="8" fill="rgba(255,255,255,0.4)">
+            <text key={t} x={x(i)} y={H - 17} textAnchor="middle" fontSize="8" fill="rgba(255,255,255,0.4)">
               {hourLabel(t)}
             </text>
           ) : null
         )}
-        <g fontSize="8">
-          <line x1={W - 150} x2={W - 132} y1={12} y2={12} stroke="#3ddcff" strokeWidth="2" />
-          <text x={W - 128} y={15} fill="rgba(255,255,255,0.6)">sustained</text>
-          <line x1={W - 76} x2={W - 58} y1={12} y2={12} stroke="#fbbf24" strokeWidth="1.5" strokeDasharray="4 3" />
-          <text x={W - 54} y={15} fill="rgba(255,255,255,0.6)">gusts mph</text>
-        </g>
+        {/* Day labels under the hours */}
+        {dayStarts.map(({ t, i }) => (
+          <text key={`day-${t}`} x={x(i) + 2} y={H - 5} textAnchor="start" fontSize="9" fontWeight="600" fill="rgba(255,255,255,0.6)">
+            {dayLabel(t)}
+          </text>
+        ))}
       </svg>
+      <div className="mt-1 flex items-center gap-4 px-1 text-[9px] text-white/50">
+        <span className="flex items-center gap-1.5">
+          <span className="print-color inline-block h-0.5 w-4 rounded" style={{ background: '#3ddcff' }} /> sustained (mph)
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="print-color inline-block h-0.5 w-4 rounded border-t border-dashed" style={{ borderColor: '#fbbf24' }} /> gusts (mph)
+        </span>
+        <span className="text-white/35">↑ arrows = direction the wind blows toward · local time at the property</span>
+      </div>
     </div>
   );
 }

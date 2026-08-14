@@ -29,6 +29,7 @@ export interface NamedFire {
   managementOrg: string | null; // e.g. incident-management team
   cause: string | null;
   discovered: number | null; // epoch ms
+  updated: number | null;    // epoch ms — WFIGS record last modified (staleness signal)
   state: string | null; // "CA"
 }
 
@@ -68,6 +69,7 @@ interface LocProps {
   IncidentManagementOrganization?: string | null;
   FireCause?: string | null;
   FireDiscoveryDateTime?: number | null;
+  ModifiedOnDateTime_dt?: number | null;
   POOState?: string | null;
   IrwinID?: string | null;
 }
@@ -91,6 +93,7 @@ function parseFire(f: GeoJSON.Feature): NamedFire | null {
     managementOrg: str(p.IncidentManagementOrganization),
     cause: str(p.FireCause),
     discovered: num(p.FireDiscoveryDateTime),
+    updated: num(p.ModifiedOnDateTime_dt),
     state: str(p.POOState)?.replace(/^US-/, '') ?? null,
   };
 }
@@ -105,16 +108,29 @@ async function queryGeoJson(url: string, params: Record<string, string>): Promis
 }
 
 // Active named wildfires (not fully contained, ≥ MIN_ACRES), biggest first.
+const FIRE_FIELDS =
+  'IncidentName,IncidentSize,PercentContained,TotalIncidentPersonnel,IncidentComplexityLevel,IncidentManagementOrganization,FireCause,FireDiscoveryDateTime,POOState,IrwinID';
+
 async function fetchFires(): Promise<NamedFire[]> {
-  const feats = await queryGeoJson(LOC, {
-    where: `IncidentTypeCategory='WF' AND IncidentSize>=${MIN_ACRES} AND (PercentContained<100 OR PercentContained IS NULL)`,
-    outFields:
-      'IncidentName,IncidentSize,PercentContained,TotalIncidentPersonnel,IncidentComplexityLevel,IncidentManagementOrganization,FireCause,FireDiscoveryDateTime,POOState,IrwinID',
-    orderByFields: 'IncidentSize DESC',
-    resultRecordCount: String(MAX_FIRES),
-    outSR: '4326',
-    f: 'geojson',
-  });
+  const query = (outFields: string) =>
+    queryGeoJson(LOC, {
+      where: `IncidentTypeCategory='WF' AND IncidentSize>=${MIN_ACRES} AND (PercentContained<100 OR PercentContained IS NULL)`,
+      outFields,
+      orderByFields: 'IncidentSize DESC',
+      resultRecordCount: String(MAX_FIRES),
+      outSR: '4326',
+      f: 'geojson',
+    });
+  let feats: GeoJSON.Feature[];
+  try {
+    // ModifiedOnDateTime_dt gives the record's last-update time (staleness
+    // context in the risk report). An unknown outField fails the whole ArcGIS
+    // query, so if the service ever renames it, retry without it rather than
+    // blacking out the layer.
+    feats = await query(`${FIRE_FIELDS},ModifiedOnDateTime_dt`);
+  } catch {
+    feats = await query(FIRE_FIELDS);
+  }
   const seen = new Set<string>();
   const fires: NamedFire[] = [];
   for (const f of feats) {

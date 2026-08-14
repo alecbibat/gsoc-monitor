@@ -50,7 +50,16 @@ function Section({ section, children }: { section: SectionResult; children?: Rea
             Unavailable
           </span>
         ) : (
-          <LevelBadge level={section.level} />
+          <>
+            {section.countLabel && (
+              <span className="rounded-full border border-white/15 bg-white/6 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-white/55">
+                {section.countLabel}
+              </span>
+            )}
+            {/* A count-framed section only shows a risk chip when it actually
+                raises risk — "None active · Low" was answering two questions. */}
+            {(!section.countLabel || section.level !== 'low') && <LevelBadge level={section.level} />}
+          </>
         )}
       </div>
       {section.unavailable ? (
@@ -202,16 +211,31 @@ function ReportBody({ data }: { data: WildfireReportData }) {
         <Section section={byId('named-fires')!}>
           {data.namedFires.length > 0 && (
             <div className="space-y-1.5">
-              {data.namedFires.map((f, i) => (
-                <div key={i} className="flex items-center gap-3 rounded-lg border border-white/8 bg-white/4 px-3 py-2 text-[12px] text-white/75">
-                  <span className="font-semibold">{f.name}</span>
-                  <span className="text-white/45">{num(f.distanceMi, 1)} mi</span>
-                  {f.acres !== undefined && <span className="text-white/45">{Math.round(f.acres).toLocaleString()} acres</span>}
-                  <span className="ml-auto text-white/45">
-                    {f.containmentPct !== undefined ? `${num(f.containmentPct)}% contained` : 'containment unknown'}
-                  </span>
-                </div>
-              ))}
+              {data.namedFires.map((f, i) => {
+                const ageH = f.updatedAt ? (Date.now() - f.updatedAt) / 3600_000 : null;
+                const stale = ageH !== null && ageH >= 24;
+                return (
+                  <div key={i} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 rounded-lg border border-white/8 bg-white/4 px-3 py-2 text-[12px] text-white/75">
+                    <span className="font-semibold">{f.name}</span>
+                    <span className="text-white/45">{num(f.distanceMi, 1)} mi</span>
+                    {f.acres !== undefined && <span className="text-white/45">{Math.round(f.acres).toLocaleString()} acres</span>}
+                    <span className="ml-auto text-white/45">
+                      {f.containmentPct !== undefined ? `${num(f.containmentPct)}% contained` : 'containment unknown'}
+                    </span>
+                    <span
+                      className={`print-color w-full text-[10px] sm:w-auto ${stale ? 'font-semibold text-amber-300' : 'text-white/35'}`}
+                      style={stale ? { color: '#fcd34d' } : undefined}
+                      title={f.updatedAt ? new Date(f.updatedAt).toLocaleString() : undefined}
+                    >
+                      {ageH === null
+                        ? 'update time unknown'
+                        : stale
+                          ? `⚠ updated ${Math.round(ageH)} h ago`
+                          : `updated ${ageH < 1 ? '<1' : Math.round(ageH)} h ago`}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </Section>

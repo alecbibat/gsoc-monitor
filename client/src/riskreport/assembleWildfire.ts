@@ -8,7 +8,7 @@ import { analyzeFuelZone } from '../fuelzone/zonalStats';
 import { haversineMeters, MILES_TO_M, pointInRings } from '../lib/geo';
 import { containmentColor } from '../layers/wildfires/wildfiresData';
 import { QPF_LAYER, type QpfPeriod } from '../layers/precip/precipStore';
-import { drawPin, drawPolygon, drawRing, renderMapSnapshot } from './mapSnapshot';
+import { drawFlame, drawPin, drawPolygon, drawRing, renderMapSnapshot } from './mapSnapshot';
 import {
   RISK_RINGS, bumpLevel, maxLevel,
   type AlertHit, type HotspotHit, type NamedFireHit, type RiskLevel,
@@ -152,6 +152,7 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
           distanceMi: distMi(target, f.lat, f.lon),
           acres: f.acres ?? undefined,
           containmentPct: f.contained ?? undefined,
+          updatedAt: f.updated ?? undefined,
         }))
         .filter((f) => f.distanceMi <= MAX_RING_MI)
         .sort((a, b) => a.distanceMi - b.distanceMi);
@@ -168,6 +169,11 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
         if ((nearestUn.acres ?? 0) >= 1000) {
           level = bumpLevel(level);
           drivers.push(`${Math.round(nearestUn.acres!).toLocaleString()} acres`);
+        }
+        // Staleness context: a day-old WFIGS record can hide a lot of fire growth.
+        const ageH = nearestUn.updatedAt ? (Date.now() - nearestUn.updatedAt) / 3600_000 : null;
+        if (ageH !== null && ageH >= 24) {
+          drivers.push(`⚠ WFIGS record last updated ${Math.round(ageH)} h ago — treat acreage/containment as stale`);
         }
       } else if (withDist.length > 0) {
         level = 'guarded';
@@ -211,7 +217,15 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
         else level = maxLevel(level, 'guarded');
         drivers.push(`${a.properties.event} in effect at the property`);
       }
-      const section: SectionResult = { id: 'alerts', title: 'Fire-weather alerts at site', level, drivers };
+      const section: SectionResult = {
+        id: 'alerts',
+        title: 'Fire-weather alerts at site',
+        level,
+        drivers,
+        // This section really answers "how many, or none" — frame it that way
+        // instead of a bare Low.
+        countLabel: alerts.length === 0 ? 'None active' : `${alerts.length} active`,
+      };
       if (counties === null && hits.length === 0) {
         // County shapes down = county-based alerts (Red Flag included) can't
         // be resolved; an empty result here is not a verified all-clear.
@@ -358,14 +372,8 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       }
       for (const h of hotspots.slice().reverse()) {
         const [x, y] = proj.toXY(h.lon, h.lat);
-        const r = 5 + Math.min(9, ((h.frp ?? 0) / 60) * 9);
-        ctx.beginPath();
-        ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255,93,46,0.85)';
-        ctx.strokeStyle = 'rgba(255,255,255,0.8)';
-        ctx.lineWidth = 1.5;
-        ctx.fill();
-        ctx.stroke();
+        const r = 9 + Math.min(11, ((h.frp ?? 0) / 60) * 11);
+        drawFlame(ctx, x, y, r);
       }
       namedFires.slice(0, 5).forEach((f, i) => {
         const [x, y] = proj.toXY(f.lon, f.lat);
@@ -450,8 +458,13 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
         '&format=png32&transparent=true&f=image',
       attribution: '© CARTO © OSM · QPF NOAA/WPC',
       draw: (ctx, proj) => {
+        // High-contrast ring: dark casing under a bright dashed stroke — the
+        // faint cyan version disappeared against the QPF ramp.
         drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, {
-          stroke: 'rgba(61,220,255,0.5)', width: 2, dash: [6, 5],
+          stroke: 'rgba(5,7,10,0.85)', width: 6,
+        });
+        drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, {
+          stroke: '#ffffff', width: 2.5, dash: [8, 6], label: '25 mi',
         });
         drawSite(ctx, proj);
       },
