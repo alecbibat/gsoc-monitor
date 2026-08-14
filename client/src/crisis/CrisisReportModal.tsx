@@ -140,15 +140,8 @@ export function CrisisReportModal({ incident, onClose }: Props) {
   const modal = (
     <div className="crisis-report-root fixed inset-0 z-[3000] overflow-y-auto bg-ink-950 text-white">
 
-      {/* Repeating page header — print only */}
-      <div className="print-page-header hidden">
-        <span className="font-bold uppercase tracking-widest">GSOC Monitor · Incident Archive Report</span>
-        <span>{incident.incidentName || 'Untitled Incident'}</span>
-        <span className="ml-auto">Generated {new Date().toLocaleString()}</span>
-      </div>
-
       {/* Top bar — hidden when printing */}
-      <div className="crisis-report-no-print sticky top-0 z-10 flex items-center gap-4 border-b border-white/8 bg-ink-900/90 px-8 py-3 backdrop-blur-sm">
+      <div className="print-hide sticky top-0 z-10 flex items-center gap-4 border-b border-white/8 bg-ink-900/90 px-8 py-3 backdrop-blur-sm">
         <div>
           <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/30">Incident Archive Report</p>
           <p className="text-[15px] font-semibold text-white/85">{incident.incidentName || 'Untitled Incident'}</p>
@@ -204,6 +197,23 @@ export function CrisisReportModal({ incident, onClose }: Props) {
         </div>
       </header>
 
+      {/* Table wrap: in print the thead repeats the page header on every page
+          (reserving its space); on screen everything is display:block. */}
+      <table className="print-page-table block w-full">
+        <thead className="print-page-thead block">
+          <tr className="block">
+            <td className="block">
+              <div className="print-page-header hidden">
+                <span className="font-bold uppercase tracking-widest">GSOC Monitor · Incident Archive Report</span>
+                <span>{incident.incidentName || 'Untitled Incident'}</span>
+                <span className="ml-auto">Generated {new Date().toLocaleString()}</span>
+              </div>
+            </td>
+          </tr>
+        </thead>
+        <tbody className="print-page-tbody block">
+          <tr className="block">
+            <td className="block">
       <main className="mx-auto max-w-5xl space-y-8 px-8 py-8">
 
         {/* Summary + details */}
@@ -321,6 +331,10 @@ export function CrisisReportModal({ incident, onClose }: Props) {
           {' · '}Report generated {new Date().toLocaleString()}
         </p>
       </main>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 

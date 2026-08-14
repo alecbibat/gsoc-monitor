@@ -11,10 +11,15 @@ export function RiskReportHost() {
   useEffect(() => {
     if (!target || status !== 'loading') return;
     let cancelled = false;
+    // The cancelled flag alone has a gap: open(B) commits before A's effect
+    // cleanup runs, so a resolution landing in that window could pin A's data
+    // under B's header. Identity-check the store's CURRENT target too.
+    const stillCurrent = () =>
+      !cancelled && useRiskReportStore.getState().target === target;
     assembleWildfireReport(target)
-      .then((data) => { if (!cancelled) useRiskReportStore.getState().setData(data); })
+      .then((data) => { if (stillCurrent()) useRiskReportStore.getState().setData(data); })
       .catch((e) => {
-        if (!cancelled) {
+        if (stillCurrent()) {
           useRiskReportStore.getState().setError(e instanceof Error ? e.message : 'Report assembly failed');
         }
       });

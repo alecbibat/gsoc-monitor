@@ -15,9 +15,12 @@ import { useEffect } from 'react';
 //   `.print-color` marker class.
 // - Page-break discipline: cards/sections/rows don't split, headings never
 //   orphan at a page bottom, table headers repeat.
-// - A repeating page header (position:fixed prints on every page in the
-//   engines we target): give the root a child with `.print-page-header`
-//   (style it `hidden print:flex` on screen).
+// - A repeating page header via table semantics: wrap the report body as
+//   .print-page-table > .print-page-thead (holding a .print-page-header div)
+//   + .print-page-tbody. On screen every part carries `block` classes so it
+//   lays out as plain divs; in print the table display is restored and the
+//   thead both repeats on every page AND reserves its own space — unlike
+//   position:fixed, which overprints the top of every page after the first.
 
 export function buildPrintCss(root: string): string {
   const R = `.${root}`;
@@ -35,7 +38,6 @@ export function buildPrintCss(root: string): string {
     color: #0f172a !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
-    padding-top: 52pt; /* clear the repeating page header */
   }
   ${R} *:not([style*="background"]):not(.print-color):not(img) { background: transparent !important; }
   ${R} *:not([style*="color"]):not(.print-color) { color: #0f172a !important; }
@@ -52,16 +54,20 @@ export function buildPrintCss(root: string): string {
   ${R} img { max-width: 100% !important; }
   ${R} .print-break-before { break-before: page; }
 
-  /* Repeating page header */
+  /* Repeating page header (table-header-group repeats per page AND reserves
+     its space, which position:fixed does not) */
+  ${R} .print-page-table { display: table !important; width: 100%; border-collapse: collapse; }
+  ${R} .print-page-thead { display: table-header-group !important; }
+  ${R} .print-page-tbody { display: table-row-group !important; }
+  ${R} .print-page-thead > tr, ${R} .print-page-tbody > tr { display: table-row !important; }
+  ${R} .print-page-thead > tr > td, ${R} .print-page-tbody > tr > td { display: table-cell !important; padding: 0; }
   ${R} .print-page-header {
     display: flex !important;
-    position: fixed;
-    top: 0; left: 0; right: 0;
     align-items: baseline;
     gap: 8pt;
-    padding-bottom: 4pt;
+    padding: 0 0 4pt;
+    margin-bottom: 8pt;
     border-bottom: 1pt solid #94a3b8 !important;
-    background: #ffffff !important;
     font-size: 8pt;
   }
 }

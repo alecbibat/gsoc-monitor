@@ -2,7 +2,7 @@ import { api } from '../api/client';
 import { fetchHotspotsNearPins, type FireHotspot } from '../layers/fires/firesData';
 import { fetchWildfires, type NamedFire } from '../layers/wildfires/wildfiresData';
 import { fetchActiveAlerts, loadCounties, alertRings, severityRank, type RawAlert } from '../layers/alerts/alertsData';
-import { outlookStyle } from '../layers/fireOutlook/fireOutlookMeta';
+import { fmtOutlookDate, outlookStyle } from '../layers/fireOutlook/fireOutlookMeta';
 import { LANDFIRE_CONUS_RECT } from '../layers/fuel/landfireService';
 import { analyzeFuelZone } from '../fuelzone/zonalStats';
 import { haversineMeters, MILES_TO_M, pointInRings } from '../lib/geo';
@@ -131,9 +131,14 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
 
   // ── Named incidents (NIFC/WFIGS) ──────────────────────────────────────────
   let namedFires: NamedFireHit[] = [];
+  let namedFiresAll: NamedFireHit[] = [];
   {
-    if (namedRes.value === null) {
-      sections.push({ id: 'named-fires', title: 'Named fire incidents (NIFC)', level: 'low', drivers: [], unavailable: `WFIGS feed unavailable (${namedRes.error ?? 'unknown error'})` });
+    // fetchWildfires never rejects — a total upstream failure RESOLVES with
+    // fires:[] and error set. Reading only value===null here would render an
+    // outage as a verified "Low, 0 named fires".
+    const feedErr = namedRes.error ?? namedRes.value?.error ?? null;
+    if (namedRes.value === null || (feedErr !== null && namedRes.value.fires.length === 0)) {
+      sections.push({ id: 'named-fires', title: 'Named fire incidents (NIFC)', level: 'low', drivers: [], unavailable: `WFIGS feed unavailable (${feedErr ?? 'unknown error'})` });
     } else {
       const withDist = namedRes.value.fires
         .map((f: NamedFire) => ({
@@ -144,7 +149,8 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
         }))
         .filter((f) => f.distanceMi <= MAX_RING_MI)
         .sort((a, b) => a.distanceMi - b.distanceMi);
-      namedFires = withDist.slice(0, 8);
+      namedFiresAll = withDist;        // ring counts use the FULL list
+      namedFires = withDist.slice(0, 8); // display list is capped
 
       let level: RiskLevel = 'low';
       const drivers: string[] = [];
@@ -209,7 +215,12 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       sections.push({ id: 'outlook', title: '7-day fire-potential outlook', level: 'low', drivers: [], unavailable: `Outlook feed unavailable (${outlookRes.error ?? 'unknown error'})` });
     } else {
       const psa = outlookRes.value.psas.find((p) => pointInRings(target.lon, target.lat, p.rings));
-      const today = psa?.days[0] ?? null;
+      // days[0] is day 1 of the ISSUANCE, not necessarily today — resolve
+      // "today" through the dates array the server provides for exactly this.
+      const dates = outlookRes.value.dates ?? [];
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const todayIdx = Math.max(0, dates.indexOf(todayIso));
+      const today = psa?.days[todayIdx] ?? null;
       const style = outlookStyle(today?.dryness ?? null, today?.type ?? null);
       outlookToday = style.label;
       let level: RiskLevel = 'low';
@@ -217,8 +228,10 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       if (today?.type === 'CRITICAL') { level = 'high'; drivers.push('NWCG outlook: CRITICAL fire potential today'); }
       else if (today?.type === 'IGNITION') { level = 'elevated'; drivers.push('NWCG outlook: ignition risk today'); }
       else if ((today?.dryness ?? 0) >= 2) { level = 'guarded'; drivers.push(`Fuel dryness: ${style.label.toLowerCase()}`); }
-      const sigDay = psa?.days.findIndex((d) => d?.type === 'CRITICAL' || d?.type === 'IGNITION') ?? -1;
-      if (sigDay > 0) drivers.push(`Significant fire potential flagged on day ${sigDay + 1} of the outlook`);
+      const sigIdx = psa?.days.findIndex((d, i) => i > todayIdx && (d?.type === 'CRITICAL' || d?.type === 'IGNITION')) ?? -1;
+      if (sigIdx > todayIdx && sigIdx >= 0) {
+        drivers.push(`Significant fire potential flagged for ${fmtOutlookDate(dates[sigIdx] ?? null)}`);
+      }
       if (!psa) drivers.push('Property is outside all Predictive Service Areas (outlook covers the US)');
       sections.push({ id: 'outlook', title: '7-day fire-potential outlook', level, drivers });
     }
@@ -250,6 +263,11 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
             ...r.risk.drivers.slice(0, 2),
           ],
         });
+      } else if (r.totalPixels === 0) {
+        // The empty sentinel means NO DATA at this location (ocean, coverage
+        // hole, or an empty ImageServer answer) — not a verified fuel-free zone.
+        fuel.unavailable = 'No LANDFIRE fuel data at this location';
+        sections.push({ id: 'fuel', title: 'Fuel conditions (3 mi ring)', level: 'low', drivers: [], unavailable: fuel.unavailable });
       } else {
         sections.push({ id: 'fuel', title: 'Fuel conditions (3 mi ring)', level: 'low', drivers: ['No burnable fuel mapped in the 3 mi ring'] });
       }
@@ -294,7 +312,7 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
   const ringCounts = RISK_RINGS.map((ring) => ({
     ring,
     hotspots: hotspots.filter((h) => h.distanceMi <= ring.miles).length,
-    namedFires: namedFires.filter((f) => f.distanceMi <= ring.miles).length,
+    namedFires: namedFiresAll.filter((f) => f.distanceMi <= ring.miles).length,
   }));
 
   const available = sections.filter((s) => !s.unavailable);

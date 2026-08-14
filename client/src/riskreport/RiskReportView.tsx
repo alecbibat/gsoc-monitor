@@ -277,13 +277,6 @@ export function RiskReportView() {
 
   const modal = (
     <div className="risk-report-root fixed inset-0 z-[3000] overflow-y-auto bg-ink-950 text-white">
-      {/* Repeating page header — print only */}
-      <div className="print-page-header hidden">
-        <span className="font-bold uppercase tracking-widest">GSOC Monitor · Property Risk Report</span>
-        <span>{target.name} — Wildfire</span>
-        <span className="ml-auto">Generated {new Date().toLocaleString()}</span>
-      </div>
-
       {/* Top bar — hidden when printing */}
       <div className="print-hide sticky top-0 z-10 flex items-center gap-4 border-b border-white/8 bg-ink-900/90 px-8 py-3 backdrop-blur-sm">
         <div>
@@ -329,7 +322,28 @@ export function RiskReportView() {
           <p className="text-[13px] text-white/50">{error ?? 'Could not assemble the report.'}</p>
         </div>
       )}
-      {status === 'ready' && data && <ReportBody data={data} />}
+      {/* Table wrap: in print the thead repeats the page header on every page
+          (reserving its space); on screen everything is display:block. */}
+      <table className="print-page-table block w-full">
+        <thead className="print-page-thead block">
+          <tr className="block">
+            <td className="block">
+              <div className="print-page-header hidden">
+                <span className="font-bold uppercase tracking-widest">GSOC Monitor · Property Risk Report</span>
+                <span>{target.name} — Wildfire</span>
+                <span className="ml-auto">Generated {new Date().toLocaleString()}</span>
+              </div>
+            </td>
+          </tr>
+        </thead>
+        <tbody className="print-page-tbody block">
+          <tr className="block">
+            <td className="block">
+              {status === 'ready' && data && <ReportBody data={data} />}
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 
