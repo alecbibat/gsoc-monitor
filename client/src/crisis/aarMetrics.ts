@@ -8,15 +8,18 @@ import type { ActionLogEntry, Incident, PersonnelAssignment } from './crisisStor
 export interface AarMetrics {
   /** Operational span: incident start (or creation) → stand-down (or now). */
   durationMs: number;
-  /** Creation → first recorded transition to Active; null = never went active
-   * via a logged transition (incidents created directly as Active have none). */
+  /** Creation → first transition to Active during the FIRST activation run
+   * (transitions after a stand-down are re-activations, not this metric).
+   * null when the incident began life Active (the store's creation default)
+   * or never reached Active. */
   timeToActiveMs: number | null;
-  /** True when there is no to-Active transition but the incident reached a
-   * closed/active lifecycle anyway — i.e. it started life already Active. */
+  /** The incident started life already Active (no pre-Active phase logged). */
   activeAtCreation: boolean;
-  personnelCount: number;   // unique people who held an assignment
+  personnelCount: number;   // unique people (by personnelId, name fallback)
   assignmentCount: number;  // total assignments (a person can hold several)
-  /** IC seat changes beyond the first assignment (command transfers). */
+  /** Root-role (IC) seat changes to a DIFFERENT person — command transfers.
+   * Derived from the assignment record, so it survives a renamed/rebuilt IC
+   * role and ignores same-person re-assignment. */
   commandTransfers: number;
   logTotal: number;
   logByType: { action: number; event: number; info: number };
@@ -35,19 +38,51 @@ export function computeAarMetrics(inc: Incident): AarMetrics {
   const end = ts(inc.archivedAt) ?? Date.now();
   const durationMs = Math.max(0, end - start);
 
-  // First logged Monitoring/etc → Active transition. Log is newest-first in
-  // storage but never trust ordering — take the earliest by timestamp.
-  let firstActive: number | null = null;
-  for (const e of inc.actionLog) {
-    if (e.system === 'status-change' && e.meta?.to === 'active') {
-      const t = ts(e.timestamp);
-      if (t !== null && (firstActive === null || t < firstActive)) firstActive = t;
-    }
+  // Time to Active — FIRST activation run only. Incidents are created Active
+  // by default and stand-down/reopen cycles log later monitoring→active
+  // transitions, so a naive "earliest to-active" reads a re-activation as a
+  // ten-day activation delay. Only status changes BEFORE the first stand-down
+  // count, and the first change's `from` tells us the creation status.
+  const firstStoodDown = inc.actionLog
+    .filter((e) => e.system === 'stood-down')
+    .reduce<number>((m, e) => Math.min(m, ts(e.timestamp) ?? Infinity), Infinity);
+  const firstRun = inc.actionLog
+    .filter((e) => e.system === 'status-change' && (ts(e.timestamp) ?? Infinity) < firstStoodDown)
+    .sort((a, b) => (ts(a.timestamp) ?? 0) - (ts(b.timestamp) ?? 0));
+  const initialStatus = firstRun[0]?.meta?.from ?? 'active'; // store default
+  let timeToActiveMs: number | null = null;
+  let activeAtCreation = initialStatus === 'active';
+  if (!activeAtCreation) {
+    const toActive = firstRun.find((e) => e.meta?.to === 'active');
+    const t = toActive ? ts(toActive.timestamp) : null;
+    if (t !== null) timeToActiveMs = Math.max(0, t - created);
   }
-  const timeToActiveMs = firstActive === null ? null : Math.max(0, firstActive - created);
 
-  const names = new Set(inc.assignments.map((a: PersonnelAssignment) => a.name.trim().toLowerCase()).filter(Boolean));
-  const icSeats = inc.assignments.filter((a) => a.roleId === 'ic').length;
+  // Unique people: personnelId is the identity when present — two people can
+  // legitimately share a name (the store models exactly this).
+  const names = new Set(
+    inc.assignments
+      .map((a: PersonnelAssignment) => a.personnelId ?? `name:${a.name.trim().toLowerCase()}`)
+      .filter((k) => k && k !== 'name:')
+  );
+
+  // Command transfers: consecutive DIFFERENT holders of a root (command) role.
+  // Root lookup instead of the literal 'ic' id — the built-in IC role can be
+  // deleted and rebuilt with a generated id; same-person re-assignment is not
+  // a transfer (matching the store's own log semantics).
+  const rootIds = new Set(inc.roles.filter((r) => r.parentId === null).map((r) => r.id));
+  const icSeatHolders = inc.assignments
+    .filter((a) => rootIds.has(a.roleId))
+    .sort((a, b) => (ts(a.startedAt) ?? 0) - (ts(b.startedAt) ?? 0));
+  let commandTransfers = 0;
+  for (let i = 1; i < icSeatHolders.length; i++) {
+    const prev = icSeatHolders[i - 1];
+    const cur = icSeatHolders[i];
+    const samePerson =
+      (cur.personnelId !== undefined && cur.personnelId === prev.personnelId) ||
+      cur.name.trim().toLowerCase() === prev.name.trim().toLowerCase();
+    if (!samePerson) commandTransfers += 1;
+  }
 
   const logByType = { action: 0, event: 0, info: 0 };
   let operatorEntries = 0;
@@ -59,10 +94,10 @@ export function computeAarMetrics(inc: Incident): AarMetrics {
   return {
     durationMs,
     timeToActiveMs,
-    activeAtCreation: firstActive === null,
+    activeAtCreation,
     personnelCount: names.size,
     assignmentCount: inc.assignments.length,
-    commandTransfers: Math.max(0, icSeats - 1),
+    commandTransfers,
     logTotal: inc.actionLog.length,
     logByType,
     operatorEntries,

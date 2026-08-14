@@ -33,7 +33,9 @@ interface ReachStats { count: number; viewers: number; links: number }
 function useShareReach(incident: Incident): ReachStats | null {
   const [reach, setReach] = useState<ReachStats | null>(null);
   useEffect(() => {
-    const tokens = incident.shareLinks.map((l) => l.token);
+    // shareLinks is absent on incidents persisted before the share-link
+    // lifecycle existed — never index it bare (render crash on legacy data).
+    const tokens = (incident.shareLinks ?? []).map((l) => l.token);
     if (incident.shareToken && !tokens.includes(incident.shareToken)) tokens.push(incident.shareToken);
     if (tokens.length === 0) return;
     let cancelled = false;
@@ -74,8 +76,16 @@ export function ResponseMetrics({ incident }: { incident: Incident }) {
         />
         <StatCard
           label="Time to Active"
-          value={m.timeToActiveMs !== null ? fmtSpan(m.timeToActiveMs) : 'At creation'}
-          sub={m.timeToActiveMs !== null ? 'creation → first Active status' : 'created in Active status'}
+          value={
+            m.timeToActiveMs !== null ? fmtSpan(m.timeToActiveMs)
+            : m.activeAtCreation ? 'At creation'
+            : 'Never active'
+          }
+          sub={
+            m.timeToActiveMs !== null ? 'creation → first Active status'
+            : m.activeAtCreation ? 'created in Active status'
+            : 'no Active phase before stand-down'
+          }
         />
         <StatCard
           label="Personnel"
@@ -89,11 +99,11 @@ export function ResponseMetrics({ incident }: { incident: Incident }) {
         />
         <StatCard
           label="Stakeholder reach"
-          value={reach ? `${reach.count}×` : incident.shareLinks.length > 0 ? '…' : '—'}
+          value={reach ? `${reach.count}×` : (incident.shareLinks ?? []).length > 0 ? '…' : '—'}
           sub={
             reach
               ? `~${reach.viewers} viewer${reach.viewers === 1 ? '' : 's'} · ${reach.links} link${reach.links === 1 ? '' : 's'}`
-              : incident.shareLinks.length > 0 ? 'share access log' : 'no share links published'
+              : (incident.shareLinks ?? []).length > 0 ? 'share access log' : 'no share links published'
           }
         />
       </div>
@@ -119,19 +129,28 @@ export function IcsSwimlane({ incident }: { incident: Incident }) {
   const span = Math.max(1, lane.t1 - lane.t0);
   const x = (t: number) => LABEL_W + ((t - lane.t0) / span) * plotW;
 
-  // Axis ticks: hourly for short incidents, daily beyond ~2 days.
+  // Axis ticks: hourly for short incidents, daily beyond ~2 days. Anchored to
+  // LOCAL midnight (not epoch multiples) so a daily gridline sits at the
+  // viewer's midnight and its date label matches the band it starts.
   const hourMs = 3_600_000;
   const step = span <= 12 * hourMs ? 2 * hourMs
     : span <= 48 * hourMs ? 6 * hourMs
     : span <= 8 * 86_400_000 ? 24 * hourMs
     : Math.ceil(span / (7 * 24 * hourMs)) * 24 * hourMs;
+  const localMidnight = new Date(lane.t0);
+  localMidnight.setHours(0, 0, 0, 0);
+  let firstTick = localMidnight.getTime();
+  while (firstTick < lane.t0) firstTick += step;
   const ticks: number[] = [];
-  for (let t = Math.ceil(lane.t0 / step) * step; t <= lane.t1; t += step) ticks.push(t);
+  for (let t = firstTick; t <= lane.t1; t += step) ticks.push(t);
+  // A short incident can fit entirely between two step boundaries — label the
+  // window endpoints instead of rendering no time axis at all.
+  if (ticks.length === 0) ticks.push(lane.t0, lane.t1);
   const tickLabel = (t: number) => {
     const d = new Date(t);
     return step >= 24 * hourMs
       ? d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })
-      : d.toLocaleTimeString('en-US', { hour: 'numeric' });
+      : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   };
 
   return (
@@ -140,7 +159,13 @@ export function IcsSwimlane({ incident }: { incident: Incident }) {
         ICS Progression
         <span className="ml-2 font-normal normal-case text-white/25">who held which seat, when</span>
       </h2>
-      <div className="print-card overflow-x-auto rounded-lg border border-white/8 bg-ink-950/60 p-3">
+      {/* Inline background + print-color: the swimlane's SVG text is white
+          FILL attributes the paper-theme flip can't remap, so the dark panel
+          must survive printing for the chart to stay legible on paper. */}
+      <div
+        className="print-card print-color overflow-x-auto rounded-lg border border-white/8 p-3"
+        style={{ background: '#0d1117' }}
+      >
         <svg viewBox={`0 0 ${W} ${H}`} className="print-color min-w-[680px]" style={{ width: '100%' }}>
           {/* Tick grid */}
           {ticks.map((t) => (

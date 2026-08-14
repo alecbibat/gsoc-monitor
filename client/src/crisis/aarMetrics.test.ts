@@ -52,6 +52,67 @@ describe('computeAarMetrics', () => {
     expect(m.activeAtCreation).toBe(true);
   });
 
+  it('does not count a post-reopen re-activation as time-to-active', () => {
+    // Created Active (store default) → stood down → reopened → escalated.
+    // The monitoring→active transition at +12h is a RE-activation.
+    const inc = makeIncident({
+      createdAt: at(0),
+      actionLog: [
+        { id: 's', timestamp: at(10), description: '', entryType: 'event', system: 'stood-down' },
+        { id: 'r', timestamp: at(12), description: '', entryType: 'event', system: 'status-change', meta: { from: 'monitoring', to: 'active' } },
+      ],
+    });
+    const m = computeAarMetrics(inc);
+    expect(m.timeToActiveMs).toBeNull();
+    expect(m.activeAtCreation).toBe(true);
+  });
+
+  it('reports never-active for a monitoring-only incident', () => {
+    const inc = makeIncident({
+      actionLog: [
+        { id: 'a', timestamp: at(1), description: '', entryType: 'event', system: 'status-change', meta: { from: 'monitoring', to: 'recovery' } },
+      ],
+    });
+    const m = computeAarMetrics(inc);
+    expect(m.timeToActiveMs).toBeNull();
+    expect(m.activeAtCreation).toBe(false);
+  });
+
+  it('same-person IC re-assignment is not a command transfer', () => {
+    const inc = makeIncident({
+      assignments: [
+        { id: '1', roleId: 'ic', name: 'Sarah Chen', startedAt: at(0), endedAt: at(2) },
+        { id: '2', roleId: 'ic', name: 'Sarah Chen', startedAt: at(2) },
+      ],
+    });
+    expect(computeAarMetrics(inc).commandTransfers).toBe(0);
+  });
+
+  it('counts transfers on a rebuilt command role (custom root id)', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    const base = active();
+    const inc: Incident = {
+      ...base,
+      roles: [{ id: 'cmd-x', title: 'Commander', parentId: null, color: '#fff', isCommandStaff: false, isSupport: false, order: 0, builtin: false }],
+      assignments: [
+        { id: '1', roleId: 'cmd-x', name: 'Sarah', startedAt: at(0), endedAt: at(2) },
+        { id: '2', roleId: 'cmd-x', name: 'Bob', startedAt: at(2) },
+      ],
+    };
+    expect(computeAarMetrics(inc).commandTransfers).toBe(1);
+  });
+
+  it('distinguishes two people who share a name via personnelId', () => {
+    const inc = makeIncident({
+      assignments: [
+        { id: '1', roleId: 'ops', name: 'J. Smith', personnelId: 'p1', startedAt: at(0) },
+        { id: '2', roleId: 'planning', name: 'J. Smith', personnelId: 'p2', startedAt: at(1) },
+      ],
+    });
+    expect(computeAarMetrics(inc).personnelCount).toBe(2);
+  });
+
   it('counts unique personnel, assignments, and command transfers', () => {
     const st = useCrisisStore.getState();
     st.createIncident();
