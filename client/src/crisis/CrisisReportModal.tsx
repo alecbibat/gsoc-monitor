@@ -227,6 +227,8 @@ export function CrisisReportModal({ incident, onClose }: Props) {
                 ['Type', incidentTypeDef(incident.incidentType).label],
                 ['Created', fmtTs(incident.createdAt)],
                 ['Archived', incident.archivedAt ? fmtTs(incident.archivedAt) : '—'],
+                ...(incident.closedBy ? [['Stood down by', incident.closedBy]] : []),
+                ...(incident.standDownReason ? [['Reason', incident.standDownReason]] : []),
               ] as [string, string][]).map(([label, value]) => (
                 <div key={label} className="flex gap-3">
                   <span className="w-20 shrink-0 text-[10px] text-white/35">{label}</span>

@@ -444,12 +444,25 @@ export function SituationReport() {
   const update = useCrisisStore((s) => s.update);
 
   if (!inc) return null;
+  // Stood-down incidents are a frozen record (F3): the fieldset disables every
+  // input and button in the edit surfaces below (the store no-ops archived
+  // edits too — this is the visible half of that guarantee). The action log
+  // handles its own freeze so its viewing controls stay usable.
+  const isArchived = !!inc.archivedAt;
 
   return (
     <div className="space-y-6">
 
+      {isArchived && (
+        <div className="rounded-lg border border-white/12 bg-white/5 px-4 py-2.5 text-[11px] text-white/50">
+          This incident is archived — the record is frozen. Reopen it to make changes.
+          {inc.closedBy && <span className="text-white/35"> Stood down by {inc.closedBy}.</span>}
+          {inc.standDownReason && <span className="text-white/35"> Reason: {inc.standDownReason}</span>}
+        </div>
+      )}
+
       {/* Row 1: Executive Summary + Incident Information */}
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+      <fieldset disabled={isArchived} className="m-0 grid min-w-0 grid-cols-1 gap-5 border-0 p-0 xl:grid-cols-2">
 
         <section className="flex flex-col">
           <h3 className="mb-2.5 text-[13px] font-bold uppercase tracking-[0.14em] text-white/65">Executive Summary</h3>
@@ -574,27 +587,31 @@ export function SituationReport() {
             </FieldRow>
           </div>
         </section>
-      </div>
+      </fieldset>
 
       {/* ICS / NIMS Org Chart */}
-      <section>
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/65">ICS / NIMS Organizational Structure</h3>
-          <span className="text-[11px] text-white/40">Click any role to assign personnel or edit</span>
-        </div>
-        <div className="rounded-lg border border-white/8 bg-ink-950/60 px-6 py-5">
-          <IcsOrgChart />
-        </div>
-      </section>
+      <fieldset disabled={isArchived} className="m-0 min-w-0 border-0 p-0">
+        <section>
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/65">ICS / NIMS Organizational Structure</h3>
+            <span className="text-[11px] text-white/40">
+              {isArchived ? 'Frozen — final structure at stand-down' : 'Click any role to assign personnel or edit'}
+            </span>
+          </div>
+          <div className="rounded-lg border border-white/8 bg-ink-950/60 px-6 py-5">
+            <IcsOrgChart />
+          </div>
+        </section>
+      </fieldset>
 
-      {/* Actions & Events Log */}
+      {/* Actions & Events Log — freezes itself so log viewing stays usable */}
       <ActionLog />
 
-      {/* Map Layers */}
-      <MapLayersSection />
-
-      {/* Live data layers for the share-link map */}
-      <LiveLayersSection />
+      {/* Map Layers + share-map live layers */}
+      <fieldset disabled={isArchived} className="m-0 min-w-0 space-y-6 border-0 p-0">
+        <MapLayersSection />
+        <LiveLayersSection />
+      </fieldset>
 
     </div>
   );

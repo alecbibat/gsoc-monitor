@@ -163,6 +163,8 @@ export interface Incident {
   shareToken: string | null;  // legacy — kept for backwards compat with persisted data
   shareLinks: ShareLink[];    // all share links ever created for this incident
   archivedAt?: string | null; // set when the incident is stood down; null/absent = active
+  closedBy?: string | null;         // who stood the incident down
+  standDownReason?: string | null;  // why, captured by the stand-down checklist
 }
 
 // Public shape sent to / received from the share endpoint
@@ -320,7 +322,7 @@ interface CrisisState {
   openIncident: (id: string) => void;
   backToList: () => void;
   removeIncident: (id: string) => void;
-  standDownIncident: (id: string) => void;
+  standDownIncident: (id: string, reason?: string) => void;
   reopenIncident: (id: string) => void;
 
   // Active-incident field updates
@@ -387,6 +389,15 @@ function patchActive(s: CrisisState, fn: (inc: Incident) => Incident): Partial<C
   return { incidents: s.incidents.map((i) => (i.id === s.activeIncidentId ? fn(i) : i)) };
 }
 
+// Same, but a no-op while the incident is stood down: an archived incident is
+// a frozen record (F3) — reopen it to edit. Share-link actions intentionally
+// bypass this (revoking a leaked link must work on archived incidents too).
+function patchActiveEditable(s: CrisisState, fn: (inc: Incident) => Incident): Partial<CrisisState> {
+  const inc = s.incidents.find((i) => i.id === s.activeIncidentId);
+  if (!inc || inc.archivedAt) return {};
+  return patchActive(s, fn);
+}
+
 // Patch whichever incident owns the given layer.
 function patchLayerOwner(s: CrisisState, layerId: string, fn: (inc: Incident) => Incident): Partial<CrisisState> {
   return {
@@ -423,20 +434,36 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
           activeIncidentId: s.activeIncidentId === id ? null : s.activeIncidentId,
         })),
 
-      standDownIncident: (id) =>
+      standDownIncident: (id, reason) =>
         set((s) => ({
-          incidents: s.incidents.map((inc) =>
+          incidents: s.incidents.map((inc) => {
+            if (inc.id !== id) return inc;
+            const now = new Date().toISOString();
+            const openAssignments = inc.assignments.filter((a) => !a.endedAt);
             // Standing down closes the incident: archived-but-still-"active"
-            // rows are what kept tab badges lit forever.
-            inc.id === id
-              ? {
-                  ...inc,
-                  archivedAt: new Date().toISOString(),
-                  incidentStatus: 'closed' as IncidentStatus,
-                  actionLog: [sysEntry('stood-down', 'Incident stood down and archived'), ...inc.actionLog],
-                }
-              : inc
-          ),
+            // rows are what kept tab badges lit forever. Open ICS assignments
+            // are released so the archived org chart reads as concluded (their
+            // start/end stamps remain the AAR's staffing record).
+            return {
+              ...inc,
+              archivedAt: now,
+              incidentStatus: 'closed' as IncidentStatus,
+              closedBy: currentActor() ?? null,
+              standDownReason: reason?.trim() || null,
+              assignments: inc.assignments.map((a) => (a.endedAt ? a : { ...a, endedAt: now })),
+              actionLog: [
+                sysEntry(
+                  'stood-down',
+                  `Incident stood down and archived${reason?.trim() ? ` — ${reason.trim()}` : ''}`,
+                  {
+                    ...(reason?.trim() ? { reason: reason.trim() } : {}),
+                    releasedAssignments: String(openAssignments.length),
+                  }
+                ),
+                ...inc.actionLog,
+              ],
+            };
+          }),
           // Navigate back to the list so the archive section is immediately visible.
           activeIncidentId: s.activeIncidentId === id ? null : s.activeIncidentId,
         })),
@@ -445,12 +472,15 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
         set((s) => ({
           incidents: s.incidents.map((inc) =>
             // Reopen conservatively as Monitoring — the operator escalates to
-            // Active if the situation actually warrants it.
+            // Active if the situation actually warrants it. Closure stamps
+            // clear (the log keeps the stand-down history).
             inc.id === id
               ? {
                   ...inc,
                   archivedAt: null,
                   incidentStatus: 'monitoring' as IncidentStatus,
+                  closedBy: null,
+                  standDownReason: null,
                   actionLog: [sysEntry('reopened', 'Incident reopened (status: Monitoring)'), ...inc.actionLog],
                 }
               : inc
@@ -458,7 +488,7 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
         })),
 
       update: (patch) =>
-        set((s) => patchActive(s, (inc) => {
+        set((s) => patchActiveEditable(s, (inc) => {
           // Lifecycle fields get a system log entry alongside the change, so
           // the AAR can reconstruct when the incident escalated and who did it.
           const events: ActionLogEntry[] = [];
@@ -516,19 +546,19 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
         })),
 
       addPersonnelMember: (name, details) =>
-        set((s) => patchActive(s, (inc) => ({
+        set((s) => patchActiveEditable(s, (inc) => ({
           ...inc,
           personnel: [...(inc.personnel ?? []), { id: uid(), name, ...details }],
         }))),
 
       removePersonnelMember: (id) =>
-        set((s) => patchActive(s, (inc) => ({
+        set((s) => patchActiveEditable(s, (inc) => ({
           ...inc,
           personnel: (inc.personnel ?? []).filter((p) => p.id !== id),
         }))),
 
       addRole: (role) =>
-        set((s) => patchActive(s, (inc) => ({
+        set((s) => patchActiveEditable(s, (inc) => ({
           ...inc,
           roles: [...inc.roles, { ...role, id: uid(), builtin: false }],
           actionLog: [
@@ -538,10 +568,10 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
         }))),
 
       updateRole: (id, patch) =>
-        set((s) => patchActive(s, (inc) => ({ ...inc, roles: inc.roles.map((r) => (r.id === id ? { ...r, ...patch } : r)) }))),
+        set((s) => patchActiveEditable(s, (inc) => ({ ...inc, roles: inc.roles.map((r) => (r.id === id ? { ...r, ...patch } : r)) }))),
 
       removeRole: (id) =>
-        set((s) => patchActive(s, (inc) => {
+        set((s) => patchActiveEditable(s, (inc) => {
           const toRemove = new Set<string>();
           const collect = (pid: string) => {
             toRemove.add(pid);
@@ -566,7 +596,7 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
         })),
 
       restoreBuiltinRole: (roleId) =>
-        set((s) => patchActive(s, (inc) => {
+        set((s) => patchActiveEditable(s, (inc) => {
           const target = DEFAULT_ROLES.find((r) => r.id === roleId);
           if (!target || inc.roles.find((r) => r.id === roleId)) return inc;
           // Also restore any missing ancestors so the role is properly connected.
@@ -583,10 +613,10 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
           return { ...inc, roles: [...inc.roles, ...toAdd] };
         })),
 
-      resetRoles: () => set((s) => patchActive(s, (inc) => ({ ...inc, roles: DEFAULT_ROLES }))),
+      resetRoles: () => set((s) => patchActiveEditable(s, (inc) => ({ ...inc, roles: DEFAULT_ROLES }))),
 
       assignRole: (roleId, name, details, personnelId) =>
-        set((s) => patchActive(s, (inc) => {
+        set((s) => patchActiveEditable(s, (inc) => {
           const now = new Date().toISOString();
           const role = inc.roles.find((r) => r.id === roleId);
           const endPrevious = !role?.isSupport;
@@ -633,7 +663,7 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
         })),
 
       endAssignment: (id) =>
-        set((s) => patchActive(s, (inc) => {
+        set((s) => patchActiveEditable(s, (inc) => {
           const target = inc.assignments.find((a) => a.id === id);
           const roleTitle = target ? inc.roles.find((r) => r.id === target.roleId)?.title ?? 'role' : 'role';
           return {
@@ -652,7 +682,7 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
 
       addActionEntry: (type = 'action') => {
         const id = uid();
-        set((s) => patchActive(s, (inc) => ({
+        set((s) => patchActiveEditable(s, (inc) => ({
           ...inc,
           actionLog: [
             { id, timestamp: new Date().toISOString(), description: '', entryType: type, actor: currentActor() },
@@ -663,16 +693,16 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
       },
 
       updateActionEntry: (id, patch) =>
-        set((s) => patchActive(s, (inc) => ({
+        set((s) => patchActiveEditable(s, (inc) => ({
           ...inc,
           actionLog: inc.actionLog.map((e) => (e.id === id ? { ...e, ...patch } : e)),
         }))),
 
       removeActionEntry: (id) =>
-        set((s) => patchActive(s, (inc) => ({ ...inc, actionLog: inc.actionLog.filter((e) => e.id !== id) }))),
+        set((s) => patchActiveEditable(s, (inc) => ({ ...inc, actionLog: inc.actionLog.filter((e) => e.id !== id) }))),
 
       toggleLiveLayer: (id) =>
-        set((s) => patchActive(s, (inc) => {
+        set((s) => patchActiveEditable(s, (inc) => {
           const cur = inc.liveLayers ?? [];
           return {
             ...inc,
@@ -681,7 +711,7 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
         })),
 
       toggleExtraLocationGroup: (id) =>
-        set((s) => patchActive(s, (inc) => {
+        set((s) => patchActiveEditable(s, (inc) => {
           const cur = inc.extraLocationGroups ?? [];
           return {
             ...inc,
@@ -691,7 +721,7 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
 
       addDrawLayer: (layer) => {
         const id = uid();
-        set((s) => patchActive(s, (inc) => ({
+        set((s) => patchActiveEditable(s, (inc) => ({
           ...inc,
           drawLayers: [...inc.drawLayers, { ...layer, id, createdAt: new Date().toISOString() }],
         })));

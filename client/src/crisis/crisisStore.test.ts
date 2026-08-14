@@ -94,6 +94,47 @@ describe('system log events', () => {
     expect(inc.actionLog[0].system).toBe('reopened');
   });
 
+  it('stand-down releases open assignments and stamps reason; reopen clears the stamps', () => {
+    const st = useCrisisStore.getState();
+    const id = st.createIncident();
+    st.assignRole('ic', 'Sarah Chen');
+    st.assignRole('ops', 'Bob Diaz');
+
+    st.standDownIncident(id, '  Contained, guests accounted for  ');
+    let inc = useCrisisStore.getState().incidents.find((i) => i.id === id)!;
+    expect(inc.assignments.every((a) => !!a.endedAt)).toBe(true);
+    expect(inc.standDownReason).toBe('Contained, guests accounted for');
+    expect(inc.actionLog[0].meta?.reason).toBe('Contained, guests accounted for');
+    expect(inc.actionLog[0].meta?.releasedAssignments).toBe('2');
+
+    st.reopenIncident(id);
+    inc = useCrisisStore.getState().incidents.find((i) => i.id === id)!;
+    expect(inc.standDownReason).toBeNull();
+    expect(inc.closedBy).toBeNull();
+  });
+
+  it('blocks edits on archived incidents until reopened', () => {
+    const st = useCrisisStore.getState();
+    const id = st.createIncident();
+    st.update({ incidentName: 'Ridge Fire' });
+    st.standDownIncident(id, 'done');
+
+    // The incident is no longer active (stand-down navigates to the list);
+    // reopen it in the editor the way the archive's View button does.
+    st.openIncident(id);
+    const before = useCrisisStore.getState().incidents.find((i) => i.id === id)!;
+    st.update({ incidentName: 'Renamed after closing' });
+    st.assignRole('ic', 'Late Larry');
+    st.addActionEntry('action');
+    const after = useCrisisStore.getState().incidents.find((i) => i.id === id)!;
+    expect(after).toBe(before); // every mutation was a no-op
+
+    st.reopenIncident(id);
+    st.update({ incidentName: 'Renamed after reopening' });
+    expect(useCrisisStore.getState().incidents.find((i) => i.id === id)!.incidentName)
+      .toBe('Renamed after reopening');
+  });
+
   it('logs share-link publish and revoke', () => {
     const st = useCrisisStore.getState();
     st.createIncident();

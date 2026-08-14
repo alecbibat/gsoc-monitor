@@ -59,6 +59,7 @@ function LogRow({
   autoFocus,
   onAutoFocused,
   onOpenImage,
+  readOnly = false,
 }: {
   entry: ActionLogEntry;
   autoFocus?: boolean;
@@ -66,6 +67,8 @@ function LogRow({
   // Lightbox state lives above the paginated list: a peer-sync prepend can
   // slide this row out of the visible slice, and an open viewer must survive.
   onOpenImage: (src: string, alt?: string) => void;
+  /** Frozen archive view: no edits, but attachments stay viewable. */
+  readOnly?: boolean;
 }) {
   const updateActionEntry = useCrisisStore((s) => s.updateActionEntry);
   const removeActionEntry = useCrisisStore((s) => s.removeActionEntry);
@@ -102,15 +105,17 @@ function LogRow({
   };
 
   // Auto-generated entries record state changes; their content is fixed so
-  // the audit trail can't be quietly rewritten. Delete stays available.
+  // the audit trail can't be quietly rewritten. Delete stays available while
+  // the incident is live. `frozen` = no edit affordances at all.
   const isSystem = !!entry.system;
+  const frozen = isSystem || readOnly;
 
   return (
     <tr
       className="group border-b border-white/6 align-top outline-none"
       tabIndex={-1}
       onPaste={(e) => {
-        if (isSystem) return;
+        if (frozen) return;
         // Mirror the picker's gating: replacing an attachment requires ✕ first.
         if (entry.attachmentName) return;
         const image = Array.from(e.clipboardData?.files ?? []).find((f) =>
@@ -138,6 +143,10 @@ function LogRow({
           >
             auto
           </span>
+        ) : readOnly ? (
+          <span className={`inline-block rounded-full border px-2 py-0.5 text-[8px] font-bold uppercase tracking-widest ${TYPE_STYLES[entry.entryType]}`}>
+            {entry.entryType}
+          </span>
         ) : (
           <button
             onClick={() =>
@@ -162,9 +171,9 @@ function LogRow({
 
       {/* Description */}
       <td className="py-2 pr-3">
-        {isSystem ? (
-          <div className="rounded bg-white/3 px-2 py-1 text-[11px] italic text-white/60">
-            {entry.description}
+        {frozen ? (
+          <div className={`rounded bg-white/3 px-2 py-1 text-[11px] text-white/60 ${isSystem ? 'italic' : ''}`}>
+            {entry.description || <span className="text-white/25">—</span>}
           </div>
         ) : (
           <textarea
@@ -181,7 +190,21 @@ function LogRow({
 
       {/* Attachment — system entries carry none and can't take one */}
       <td className="w-36 py-2 pr-3">
-        {isSystem ? null : (<>
+        {frozen ? (
+          entry.attachmentName ? (
+            <div className="space-y-1">
+              {entry.attachmentData && (
+                <ZoomableImage
+                  src={entry.attachmentData}
+                  alt={entry.attachmentName}
+                  onOpen={() => onOpenImage(entry.attachmentData!, entry.attachmentName)}
+                  className="max-h-20 rounded border border-white/10 object-cover"
+                />
+              )}
+              <span className="block truncate text-[9px] text-accent/80">{entry.attachmentName}</span>
+            </div>
+          ) : null
+        ) : (<>
         <input
           ref={fileRef}
           type="file"
@@ -228,13 +251,15 @@ function LogRow({
 
       {/* Delete */}
       <td className="w-8 py-2 pr-2 text-right">
-        <button
-          onClick={() => removeActionEntry(entry.id)}
-          className="text-[11px] text-white/20 opacity-0 transition hover:text-red-400/70 group-hover:opacity-100"
-          aria-label="Delete row"
-        >
-          ✕
-        </button>
+        {!readOnly && (
+          <button
+            onClick={() => removeActionEntry(entry.id)}
+            className="text-[11px] text-white/20 opacity-0 transition hover:text-red-400/70 group-hover:opacity-100"
+            aria-label="Delete row"
+          >
+            ✕
+          </button>
+        )}
       </td>
     </tr>
   );
@@ -244,6 +269,9 @@ function LogRow({
 
 export function ActionLog() {
   const actionLog = useCrisisStore((s) => selectActive(s)?.actionLog ?? []);
+  // Frozen archive (F3): entries render read-only and the add buttons hide,
+  // while view toggles, pagination and the image lightbox stay usable.
+  const archived = useCrisisStore((s) => !!selectActive(s)?.archivedAt);
   const addActionEntry = useCrisisStore((s) => s.addActionEntry);
   const [view, setView] = useState<'table' | 'timeline'>('table');
   const [hideInfo, setHideInfo] = useState(false);
@@ -303,7 +331,7 @@ export function ActionLog() {
         </div>
 
         {/* Add buttons */}
-        <div className="flex gap-1.5">
+        {!archived && <div className="flex gap-1.5">
           <button
             onClick={() => handleAdd('action')}
             className="rounded border border-blue-400/25 bg-blue-400/8 px-2.5 py-1 text-[9px] text-blue-300/70 transition hover:border-blue-400/40 hover:text-blue-300"
@@ -322,7 +350,7 @@ export function ActionLog() {
           >
             + Info
           </button>
-        </div>
+        </div>}
       </div>
 
       {/* Content */}
@@ -357,6 +385,7 @@ export function ActionLog() {
                         autoFocus={entry.id === focusId}
                         onAutoFocused={() => setFocusId(null)}
                         onOpenImage={(src, alt) => setLightbox({ src, alt })}
+                        readOnly={archived}
                       />
                     ))}
                   </tbody>
