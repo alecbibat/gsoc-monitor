@@ -156,12 +156,9 @@ export interface WildfireReportData {
     exposure: string | null;   // rings + hotspots + named fires
     alerts: string | null;     // alert polygons at the site (null when no alerts)
     fuel: string | null;       // LANDFIRE fuel raster, 3 mi ring
-    qpf24: string | null;      // WPC precip accumulation windows
-    qpf48: string | null;
-    qpf72: string | null;
-    /** Regional outlook maps aligned with outlook.days ([0] = today, larger). */
-    outlookDays: (string | null)[];
-    smoke: string | null;      // GIBS true-color satellite + HMS smoke plumes
+    qpf: string | null;        // WPC 72 h precip accumulation, regional
+    outlook: string | null;    // regional significant fire potential, today
+    smoke: string | null;      // GIBS true-color satellite + HMS plume outlines
     lightning: string | null;  // age-tinted strikes, past 24 h
   };
   /** 48 h hourly wind window for the chart (mph, "from" bearings). */

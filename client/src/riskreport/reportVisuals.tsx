@@ -189,14 +189,17 @@ export const shortDayDate = (iso: string | null) => {
 };
 
 // A compact swatch legend row — fuel groups, outlook classes, smoke density,
-// lightning age. Print-safe: swatches keep their colors on paper.
-export function LegendRow({ items, className }: { items: { color: string; label: string }[]; className?: string }) {
+// lightning age. `line: true` renders a short bar instead of a square (for
+// outline-styled overlays). Print-safe: swatches keep their colors on paper.
+export function LegendRow({ items, className }: { items: { color: string; label: string; line?: boolean }[]; className?: string }) {
   return (
     <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-1 ${className ?? ''}`}>
       {items.map((it) => (
         <span key={it.label} className="flex items-center gap-1.5 text-[9px] text-white/50">
           <span
-            className="print-color inline-block h-2.5 w-2.5 shrink-0 rounded-[2px] ring-1 ring-white/15"
+            className={`print-color inline-block shrink-0 ${
+              it.line ? 'h-1 w-4 rounded-full' : 'h-2.5 w-2.5 rounded-[2px] ring-1 ring-white/15'
+            }`}
             style={{ background: it.color }}
           />
           {it.label}
@@ -206,24 +209,47 @@ export function LegendRow({ items, className }: { items: { color: string; label:
   );
 }
 
-// ── 7-day outlook strip — one colored cell per day for the site's PSA ────────
-export function OutlookStrip({ days }: { days: OutlookDayCell[] }) {
-  if (days.length === 0) return null;
+// ── Summary chip strip — one colored cell per period ─────────────────────────
+// The shared "forecast summarized on top of the map" format: label, colored
+// bar, value. Used by the outlook (7 PSA days) and rainfall (24/48/72 h).
+export interface StripCell {
+  top: string;
+  hex: string;
+  bottom: string;
+  emph?: boolean;
+}
+
+export function ChipStrip({ cells }: { cells: StripCell[] }) {
+  if (cells.length === 0) return null;
   return (
     <div
       className="print-card grid gap-1"
-      style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0, 1fr))` }}
+      style={{ gridTemplateColumns: `repeat(${cells.length}, minmax(0, 1fr))` }}
     >
-      {days.map((d, i) => (
+      {cells.map((c, i) => (
         <div key={i} className="rounded-lg border border-white/8 bg-white/4 px-1 py-1.5 text-center">
-          <div className="text-[9px] font-semibold text-white/55">{i === 0 ? 'Today' : shortDayDate(d.date)}</div>
-          <div className="print-color mx-auto mt-1 h-2 w-full max-w-[46px] rounded-full" style={{ background: d.hex }} />
-          <div className={`mt-1 text-[8px] leading-tight ${d.sig ? 'font-bold text-white/85' : 'text-white/45'}`}>
-            {d.label}
+          <div className="text-[9px] font-semibold text-white/55">{c.top}</div>
+          <div className="print-color mx-auto mt-1 h-2 w-full max-w-[46px] rounded-full" style={{ background: c.hex }} />
+          <div className={`mt-1 text-[8px] leading-tight ${c.emph ? 'font-bold text-white/85' : 'text-white/45'}`}>
+            {c.bottom}
           </div>
         </div>
       ))}
     </div>
+  );
+}
+
+// 7-day outlook strip — one cell per day for the site's PSA.
+export function OutlookStrip({ days }: { days: OutlookDayCell[] }) {
+  return (
+    <ChipStrip
+      cells={days.map((d, i) => ({
+        top: i === 0 ? 'Today' : shortDayDate(d.date),
+        hex: d.hex,
+        bottom: d.label,
+        emph: d.sig,
+      }))}
+    />
   );
 }
 

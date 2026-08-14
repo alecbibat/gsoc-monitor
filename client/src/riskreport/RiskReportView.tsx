@@ -2,16 +2,42 @@ import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useRiskReportStore } from './riskReportStore';
 import { RISK_LEVELS, RISK_RINGS, type RiskLevel, type SectionResult, type WildfireReportData } from './riskTypes';
-import { ForecastStrip, LegendRow, MapFigure, OutlookStrip, WindChart, shortDayDate } from './reportVisuals';
+import { ChipStrip, ForecastStrip, LegendRow, MapFigure, OutlookStrip, WindChart, type StripCell } from './reportVisuals';
 import { FUEL_GROUPS, rgbCss } from '../layers/fuel/fbfm40';
 import { OUTLOOK_LEGEND } from '../layers/fireOutlook/fireOutlookMeta';
 import { usePrintStyles } from '../lib/printStyles';
 
+// Plumes are drawn as outlines so the satellite imagery (the smoke itself)
+// stays visible — the legend mirrors that with line swatches.
 const SMOKE_LEGEND = [
-  { color: 'rgba(220,200,130,0.85)', label: 'Light smoke' },
-  { color: 'rgba(190,145,60,0.9)', label: 'Medium' },
-  { color: 'rgba(140,80,25,0.95)', label: 'Heavy' },
+  { color: 'rgba(236,222,152,0.95)', label: 'Light smoke (outline)', line: true },
+  { color: 'rgba(245,158,11,0.95)', label: 'Medium', line: true },
+  { color: 'rgba(220,80,20,1)', label: 'Heavy', line: true },
 ];
+
+// Site rainfall accumulation chip color by depth (loosely WPC-ramp shaped).
+const rainHex = (inches: number) =>
+  inches < 0.005 ? '#4b5563'
+  : inches < 0.1 ? '#7dd3fc'
+  : inches < 0.25 ? '#38bdf8'
+  : inches < 0.5 ? '#0ea5e9'
+  : inches < 1 ? '#2563eb'
+  : inches < 2 ? '#7c3aed'
+  : '#c026d3';
+
+// Cumulative 24/48/72 h site totals from the daily point forecast (calendar-
+// day approximation — the footnote says so).
+function rainCells(days: { precipIn: number }[]): StripCell[] {
+  return [1, 2, 3].map((n) => {
+    const v = days.slice(0, n).reduce((a, d) => a + d.precipIn, 0);
+    return {
+      top: `Next ${n * 24} h`,
+      hex: rainHex(v),
+      bottom: v < 0.005 ? 'None' : `${v.toFixed(2)} in`,
+      emph: v >= 0.5,
+    };
+  });
+}
 
 const LIGHTNING_LEGEND = [
   { color: '#ffd84d', label: '<1 h' },
@@ -278,24 +304,10 @@ function ReportBody({ data }: { data: WildfireReportData }) {
               <div className="space-y-2">
                 {data.outlook.days && <OutlookStrip days={data.outlook.days} />}
                 <MapFigure
-                  src={data.maps.outlookDays[0] ?? null}
+                  src={data.maps.outlook}
                   caption={`Regional significant fire potential — today${data.outlook.days?.[0] ? ` (${data.outlook.days[0].label} at the site)` : ''} · white outline = this property's Predictive Service Area`}
                 />
-                {data.maps.outlookDays.filter((m, i) => i > 0 && m).length > 0 && (
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                    {data.maps.outlookDays.slice(1).map((src, i) => {
-                      const cell = data.outlook.days?.[i + 1];
-                      return (
-                        <MapFigure
-                          key={i}
-                          src={src}
-                          caption={cell ? `${shortDayDate(cell.date)} — ${cell.label}` : ''}
-                        />
-                      );
-                    })}
-                  </div>
-                )}
-                {data.maps.outlookDays.some(Boolean) && (
+                {data.maps.outlook && (
                   <LegendRow items={OUTLOOK_LEGEND.map((l) => ({ color: l.hex, label: l.label }))} />
                 )}
               </div>
@@ -333,7 +345,7 @@ function ReportBody({ data }: { data: WildfireReportData }) {
             <div className="space-y-2">
               <MapFigure
                 src={data.maps.smoke}
-                caption={`MODIS Aqua true color, ${data.smoke.imageryDate ?? 'latest complete day'}${data.smoke.analysisDate ? ` · HMS smoke analysis ${data.smoke.analysisDate}` : ''} · dashed ring = 25 mi`}
+                caption={`MODIS Aqua true color, ${data.smoke.imageryDate ?? 'latest complete day'}${data.smoke.analysisDate ? ` · HMS plume outlines, analysis ${data.smoke.analysisDate}` : ''} — the imagery beneath the outlines is the smoke itself · dashed ring = 25 mi`}
               />
               {data.maps.smoke && <LegendRow items={SMOKE_LEGEND} />}
             </div>
@@ -362,19 +374,23 @@ function ReportBody({ data }: { data: WildfireReportData }) {
         </Section>
       )}
 
-      {/* Forecast rainfall — 24/48/72 h accumulation */}
-      {(data.maps.qpf24 || data.maps.qpf48 || data.maps.qpf72) && (
+      {/* Forecast rainfall — site totals summarized above one regional map */}
+      {data.maps.qpf && (
         <section className="print-card">
           <h2 className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-white/50">
             Forecast rainfall (WPC accumulation)
           </h2>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <MapFigure src={data.maps.qpf24} caption="Next 24 h" />
-            <MapFigure src={data.maps.qpf48} caption="Next 48 h" />
-            <MapFigure src={data.maps.qpf72} caption="Next 72 h" />
+          <div className="space-y-2">
+            {'days' in data.forecastDaily && data.forecastDaily.days.length > 0 && (
+              <ChipStrip cells={rainCells(data.forecastDaily.days)} />
+            )}
+            <MapFigure
+              src={data.maps.qpf}
+              caption="Regional accumulation over the next 72 h — official WPC color ramp · dashed ring = 25 mi"
+            />
           </div>
           <p className="mt-1.5 text-[9px] text-white/30 print-muted">
-            Official WPC color ramp · dashed ring = 25 mi · rain on fuels beats any suppression asset
+            Site totals approximated from the daily point forecast (calendar days) · rain on fuels beats any suppression asset
           </p>
         </section>
       )}

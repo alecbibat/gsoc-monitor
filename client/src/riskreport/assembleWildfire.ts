@@ -7,7 +7,7 @@ import { LANDFIRE_CONUS_RECT, LANDFIRE_FBFM40_IMAGESERVER } from '../layers/fuel
 import { analyzeFuelZone } from '../fuelzone/zonalStats';
 import { haversineMeters, MILES_TO_M, pointInRings } from '../lib/geo';
 import { containmentColor } from '../layers/wildfires/wildfiresData';
-import { QPF_LAYER, type QpfPeriod } from '../layers/precip/precipStore';
+import { QPF_LAYER } from '../layers/precip/precipStore';
 import { drawFlame, drawPin, drawPolygon, drawRing, renderMapSnapshot } from './mapSnapshot';
 import type { SmokePolygon } from '../types';
 import {
@@ -583,57 +583,58 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
         },
       });
 
-  const qpfSnapshot = (period: QpfPeriod) =>
-    renderMapSnapshot({
-      centerLat: target.lat,
-      centerLon: target.lon,
-      fitRadiusM: 220 * MILES_TO_M,
-      width: 420,
-      height: 300,
-      overlayAlpha: 0.68,
-      overlayUrl: (proj) =>
-        `${WPC_QPF_MAPSERVER}/export` +
-        `?bbox=${proj.bbox3857.join(',')}` +
-        `&bboxSR=3857&imageSR=3857&size=${proj.width},${proj.height}` +
-        `&layers=show:${QPF_LAYER[period]}` +
-        '&format=png32&transparent=true&f=image',
-      attribution: '© CARTO © OSM · QPF NOAA/WPC',
-      draw: (ctx, proj) => {
-        // High-contrast ring: dark casing under a bright dashed stroke — the
-        // faint cyan version disappeared against the QPF ramp.
-        drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, {
-          stroke: 'rgba(5,7,10,0.85)', width: 6,
-        });
-        drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, {
-          stroke: '#ffffff', width: 2.5, dash: [8, 6], label: '25 mi',
-        });
-        drawSite(ctx, proj);
-      },
-    });
+  // Single 72 h accumulation map — the full multi-day picture in one image;
+  // per-window site totals live in the strip above it (view-side).
+  const qpfSnapshot = renderMapSnapshot({
+    centerLat: target.lat,
+    centerLon: target.lon,
+    fitRadiusM: 220 * MILES_TO_M,
+    width: MAP_W,
+    height: 380,
+    overlayAlpha: 0.68,
+    overlayUrl: (proj) =>
+      `${WPC_QPF_MAPSERVER}/export` +
+      `?bbox=${proj.bbox3857.join(',')}` +
+      `&bboxSR=3857&imageSR=3857&size=${proj.width},${proj.height}` +
+      `&layers=show:${QPF_LAYER['72h']}` +
+      '&format=png32&transparent=true&f=image',
+    attribution: '© CARTO © OSM · QPF NOAA/WPC',
+    draw: (ctx, proj) => {
+      // High-contrast ring: dark casing under a bright dashed stroke — the
+      // faint cyan version disappeared against the QPF ramp.
+      drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, {
+        stroke: 'rgba(5,7,10,0.85)', width: 6,
+      });
+      drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, {
+        stroke: '#ffffff', width: 2.5, dash: [8, 6], label: '25 mi',
+      });
+      drawSite(ctx, proj);
+    },
+  });
 
-  // Regional 7-day outlook: every PSA colored by that day's class, the site's
-  // PSA outlined white — index 0 (today) rendered large, later days as small
-  // multiples. 'No data' PSAs are skipped so they don't gray-blanket the map.
+  // Regional outlook, today only — every PSA colored by today's class, the
+  // site's PSA outlined white; the 7-day picture is the strip above the map.
+  // 'No data' PSAs are skipped so they don't gray-blanket the map.
   const outlookValue = outlookRes.value;
-  const outlookSnapshot = (dayIdx: number, hero: boolean) =>
+  const outlookTodayIdx = outlookDayIdxs[0] ?? 0;
+  const outlookSnapshot =
     outlookValue === null
       ? Promise.resolve(null)
       : renderMapSnapshot({
           centerLat: target.lat,
           centerLon: target.lon,
           fitRadiusM: 250 * MILES_TO_M,
-          width: hero ? MAP_W : 210,
-          height: hero ? 380 : 160,
-          labels: hero,
-          attribution: hero ? '© CARTO © OSM · outlook NWCG Predictive Services' : '',
+          width: MAP_W,
+          height: 380,
+          attribution: '© CARTO © OSM · outlook NWCG Predictive Services',
           draw: (ctx, proj) => {
             for (const p of outlookValue.psas) {
-              const st = outlookStyle(p.days[dayIdx]?.dryness ?? null, p.days[dayIdx]?.type ?? null);
+              const st = outlookStyle(p.days[outlookTodayIdx]?.dryness ?? null, p.days[outlookTodayIdx]?.type ?? null);
               if (st.label === 'No data') continue;
-              drawPolygon(ctx, proj, p.rings, { fill: `${st.hex}59`, stroke: `${st.hex}cc`, width: hero ? 1.5 : 1 });
+              drawPolygon(ctx, proj, p.rings, { fill: `${st.hex}59`, stroke: `${st.hex}cc`, width: 1.5 });
             }
             if (sitePsaRings) {
-              drawPolygon(ctx, proj, sitePsaRings, { fill: 'rgba(0,0,0,0)', stroke: '#ffffff', width: hero ? 3 : 2 });
+              drawPolygon(ctx, proj, sitePsaRings, { fill: 'rgba(0,0,0,0)', stroke: '#ffffff', width: 3 });
             }
             drawSite(ctx, proj);
           },
@@ -649,10 +650,15 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       ? smoke.analysisDate
       : addDaysIso(todayUtcIso(), -1);
   smoke.imageryDate = smokeImageryDate;
-  const SMOKE_STYLE: Record<string, { fill: string; stroke: string }> = {
-    Light:  { fill: 'rgba(220,200,130,0.28)', stroke: 'rgba(220,200,130,0.55)' },
-    Medium: { fill: 'rgba(190,145,60,0.42)',  stroke: 'rgba(190,145,60,0.70)' },
-    Heavy:  { fill: 'rgba(140,80,25,0.60)',   stroke: 'rgba(140,80,25,0.85)' },
+  // Plumes as density-colored OUTLINES over the imagery, not fills — the
+  // satellite picture already shows the smoke itself, and a filled Heavy
+  // plume would paint over exactly the thing worth looking at. Dark casing
+  // keeps the outline readable over bright cloud; Heavy gets a whisper of
+  // tint so an enclosed area still reads when its boundary runs off-canvas.
+  const SMOKE_STYLE: Record<string, { stroke: string; width: number; fill: string }> = {
+    Light:  { stroke: 'rgba(236,222,152,0.95)', width: 2,   fill: 'rgba(0,0,0,0)' },
+    Medium: { stroke: 'rgba(245,158,11,0.95)',  width: 2.5, fill: 'rgba(0,0,0,0)' },
+    Heavy:  { stroke: 'rgba(220,80,20,1)',      width: 3.5, fill: 'rgba(220,80,20,0.10)' },
   };
   const smokeSnapshot = renderMapSnapshot({
     centerLat: target.lat,
@@ -673,7 +679,8 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       const ordered = smokePolys.slice().sort((a, b) => (DENSITY_RANK[a.density] ?? 0) - (DENSITY_RANK[b.density] ?? 0));
       for (const p of ordered) {
         const st = SMOKE_STYLE[p.density] ?? SMOKE_STYLE.Light;
-        drawPolygon(ctx, proj, [p.coords], { fill: st.fill, stroke: st.stroke, width: 1.5 });
+        drawPolygon(ctx, proj, [p.coords], { fill: st.fill, stroke: 'rgba(5,7,10,0.6)', width: st.width + 2.5 });
+        drawPolygon(ctx, proj, [p.coords], { fill: 'rgba(0,0,0,0)', stroke: st.stroke, width: st.width });
       }
       // High-contrast ring — must read over both bright cloud and dark terrain.
       drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, { stroke: 'rgba(5,7,10,0.85)', width: 6 });
@@ -716,11 +723,9 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
         },
       });
 
-  const [exposureMap, alertsMap, fuelMap, qpf24, qpf48, qpf72, smokeMap, lightningMap, outlookMaps] = await Promise.all([
+  const [exposureMap, alertsMap, fuelMap, qpfMap, smokeMap, lightningMap, outlookMap] = await Promise.all([
     exposureSnapshot, alertsSnapshot, fuelSnapshot,
-    qpfSnapshot('24h'), qpfSnapshot('48h'), qpfSnapshot('72h'),
-    smokeSnapshot, lightningSnapshot,
-    Promise.all(outlookDayIdxs.map((dayIdx, k) => outlookSnapshot(dayIdx, k === 0))),
+    qpfSnapshot, smokeSnapshot, lightningSnapshot, outlookSnapshot,
   ]);
 
   // ── 10-day forecast strip data ────────────────────────────────────────────
@@ -786,8 +791,8 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
       exposure: exposureMap,
       alerts: alertsMap,
       fuel: fuelMap,
-      qpf24, qpf48, qpf72,
-      outlookDays: outlookMaps,
+      qpf: qpfMap,
+      outlook: outlookMap,
       smoke: smokeMap,
       lightning: lightningMap,
     },
