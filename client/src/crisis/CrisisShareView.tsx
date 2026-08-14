@@ -240,6 +240,37 @@ function PasswordGate({ onSubmit, error, checking }: {
   );
 }
 
+// ── Last-updated indicator ───────────────────────────────────────────────────
+// The 30-second stakeholder question includes "is this current?" — a static
+// timestamp can't answer that. Relative time, re-ticked every 30 s, amber once
+// an OPEN incident hasn't updated in 45 min (closed incidents don't go stale).
+
+function LastUpdated({ iso, closed }: { iso: string; closed: boolean }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick((n) => n + 1), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  const ageMin = Math.max(0, Math.round((Date.now() - t) / 60_000));
+  const rel =
+    ageMin < 1 ? 'just now'
+    : ageMin < 60 ? `${ageMin}m ago`
+    : ageMin < 48 * 60 ? `${Math.floor(ageMin / 60)}h ${ageMin % 60}m ago`
+    : `${Math.floor(ageMin / 1440)}d ago`;
+  const stale = !closed && ageMin >= 45;
+  return (
+    <div className="ml-auto text-right" title={new Date(iso).toLocaleString()}>
+      <p className="text-[10px] text-white/40">Last updated</p>
+      <p className={`text-[11px] font-semibold ${stale ? 'text-amber-300' : 'text-white/70'}`}>
+        {rel}
+        {stale && <span className="ml-1 font-normal text-amber-300/70">· may be stale</span>}
+      </p>
+    </div>
+  );
+}
+
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 export function CrisisShareView({ token }: { token: string }) {
@@ -264,7 +295,9 @@ export function CrisisShareView({ token }: { token: string }) {
   const [offLive, setOffLive] = useState<Set<ShareLiveLayerId>>(new Set());
   const [offDraw, setOffDraw] = useState<Set<string>>(new Set());
   const [hideInfo, setHideInfo] = useState(false);
-  const [logView, setLogView] = useState<'list' | 'timeline'>('list');
+  // Viewers get the timeline by default — a stakeholder wants the shape of the
+  // response at a glance, not a dense operator list (that's one toggle away).
+  const [logView, setLogView] = useState<'list' | 'timeline'>('timeline');
   const [logLimit, setLogLimit] = useState(DEFAULT_LOG_LIMIT);
   // Hoisted above the paginated log rows: an SSE update can slide a row out
   // of the visible slice, and an open viewer must survive that unmount.
@@ -445,58 +478,37 @@ export function CrisisShareView({ token }: { token: string }) {
 
   return (
     <div className="min-h-screen bg-ink-950 text-white">
-      {/* Header */}
-      <header className="sticky top-0 z-10 border-b border-white/8 bg-ink-900/90 px-8 py-4 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-5xl items-center gap-4">
+      {/* Header — wraps on phones (most shared-link viewers are on phones) */}
+      <header className="pt-safe sticky top-0 z-10 border-b border-white/8 bg-ink-900/90 px-4 py-3 backdrop-blur-sm sm:px-8 sm:py-4">
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-4 gap-y-1">
           <div className="relative flex h-2.5 w-2.5 shrink-0">
             {status.id === 'active' && <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-70" style={{ background: dot }} />}
             <span className="relative inline-flex h-2.5 w-2.5 rounded-full" style={{ background: dot }} />
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">Live Situation Report</p>
-            <p className="text-[20px] font-semibold text-white/95">{data.incidentName || 'Unnamed Incident'}</p>
+            <p className="truncate text-[17px] font-semibold text-white/95 sm:text-[20px]">{data.incidentName || 'Unnamed Incident'}</p>
           </div>
           <span className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-widest ${badge}`}>{status.label}</span>
-          <div className="ml-auto text-right">
-            <p className="text-[10px] text-white/40">Last updated</p>
-            <p className="text-[11px] text-white/60">{fmtTs(data.lastUpdated)}</p>
-          </div>
+          <LastUpdated iso={data.lastUpdated} closed={status.id === 'closed'} />
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl space-y-8 px-8 py-8">
+      <main className="mx-auto max-w-5xl space-y-8 px-4 py-6 sm:px-8 sm:py-8">
 
-        {/* Incident info + summary */}
-        <div className="grid grid-cols-2 gap-6">
-          <div>
-            <h2 className="mb-3 text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Executive Summary</h2>
-            <p className="whitespace-pre-wrap rounded-lg border border-white/8 bg-white/4 px-4 py-3 text-[14px] leading-relaxed text-white/85">
-              {data.executiveSummary || <span className="text-white/25 italic">No summary provided</span>}
-            </p>
-          </div>
-          <div>
-            <h2 className="mb-3 text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Incident Details</h2>
-            <div className="space-y-2 rounded-lg border border-white/8 bg-white/4 px-4 py-3">
-              {[
-                ['Location', data.incidentLocation],
-                ['Start', data.incidentDatetime ? new Date(data.incidentDatetime).toLocaleString() : '—'],
-                ['End', data.incidentEndDatetime ? new Date(data.incidentEndDatetime).toLocaleString() : '—'],
-                ['Type', incidentTypeDef(data.incidentType).label],
-              ].map(([label, value]) => (
-                <div key={label} className="flex gap-3">
-                  <span className="w-24 shrink-0 text-[11px] text-white/50">{label}</span>
-                  <span className="text-[13px] text-white/85">{value || '—'}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+        {/* BLUF: the 30-second answer, full width and first */}
+        <div>
+          <h2 className="mb-3 text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Executive Summary</h2>
+          <p className="whitespace-pre-wrap rounded-lg border border-white/8 bg-white/4 px-4 py-3 text-[15px] leading-relaxed text-white/90">
+            {data.executiveSummary || <span className="text-white/25 italic">No summary provided</span>}
+          </p>
         </div>
 
-        {/* Live property watch, scoped to the property groups the incident
-            team selected — no groups selected means nothing is shared here */}
+        {/* Affected properties next — live watch scoped to the property groups
+            the incident team selected; no groups means nothing is shared here */}
         {pinGroups.length > 0 && (
           <div>
-            <div className="mb-3 flex items-baseline gap-3">
+            <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
               <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Property Watch</h2>
               <span className="text-[11px] text-white/35">Hazards near the incident properties · updates live</span>
             </div>
@@ -504,19 +516,23 @@ export function CrisisShareView({ token }: { token: string }) {
           </div>
         )}
 
-        {/* Org chart */}
-        {roots.length > 0 && (
-          <div>
-            <h2 className="mb-3 text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">ICS / NIMS Organizational Structure</h2>
-            <div className="overflow-x-auto rounded-lg border border-white/8 bg-ink-950/60 px-6 py-5">
-              <div className="flex min-w-[700px] flex-col items-center py-2">
-                {roots.map((r) => (
-                  <ROSubtree key={r.id} roleId={r.id} roles={data.roles} assignments={data.assignments} />
-                ))}
+        {/* Compact details */}
+        <div>
+          <h2 className="mb-3 text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Incident Details</h2>
+          <div className="grid gap-x-8 gap-y-2 rounded-lg border border-white/8 bg-white/4 px-4 py-3 sm:grid-cols-2">
+            {[
+              ['Location', data.incidentLocation],
+              ['Type', incidentTypeDef(data.incidentType).label],
+              ['Start', data.incidentDatetime ? new Date(data.incidentDatetime).toLocaleString() : '—'],
+              ['End', data.incidentEndDatetime ? new Date(data.incidentEndDatetime).toLocaleString() : '—'],
+            ].map(([label, value]) => (
+              <div key={label} className="flex gap-3">
+                <span className="w-20 shrink-0 text-[11px] text-white/50">{label}</span>
+                <span className="min-w-0 text-[13px] text-white/85">{value || '—'}</span>
               </div>
-            </div>
+            ))}
           </div>
-        )}
+        </div>
 
         {/* Action log */}
         {data.actionLog.length > 0 && (() => {
@@ -572,12 +588,12 @@ export function CrisisShareView({ token }: { token: string }) {
                 <>
                   <div className="divide-y divide-white/6">
                     {shownLog.map((entry) => (
-                      <div key={entry.id} className="flex items-start gap-3 px-4 py-3">
+                      <div key={entry.id} className="flex flex-wrap items-start gap-x-3 gap-y-1 px-3 py-3 sm:flex-nowrap sm:px-4">
                         <span className={`mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-widest ${TYPE_STYLES[entry.entryType ?? 'action']}`}>
                           {entry.entryType ?? 'action'}
                         </span>
-                        <span className="w-36 shrink-0 text-[11px] text-white/45">{fmtTs(entry.timestamp)}</span>
-                        <p className="flex-1 text-[13px] leading-snug text-white/80">{entry.description || <span className="text-white/30 italic">No description</span>}</p>
+                        <span className="shrink-0 text-[11px] text-white/45 sm:w-36">{fmtTs(entry.timestamp)}</span>
+                        <p className="w-full text-[13px] leading-snug text-white/80 sm:w-auto sm:flex-1">{entry.description || <span className="text-white/30 italic">No description</span>}</p>
                         <div className="shrink-0 flex flex-col items-end gap-1">
                           {(entry as { attachmentData?: string }).attachmentData && (
                             <ZoomableImage
@@ -696,7 +712,21 @@ export function CrisisShareView({ token }: { token: string }) {
           </div>
         )}
 
-        <p className="border-t border-white/6 pt-4 text-center text-[9px] text-white/20">
+        {/* Org chart — reference material, below the operational picture */}
+        {roots.length > 0 && (
+          <div>
+            <h2 className="mb-3 text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">ICS / NIMS Organizational Structure</h2>
+            <div className="overflow-x-auto rounded-lg border border-white/8 bg-ink-950/60 px-6 py-5">
+              <div className="flex min-w-[700px] flex-col items-center py-2">
+                {roots.map((r) => (
+                  <ROSubtree key={r.id} roleId={r.id} roles={data.roles} assignments={data.assignments} />
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <p className="pb-safe border-t border-white/6 pt-4 text-center text-[9px] text-white/20">
           Published {fmtTs(data.publishedAt)} · Updates automatically in real-time
         </p>
 
