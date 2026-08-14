@@ -169,6 +169,32 @@ export interface Incident {
   archivedAt?: string | null; // set when the incident is stood down; null/absent = active
   closedBy?: string | null;         // who stood the incident down
   standDownReason?: string | null;  // why, captured by the stand-down checklist
+  /** After-action review content — editable AFTER stand-down (see updateAar). */
+  aar?: IncidentAar;
+}
+
+// ── After-action report (Track 6) ────────────────────────────────────────────
+
+export interface AarCorrectiveAction {
+  id: string;
+  text: string;
+  owner?: string;
+  due?: string;   // ISO date
+  done?: boolean;
+}
+
+/**
+ * The standard four-question AAR structure plus the corrective-action tracker.
+ * This is post-incident work product: it is deliberately EXEMPT from the
+ * archived-incident freeze (the whole point is to write it after stand-down),
+ * and it is never included in share snapshots (internal, not stakeholder-facing).
+ */
+export interface IncidentAar {
+  expected?: string;   // What was expected / planned to happen?
+  happened?: string;   // What actually happened?
+  wentWell?: string;   // What went well, and why?
+  improve?: string;    // What can be improved, and how?
+  correctiveActions?: AarCorrectiveAction[];
 }
 
 // Public shape sent to / received from the share endpoint
@@ -356,6 +382,13 @@ interface CrisisState {
   updateActionEntry: (id: string, patch: Partial<Pick<ActionLogEntry, 'description' | 'attachmentName' | 'attachmentData' | 'entryType'>>) => void;
   removeActionEntry: (id: string) => void;
 
+  // AAR — keyed by explicit incident id (the report opens from the archive
+  // list, where no incident is "active"), and NOT gated on archived state.
+  updateAar: (incidentId: string, patch: Partial<Omit<IncidentAar, 'correctiveActions'>>) => void;
+  addCorrectiveAction: (incidentId: string) => string;
+  updateCorrectiveAction: (incidentId: string, actionId: string, patch: Partial<Omit<AarCorrectiveAction, 'id'>>) => void;
+  removeCorrectiveAction: (incidentId: string, actionId: string) => void;
+
   // Live layers on the share map
   toggleLiveLayer: (id: ShareLiveLayerId) => void;
   // Additional property-pin groups on the share map
@@ -401,6 +434,12 @@ function patchActiveEditable(s: CrisisState, fn: (inc: Incident) => Incident): P
   const inc = s.incidents.find((i) => i.id === s.activeIncidentId);
   if (!inc || inc.archivedAt) return {};
   return patchActive(s, fn);
+}
+
+// Patch a specific incident by id, archived or not — for post-incident work
+// (the AAR) that by definition happens on frozen records.
+function patchById(s: CrisisState, id: string, fn: (inc: Incident) => Incident): Partial<CrisisState> {
+  return { incidents: s.incidents.map((i) => (i.id === id ? fn(i) : i)) };
 }
 
 // Patch whichever incident owns the given layer.
@@ -716,6 +755,37 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
 
       removeActionEntry: (id) =>
         set((s) => patchActiveEditable(s, (inc) => ({ ...inc, actionLog: inc.actionLog.filter((e) => e.id !== id) }))),
+
+      // AAR content rides the incident blob (synced by the generic watcher,
+      // archived incidents included) and stays out of extractPublicState.
+      updateAar: (incidentId, patch) =>
+        set((s) => patchById(s, incidentId, (inc) => ({ ...inc, aar: { ...inc.aar, ...patch } }))),
+      addCorrectiveAction: (incidentId) => {
+        const id = uid();
+        set((s) => patchById(s, incidentId, (inc) => ({
+          ...inc,
+          aar: { ...inc.aar, correctiveActions: [...(inc.aar?.correctiveActions ?? []), { id, text: '' }] },
+        })));
+        return id;
+      },
+      updateCorrectiveAction: (incidentId, actionId, patch) =>
+        set((s) => patchById(s, incidentId, (inc) => ({
+          ...inc,
+          aar: {
+            ...inc.aar,
+            correctiveActions: (inc.aar?.correctiveActions ?? []).map((a) =>
+              a.id === actionId ? { ...a, ...patch } : a
+            ),
+          },
+        }))),
+      removeCorrectiveAction: (incidentId, actionId) =>
+        set((s) => patchById(s, incidentId, (inc) => ({
+          ...inc,
+          aar: {
+            ...inc.aar,
+            correctiveActions: (inc.aar?.correctiveActions ?? []).filter((a) => a.id !== actionId),
+          },
+        }))),
 
       toggleLiveLayer: (id) =>
         set((s) => patchActiveEditable(s, (inc) => {

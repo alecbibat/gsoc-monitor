@@ -31,6 +31,10 @@ export function buildPrintCss(root: string): string {
   body > *:not(${R}) { display: none !important; }
   ${R} { position: static !important; overflow: visible !important; }
   ${R} .print-hide, ${R} .${root}-no-print { display: none !important; }
+  /* Print-only content: mark the element with BOTH the \`hidden\` attribute
+     (screen) and .print-only — used where the screen shows an editor and the
+     paper shows clean text (AAR questions, corrective-action table). */
+  ${R} .print-only { display: block !important; }
 
   /* Paper-light theme */
   ${R} {
