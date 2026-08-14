@@ -7,6 +7,7 @@ import { lazy, Suspense, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import type { Incident, IcsRole, PersonnelAssignment } from './crisisStore';
 import { incidentStatusDef, incidentTypeDef } from './taxonomy';
+import { usePrintStyles } from '../lib/printStyles';
 
 // Lazy so Leaflet (used only by this printable report and the share view)
 // stays out of the main bundle.
@@ -122,20 +123,9 @@ interface Props {
 }
 
 export function CrisisReportModal({ incident, onClose }: Props) {
-  // Inject print CSS: hide everything except this modal when Ctrl-P fires.
-  useEffect(() => {
-    const style = document.createElement('style');
-    style.id = 'crisis-report-print-css';
-    style.textContent = `
-      @media print {
-        body > *:not(.crisis-report-root) { display: none !important; }
-        .crisis-report-root { position: static !important; overflow: visible !important; }
-        .crisis-report-no-print { display: none !important; }
-      }
-    `;
-    document.head.appendChild(style);
-    return () => style.remove();
-  }, []);
+  // Shared report print stylesheet: paper-light theme, page-break discipline,
+  // repeating page header (see lib/printStyles.ts).
+  usePrintStyles('crisis-report-root');
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -149,6 +139,13 @@ export function CrisisReportModal({ incident, onClose }: Props) {
 
   const modal = (
     <div className="crisis-report-root fixed inset-0 z-[3000] overflow-y-auto bg-ink-950 text-white">
+
+      {/* Repeating page header — print only */}
+      <div className="print-page-header hidden">
+        <span className="font-bold uppercase tracking-widest">GSOC Monitor · Incident Archive Report</span>
+        <span>{incident.incidentName || 'Untitled Incident'}</span>
+        <span className="ml-auto">Generated {new Date().toLocaleString()}</span>
+      </div>
 
       {/* Top bar — hidden when printing */}
       <div className="crisis-report-no-print sticky top-0 z-10 flex items-center gap-4 border-b border-white/8 bg-ink-900/90 px-8 py-3 backdrop-blur-sm">
@@ -190,7 +187,7 @@ export function CrisisReportModal({ incident, onClose }: Props) {
             <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/30">Incident Archive Report</p>
             <p className="text-[18px] font-semibold text-white/90">{incident.incidentName || 'Unnamed Incident'}</p>
           </div>
-          <span className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-widest ${badge}`}>
+          <span className={`print-color shrink-0 rounded-full border px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-widest ${badge}`}>
             {statusLabel}
           </span>
           <span className="shrink-0 rounded-full border border-white/20 bg-white/8 px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-white/50">
@@ -265,7 +262,7 @@ export function CrisisReportModal({ incident, onClose }: Props) {
                 .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
                 .map((entry) => (
                   <div key={entry.id} className="flex items-start gap-3 px-4 py-3">
-                    <span className={`mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-widest ${ENTRY_STYLES[entry.entryType ?? 'action']}`}>
+                    <span className={`print-color mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-widest ${ENTRY_STYLES[entry.entryType ?? 'action']}`}>
                       {entry.entryType ?? 'action'}
                     </span>
                     <span className="w-36 shrink-0 text-[10px] text-white/30">{fmtTs(entry.timestamp)}</span>
