@@ -137,6 +137,9 @@ function LegCard({
 
   const url = gmapsUrl(origin.lat, origin.lon, leg.lat, leg.lon);
   const dur = fmtDur(leg.durationS);
+  // tier 0 is an exact match for the category; anything above it is a
+  // documented fallback (urgent care, a non-acute hospital, a guest house).
+  const isFallback = (leg.tier ?? 0) > 0;
 
   const share = async () => {
     const text = `Directions to ${leg.name} (${fmtDist(leg.distanceM)}${dur ? `, ${dur} drive` : ''}):\n${url}`;
@@ -170,8 +173,13 @@ function LegCard({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: meta.color }}>
-            {meta.icon} {meta.label}
+          <div
+            className="text-[10px] font-semibold uppercase tracking-wider"
+            // A fallback result states what it really is, in amber, rather than
+            // borrowing the category's colour and calling itself a hospital.
+            style={{ color: isFallback ? '#fbbf24' : meta.color }}
+          >
+            {meta.icon} {leg.serviceLabel ?? meta.label}
             {optionLabel ? ` · Option ${optionLabel}` : ''}
           </div>
           <div className="truncate text-[13px] font-medium text-white/90">{leg.name}</div>
@@ -181,6 +189,12 @@ function LegCard({
           {dur && <div className="text-white/40">{dur}</div>}
         </div>
       </div>
+
+      {isFallback && kind === 'hospital' && (
+        <div className="mt-1 text-[10px] text-amber-300/80">
+          No general hospital within range — nearest alternative shown
+        </div>
+      )}
 
       {!leg.routed && (
         <div className="mt-1 text-[10px] text-amber-300/80">
@@ -464,7 +478,7 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
     setLoading(true);
     setError(null);
     setData(null);
-    fetchDirections(payload.lat, payload.lon)
+    fetchDirections(payload.lat, payload.lon, payload.name)
       .then((d) => {
         if (!cancelled) {
           setData(d);
@@ -480,7 +494,7 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
         }
       });
     return () => { cancelled = true; };
-  }, [payload.lat, payload.lon, reloadKey]);
+  }, [payload.lat, payload.lon, payload.name, reloadKey]);
 
   // Compute nearest 3 pins client-side, then fetch drive routes for each.
   useEffect(() => {

@@ -335,6 +335,13 @@ export interface DirectionsLeg {
   geometry: Array<[number, number]>; // [lon, lat] pairs
   steps: RouteStep[];
   routed: boolean; // false = straight-line fallback (OSRM had no route)
+  /** Ranking group from the POI classifier — 0 is an exact category match, and
+   *  anything above it is a documented fallback the panel labels honestly.
+   *  Optional: responses cached before this shipped won't carry it. */
+  tier?: number;
+  /** What the place actually is ('Hospital · emergency dept', 'Urgent care',
+   *  'Motel'), shown in place of the generic category name. */
+  serviceLabel?: string;
 }
 
 export interface DirectionsResponse {

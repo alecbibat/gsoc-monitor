@@ -3,6 +3,13 @@ import { cache } from '../cache';
 
 const router = Router();
 
+// NOT WIRED UP. `api.directions` in the client has no call sites — the panel
+// calls client/src/layers/locations/directionsClient.ts directly — so this
+// route and its 24h cache are currently dead, and its POI filters still
+// predate the classifier. Do not point the client at this until it adopts
+// client/src/layers/locations/poiClassifier.ts, or `amenity=clinic` will put
+// acupuncturists and chiropractors back under "nearest hospital".
+//
 // Both services are free and keyless:
 //  - Overpass (OpenStreetMap) finds the nearest hospital / hotel
 //  - OSRM's public demo server computes the driving route + turn-by-turn steps
