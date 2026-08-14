@@ -9,7 +9,6 @@ import { HazardRows } from './HazardRows';
 import { expiresText, fmtMiles, quakeColor, timeAgo } from './format';
 import { downloadPropertyReport } from './reportCanvas';
 import { useRiskReportStore } from '../../riskreport/riskReportStore';
-import { PropertyAssets } from '../../assets/PropertyAssets';
 
 const REFRESH_MS = 5 * 60_000;
 
@@ -229,9 +228,6 @@ export function PropertyDetail({ payload }: { payload: PropertyDetailPayload }) 
           )}
         </>
       )}
-
-      {/* Asset register (Track 2). Proximity keys are `${group.id}::${name}`. */}
-      <PropertyAssets groupId={payload.key.split('::')[0]} locationName={payload.name} />
     </div>
   );
 }

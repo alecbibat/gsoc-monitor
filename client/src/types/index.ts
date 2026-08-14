@@ -23,9 +23,7 @@ export type LayerId =
   | 'precip'
   | 'wildfires'
   | 'outages'
-  | 'intel'
-  | 'isobars'
-  | 'envField';
+  | 'intel';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
@@ -536,45 +534,6 @@ export interface IntelResponse {
 }
 
 // A watchlist source row as returned by /api/watchlist.
-// --- Environmental grid (Track 4: isobars / RH / temp overlays) --------------
-export interface EnvGridResponse {
-  nx: number;
-  ny: number;
-  lon0: number;
-  lat0: number;
-  dLon: number;
-  dLat: number;
-  tempC: (number | null)[];
-  rhPct: (number | null)[];
-  mslHpa: (number | null)[];
-  updated: number;
-  stale?: boolean;
-}
-
-// --- Site assets & infrastructure (Track 2) ---------------------------------
-export type AssetCategory =
-  | 'building' | 'generator' | 'water-system' | 'fuel-storage'
-  | 'comms' | 'vehicle' | 'medical' | 'other';
-export type AssetCondition = 'good' | 'fair' | 'poor' | 'failed';
-
-export interface PropertyAsset {
-  id: string;
-  groupId: string;       // LOCATION_GROUPS id (stable external key)
-  locationName: string;  // property identity today is group id + location name
-  name: string;
-  category: AssetCategory;
-  lat: number | null;
-  lon: number | null;
-  notes: string;
-  condition: AssetCondition | null;
-  lastInspected: string | null; // YYYY-MM-DD
-  nextDue: string | null;       // YYYY-MM-DD
-  responsibleParty: string | null;
-  addedBy: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface WatchlistSource {
   id: string;
   kind: SourceKind;
