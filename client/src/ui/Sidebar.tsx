@@ -156,7 +156,8 @@ export function Sidebar() {
     }))
   );
   const precipPeriod = usePrecipStore((s) => s.period);
-  const envStatus = useEnvStore((s) => s.status);
+  const isobarStatus = useEnvStore((s) => s.isobarStatus);
+  const envFieldStatus = useEnvStore((s) => s.fieldStatus);
   const fireOutlookError = useFireOutlookStore((s) => s.error);
   const fuelError = useFuelStatus((s) => s.error);
   const windStatus = useWindStatus(
@@ -438,13 +439,13 @@ export function Sidebar() {
             label="Isobars (MSL Pressure)"
             active={(active as Record<string, boolean>).isobars ?? false}
             onToggle={() => toggleLayer('isobars')}
-            statusText={active.isobars ? envStatus ?? 'loading grid…' : 'GFS surface pressure · 4 hPa contours'}
+            statusText={active.isobars ? isobarStatus ?? 'loading grid…' : 'GFS surface pressure · 4 hPa contours'}
           />
           <LayerToggle
             label="Surface Temp / Humidity"
             active={(active as Record<string, boolean>).envField ?? false}
             onToggle={() => toggleLayer('envField')}
-            statusText={active.envField ? envStatus ?? 'loading grid…' : 'GFS surface fields · CONUS'}
+            statusText={active.envField ? envFieldStatus ?? 'loading grid…' : 'GFS surface fields · CONUS'}
           >
             <EnvControls />
           </LayerToggle>

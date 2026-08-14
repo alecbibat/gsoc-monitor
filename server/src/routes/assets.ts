@@ -56,9 +56,12 @@ function validate(b: Body): { values?: {
   if (!(ASSET_CATEGORIES as readonly string[]).includes(category)) {
     return { error: `category must be one of: ${ASSET_CATEGORIES.join(', ')}` };
   }
-  // Coordinates are optional but must come as a valid pair.
-  const hasLat = b.lat !== undefined && b.lat !== null;
-  const hasLon = b.lon !== undefined && b.lon !== null;
+  // Coordinates are optional but must come as a valid pair. An empty string
+  // counts as "not provided" — Number('') is 0, which would silently store a
+  // Null Island row; a non-numeric value is an error, not a coercion.
+  const provided = (v: unknown) => v !== undefined && v !== null && v !== '';
+  const hasLat = provided(b.lat);
+  const hasLon = provided(b.lon);
   if (hasLat !== hasLon) return { error: 'lat and lon must be provided together' };
   let lat: number | null = null;
   let lon: number | null = null;
@@ -77,7 +80,13 @@ function validate(b: Body): { values?: {
   const date = (v: unknown, field: string): { value: string | null; error?: string } => {
     const s = str(v);
     if (!s) return { value: null };
-    return DATE_RE.test(s) ? { value: s } : { value: null, error: `${field} must be YYYY-MM-DD` };
+    // Regex shape AND a real calendar date — '2026-02-30' would otherwise
+    // reach Postgres and surface as a 500 instead of a validation error.
+    if (DATE_RE.test(s)) {
+      const d = new Date(`${s}T00:00:00Z`);
+      if (!Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s) return { value: s };
+    }
+    return { value: null, error: `${field} must be a valid YYYY-MM-DD date` };
   };
   const li = date(b.lastInspected, 'lastInspected');
   if (li.error) return { error: li.error };

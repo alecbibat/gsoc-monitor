@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import type { AssetCategory, AssetCondition, PropertyAsset } from '../types';
 
@@ -27,11 +27,18 @@ const CONDITION_STYLE: Record<AssetCondition, string> = {
 
 type DueState = { label: string; cls: string } | null;
 
+/** The viewer's LOCAL calendar date — toISOString() is the UTC day, which
+ * flips compliance chips a day early every local evening in UTC- zones. */
+export function localIsoDate(d = new Date()): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 /** Compliance framing for next_due: overdue (red), ≤30 days (amber), else quiet. */
 export function dueState(nextDue: string | null, todayIso?: string): DueState {
   if (!nextDue) return null;
-  const today = todayIso ?? new Date().toISOString().slice(0, 10);
+  const today = todayIso ?? localIsoDate();
   if (nextDue < today) return { label: 'overdue', cls: 'text-red-300 border-red-400/40 bg-red-400/10' };
+  // Both sides parse as UTC midnight, so the day difference is timezone-exact.
   const days = Math.round((Date.parse(nextDue) - Date.parse(today)) / 86_400_000);
   if (days <= 30) return { label: `due in ${days}d`, cls: 'text-amber-300 border-amber-400/30 bg-amber-400/10' };
   return { label: `due ${nextDue}`, cls: 'text-white/35 border-white/10' };
@@ -141,10 +148,14 @@ export function PropertyAssets({ groupId, locationName }: { groupId: string; loc
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
+  // Sequence token: a slow initial GET resolving AFTER a save's reload must
+  // not overwrite the list with its stale pre-save contents.
+  const loadSeq = useRef(0);
   const load = useCallback(() => {
+    const seq = ++loadSeq.current;
     api.assets(groupId, locationName)
-      .then((rows) => { setAssets(rows); setError(null); })
-      .catch((e) => setError((e as Error).message));
+      .then((rows) => { if (seq === loadSeq.current) { setAssets(rows); setError(null); } })
+      .catch((e) => { if (seq === loadSeq.current) setError((e as Error).message); });
   }, [groupId, locationName]);
 
   useEffect(() => {

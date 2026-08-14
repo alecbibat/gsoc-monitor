@@ -72,14 +72,18 @@ function colorAt(stops: Stop[], v: number): [number, number, number] {
 }
 
 // Bilinear sample of a (nullable) grid field at fractional grid coordinates.
+// Any null corner makes the sample null (transparent pixel) — a missing
+// upstream point must never be smeared over as if it were data, matching the
+// isobar engine's null-cell honesty. (Indices stay in bounds: callers clamp
+// fx/fy below nx-1/ny-1 by an epsilon.)
 function sample(values: (number | null)[], nx: number, fx: number, fy: number): number | null {
   const c = Math.floor(fx);
   const r = Math.floor(fy);
   const v00 = values[r * nx + c];
-  const v10 = values[r * nx + c + 1] ?? v00;
-  const v01 = values[(r + 1) * nx + c] ?? v00;
-  const v11 = values[(r + 1) * nx + c + 1] ?? v00;
-  if (v00 === null || v10 === null || v01 === null || v11 === null) return null;
+  const v10 = values[r * nx + c + 1];
+  const v01 = values[(r + 1) * nx + c];
+  const v11 = values[(r + 1) * nx + c + 1];
+  if (v00 == null || v10 == null || v01 == null || v11 == null) return null;
   const tx = fx - c;
   const ty = fy - r;
   return (
@@ -137,7 +141,7 @@ export function EnvGridLayer() {
   useEffect(() => {
     if (!viewer) return;
     let cancelled = false;
-    const setStatus = useEnvStore.getState().setStatus;
+    const setStatus = useEnvStore.getState().setIsobarStatus;
 
     if (!isobarsActive) {
       if (isobarDsRef.current) {
@@ -201,7 +205,7 @@ export function EnvGridLayer() {
   useEffect(() => {
     if (!viewer) return;
     let cancelled = false;
-    const setStatus = useEnvStore.getState().setStatus;
+    const setStatus = useEnvStore.getState().setFieldStatus;
 
     if (!fieldActive) {
       if (fieldLayerRef.current) {

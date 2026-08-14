@@ -7,14 +7,19 @@ export type EnvField = 'temp' | 'rh';
 interface EnvState {
   field: EnvField;
   setField: (f: EnvField) => void;
-  // Sidebar status line, set by the layer ("updated 12m ago", error text).
-  status: string | null;
-  setStatus: (s: string | null) => void;
+  // Per-toggle sidebar status lines — the two layers share one grid but must
+  // not overwrite each other's label (last-writer-wins mislabeled both rows).
+  isobarStatus: string | null;
+  setIsobarStatus: (s: string | null) => void;
+  fieldStatus: string | null;
+  setFieldStatus: (s: string | null) => void;
 }
 
 export const useEnvStore = create<EnvState>((set) => ({
   field: 'temp',
   setField: (field) => set({ field }),
-  status: null,
-  setStatus: (status) => set({ status }),
+  isobarStatus: null,
+  setIsobarStatus: (isobarStatus) => set({ isobarStatus }),
+  fieldStatus: null,
+  setFieldStatus: (fieldStatus) => set({ fieldStatus }),
 }));

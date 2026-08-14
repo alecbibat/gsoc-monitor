@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { rgbCss } from '../layers/fuel/fbfm40';
+import { FBFM40, rgbCss } from '../layers/fuel/fbfm40';
 import {
   BEHAVIOR_CLASSES, BENCHMARK_NOTE, FUEL_BEHAVIOR_REF,
   suppressionBandsForFlameClass,
@@ -239,9 +239,15 @@ export function FuelZoneDetails({ payload }: Props) {
 function FuelRefCard({ value, code, name }: { value: number; code: string; name: string }) {
   const ref = FUEL_BEHAVIOR_REF[value];
   if (!ref) {
+    // Only a KNOWN nonburnable code gets the published "no fire spread"
+    // determination — an unexpected raster value must not be attributed to
+    // the GTR (the codebook's Unclassified fallback exists for exactly this).
+    const known = FBFM40[value];
     return (
       <div className="ml-5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/45">
-        Nonburnable ({code}) — no wildland fire spread expected (RMRS-GTR-153).
+        {known
+          ? `Nonburnable (${code}) — no wildland fire spread expected (RMRS-GTR-153).`
+          : `Raster value ${value} is not in the published FBFM40 codebook — no reference available.`}
       </div>
     );
   }
