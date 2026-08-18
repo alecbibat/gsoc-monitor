@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { ShareLiveLayerId } from './shareLiveLayers';
 import { normalizeIncidentFields, incidentStatusDef, type IncidentStatus, type IncidentType } from './taxonomy';
+import { incidentShipMmsis, shipListText } from './incidentShips';
 import { useAuthStore } from '../auth/authStore';
 
 // ── Domain types ─────────────────────────────────────────────────────────────
@@ -69,7 +70,8 @@ export type SystemEventKind =
   | 'share-created'
   | 'share-revoked'
   | 'stood-down'
-  | 'reopened';
+  | 'reopened'
+  | 'vessels-change';
 
 export interface ActionLogEntry {
   id: string;
@@ -175,6 +177,12 @@ export interface Incident {
   // Additional property groups whose pins/watch info also appear on the share
   // link, chosen in the Live Data Layers section.
   extraLocationGroups?: string[];
+  // Windstar vessels involved in this incident, by MMSI — any number of them,
+  // chosen in Incident Information. Identities only: positions are always read
+  // live from the AIS feed, never frozen into the record. Independent of
+  // locationGroupId so a shore-side incident can still involve ships (and the
+  // fleet itself can be the incident's property — see SHIP_GROUP_ID).
+  shipMmsis?: string[];
   shareToken: string | null;  // legacy — kept for backwards compat with persisted data
   shareLinks: ShareLink[];    // all share links ever created for this incident
   archivedAt?: string | null; // set when the incident is stood down; null/absent = active
@@ -226,6 +234,7 @@ export interface CrisisPublicState {
   liveLayers?: ShareLiveLayerId[];
   locationGroupId?: string | null;
   extraLocationGroups?: string[];
+  shipMmsis?: string[];
   publishedAt: string;
   lastUpdated: string;
 }
@@ -298,6 +307,43 @@ function sysEntry(
 const COMPLEXITY_LABEL = (c: ComplexityType | null | undefined) =>
   COMPLEXITY_TYPES.find((t) => t.id === c)?.label ?? 'unset';
 
+/**
+ * Set the incident's vessel list, normalized (deduped, fleet order, unknown
+ * MMSIs dropped) and logged.
+ *
+ * Which vessels are in play is an operational fact the AAR has to be able to
+ * reconstruct — "when did Wind Surf come into this?" — so each change lands in
+ * the action log as a system event naming what was added or removed. A patch
+ * that resolves to the same list logs nothing.
+ */
+function withVessels(inc: Incident, next: readonly string[]): Incident {
+  const before = incidentShipMmsis(inc.shipMmsis);
+  const after = incidentShipMmsis(next);
+  if (before.join(',') === after.join(',')) return inc;
+  const added = after.filter((m) => !before.includes(m));
+  const removed = before.filter((m) => !after.includes(m));
+  const parts = [
+    added.length ? `added ${shipListText(added)}` : '',
+    removed.length ? `removed ${shipListText(removed)}` : '',
+  ].filter(Boolean);
+  return {
+    ...inc,
+    shipMmsis: after,
+    actionLog: [
+      sysEntry(
+        'vessels-change',
+        `Vessels ${parts.join(', ')} — now ${after.length ? shipListText(after, 7) : 'none'}`,
+        {
+          ...(added.length ? { added: shipListText(added, 7) } : {}),
+          ...(removed.length ? { removed: shipListText(removed, 7) } : {}),
+          count: String(after.length),
+        }
+      ),
+      ...inc.actionLog,
+    ],
+  };
+}
+
 function newIncident(type: IncidentType = 'other'): Incident {
   return {
     id: uid(),
@@ -318,6 +364,7 @@ function newIncident(type: IncidentType = 'other'): Incident {
     liveLayers: [],
     locationGroupId: null,
     extraLocationGroups: [],
+    shipMmsis: [],
     shareToken: null,
     shareLinks: [],
   };
@@ -404,6 +451,9 @@ interface CrisisState {
   toggleLiveLayer: (id: ShareLiveLayerId) => void;
   // Additional property-pin groups on the share map
   toggleExtraLocationGroup: (id: string) => void;
+  // Windstar vessels attached to the incident (any number)
+  toggleIncidentShip: (mmsi: string) => void;
+  setIncidentShips: (mmsis: string[]) => void;
 
   // Draw layers
   addDrawLayer: (layer: Omit<DrawLayer, 'id' | 'createdAt'>) => string;
@@ -816,6 +866,18 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
           };
         })),
 
+      toggleIncidentShip: (mmsi) =>
+        set((s) => patchActiveEditable(s, (inc) => {
+          const cur = inc.shipMmsis ?? [];
+          return withVessels(
+            inc,
+            cur.includes(mmsi) ? cur.filter((m) => m !== mmsi) : [...cur, mmsi]
+          );
+        })),
+
+      setIncidentShips: (mmsis) =>
+        set((s) => patchActiveEditable(s, (inc) => withVessels(inc, mmsis))),
+
       addDrawLayer: (layer) => {
         const id = uid();
         set((s) => patchActiveEditable(s, (inc) => ({
@@ -905,6 +967,9 @@ export function extractPublicState(inc: Incident, publishedAt?: string): CrisisP
     liveLayers: inc.liveLayers ?? [],
     locationGroupId: inc.locationGroupId ?? null,
     extraLocationGroups: inc.extraLocationGroups ?? [],
+    // Vessel identities only — share viewers read live positions from the
+    // public AIS endpoint, so a snapshot never carries a stale one.
+    shipMmsis: incidentShipMmsis(inc.shipMmsis),
     publishedAt: publishedAt ?? new Date().toISOString(),
     lastUpdated: new Date().toISOString(),
   };

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { useCrisisStore, type Incident } from './crisisStore';
+import { extractPublicState, useCrisisStore, type Incident } from './crisisStore';
 
 // The store is a module singleton — reset between tests.
 beforeEach(() => {
@@ -133,6 +133,52 @@ describe('system log events', () => {
     st.update({ incidentName: 'Renamed after reopening' });
     expect(useCrisisStore.getState().incidents.find((i) => i.id === id)!.incidentName)
       .toBe('Renamed after reopening');
+  });
+
+  it('logs vessel changes with what came and went', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    st.toggleIncidentShip('311083000'); // Star Breeze
+    st.toggleIncidentShip('309242000'); // Wind Surf
+    expect(active().shipMmsis).toEqual(['311083000', '309242000']);
+    const [added] = active().actionLog;
+    expect(added.system).toBe('vessels-change');
+    expect(added.meta).toEqual({ added: 'Wind Surf', count: '2' });
+    expect(added.description).toContain('Star Breeze and Wind Surf');
+
+    st.toggleIncidentShip('311083000');
+    expect(active().shipMmsis).toEqual(['309242000']);
+    expect(active().actionLog[0].meta).toEqual({ removed: 'Star Breeze', count: '1' });
+  });
+
+  it('normalizes the vessel list and stays quiet when nothing changes', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    // Reverse order, a duplicate, and an MMSI no longer in the fleet.
+    st.setIncidentShips(['309242000', '311083000', '309242000', '999999999']);
+    expect(active().shipMmsis).toEqual(['311083000', '309242000']);
+    const logLength = active().actionLog.length;
+    st.setIncidentShips(['309242000', '311083000']); // same set, different order
+    expect(active().actionLog).toHaveLength(logLength);
+  });
+
+  it('freezes vessel edits on a stood-down incident', () => {
+    const st = useCrisisStore.getState();
+    const id = st.createIncident();
+    st.toggleIncidentShip('311083000');
+    st.standDownIncident(id, 'done');
+    st.openIncident(id);
+    st.toggleIncidentShip('309242000');
+    st.setIncidentShips([]);
+    expect(active().shipMmsis).toEqual(['311083000']);
+  });
+
+  it('publishes vessel identities, always as a concrete list', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    expect(extractPublicState(active()).shipMmsis).toEqual([]);
+    st.toggleIncidentShip('311083000');
+    expect(extractPublicState(active()).shipMmsis).toEqual(['311083000']);
   });
 
   it('logs share-link publish and revoke', () => {

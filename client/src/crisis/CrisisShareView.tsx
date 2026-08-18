@@ -5,6 +5,9 @@ import { LOCATION_GROUPS, type LocationGroup } from '../layers/locations/locatio
 import { CrisisShareMap } from './CrisisShareMap';
 import { ShareWatchCard } from './ShareWatchCard';
 import { isShareLiveLayerId } from './shareLiveLayers';
+import { incidentShipMmsis, incidentVessels, shipLocationGroup } from './incidentShips';
+import { useFleetPositions } from '../layers/ships/useFleetPositions';
+import { STATUS_TONE, lastSeenText, positionText, statusOf } from '../layers/ships/shipStatus';
 import { ImageLightbox, ZoomableImage } from './ImageLightbox';
 import { TYPE_STYLES, TimelineView, LogShowMore, DEFAULT_LOG_LIMIT } from './logViews';
 // Share snapshots outlive deploys, so status/type may arrive as retired ids —
@@ -308,6 +311,16 @@ export function CrisisShareView({ token }: { token: string }) {
   // map mid-session would throw away their camera, basemap and pins.
   const globeEverRef = useRef(false);
 
+  // Vessels attached to the incident. The snapshot carries identities only, so
+  // positions come live from the public AIS endpoint here — a viewer opening a
+  // week-old link sees where the ship is now, not where it was at publish. The
+  // feed is only polled when the incident actually names vessels.
+  // (Hooks run before the early returns below, so this reads data optionally.)
+  const shipMmsis = incidentShipMmsis(data?.shipMmsis);
+  const fleet = useFleetPositions(shipMmsis.length > 0);
+  const vessels = incidentVessels(shipMmsis, fleet.ships);
+  const shipGroup = shipLocationGroup(shipMmsis, fleet.ships);
+
   const toggleLive = (id: ShareLiveLayerId) =>
     setOffLive((prev) => {
       const next = new Set(prev);
@@ -466,7 +479,10 @@ export function CrisisShareView({ token }: { token: string }) {
     .map((id) => LOCATION_GROUPS.find((g) => g.id === id))
     .filter((g): g is LocationGroup => g !== undefined);
   const primaryGroupId = typeof data.locationGroupId === 'string' ? data.locationGroupId : null;
-  if (liveLayers.length > 0 || pinGroups.length > 0) globeEverRef.current = true;
+  // Vessels count too: they only render on the interactive globe (the flat
+  // fallback map draws hand-drawn layers only), so an incident whose whole
+  // location is a ship must get the globe.
+  if (liveLayers.length > 0 || pinGroups.length > 0 || shipMmsis.length > 0) globeEverRef.current = true;
   const showGlobe = globeEverRef.current;
   const drawLayers = Array.isArray(data.drawLayers) ? data.drawLayers : [];
   // Viewer-side hides mask a layer's visible flag rather than replace it: a
@@ -513,6 +529,64 @@ export function CrisisShareView({ token }: { token: string }) {
               <span className="text-[11px] text-white/35">Hazards near the incident properties · updates live</span>
             </div>
             <ShareWatchCard groups={pinGroups} />
+          </div>
+        )}
+
+        {/* Vessels — only the ships the incident team attached, never the rest
+            of the fleet. Positions are read live, so this is the one part of
+            the page that changes without the team touching the report. */}
+        {vessels.length > 0 && (
+          <div>
+            <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+              <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Vessels</h2>
+              <span className="text-[11px] text-white/35">
+                {fleet.error
+                  ? fleet.error
+                  : fleet.loading
+                    ? 'Reading positions…'
+                    : `AIS positions · ${vessels.filter((v) => v.ship).length} of ${vessels.length} reporting`}
+              </span>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {vessels.map((v) => {
+                const st = v.ship ? statusOf(v.ship) : null;
+                return (
+                  <div key={v.roster.mmsi} className="rounded-lg border border-white/8 bg-white/4 px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: v.color }} />
+                      <span className="text-[14px] font-semibold text-white/90">{v.roster.name}</span>
+                      {st && (
+                        <span className={`ml-auto text-[11px] ${STATUS_TONE[st.kind]}`}>
+                          {st.label}
+                          {v.ship?.speedKt != null && st.kind === 'underway' ? ` · ${v.ship.speedKt.toFixed(1)} kt` : ''}
+                        </span>
+                      )}
+                    </div>
+                    {v.ship ? (
+                      <div className="mt-1.5 space-y-0.5 text-[11px] text-white/55">
+                        <p>{positionText(v.ship.latitude, v.ship.longitude)} · reported {lastSeenText(v.ship.lastSeenSec)}</p>
+                        {v.ship.destination && (
+                          <p>
+                            Destination {v.ship.destination}
+                            {v.ship.etaUtc
+                              ? ` · ETA ${new Date(v.ship.etaUtc).toLocaleString()}`
+                              : v.ship.etaText
+                                ? ` · ETA ${v.ship.etaText}`
+                                : ''}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      // Never imply an all-clear from a missing report: say the
+                      // position is unknown, not that the ship is fine.
+                      <p className="mt-1.5 text-[11px] text-white/35">
+                        {fleet.loading ? 'Reading position…' : 'No position reported — not shown on the map'}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -630,7 +704,7 @@ export function CrisisShareView({ token }: { token: string }) {
             <div className="mb-3 flex items-baseline gap-3">
               <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Live Incident Map</h2>
               <span className="text-[11px] text-white/40">
-                Interactive globe · live layers &amp; property pins selected by the incident team
+                Interactive globe · live layers, property pins{vessels.length > 0 ? ' and vessels' : ''} selected by the incident team
               </span>
             </div>
             <Suspense
@@ -648,6 +722,8 @@ export function CrisisShareView({ token }: { token: string }) {
                 drawLayers={maskedDrawLayers}
                 pinGroups={pinGroups}
                 primaryGroupId={primaryGroupId}
+                vessels={vessels}
+                shipGroup={shipGroup}
               />
             </Suspense>
           </div>

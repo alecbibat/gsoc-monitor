@@ -10,14 +10,18 @@
 import type { ShipState } from '../../types';
 import { api } from '../../api/client';
 import { FLEET_ROSTER, fleetColor, type FleetRosterShip } from './fleet';
+// statusOf/StatusKind moved to shipStatus.ts so lighter consumers (the crisis
+// vessel picker, the share page) can read a ship's status without pulling this
+// module's coastline and city datasets. Re-exported here for existing callers.
+import { statusOf, type StatusKind } from './shipStatus';
 import { landRings } from './worldLand';
 import { nearestMajorCity, type NearestCity } from './majorCities';
+
+export { statusOf, type StatusKind };
 
 // ---------------------------------------------------------------------------
 // Data assembly
 // ---------------------------------------------------------------------------
-
-export type StatusKind = 'docked' | 'anchored' | 'underway' | 'alert' | 'unknown';
 
 // Reverse-geocode result, tagged so consumers can tell "an actual town"
 // from weaker context (country-only hits, named water bodies).
@@ -31,32 +35,6 @@ export interface SnapshotRow {
   ship: ShipState | null; // null = no position received yet
   place: GeoPlace | null; // reverse-geocoded context
   near: NearestCity | null; // nearest major city + country (offline dataset)
-}
-
-// Abnormal AIS statuses must never be dressed up as routine by the speed
-// heuristic — a digest that shows an aground ship as "In port" is worse than
-// no digest.
-const ALERT_STATUS: Record<number, string> = {
-  2: 'Not under command',
-  3: 'Restricted maneuv.',
-  4: 'Constrained',
-  6: 'Aground',
-};
-
-export function statusOf(s: ShipState): { kind: StatusKind; label: string } {
-  if (s.navStatus != null && ALERT_STATUS[s.navStatus]) {
-    return { kind: 'alert', label: ALERT_STATUS[s.navStatus] };
-  }
-  if (s.navStatus === 5) return { kind: 'docked', label: 'Docked' };
-  if (s.navStatus === 1) return { kind: 'anchored', label: 'At anchor' };
-  if (s.navStatus === 0) return { kind: 'underway', label: 'Underway' };
-  if (s.navStatus === 8) return { kind: 'underway', label: 'Under sail' };
-  if (s.speedKt != null) {
-    return s.speedKt > 0.7
-      ? { kind: 'underway', label: 'Underway' }
-      : { kind: 'docked', label: 'In port' };
-  }
-  return { kind: 'unknown', label: 'Last known' };
 }
 
 // AbortSignal.timeout with a fallback for engines that predate it (pre-2022).

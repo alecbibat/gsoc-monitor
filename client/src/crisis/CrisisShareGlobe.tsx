@@ -7,6 +7,10 @@ import { BASEMAPS } from '../cesium/basemaps';
 import type { BasemapId } from '../types';
 import type { LocationGroup } from '../layers/locations/locations';
 import { makePinIcon } from '../layers/locations/pinIcon';
+import {
+  SHIP_MARKER, shipHullUri, shipNameLabel, shipReticleUri,
+} from '../layers/ships/shipMarkers';
+import { isShipGroupId, type IncidentVessel } from './incidentShips';
 import { resetCamera } from '../cesium/flyTo';
 import { addLayerEntities } from './CrisisMapLayer';
 import { shareLiveLayerLabel, type ShareLiveLayerId } from './shareLiveLayers';
@@ -191,6 +195,77 @@ function SharePinsLayer({ groups }: { groups: LocationGroup[] }) {
   return null;
 }
 
+// The incident's vessels as live AIS contacts — the same sonar-contact marker
+// the operator's ships layer draws (reticle + heading-rotated hull + nametag),
+// minus its ping animation: the share globe renders on demand, and a permanent
+// animation loop would keep a viewer's phone GPU busy for no operational gain.
+//
+// Only the ships the incident team attached are ever drawn here; the rest of
+// the fleet is not part of the share payload.
+function ShareShipsLayer({ vessels }: { vessels: IncidentVessel[] }) {
+  const viewer = useCesiumViewer();
+  const dsRef = useRef<Cesium.CustomDataSource | null>(null);
+  // Positions participate: unlike fixed property pins, a contact must move
+  // when the feed reports a new fix.
+  const sig = vessels
+    .map((v) =>
+      v.ship
+        ? `${v.roster.mmsi}:${v.ship.latitude}:${v.ship.longitude}:${v.ship.heading ?? ''}:${v.ship.course ?? ''}`
+        : `${v.roster.mmsi}:none`
+    )
+    .join('|');
+
+  useEffect(() => {
+    if (!viewer) return;
+    const ds = new Cesium.CustomDataSource('crisis-share-vessels');
+    dsRef.current = ds;
+    viewer.dataSources.add(ds);
+    return () => {
+      viewer.dataSources.remove(ds, true);
+      dsRef.current = null;
+    };
+  }, [viewer]);
+
+  useEffect(() => {
+    const ds = dsRef.current;
+    if (!viewer || !ds) return;
+    ds.entities.removeAll();
+    for (const v of vessels) {
+      // A vessel with no reported position is listed in the report's Vessels
+      // card as unknown — it is never pinned at a guessed spot on the map.
+      if (!v.ship) continue;
+      const { latitude: lat, longitude: lon } = v.ship;
+      const bearing = v.ship.heading ?? v.ship.course ?? 0;
+      // Sub-metre lifts break the depth tie so the hull draws over its reticle.
+      ds.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(lon, lat, 1),
+        billboard: {
+          image: shipReticleUri(v.color, false),
+          width: SHIP_MARKER.reticlePx,
+          height: SHIP_MARKER.reticlePx,
+          scaleByDistance: SHIP_MARKER.scaleByDistance,
+        },
+      });
+      ds.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(lon, lat, 2),
+        billboard: {
+          image: shipHullUri(v.color, false),
+          width: SHIP_MARKER.hullPx,
+          height: SHIP_MARKER.hullPx,
+          rotation: Cesium.Math.toRadians(-bearing),
+          alignedAxis: Cesium.Cartesian3.UNIT_Z,
+          scaleByDistance: SHIP_MARKER.scaleByDistance,
+        },
+        label: shipNameLabel(v.roster.name, v.color, 1),
+      });
+    }
+    viewer.scene.requestRender();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewer, sig]);
+
+  return null;
+}
+
 // Fly to the centre of a set of property pins, zoomed to fit their spread.
 function zoomToPins(viewer: Cesium.Viewer, groups: LocationGroup[]): void {
   const locs = groups.flatMap((g) => g.locations);
@@ -223,10 +298,17 @@ interface Props {
   // Property groups prescribed by the incident team (primary first).
   pinGroups: LocationGroup[];
   primaryGroupId: string | null;
+  // Vessels attached to the incident, with whatever live position the AIS feed
+  // has for each (null while none has been reported).
+  vessels: IncidentVessel[];
+  // The positioned subset of those vessels as a location group, for camera
+  // framing. Null until at least one position lands.
+  shipGroup: LocationGroup | null;
 }
 
 export function CrisisShareGlobe({
   liveLayers, offLive, onToggleLive, onResetLayers, drawLayers, pinGroups, primaryGroupId,
+  vessels, shipGroup,
 }: Props) {
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
   const [controlsOpen, setControlsOpen] = useState(true);
@@ -259,13 +341,31 @@ export function CrisisShareGlobe({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig]);
 
+  // Open framed on the vessels when they are the whole map: drawn layers claim
+  // the initial camera when they exist (ShareDrawLayers fits them once), and a
+  // vessels-only incident would otherwise open on the default home view with
+  // its ships somewhere off-screen. Runs once, when the first position lands,
+  // so later fixes never yank a viewer's camera around.
+  const shipsFramedRef = useRef(false);
+  useEffect(() => {
+    if (!viewer || shipsFramedRef.current || !shipGroup) return;
+    if (pinGroups.length > 0) return;
+    if (drawLayers.some((l) => l.visible && l.positions.length > 0)) return;
+    shipsFramedRef.current = true;
+    zoomToPins(viewer, [shipGroup]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewer, shipGroup]);
+
   const handleZoomToIncident = () => {
     if (!viewer) return;
-    // The incident's own property group is the incident location; fall back to
-    // all prescribed pins, then to the drawn layers' extent.
+    // The incident's own property group is the incident location; when that
+    // property IS the fleet, the vessels are it. Then fall back to all
+    // prescribed pins, any positioned vessels, then the drawn layers' extent.
     const primary = pinGroups.filter((g) => g.id === primaryGroupId);
-    if (primary.length > 0) zoomToPins(viewer, primary);
+    if (isShipGroupId(primaryGroupId) && shipGroup) zoomToPins(viewer, [shipGroup]);
+    else if (primary.length > 0) zoomToPins(viewer, primary);
     else if (pinGroups.length > 0) zoomToPins(viewer, pinGroups);
+    else if (shipGroup) zoomToPins(viewer, [shipGroup]);
     else frameDrawnExtent(viewer, drawLayers, true);
   };
 
@@ -310,6 +410,7 @@ export function CrisisShareGlobe({
             {live.has('intel') && <IntelLayer />}
             <ShareDrawLayers layers={drawLayers} />
             <SharePinsLayer groups={pinGroups} />
+            <ShareShipsLayer vessels={vessels} />
             {live.has('radar') && <RadarTimeline />}
           </CesiumGlobe>
           {live.has('hurricanes') && <HurricaneTooltip />}
@@ -351,6 +452,17 @@ export function CrisisShareGlobe({
                     <p className="text-[11px] leading-snug text-white/60">
                       {pinGroups.map((g) => `${g.icon} ${g.name}`).join(' · ')}
                     </p>
+                  </div>
+                )}
+                {vessels.length > 0 && (
+                  <div>
+                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/45">Vessels</p>
+                    <p className="text-[11px] leading-snug text-white/60">
+                      {vessels.map((v) => v.roster.name).join(' · ')}
+                    </p>
+                    {shipGroup === null && (
+                      <p className="text-[10px] leading-snug text-white/35">Waiting for a position report</p>
+                    )}
                   </div>
                 )}
                 <div className="flex gap-1.5">

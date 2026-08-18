@@ -7,6 +7,8 @@ import { lazy, Suspense, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useCrisisStore, geometryLabel, type Incident, type IcsRole, type PersonnelAssignment } from './crisisStore';
 import { incidentStatusDef, incidentTypeDef } from './taxonomy';
+import { LOCATION_GROUPS } from '../layers/locations/locations';
+import { SHIP_GROUP_NAME, incidentShips, isShipGroupId } from './incidentShips';
 import { usePrintStyles } from '../lib/printStyles';
 import { CorrectiveActions, FourQuestions, IcsSwimlane, ResponseMetrics, RosterTable } from './AarSections';
 
@@ -21,6 +23,14 @@ const ENTRY_STYLES = {
   event:  'text-amber-300 bg-amber-400/15 border-amber-400/30',
   info:   'text-cyan-300 bg-cyan-400/15 border-cyan-400/30',
 };
+
+// The incident's property, as the archive should read it: a shore-side group
+// by name, or the fleet when the vessels themselves were the location.
+function propertyLabel(id: string | null | undefined): string {
+  if (!id) return '—';
+  if (isShipGroupId(id)) return SHIP_GROUP_NAME;
+  return LOCATION_GROUPS.find((g) => g.id === id)?.name ?? '—';
+}
 
 function fmtTs(iso: string) {
   try {
@@ -245,6 +255,13 @@ export function CrisisReportModal({ incident: incidentProp, onClose }: Props) {
             <div className="space-y-2 rounded-lg border border-white/8 bg-white/4 px-4 py-3">
               {([
                 ['Location', incident.incidentLocation],
+                ['Property', propertyLabel(incident.locationGroupId)],
+                // Vessel names only: the report is the frozen record, and a
+                // position captured at print time would read as where the ship
+                // was during the incident, which it isn't.
+                ...(incidentShips(incident.shipMmsis).length
+                  ? [['Vessels', incidentShips(incident.shipMmsis).map((v) => v.name).join(', ')]]
+                  : []),
                 ['Start', incident.incidentDatetime ? new Date(incident.incidentDatetime).toLocaleString() : '—'],
                 ['End', incident.incidentEndDatetime ? new Date(incident.incidentEndDatetime).toLocaleString() : '—'],
                 ['Type', incidentTypeDef(incident.incidentType).label],

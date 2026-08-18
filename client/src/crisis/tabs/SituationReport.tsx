@@ -9,6 +9,13 @@ import { ActionLog } from '../ActionLog';
 import { parseCoords } from '../parseCoords';
 import { SHARE_LIVE_LAYER_GROUPS, isShareLiveLayerId } from '../shareLiveLayers';
 import { LOCATION_GROUPS } from '../../layers/locations/locations';
+import {
+  SHIP_GROUP_ICON, SHIP_GROUP_ID, SHIP_GROUP_NAME,
+  incidentShipMmsis, incidentVessels, isShipGroupId,
+} from '../incidentShips';
+import { FLEET_ROSTER, fleetColor } from '../../layers/ships/fleet';
+import { useFleetPositions } from '../../layers/ships/useFleetPositions';
+import { STATUS_TONE, lastSeenText, statusOf } from '../../layers/ships/shipStatus';
 
 const DRAW_LAYER_TYPES: { value: DrawLayerType; label: string; color: string }[] = [
   { value: 'fire-perimeter', label: 'Fire Perimeter',  color: '#ef4444' },
@@ -361,6 +368,155 @@ function MapLayersSection() {
   );
 }
 
+// ── Vessel picker ─────────────────────────────────────────────────────────────
+
+/**
+ * The incident's Windstar vessels — any number of them, independent of the
+ * Property field so a shore-side incident can still involve ships (and the
+ * fleet itself can BE the property, see SHIP_GROUP_ID).
+ *
+ * Live AIS status is shown next to each ship so the person attaching vessels
+ * can tell "Star Pride, docked in Papeete" from "Star Pride, last known 3 days
+ * ago" before committing it to the record. The feed is only polled while this
+ * field is in use — a land incident never touches it.
+ */
+function VesselsField() {
+  const inc = useActiveIncident();
+  const toggleIncidentShip = useCrisisStore((s) => s.toggleIncidentShip);
+  const setIncidentShips = useCrisisStore((s) => s.setIncidentShips);
+  const [picking, setPicking] = useState(false);
+
+  const selected = incidentShipMmsis(inc?.shipMmsis);
+  const chosen = new Set(selected);
+  const fleetIsProperty = isShipGroupId(inc?.locationGroupId);
+  const { ships, loading, error } = useFleetPositions(picking || selected.length > 0);
+  const vessels = incidentVessels(selected, ships);
+  const byMmsi = new Map(ships.map((sh) => [sh.mmsi, sh]));
+
+  // "Underway 13.4 kt · 2m ago" — or an honest blank when the feed has no
+  // position. `short` drops the speed for the picker's narrow rows; the full
+  // text still rides along as the row's tooltip.
+  const statusText = (mmsi: string, short = false): { text: string; tone: string } => {
+    const ship = byMmsi.get(mmsi);
+    if (!ship) {
+      return loading
+        ? { text: 'checking position…', tone: 'text-white/30' }
+        : { text: error ?? 'no position reported', tone: 'text-white/30' };
+    }
+    const st = statusOf(ship);
+    const speed = !short && ship.speedKt != null && st.kind === 'underway' ? ` ${ship.speedKt.toFixed(1)} kt` : '';
+    return { text: `${st.label}${speed} · ${lastSeenText(ship.lastSeenSec)}`, tone: STATUS_TONE[st.kind] };
+  };
+
+  return (
+    <FieldRow label="Vessels">
+      <div className="min-w-0 flex-1 space-y-2">
+        {selected.length === 0 ? (
+          <p className={`text-[11px] ${fleetIsProperty ? 'text-accent-warn' : 'text-white/35'}`}>
+            {fleetIsProperty
+              ? 'The property is the fleet — select at least one vessel, or nothing shows on the map.'
+              : 'None selected'}
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {vessels.map((v) => {
+              const st = statusText(v.roster.mmsi);
+              return (
+                <span
+                  key={v.roster.mmsi}
+                  className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-white/12 bg-white/6 py-0.5 pl-2 pr-1"
+                  title={
+                    v.ship
+                      ? `${v.roster.name} · ${st.text}`
+                      : `${v.roster.name} · no live position — it will not appear on the map until the feed reports one`
+                  }
+                >
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: v.color }} />
+                  <span className="whitespace-nowrap text-[11px] leading-tight text-white/80">{v.roster.name}</span>
+                  <span className={`min-w-0 truncate text-[9px] leading-tight ${st.tone}`}>{st.text}</span>
+                  <button
+                    onClick={() => toggleIncidentShip(v.roster.mmsi)}
+                    className="px-1 text-[11px] leading-none text-white/25 transition hover:text-red-400/80"
+                    title={`Remove ${v.roster.name} from this incident`}
+                    aria-label={`Remove ${v.roster.name}`}
+                  >
+                    <span aria-hidden="true">✕</span>
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setPicking((v) => !v)}
+            aria-expanded={picking}
+            className="rounded border border-white/12 px-2 py-1 text-[10px] uppercase tracking-wider text-white/55 transition hover:border-white/25 hover:text-white/80"
+          >
+            {picking ? 'Done' : selected.length ? 'Edit vessels' : 'Add vessels'}
+          </button>
+          {picking && (
+            <>
+              <button
+                onClick={() => setIncidentShips(FLEET_ROSTER.map((r) => r.mmsi))}
+                className="text-[10px] text-white/40 transition hover:text-white/70"
+              >
+                Select all {FLEET_ROSTER.length}
+              </button>
+              {selected.length > 0 && (
+                <button
+                  onClick={() => setIncidentShips([])}
+                  className="text-[10px] text-white/40 transition hover:text-white/70"
+                >
+                  Clear
+                </button>
+              )}
+            </>
+          )}
+        </div>
+
+        {picking && (
+          <div className="space-y-1.5 rounded-lg border border-white/10 bg-ink-950/60 p-2">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-1.5">
+              {FLEET_ROSTER.map((r) => {
+                const on = chosen.has(r.mmsi);
+                const st = statusText(r.mmsi, true);
+                return (
+                  <button
+                    key={r.mmsi}
+                    onClick={() => toggleIncidentShip(r.mmsi)}
+                    aria-pressed={on}
+                    title={`${r.name} · ${statusText(r.mmsi).text}`}
+                    className={`flex items-center gap-2 rounded border px-2 py-1.5 text-left transition ${
+                      on ? 'border-accent/40 bg-accent/12' : 'border-white/10 bg-white/4 hover:border-white/22'
+                    }`}
+                  >
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full ring-1 ring-white/25"
+                      style={{ background: on ? fleetColor(r.cls) : 'transparent' }}
+                    />
+                    <span className="min-w-0">
+                      <span className={`block truncate text-[11px] leading-tight ${on ? 'text-accent' : 'text-white/75'}`}>
+                        {r.name}
+                      </span>
+                      <span className={`block truncate text-[9px] leading-tight ${st.tone}`}>{st.text}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[9px] leading-relaxed text-white/25">
+              Vessels ride on the share-link map as live AIS contacts that move as the ships do —
+              only the ones selected here, never the rest of the fleet.
+            </p>
+          </div>
+        )}
+      </div>
+    </FieldRow>
+  );
+}
+
 // ── Share-map live layers section ─────────────────────────────────────────────
 
 function LiveLayersSection() {
@@ -374,6 +530,7 @@ function LiveLayersSection() {
   const selected = new Set((inc?.liveLayers ?? []).filter(isShareLiveLayerId));
   const primaryGroupId = inc?.locationGroupId ?? null;
   const extraGroups = new Set(inc?.extraLocationGroups ?? []);
+  const vesselCount = incidentShipMmsis(inc?.shipMmsis).length;
 
   return (
     <section>
@@ -446,14 +603,33 @@ function LiveLayersSection() {
                 </button>
               );
             })}
+            {/* The fleet is read-only here: vessels ride on the share map
+                whenever any are attached, and which ones is a single decision
+                made once, in Incident Information — a second toggle for the
+                same thing is how the two get out of step. */}
+            <div
+              className={`rounded border px-2.5 py-1.5 text-left ${
+                vesselCount > 0 ? 'border-accent/40 bg-accent/15' : 'border-white/10 bg-white/5'
+              }`}
+              title="Vessels are chosen in Incident Information — any attached to this incident appear on the share map as live AIS contacts"
+            >
+              <span className={`block text-[11px] leading-tight ${vesselCount > 0 ? 'text-accent' : 'text-white/45'}`}>
+                {SHIP_GROUP_ICON} {SHIP_GROUP_NAME}
+              </span>
+              <span className="mt-0.5 block text-[8px] leading-tight text-white/30">
+                {vesselCount > 0
+                  ? `${vesselCount} vessel${vesselCount === 1 ? '' : 's'} · live AIS`
+                  : 'Set in Incident Information'}
+              </span>
+            </div>
           </div>
         </div>
 
         <p className="text-[9px] leading-relaxed text-white/25">
           Selected layers render on a live interactive globe on every active share link for this
           incident, alongside the drawn map layers above. The incident property and any additional
-          groups appear as pins and scope the shared Property Watch. Changes apply to viewers
-          within seconds.
+          groups appear as pins and scope the shared Property Watch; attached vessels appear as
+          live AIS contacts that move as the ships do. Changes apply to viewers within seconds.
         </p>
       </div>
     </section>
@@ -536,14 +712,24 @@ export function SituationReport() {
                 className="min-w-0 flex-1 rounded border border-white/10 bg-ink-900 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25"
                 value={inc.locationGroupId ?? ''}
                 onChange={(e) => update({ locationGroupId: e.target.value || null })}
-                title="Property group affected by this incident — its pins appear on the share-link map and scope the shared Property Watch"
+                title="Property affected by this incident — its pins appear on the share-link map and scope the shared Property Watch. Pick Windstar Ships when the incident is aboard the fleet."
               >
                 <option value="">None</option>
-                {LOCATION_GROUPS.map((g) => (
-                  <option key={g.id} value={g.id}>{g.icon} {g.name}</option>
-                ))}
+                <optgroup label="Properties">
+                  {LOCATION_GROUPS.map((g) => (
+                    <option key={g.id} value={g.id}>{g.icon} {g.name}</option>
+                  ))}
+                </optgroup>
+                {/* The fleet is a location too, but a moving one: it resolves
+                    to live AIS positions rather than fixed pins, so it lives
+                    outside LOCATION_GROUPS. Which ships is the Vessels row. */}
+                <optgroup label="Fleet (live positions)">
+                  <option value={SHIP_GROUP_ID}>{SHIP_GROUP_ICON} {SHIP_GROUP_NAME}</option>
+                </optgroup>
               </select>
             </FieldRow>
+
+            <VesselsField />
 
             <FieldRow label="Type">
               <select
