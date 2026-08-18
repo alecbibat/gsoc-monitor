@@ -98,6 +98,8 @@ export function Sidebar() {
   const shipFavorites = useLayersStore((s) => s.shipFavorites);
   const shipPaths = useLayersStore((s) => s.shipPaths);
   const setShipPaths = useLayersStore((s) => s.setShipPaths);
+  const shipNames = useLayersStore((s) => s.shipNames);
+  const setShipNames = useLayersStore((s) => s.setShipNames);
   const firesNearMiles = useLayersStore((s) => s.firesNearMiles);
   const setFiresNearMiles = useLayersStore((s) => s.setFiresNearMiles);
   const satelliteGroup = useLayersStore((s) => s.satelliteGroup);
@@ -692,6 +694,15 @@ export function Sidebar() {
                 className="accent-accent"
               />
               Show favorites only ({shipFavorites.length})
+            </label>
+            <label className="flex items-center gap-2 pt-1 text-[11px] text-white/60">
+              <input
+                type="checkbox"
+                checked={shipNames}
+                onChange={(e) => setShipNames(e.target.checked)}
+                className="accent-accent"
+              />
+              Show ship names
             </label>
             <label className="flex items-center gap-2 pt-1 text-[11px] text-white/60">
               <input
