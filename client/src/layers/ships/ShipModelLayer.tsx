@@ -71,21 +71,29 @@ export function ShipModelLayer() {
       v.scene.primitives.add(coll);
       collRef.current = coll;
 
-      // Hide the whole flat marker — hull, furniture and ping rings — while the
-      // model is shown; the screensaver draws its own sonar shockwave instead.
+      // Hide the whole flat marker — hull, furniture, ping rings and nametag —
+      // while the model is shown; the screensaver draws its own sonar shockwave
+      // and ship card instead.
       const dsArr = v.dataSources.getByName('ships');
       const marker = mmsi
         ? dsArr[0]?.entities.values.filter(
             (e) => e.id === `ship-${mmsi}` || String(e.id).startsWith(`ship-${mmsi}-`)
           ) ?? []
         : [];
-      const restores = marker
-        .filter((e) => e.billboard)
-        .map((e) => {
-          const prev = e.billboard!.show;
-          e.billboard!.show = new Cesium.ConstantProperty(false);
-          return () => { if (e.billboard) e.billboard.show = prev ?? new Cesium.ConstantProperty(true); };
-        });
+      const restores = marker.flatMap((e) => {
+        const undos: Array<() => void> = [];
+        if (e.billboard) {
+          const prev = e.billboard.show;
+          e.billboard.show = new Cesium.ConstantProperty(false);
+          undos.push(() => { if (e.billboard) e.billboard.show = prev ?? new Cesium.ConstantProperty(true); });
+        }
+        if (e.label) {
+          const prev = e.label.show;
+          e.label.show = new Cesium.ConstantProperty(false);
+          undos.push(() => { if (e.label) e.label.show = prev ?? new Cesium.ConstantProperty(true); });
+        }
+        return undos;
+      });
       if (restores.length) restoreRef.current = () => restores.forEach((r) => r());
 
       v.scene.requestRender();

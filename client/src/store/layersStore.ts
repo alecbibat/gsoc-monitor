@@ -17,6 +17,8 @@ interface LayersState {
   toggleShipFavorite: (mmsi: string) => void;
   shipPaths: boolean;
   setShipPaths: (v: boolean) => void;
+  shipNames: boolean;
+  setShipNames: (v: boolean) => void;
   firesNearMiles: 0 | 5 | 50 | 100 | 200;
   setFiresNearMiles: (v: 0 | 5 | 50 | 100 | 200) => void;
   // 0 = global (all geocoded events); >0 = only events within N miles of a pin.
@@ -92,6 +94,8 @@ export const useLayersStore = create<LayersState>()(
       },
       shipPaths: true,
       setShipPaths: (v) => set({ shipPaths: v }),
+      shipNames: true,
+      setShipNames: (v) => set({ shipNames: v }),
       firesNearMiles: 0,
       setFiresNearMiles: (v) => set({ firesNearMiles: v }),
       newsNearMiles: 0,
@@ -116,6 +120,7 @@ export const useLayersStore = create<LayersState>()(
         shipFavoritesOnly: state.shipFavoritesOnly,
         shipFavorites: state.shipFavorites,
         shipPaths: state.shipPaths,
+        shipNames: state.shipNames,
         firesNearMiles: state.firesNearMiles,
         newsNearMiles: state.newsNearMiles,
         satelliteGroup: state.satelliteGroup,

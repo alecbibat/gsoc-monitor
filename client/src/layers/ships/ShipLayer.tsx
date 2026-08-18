@@ -13,6 +13,7 @@ import {
   pingScale,
   prefersReducedMotion,
   shipHullUri,
+  shipNameLabel,
   shipPingUri,
   shipReticleUri,
 } from './shipMarkers';
@@ -93,6 +94,7 @@ export function ShipLayer() {
   const favoritesOnly = useLayersStore((s) => s.shipFavoritesOnly);
   const favorites = useLayersStore((s) => s.shipFavorites);
   const showPaths = useLayersStore((s) => s.shipPaths);
+  const showNames = useLayersStore((s) => s.shipNames);
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
   const lastSigRef = useRef<string>('');
 
@@ -198,12 +200,14 @@ export function ShipLayer() {
           });
 
         // Skip the teardown/redraw when nothing that affects rendering changed.
+        // Name is included because it can arrive late (AIS static data) while
+        // the ship itself sits still — the nametag must update anyway.
         const sig =
-          `${showPaths}|${favoritesOnly}|${favorites.join(',')}|` +
+          `${showPaths}|${showNames}|${favoritesOnly}|${favorites.join(',')}|` +
           visible
             .map(
               (s) =>
-                `${s.mmsi}:${s.latitude}:${s.longitude}:${s.heading}:${s.course}:${shipAlpha(s.lastSeenSec)}`
+                `${s.mmsi}:${s.latitude}:${s.longitude}:${s.heading}:${s.course}:${shipAlpha(s.lastSeenSec)}:${s.name ?? ''}`
             )
             .join('|');
         if (sig === lastSigRef.current) {
@@ -280,6 +284,9 @@ export function ShipLayer() {
               scaleByDistance: SHIP_MARKER.scaleByDistance,
               // Default depth test so ships on the far side of the globe stay hidden.
             },
+            label: showNames
+              ? shipNameLabel(ship.name?.trim() || `MMSI ${ship.mmsi}`, color, alpha)
+              : undefined,
           });
 
           attachPanelData(entity, shipPanelData(ship));
@@ -355,7 +362,7 @@ export function ShipLayer() {
       offCamera();
       if (pingRaf != null) cancelAnimationFrame(pingRaf);
     };
-  }, [viewer, active, favoritesOnly, favorites, showPaths]);
+  }, [viewer, active, favoritesOnly, favorites, showPaths, showNames]);
 
   return null;
 }

@@ -14,6 +14,9 @@ import * as Cesium from 'cesium';
  *   hull    — the silhouette, rotated to the ship's heading (as before).
  *   ping    — three rings expanding out of the marker on a shared 2 s loop.
  *
+ * A nametag label (shipNameLabel below) hangs under the reticle so each
+ * contact is identifiable without clicking.
+ *
  * Artwork is authored as inline SVG data URIs and memoised per (colour,
  * favourite), so the whole fleet shares a handful of textures.
  */
@@ -65,6 +68,37 @@ function ringImage(color: string): string {
       '<circle cx="64" cy="64" r="56" stroke-width="3.2" stroke-opacity="0.95"/>' +
       '</g>'
   );
+}
+
+/**
+ * The nametag under every ship's reticle, so a specific ship is findable
+ * without clicking — the "still on the table" upgrade from the marker
+ * studies (docs/ship-marker-studies.html), built to option C's label spec:
+ * ship-coloured mono text on the deep-ocean plate with a dark halo. The
+ * text keeps its size at every zoom (seven nametags never crowd a world
+ * view); only the offset tracks the reticle as it scales down.
+ */
+export function shipNameLabel(
+  name: string,
+  color: string,
+  alpha: number
+): Cesium.LabelGraphics.ConstructorOptions {
+  return {
+    text: name,
+    font: '600 11px "JetBrains Mono", ui-monospace, SFMono-Regular, monospace',
+    fillColor: Cesium.Color.fromCssColorString(color).withAlpha(alpha),
+    outlineColor: Cesium.Color.fromCssColorString(PLATE).withAlpha(alpha),
+    outlineWidth: 2,
+    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+    showBackground: true,
+    backgroundColor: Cesium.Color.fromCssColorString(PLATE).withAlpha(0.72 * alpha),
+    backgroundPadding: new Cesium.Cartesian2(5, 3),
+    horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+    verticalOrigin: Cesium.VerticalOrigin.TOP,
+    pixelOffset: new Cesium.Cartesian2(0, SHIP_MARKER.reticlePx / 2 + 4),
+    pixelOffsetScaleByDistance: SHIP_MARKER.scaleByDistance,
+    // Default depth test so far-side tags stay hidden behind the globe.
+  };
 }
 
 /** Billboard sizes in screen px, and how the rings travel. */
