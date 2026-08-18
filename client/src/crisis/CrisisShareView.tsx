@@ -691,7 +691,12 @@ export function CrisisShareView({ token }: { token: string }) {
                     <div className="flex items-center gap-2 px-3 py-2">
                       <div className="h-3 w-3 shrink-0 rounded-full" style={{ background: layer.color, opacity: shown ? 1 : 0.4 }} />
                       <span className="text-[12px] text-white/80">{layer.name}</span>
-                      <span className="text-[10px] text-white/40">{layer.type} · {layer.geometry}</span>
+                      {/* Inline label (not crisisStore's geometryLabel): this page
+                          value-imports only taxonomy, keeping the store out of the
+                          share bundle. */}
+                      <span className="text-[10px] text-white/40">
+                        {layer.type} · {layer.geometry === 'line' && layer.directional ? 'directional line' : layer.geometry}
+                      </span>
                       <span className="ml-auto text-[10px] text-white/35">{layer.positions.length} points</span>
                       <span
                         className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest ${

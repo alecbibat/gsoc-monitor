@@ -32,6 +32,7 @@ export function CrisisDrawController() {
   const setOpen = useCrisisStore((s) => s.setOpen);
 
   const geometry: DrawGeometry = activeLayer?.geometry ?? 'polygon';
+  const directional = geometry === 'line' && !!activeLayer?.directional;
   const geomRef = useRef(geometry);
   useEffect(() => { geomRef.current = geometry; }, [geometry]);
 
@@ -165,9 +166,13 @@ export function CrisisDrawController() {
       ds.entities.add({
         polyline: {
           positions: geometry === 'polygon' ? [...linePos, linePos[0]] : linePos,
-          width: 2.5,
-          material: PREVIEW.withAlpha(0.85),
-          clampToGround: true,
+          // Directional lines preview with the same arrow material they render
+          // with, so the operator sees which way it points while drawing.
+          width: directional ? 12 : 2.5,
+          material: directional
+            ? new Cesium.PolylineArrowMaterialProperty(PREVIEW.withAlpha(0.85))
+            : PREVIEW.withAlpha(0.85),
+          clampToGround: !directional,
           arcType: Cesium.ArcType.GEODESIC,
         },
       });
@@ -184,7 +189,7 @@ export function CrisisDrawController() {
     }
 
     viewer.scene.requestRender();
-  }, [viewer, points, hoverPt, geometry]);
+  }, [viewer, points, hoverPt, geometry, directional]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -203,8 +208,8 @@ export function CrisisDrawController() {
 
   const instruction =
     geometry === 'point' ? 'Click on the map to place the marker'
-    : points.length === 0 ? 'Click on the map to start'
-    : geometry === 'line' ? `${points.length} point${points.length !== 1 ? 's' : ''} · double-click to finish`
+    : points.length === 0 ? (directional ? 'Click on the map to start — the arrow will point toward your last click' : 'Click on the map to start')
+    : geometry === 'line' ? `${points.length} point${points.length !== 1 ? 's' : ''} · double-click to finish${directional ? ' · arrow points to last point' : ''}`
     : `${points.length} point${points.length !== 1 ? 's' : ''} · double-click to close area`;
 
   return createPortal(
@@ -212,7 +217,7 @@ export function CrisisDrawController() {
       <div className="flex items-center gap-2 rounded-lg border border-white/20 bg-ink-950/95 px-4 py-2.5 shadow-xl">
         <div className="mr-1">
           <p className="text-[9px] font-bold uppercase tracking-wider text-white/35">
-            Drawing {geometry}
+            Drawing {directional ? 'directional line' : geometry}
           </p>
           <p className="text-[12px] font-semibold text-white/80">{activeLayer?.name ?? '—'}</p>
         </div>

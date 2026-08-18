@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import {
-  useCrisisStore, useActiveIncident,
+  useCrisisStore, useActiveIncident, geometryLabel,
   type IncidentType, type DrawLayerType, type DrawGeometry, type DrawLayer,
 } from '../crisisStore';
 import { INCIDENT_CATEGORIES, INCIDENT_STATUSES, incidentTypesInCategory } from '../taxonomy';
@@ -20,10 +20,16 @@ const DRAW_LAYER_TYPES: { value: DrawLayerType; label: string; color: string }[]
   { value: 'other',          label: 'Other',           color: '#a855f7' },
 ];
 
-const GEOMETRIES: { value: DrawGeometry; label: string; hint: string }[] = [
-  { value: 'polygon', label: 'Area',  hint: 'Filled zone' },
-  { value: 'line',    label: 'Line',  hint: 'Path / boundary' },
-  { value: 'point',   label: 'Point', hint: 'Single marker' },
+// Shape choices for new layers. "Arrow" is a line that renders with an
+// arrowhead toward its last point (evacuation routes, ingress/egress) —
+// stored as geometry 'line' + the directional flag, so older clients and
+// snapshots degrade to a plain line.
+type ShapeId = 'polygon' | 'line' | 'arrow' | 'point';
+const SHAPES: { id: ShapeId; geometry: DrawGeometry; directional?: boolean; label: string; hint: string }[] = [
+  { id: 'polygon', geometry: 'polygon', label: 'Area',    hint: 'Filled zone' },
+  { id: 'line',    geometry: 'line',    label: 'Line',    hint: 'Path / boundary' },
+  { id: 'arrow',   geometry: 'line',    directional: true, label: 'Arrow →', hint: 'Line with direction — points toward the last point drawn' },
+  { id: 'point',   geometry: 'point',   label: 'Point',   hint: 'Single marker' },
 ];
 
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -97,7 +103,10 @@ function CoordImportPanel({ layer, onClose }: { layer: DrawLayer; onClose: () =>
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-[10px] font-semibold text-white/55">Import coordinates</p>
-          <p className="text-[9px] text-white/30 mt-0.5">{COORD_HINT[geom]}</p>
+          <p className="text-[9px] text-white/30 mt-0.5">
+            {COORD_HINT[geom]}
+            {geom === 'line' && layer.directional ? ' The arrow points toward the last pair.' : ''}
+          </p>
         </div>
         <button onClick={onClose} className="mt-0.5 text-white/25 hover:text-white/55 text-[11px]">✕</button>
       </div>
@@ -173,7 +182,7 @@ function MapLayersSection() {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<DrawLayerType>('fire-perimeter');
-  const [newGeom, setNewGeom] = useState<DrawGeometry>('polygon');
+  const [newShape, setNewShape] = useState<ShapeId>('polygon');
   const defaultColor = DRAW_LAYER_TYPES.find((t) => t.value === newType)?.color ?? '#ef4444';
   const [newColor, setNewColor] = useState(defaultColor);
   const [coordLayerId, setCoordLayerId] = useState<string | null>(null);
@@ -183,7 +192,12 @@ function MapLayersSection() {
   const startCreate = () => {
     const t = newName.trim();
     if (!t) return;
-    addDrawLayer({ name: t, type: newType, geometry: newGeom, color: newColor, visible: true, positions: [] });
+    const shape = SHAPES.find((s) => s.id === newShape) ?? SHAPES[0];
+    addDrawLayer({
+      name: t, type: newType, geometry: shape.geometry,
+      ...(shape.directional ? { directional: true } : {}),
+      color: newColor, visible: true, positions: [],
+    });
     setNewName('');
     setCreating(false);
   };
@@ -245,13 +259,13 @@ function MapLayersSection() {
           <div className="flex items-center gap-2">
             <span className="text-[9px] uppercase tracking-wider text-white/35">Shape</span>
             <div className="flex gap-1">
-              {GEOMETRIES.map((g) => (
+              {SHAPES.map((g) => (
                 <button
-                  key={g.value}
-                  onClick={() => setNewGeom(g.value)}
+                  key={g.id}
+                  onClick={() => setNewShape(g.id)}
                   title={g.hint}
                   className={`rounded border px-2.5 py-1 text-[10px] transition ${
-                    newGeom === g.value
+                    newShape === g.id
                       ? 'border-accent/40 bg-accent/15 text-accent'
                       : 'border-white/10 text-white/40 hover:border-white/25 hover:text-white/65'
                   }`}
@@ -284,12 +298,21 @@ function MapLayersSection() {
                 <div className="min-w-0 flex-1">
                   <span className="text-[11px] text-white/80">{layer.name}</span>
                   <span className="ml-2 text-[9px] text-white/35">
-                    {DRAW_LAYER_TYPES.find((t) => t.value === layer.type)?.label} · {layer.geometry}
+                    {DRAW_LAYER_TYPES.find((t) => t.value === layer.type)?.label} · {geometryLabel(layer)}
                   </span>
                   {layer.positions.length > 0 && (
                     <span className="ml-2 text-[9px] text-white/30">{layer.positions.length} pts</span>
                   )}
                 </div>
+                {layer.geometry === 'line' && layer.directional && layer.positions.length >= 2 && (
+                  <button
+                    onClick={() => updateDrawLayer(layer.id, { positions: [...layer.positions].reverse() })}
+                    className="rounded border border-white/12 px-2 py-0.5 text-[9px] text-white/35 transition hover:border-white/22 hover:text-white/60"
+                    title="Reverse direction — point the arrow the other way"
+                  >
+                    ⇄ Flip
+                  </button>
+                )}
                 <button
                   onClick={() => updateDrawLayer(layer.id, { visible: !layer.visible })}
                   className={`text-[11px] transition ${layer.visible ? 'text-white/55 hover:text-white/80' : 'text-white/20 hover:text-white/40'}`}

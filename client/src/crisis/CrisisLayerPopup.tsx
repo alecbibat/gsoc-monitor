@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom';
-import { useCrisisStore, incidentOfLayer, type DrawLayerType } from './crisisStore';
+import { useCrisisStore, incidentOfLayer, geometryLabel, type DrawLayerType } from './crisisStore';
 import { incidentStatusDef } from './taxonomy';
 
 const TYPE_LABEL: Record<DrawLayerType, string> = {
@@ -46,7 +46,7 @@ export function CrisisLayerPopup() {
           <div className="min-w-0 flex-1">
             <div className="truncate text-[13px] font-semibold text-white/90">{layer.name}</div>
             <div className="text-[10px] text-white/40">
-              {TYPE_LABEL[layer.type]} · {layer.geometry} · {layer.positions.length} pts
+              {TYPE_LABEL[layer.type]} · {geometryLabel(layer)} · {layer.positions.length} pts
             </div>
           </div>
           <button

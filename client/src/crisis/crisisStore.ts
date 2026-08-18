@@ -113,11 +113,22 @@ export interface DrawLayer {
   name: string;
   type: DrawLayerType;
   geometry: DrawGeometry;
+  // Line-only: render the line with an arrowhead pointing from the first
+  // position toward the last (evacuation routes, ingress/egress, flow).
+  // Optional so incidents persisted before this feature — and older clients
+  // reading newer data — degrade to a plain line.
+  directional?: boolean;
   color: string;
   visible: boolean;
   positions: DrawLayerPoint[];
   thumbnail?: string;  // Cloudinary URL of the map snapshot captured when drawing finishes
   createdAt: string;
+}
+
+/** Human label for a layer's shape ("area", "line", "directional line", "point"). */
+export function geometryLabel(layer: Pick<DrawLayer, 'geometry' | 'directional'>): string {
+  if (layer.geometry === 'line' && layer.directional) return 'directional line';
+  return layer.geometry;
 }
 
 export interface ShareLink {
