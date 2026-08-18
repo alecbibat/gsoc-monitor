@@ -65,7 +65,7 @@ function applyShareLayerFlags(enabled: ShareLiveLayerId[]) {
 // touch the drawings (log entries, status changes) never redraw the entities.
 function drawSignature(layers: DrawLayer[]): string {
   return layers
-    .map((l) => `${l.id}:${l.geometry}:${l.color}:${l.name}:${l.visible}:${l.positions.map((p) => `${p.lat},${p.lon}`).join('|')}`)
+    .map((l) => `${l.id}:${l.geometry}:${l.directional ? 'dir' : ''}:${l.color}:${l.name}:${l.visible}:${l.positions.map((p) => `${p.lat},${p.lon}`).join('|')}`)
     .join(';');
 }
 

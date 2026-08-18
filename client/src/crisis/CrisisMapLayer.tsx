@@ -58,14 +58,22 @@ export function addLayerEntities(ds: Cesium.CustomDataSource, layer: DrawLayer) 
 
   // LINE
   if (layer.geometry === 'line' || positions.length < 3) {
+    const directional = layer.geometry === 'line' && layer.directional;
     ds.entities.add({
       id,
       position: Cesium.Cartesian3.fromDegrees(labelPos.lon, labelPos.lat),
       polyline: {
         positions,
-        width: 4,
-        material: color.withAlpha(0.95),
-        clampToGround: true,
+        // The arrow material draws its shaft thinner than the nominal width,
+        // so directional lines get a wider polyline for a legible arrowhead.
+        width: directional ? 12 : 4,
+        material: directional
+          ? new Cesium.PolylineArrowMaterialProperty(color.withAlpha(0.95))
+          : color.withAlpha(0.95),
+        // Arrow material misrenders on ground-clamped polylines (per-segment
+        // heads); with no terrain configured, a surface-height geodesic line
+        // sits on the globe identically, so directional lines skip clamping.
+        clampToGround: !directional,
         arcType: Cesium.ArcType.GEODESIC,
       },
       label: labelGraphics,
