@@ -73,28 +73,35 @@ export function ShipModelLayer() {
 
       // Hide the whole flat marker — hull, furniture, ping rings and nametag —
       // while the model is shown; the screensaver draws its own sonar shockwave
-      // and ship card instead.
-      const dsArr = v.dataSources.getByName('ships');
-      const marker = mmsi
-        ? dsArr[0]?.entities.values.filter(
-            (e) => e.id === `ship-${mmsi}` || String(e.id).startsWith(`ship-${mmsi}-`)
-          ) ?? []
-        : [];
-      const restores = marker.flatMap((e) => {
-        const undos: Array<() => void> = [];
-        if (e.billboard) {
-          const prev = e.billboard.show;
-          e.billboard.show = new Cesium.ConstantProperty(false);
-          undos.push(() => { if (e.billboard) e.billboard.show = prev ?? new Cesium.ConstantProperty(true); });
-        }
-        if (e.label) {
-          const prev = e.label.show;
-          e.label.show = new Cesium.ConstantProperty(false);
-          undos.push(() => { if (e.label) e.label.show = prev ?? new Cesium.ConstantProperty(true); });
-        }
-        return undos;
-      });
-      if (restores.length) restoreRef.current = () => restores.forEach((r) => r());
+      // and ship card instead. ShipLayer keeps polling during the orbit and a
+      // redraw recreates every marker entity visible again, so the hide is
+      // re-applied to entities as they are (re)created, not just once up front.
+      const entities = mmsi ? v.dataSources.getByName('ships')[0]?.entities : undefined;
+      if (entities) {
+        const isMarker = (e: Cesium.Entity) =>
+          e.id === `ship-${mmsi}` || String(e.id).startsWith(`ship-${mmsi}-`);
+        const hidden = new Set<Cesium.Entity>();
+        const hide = (e: Cesium.Entity) => {
+          if (!e.billboard && !e.label) return; // paths stay drawn under the model
+          if (e.billboard) e.billboard.show = new Cesium.ConstantProperty(false);
+          if (e.label) e.label.show = new Cesium.ConstantProperty(false);
+          hidden.add(e);
+        };
+        entities.values.filter(isMarker).forEach(hide);
+        const offAdded = entities.collectionChanged.addEventListener(
+          (_coll: Cesium.EntityCollection, added: Cesium.Entity[]) => {
+            added.filter(isMarker).forEach(hide);
+          }
+        );
+        restoreRef.current = () => {
+          offAdded();
+          // Un-hiding an entity a redraw has since removed is a harmless no-op.
+          hidden.forEach((e) => {
+            if (e.billboard) e.billboard.show = new Cesium.ConstantProperty(true);
+            if (e.label) e.label.show = new Cesium.ConstantProperty(true);
+          });
+        };
+      }
 
       v.scene.requestRender();
     });

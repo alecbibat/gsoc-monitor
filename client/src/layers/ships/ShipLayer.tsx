@@ -200,14 +200,15 @@ export function ShipLayer() {
           });
 
         // Skip the teardown/redraw when nothing that affects rendering changed.
-        // Name is included because it can arrive late (AIS static data) while
-        // the ship itself sits still — the nametag must update anyway.
+        // Name participates only while nametags are shown: it can arrive late
+        // (AIS static data) while the ship sits still, and the tag must update
+        // — but with tags off a name change alters nothing drawn.
         const sig =
           `${showPaths}|${showNames}|${favoritesOnly}|${favorites.join(',')}|` +
           visible
             .map(
               (s) =>
-                `${s.mmsi}:${s.latitude}:${s.longitude}:${s.heading}:${s.course}:${shipAlpha(s.lastSeenSec)}:${s.name ?? ''}`
+                `${s.mmsi}:${s.latitude}:${s.longitude}:${s.heading}:${s.course}:${shipAlpha(s.lastSeenSec)}:${showNames ? s.name ?? '' : ''}`
             )
             .join('|');
         if (sig === lastSigRef.current) {
