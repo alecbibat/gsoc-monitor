@@ -2,7 +2,6 @@ import * as Cesium from 'cesium';
 import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useCrisisStore, type DrawLayer } from './crisisStore';
-import { measureLayer } from './layerMeasure';
 
 const ENTITY_PREFIX = 'crisis-layer-';
 
@@ -24,12 +23,12 @@ export function addLayerEntities(ds: Cesium.CustomDataSource, layer: DrawLayer) 
   const id = `${ENTITY_PREFIX}${layer.id}`;
 
   const labelPos = centroid(layer);
-  // The shape's own measurement rides under its name: the distance an
-  // evacuation arrow covers, or the area an exclusion zone encloses, is the
-  // reason it was drawn — reading it should not need a trip to the layer list.
-  const measure = measureLayer(layer);
+  // Name only. The shape's measurements (length, area, position) are a
+  // detail-on-demand thing: they live in the click-to-identify popup, the
+  // layer lists and the share report — a map of shapes each carrying two
+  // lines of figures is unreadable at a glance, which is what a map is for.
   const labelGraphics: Cesium.LabelGraphics.ConstructorOptions = {
-    text: measure.kind === 'none' ? layer.name : `${layer.name}\n${measure.primary}`,
+    text: layer.name,
     font: '600 11px Inter, system-ui, sans-serif',
     fillColor: Cesium.Color.WHITE,
     outlineColor: Cesium.Color.BLACK.withAlpha(0.85),
