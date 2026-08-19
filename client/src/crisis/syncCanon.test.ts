@@ -88,3 +88,17 @@ describe('mergeActionLogs', () => {
     expect(mergeActionLogs(remote, local, new Set())).toEqual(remote);
   });
 });
+
+describe('serverCanon - checklist exclusion', () => {
+  it('does not register checklist toggles as blob edits', () => {
+    // Toggles sync through their per-item endpoints (checklistSync.ts); if
+    // they changed the canon, every check would also schedule a whole-blob
+    // PUT that could clobber a concurrent responder's toggle.
+    const base = { id: 'c-1', incidentType: 'maritime', incidentStatus: 'active' };
+    const toggled = {
+      ...base,
+      checklists: { 'ic-imm-1': { checked: true, at: '2026-08-19T10:00:00.000Z' } },
+    };
+    expect(serverCanon(toggled)).toBe(serverCanon(base));
+  });
+});

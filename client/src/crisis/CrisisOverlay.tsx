@@ -9,11 +9,15 @@ import { useAuthStore } from '../auth/authStore';
 import { useIsMobile } from '../ui/useIsMobile';
 import { useCrisisPanelStore } from '../ui/uiStore';
 import { SituationReport } from './tabs/SituationReport';
+import { IntakeTab } from './tabs/Intake';
+import { ChecklistsTab } from './tabs/Checklists';
 import { IncidentList } from './IncidentList';
 import { CrisisReportModal } from './CrisisReportModal';
 
 const TABS: { id: CrisisTab; label: string }[] = [
   { id: 'situation-report', label: 'Situation Report' },
+  { id: 'intake', label: 'Intake' },
+  { id: 'checklists', label: 'Checklists' },
 ];
 
 // "expires in 51h" / "expires in 40m" / "expired"
@@ -517,6 +521,8 @@ function IncidentDetail() {
         {/* Content */}
         <main className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
           {activeTab === 'situation-report' && <SituationReport />}
+          {activeTab === 'intake' && <IntakeTab />}
+          {activeTab === 'checklists' && <ChecklistsTab />}
         </main>
       </div>
     </div>

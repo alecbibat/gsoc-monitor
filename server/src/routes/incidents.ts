@@ -3,7 +3,9 @@ import { pool } from '../db';
 import { wrap } from '../asyncWrap';
 import { requireAuth } from '../middleware/auth';
 import { invalidIncidentReason, invalidLogEntryReason, ACTION_ENTRY_TYPES } from '../incidentTaxonomy';
-import { revokeShareLinksForIncident } from './crisis';
+import { revokeShareLinksForIncident, updateShareChecklists } from './crisis';
+import { applyChecklistToggle, cleanActor, invalidToggleReason } from '../checklist';
+import { broadcastIncident as broadcast, incidentSseClients as sseClients } from './incidentBus';
 
 const router = Router();
 router.use(requireAuth);
@@ -15,14 +17,8 @@ router.use(requireAuth);
 // deleted we fan the change out to all of them. Combined with the client's
 // skip-if-locally-dirty merge, this collapses the window in which two people can
 // unknowingly overwrite each other from "until someone reloads" to ~1 second.
-const sseClients = new Set<Response>();
-
-function broadcast(event: 'upsert' | 'delete', data: unknown) {
-  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const client of sseClients) {
-    try { client.write(payload); } catch { /* disconnected — cleaned up on close */ }
-  }
-}
+// (The client set + broadcast live in incidentBus.ts so the share-side checklist
+// toggle in crisis.ts can also fan out here without a circular import.)
 
 // GET /api/incidents/events — SSE stream of live incident changes (auth required).
 router.get('/events', (req: Request, res: Response) => {
@@ -55,11 +51,12 @@ router.get('/', wrap(async (_req, res: Response) => {
 
 // Upsert an incident (client generates stable IDs, so POST and PUT are the same).
 //
-// Both write paths preserve the row's EXISTING actionLog: the log is
-// append-only and owned by the /:id/log endpoints below, so a whole-blob
-// last-write-wins update must never be able to erase entries another
-// responder appended concurrently. A brand-new row takes the client's log
-// (it seeds the incident's initial entries).
+// Both write paths preserve the row's EXISTING actionLog and checklists: those
+// two fields are owned by their per-entry/per-item endpoints (the log routes
+// below and the checklist toggle routes), so a whole-blob last-write-wins
+// update must never be able to erase entries another responder — or a
+// share-link viewer — wrote concurrently. A brand-new row takes the client's
+// values (they seed the incident's initial state).
 router.post('/', wrap(async (req: Request, res: Response) => {
   const incident = req.body;
   const invalid = invalidIncidentReason(incident);
@@ -70,7 +67,9 @@ router.post('/', wrap(async (req: Request, res: Response) => {
      ON CONFLICT (id) DO UPDATE SET
        data = EXCLUDED.data || jsonb_build_object(
          'actionLog',
-         COALESCE(incidents.data->'actionLog', EXCLUDED.data->'actionLog', '[]'::jsonb)
+         COALESCE(incidents.data->'actionLog', EXCLUDED.data->'actionLog', '[]'::jsonb),
+         'checklists',
+         COALESCE(incidents.data->'checklists', EXCLUDED.data->'checklists', '{}'::jsonb)
        ),
        updated_at = NOW()
      RETURNING data`,
@@ -89,7 +88,9 @@ router.put('/:id', wrap(async (req: Request, res: Response) => {
     `UPDATE incidents SET
        data = $1::jsonb || jsonb_build_object(
          'actionLog',
-         COALESCE(incidents.data->'actionLog', $1::jsonb->'actionLog', '[]'::jsonb)
+         COALESCE(incidents.data->'actionLog', $1::jsonb->'actionLog', '[]'::jsonb),
+         'checklists',
+         COALESCE(incidents.data->'checklists', $1::jsonb->'checklists', '{}'::jsonb)
        ),
        updated_at = NOW()
      WHERE id = $2 RETURNING data`,
@@ -98,6 +99,28 @@ router.put('/:id', wrap(async (req: Request, res: Response) => {
   if (!row) { res.status(404).json({ error: 'Incident not found' }); return; }
   broadcast('upsert', row.data);
   res.json(row.data);
+}, 'incidents'));
+
+// ── ICS checklist (per-item sync path) ───────────────────────────────────────
+// The editor-side twin of the public share route in crisis.ts: one row-locked
+// per-item toggle, attributed to the signed-in user, fanned out to editors AND
+// into every live share snapshot (the auto-publish PATCH deliberately skips
+// the checklist key — see crisis.ts).
+router.post('/:id/checklist/:itemId', wrap(async (req: Request, res: Response) => {
+  const invalid = invalidToggleReason(req.params.itemId, req.body);
+  if (invalid) { res.status(400).json({ error: invalid }); return; }
+  const body = req.body as { checked: boolean; by?: unknown };
+  const user = (req as Request & { user?: { name?: string } }).user;
+  const by = cleanActor(body.by) ?? cleanActor(user?.name);
+  const result = await applyChecklistToggle(req.params.id, req.params.itemId, body.checked, by);
+  if (!result.ok) { res.status(result.status).json({ error: result.error }); return; }
+  if (result.changed) {
+    broadcast('upsert', result.incident);
+    await updateShareChecklists(req.params.id, result.checklists).catch((e) =>
+      console.warn('[incidents] share checklist fanout failed:', e?.message ?? e)
+    );
+  }
+  res.json({ checklists: result.checklists });
 }, 'incidents'));
 
 // ── Action log (append-only sync path) ──────────────────────────────────────
