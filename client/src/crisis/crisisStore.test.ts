@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { extractPublicState, useCrisisStore, type Incident } from './crisisStore';
+import { entryTypeOf, extractPublicState, useCrisisStore, type ActionLogEntry, type Incident } from './crisisStore';
 
 // The store is a module singleton — reset between tests.
 beforeEach(() => {
@@ -19,6 +19,20 @@ describe('system log events', () => {
     expect(inc.actionLog).toHaveLength(1);
     expect(inc.actionLog[0].system).toBe('created');
     expect(inc.actionLog[0].entryType).toBe('event');
+    // Stored as 'event', but auto-generated entries DISPLAY as system
+    // everywhere — badges, visibility filters and counts go through entryTypeOf.
+    expect(entryTypeOf(inc.actionLog[0])).toBe('system');
+  });
+
+  it('classes entry types for display: auto → system, missing → action', () => {
+    const base = { id: 'x', timestamp: '2026-01-01T00:00:00.000Z', description: '' };
+    expect(entryTypeOf({ ...base, entryType: 'action' })).toBe('action');
+    expect(entryTypeOf({ ...base, entryType: 'event' })).toBe('event');
+    expect(entryTypeOf({ ...base, entryType: 'info' })).toBe('info');
+    // Auto-generated entries read as system regardless of the stored type.
+    expect(entryTypeOf({ ...base, entryType: 'event', system: 'status-change' })).toBe('system');
+    // Snapshot entries published before entry types existed have none.
+    expect(entryTypeOf(base as ActionLogEntry)).toBe('action');
   });
 
   it('logs status changes with from/to meta', () => {

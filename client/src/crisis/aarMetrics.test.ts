@@ -132,6 +132,8 @@ describe('computeAarMetrics', () => {
     const m = computeAarMetrics(active());
     expect(m.logTotal).toBe(2);
     expect(m.operatorEntries).toBe(1);
+    // Auto-generated entries class as system in logByType, matching the log views.
+    expect(m.logByType).toEqual({ action: 1, event: 0, info: 0, system: 1 });
   });
 });
 
