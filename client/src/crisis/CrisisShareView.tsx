@@ -299,6 +299,9 @@ export function CrisisShareView({ token }: { token: string }) {
   const [offLive, setOffLive] = useState<Set<ShareLiveLayerId>>(new Set());
   const [offDraw, setOffDraw] = useState<Set<string>>(new Set());
   const [hideInfo, setHideInfo] = useState(false);
+  // System (auto-generated) entries start hidden — stakeholders open the log
+  // for what operators wrote; the state-change narration is a toggle away.
+  const [hideSystem, setHideSystem] = useState(true);
   // Viewers get the list by default: the question a share link is opened to
   // answer is "what has happened, most recent first", and the list says that
   // in the fewest words. The timeline is one toggle away for anyone who wants
@@ -613,12 +616,13 @@ export function CrisisShareView({ token }: { token: string }) {
 
         {/* Action log */}
         {data.actionLog.length > 0 && (() => {
-          // Auto-generated (system) entries class as info here, so the
-          // hide-info toggle folds the state-change narration away too.
           const infoCount = data.actionLog.filter((e) => entryTypeOf(e) === 'info').length;
-          const visibleLog = hideInfo
-            ? data.actionLog.filter((e) => entryTypeOf(e) !== 'info')
-            : data.actionLog;
+          const systemCount = data.actionLog.filter((e) => entryTypeOf(e) === 'system').length;
+          const visibleLog = data.actionLog.filter(
+            (e) =>
+              !(hideInfo && entryTypeOf(e) === 'info') &&
+              !(hideSystem && entryTypeOf(e) === 'system')
+          );
           const sortedLog = [...visibleLog].sort(
             (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
           );
@@ -639,6 +643,18 @@ export function CrisisShareView({ token }: { token: string }) {
                   {hideInfo ? `Show info (${infoCount})` : `Hide info (${infoCount})`}
                 </button>
               )}
+              {systemCount > 0 && (
+                <button
+                  onClick={() => setHideSystem((h) => !h)}
+                  className={`rounded border px-2.5 py-1 text-[10px] transition ${
+                    hideSystem
+                      ? 'border-white/10 text-white/35 hover:text-white/55'
+                      : 'border-white/25 bg-white/10 text-white/60 hover:text-white/80'
+                  }`}
+                >
+                  {hideSystem ? `Show system (${systemCount})` : `Hide system (${systemCount})`}
+                </button>
+              )}
               <div className="ml-auto flex rounded border border-white/10 text-[10px]">
                 <button
                   onClick={() => setLogView('list')}
@@ -657,7 +673,7 @@ export function CrisisShareView({ token }: { token: string }) {
             <div className="rounded-lg border border-white/8 bg-ink-950/60">
               {visibleLog.length === 0 ? (
                 <p className="px-4 py-6 text-center text-[12px] text-white/30 italic">
-                  All entries are informational and currently hidden
+                  All entries are currently hidden — use the filter buttons above to show them
                 </p>
               ) : logView === 'timeline' ? (
                 <div className="px-4 py-4">
@@ -672,7 +688,7 @@ export function CrisisShareView({ token }: { token: string }) {
                           {entryTypeOf(entry)}
                         </span>
                         <span className="shrink-0 text-[11px] text-white/45 sm:w-36">{fmtTs(entry.timestamp)}</span>
-                        <p className="w-full text-[13px] leading-snug text-white/80 sm:w-auto sm:flex-1">{entry.description || <span className="text-white/30 italic">No description</span>}</p>
+                        <p className={`w-full text-[13px] leading-snug sm:w-auto sm:flex-1 ${entry.system ? 'italic text-white/55' : 'text-white/80'}`}>{entry.description || <span className="text-white/30 italic">No description</span>}</p>
                         <div className="shrink-0 flex flex-col items-end gap-1">
                           {(entry as { attachmentData?: string }).attachmentData && (
                             <ZoomableImage

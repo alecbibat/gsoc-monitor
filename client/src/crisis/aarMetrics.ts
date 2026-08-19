@@ -22,8 +22,8 @@ export interface AarMetrics {
    * role and ignores same-person re-assignment. */
   commandTransfers: number;
   logTotal: number;
-  /** By displayed type — system (auto) entries class as info, matching the log views. */
-  logByType: { action: number; event: number; info: number };
+  /** By displayed type — auto-generated entries class as system, matching the log views. */
+  logByType: { action: number; event: number; info: number; system: number };
   operatorEntries: number;  // manually written entries (non-system)
 }
 
@@ -85,7 +85,7 @@ export function computeAarMetrics(inc: Incident): AarMetrics {
     if (!samePerson) commandTransfers += 1;
   }
 
-  const logByType = { action: 0, event: 0, info: 0 };
+  const logByType = { action: 0, event: 0, info: 0, system: 0 };
   let operatorEntries = 0;
   for (const e of inc.actionLog as ActionLogEntry[]) {
     logByType[entryTypeOf(e)] += 1;

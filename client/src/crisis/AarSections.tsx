@@ -95,7 +95,7 @@ export function ResponseMetrics({ incident }: { incident: Incident }) {
         <StatCard
           label="Log entries"
           value={String(m.logTotal)}
-          sub={`${m.operatorEntries} operator · ${m.logTotal - m.operatorEntries} auto`}
+          sub={`${m.operatorEntries} operator · ${m.logByType.system} system`}
         />
         <StatCard
           label="Stakeholder reach"

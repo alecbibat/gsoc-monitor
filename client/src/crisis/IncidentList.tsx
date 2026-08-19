@@ -90,7 +90,7 @@ function IncidentCard({ incident }: { incident: Incident }) {
   const sb = incidentStatusDef(incident.incidentStatus);
   const td = incidentTypeDef(incident.incidentType);
   const assigned = incident.assignments.filter((a) => !a.endedAt).length;
-  // Operator-logged counts: system (auto) entries class as info, not events.
+  // Operator-logged counts: auto-generated entries class as system, not events.
   const actions  = incident.actionLog.filter((e) => entryTypeOf(e) === 'action').length;
   const events   = incident.actionLog.filter((e) => entryTypeOf(e) === 'event').length;
 

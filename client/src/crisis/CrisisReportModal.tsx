@@ -23,6 +23,7 @@ const ENTRY_STYLES = {
   action: 'text-blue-300 bg-blue-400/15 border-blue-400/30',
   event:  'text-amber-300 bg-amber-400/15 border-amber-400/30',
   info:   'text-cyan-300 bg-cyan-400/15 border-cyan-400/30',
+  system: 'text-white/50 bg-white/8 border-white/20',
 };
 
 // The incident's property, as the archive should read it: a shore-side group
@@ -325,9 +326,8 @@ export function CrisisReportModal({ incident: incidentProp, onClose }: Props) {
                       {fmtTs(entry.timestamp)}
                       {entry.actor && <span className="block text-white/40">{entry.actor}</span>}
                     </span>
-                    <p className="flex-1 text-[12px] leading-snug text-white/70">
+                    <p className={`flex-1 text-[12px] leading-snug ${entry.system ? 'italic text-white/45' : 'text-white/70'}`}>
                       {entry.description || <span className="text-white/25 italic">No description</span>}
-                      {entry.system && <span className="ml-1.5 text-[9px] uppercase tracking-wider text-white/25">auto</span>}
                     </p>
                     {entry.attachmentData && (
                       <img

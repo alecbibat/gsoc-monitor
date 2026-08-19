@@ -19,18 +19,18 @@ describe('system log events', () => {
     expect(inc.actionLog).toHaveLength(1);
     expect(inc.actionLog[0].system).toBe('created');
     expect(inc.actionLog[0].entryType).toBe('event');
-    // Stored as 'event', but system entries DISPLAY as info everywhere —
-    // badges, hide-info filters and counts all go through entryTypeOf.
-    expect(entryTypeOf(inc.actionLog[0])).toBe('info');
+    // Stored as 'event', but auto-generated entries DISPLAY as system
+    // everywhere — badges, visibility filters and counts go through entryTypeOf.
+    expect(entryTypeOf(inc.actionLog[0])).toBe('system');
   });
 
-  it('classes entry types for display: system → info, missing → action', () => {
+  it('classes entry types for display: auto → system, missing → action', () => {
     const base = { id: 'x', timestamp: '2026-01-01T00:00:00.000Z', description: '' };
     expect(entryTypeOf({ ...base, entryType: 'action' })).toBe('action');
     expect(entryTypeOf({ ...base, entryType: 'event' })).toBe('event');
     expect(entryTypeOf({ ...base, entryType: 'info' })).toBe('info');
-    // System entries read as info regardless of the stored type.
-    expect(entryTypeOf({ ...base, entryType: 'event', system: 'status-change' })).toBe('info');
+    // Auto-generated entries read as system regardless of the stored type.
+    expect(entryTypeOf({ ...base, entryType: 'event', system: 'status-change' })).toBe('system');
     // Snapshot entries published before entry types existed have none.
     expect(entryTypeOf(base as ActionLogEntry)).toBe('action');
   });

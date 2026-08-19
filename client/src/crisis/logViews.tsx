@@ -1,26 +1,29 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { entryTypeOf, type ActionEntryType, type ActionLogEntry } from './crisisStore';
+import { entryTypeOf, type ActionLogEntry, type DisplayEntryType } from './crisisStore';
 import { ZoomableImage } from './ImageLightbox';
 
 // Pieces of the Actions & Events Log shared between the incident editor
 // (ActionLog) and the read-only share page (CrisisShareView): entry styling,
 // the snake timeline view, and the show-more pagination bar.
 
-export const TYPE_STYLES: Record<ActionEntryType, string> = {
+export const TYPE_STYLES: Record<DisplayEntryType, string> = {
   action: 'text-blue-300 bg-blue-400/15 border-blue-400/30',
   event:  'text-amber-300 bg-amber-400/15 border-amber-400/30',
   info:   'text-cyan-300 bg-cyan-400/15 border-cyan-400/30',
+  system: 'text-white/50 bg-white/8 border-white/20',
 };
 
-export const STRIP_STYLES: Record<ActionEntryType, string> = {
+export const STRIP_STYLES: Record<DisplayEntryType, string> = {
   action: 'bg-blue-400/60',
   event:  'bg-amber-400/60',
   info:   'bg-cyan-400/60',
+  system: 'bg-white/35',
 };
 
-// Display type of an entry (system entries read as info) — defined next to
-// the data model, re-exported here alongside the styles keyed by it.
+// Display type of an entry (system entries read as their own 'system' class)
+// — defined next to the data model, re-exported here alongside the styles
+// keyed by it.
 export { entryTypeOf };
 
 export function fmtLogTimestamp(iso: string) {
