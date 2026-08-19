@@ -299,9 +299,11 @@ export function CrisisShareView({ token }: { token: string }) {
   const [offLive, setOffLive] = useState<Set<ShareLiveLayerId>>(new Set());
   const [offDraw, setOffDraw] = useState<Set<string>>(new Set());
   const [hideInfo, setHideInfo] = useState(false);
-  // Viewers get the timeline by default — a stakeholder wants the shape of the
-  // response at a glance, not a dense operator list (that's one toggle away).
-  const [logView, setLogView] = useState<'list' | 'timeline'>('timeline');
+  // Viewers get the list by default: the question a share link is opened to
+  // answer is "what has happened, most recent first", and the list says that
+  // in the fewest words. The timeline is one toggle away for anyone who wants
+  // the shape of the response instead.
+  const [logView, setLogView] = useState<'list' | 'timeline'>('list');
   const [logLimit, setLogLimit] = useState(DEFAULT_LOG_LIMIT);
   // Hoisted above the paginated log rows: an SSE update can slide a row out
   // of the visible slice, and an open viewer must survive that unmount.
