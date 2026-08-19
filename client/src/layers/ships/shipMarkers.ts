@@ -101,6 +101,17 @@ export function shipNameLabel(
   };
 }
 
+/**
+ * Fade a ship sitting at a stale last-known position so it's clear it isn't
+ * reporting live (e.g. out of coastal AIS range). Applies to every part of the
+ * marker — rings, reticle, hull and nametag — on both the operator globe and
+ * the share-link map.
+ */
+export function shipAlpha(lastSeenSec: number): number {
+  const ageMin = lastSeenSec / 60;
+  return ageMin < 20 ? 1 : ageMin < 120 ? 0.6 : 0.4;
+}
+
 /** Billboard sizes in screen px, and how the rings travel. */
 export const SHIP_MARKER = {
   hullPx: 26,

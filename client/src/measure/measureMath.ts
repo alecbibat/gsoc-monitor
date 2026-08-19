@@ -41,6 +41,74 @@ export function perimeterM(pts: LngLat[]): number {
   return totalDistanceM([...pts, pts[0]]);
 }
 
+// Point reached by travelling `distM` from (lat, lon) along a great circle on
+// the given initial bearing. Spherical — well inside the tool's accuracy.
+function destination(lat: number, lon: number, bearingDeg: number, distM: number): LngLat {
+  const d = distM / EARTH_RADIUS_M;
+  const br = toRad(bearingDeg);
+  const φ1 = toRad(lat);
+  const λ1 = toRad(lon);
+  const sinφ2 = Math.sin(φ1) * Math.cos(d) + Math.cos(φ1) * Math.sin(d) * Math.cos(br);
+  const φ2 = Math.asin(Math.min(1, Math.max(-1, sinφ2)));
+  const λ2 =
+    λ1 +
+    Math.atan2(
+      Math.sin(br) * Math.sin(d) * Math.cos(φ1),
+      Math.cos(d) - Math.sin(φ1) * sinφ2
+    );
+  return {
+    lat: (φ2 * 180) / Math.PI,
+    // Normalize into [-180, 180] so a circle spanning the antimeridian still
+    // renders as one ring instead of wrapping the globe.
+    lon: (((λ2 * 180) / Math.PI + 540) % 360) - 180,
+  };
+}
+
+/**
+ * The rim of a circle of `radius` metres around a centre, as a closed ring of
+ * lon/lat points. Drawn as an explicit ring (rather than Cesium's ellipse
+ * outline) so the rim keeps the same crisp 2.5 px stroke as the other measure
+ * shapes on every platform.
+ *
+ * Each point starts as a spherical projection and is then corrected against
+ * the ellipsoid: the sphere is up to ~0.5% out depending on latitude and
+ * bearing, which at 50 km is a couple of hundred metres of daylight between
+ * the circle you see and the radius the readout claims. One rescale per
+ * bearing closes that to under a metre.
+ */
+export function circleRing(center: LngLat, radius: number, segments = 128): LngLat[] {
+  if (!(radius > 0)) return [];
+  const ring: LngLat[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const bearing = (360 * i) / segments;
+    const guess = destination(center.lat, center.lon, bearing, radius);
+    const actual = radiusM(center, guess);
+    ring.push(
+      actual > 0
+        ? destination(center.lat, center.lon, bearing, radius * (radius / actual))
+        : guess
+    );
+  }
+  return ring;
+}
+
+/** Great-circle distance between two points, in metres. */
+export function radiusM(center: LngLat, rim: LngLat): number {
+  return totalDistanceM([center, rim]);
+}
+
+/** Area enclosed by a circle of the given radius, in square metres. */
+export function circleAreaM2(radius: number): number {
+  return Math.PI * radius * radius;
+}
+
+/** Circumference of a circle of the given radius, in metres. */
+export function circleCircumferenceM(radius: number): number {
+  return 2 * Math.PI * radius;
+}
+
+const round0 = (n: number): string => n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+
 // "1.23 km" / "840 m", with the imperial equivalent appended.
 export function formatDistance(m: number): string {
   const mi = m / 1609.344;
@@ -48,7 +116,18 @@ export function formatDistance(m: number): string {
     const ft = m * 3.28084;
     return `${m.toFixed(0)} m · ${ft.toFixed(0)} ft`;
   }
+  // Thousands separators once the numbers get long: "4,911 km" is readable at
+  // a glance where "4911.17" is a digit-counting exercise.
+  if (m >= 1_000_000) return `${round0(m / 1000)} km · ${round0(mi)} mi`;
   return `${(m / 1000).toFixed(2)} km · ${mi.toFixed(2)} mi`;
+}
+
+// Same distance in nautical miles — the unit every conversation about a ship's
+// position happens in. Shown alongside, not instead: the shore-side reader
+// wants km.
+export function formatNauticalMiles(m: number): string {
+  const nm = m / 1852;
+  return nm < 10 ? `${nm.toFixed(2)} nm` : `${nm.toFixed(1)} nm`;
 }
 
 // "12.3 km²" / "4,200 m²", with acres or square miles appended.
@@ -63,5 +142,6 @@ export function formatArea(m2: number): string {
     return `${(m2 / 10_000).toFixed(2)} ha · ${acres.toFixed(1)} ac`;
   }
   const sqmi = m2 / 2_589_988.11;
+  if (km2 >= 1000) return `${round0(km2)} km² · ${round0(sqmi)} mi²`;
   return `${km2.toFixed(2)} km² · ${sqmi.toFixed(2)} mi²`;
 }

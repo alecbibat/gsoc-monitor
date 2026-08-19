@@ -8,8 +8,9 @@ import type { BasemapId } from '../types';
 import type { LocationGroup } from '../layers/locations/locations';
 import { makePinIcon } from '../layers/locations/pinIcon';
 import {
-  SHIP_MARKER, shipHullUri, shipNameLabel, shipReticleUri,
+  SHIP_MARKER, shipAlpha, shipHullUri, shipNameLabel, shipReticleUri,
 } from '../layers/ships/shipMarkers';
+import { createPingPump, pingBillboard } from '../layers/ships/shipPing';
 import { isShipGroupId, type IncidentVessel } from './incidentShips';
 import { resetCamera } from '../cesium/flyTo';
 import { addLayerEntities } from './CrisisMapLayer';
@@ -39,6 +40,9 @@ import { NewsMapLayer } from '../layers/newsMap/NewsMapLayer';
 import { IntelLayer } from '../layers/intel/IntelLayer';
 import { PanelManager } from '../panels/PanelManager';
 import { PickChooser } from '../panels/PickChooser';
+import { MeasureController } from '../measure/MeasureController';
+import { MeasureOverlay } from '../measure/MeasureOverlay';
+import { useMeasureStore } from '../measure/measureStore';
 
 // The share page is served from the same origin as the operator app, so the
 // persisted layersStore would write to the operator's own 'gsoc-layers'
@@ -196,21 +200,23 @@ function SharePinsLayer({ groups }: { groups: LocationGroup[] }) {
 }
 
 // The incident's vessels as live AIS contacts — the same sonar-contact marker
-// the operator's ships layer draws (reticle + heading-rotated hull + nametag),
-// minus its ping animation: the share globe renders on demand, and a permanent
-// animation loop would keep a viewer's phone GPU busy for no operational gain.
+// the operator's ships layer draws: expanding ping rings, a reticle, the
+// heading-rotated hull and a nametag, all sharing the fleet-wide ping clock.
+// The frame pump idles whenever no contact is on screen, so an idle share page
+// costs a phone nothing.
 //
 // Only the ships the incident team attached are ever drawn here; the rest of
 // the fleet is not part of the share payload.
 function ShareShipsLayer({ vessels }: { vessels: IncidentVessel[] }) {
   const viewer = useCesiumViewer();
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
+  const pumpRef = useRef<ReturnType<typeof createPingPump> | null>(null);
   // Positions participate: unlike fixed property pins, a contact must move
   // when the feed reports a new fix.
   const sig = vessels
     .map((v) =>
       v.ship
-        ? `${v.roster.mmsi}:${v.ship.latitude}:${v.ship.longitude}:${v.ship.heading ?? ''}:${v.ship.course ?? ''}`
+        ? `${v.roster.mmsi}:${v.ship.latitude}:${v.ship.longitude}:${v.ship.heading ?? ''}:${v.ship.course ?? ''}:${shipAlpha(v.ship.lastSeenSec)}`
         : `${v.roster.mmsi}:none`
     )
     .join('|');
@@ -220,7 +226,10 @@ function ShareShipsLayer({ vessels }: { vessels: IncidentVessel[] }) {
     const ds = new Cesium.CustomDataSource('crisis-share-vessels');
     dsRef.current = ds;
     viewer.dataSources.add(ds);
+    pumpRef.current = createPingPump(viewer);
     return () => {
+      pumpRef.current?.dispose();
+      pumpRef.current = null;
       viewer.dataSources.remove(ds, true);
       dsRef.current = null;
     };
@@ -236,13 +245,26 @@ function ShareShipsLayer({ vessels }: { vessels: IncidentVessel[] }) {
       if (!v.ship) continue;
       const { latitude: lat, longitude: lon } = v.ship;
       const bearing = v.ship.heading ?? v.ship.course ?? 0;
-      // Sub-metre lifts break the depth tie so the hull draws over its reticle.
+      // Same staleness fade as the operator globe: a contact that stopped
+      // reporting hours ago must not read as a live fix.
+      const alpha = shipAlpha(v.ship.lastSeenSec);
+      const tint = Cesium.Color.WHITE.withAlpha(alpha);
+      // Rings first: they expand out from under the marker and must not cover
+      // it, so they sit lowest in the stack (sub-metre altitude lifts break the
+      // depth tie between the billboards stacked on one position).
+      for (let ring = 0; ring < SHIP_MARKER.ping.count; ring++) {
+        ds.entities.add({
+          position: Cesium.Cartesian3.fromDegrees(lon, lat, 0),
+          billboard: pingBillboard(v.color, ring, alpha),
+        });
+      }
       ds.entities.add({
         position: Cesium.Cartesian3.fromDegrees(lon, lat, 1),
         billboard: {
           image: shipReticleUri(v.color, false),
           width: SHIP_MARKER.reticlePx,
           height: SHIP_MARKER.reticlePx,
+          color: tint,
           scaleByDistance: SHIP_MARKER.scaleByDistance,
         },
       });
@@ -254,11 +276,19 @@ function ShareShipsLayer({ vessels }: { vessels: IncidentVessel[] }) {
           height: SHIP_MARKER.hullPx,
           rotation: Cesium.Math.toRadians(-bearing),
           alignedAxis: Cesium.Cartesian3.UNIT_Z,
+          color: tint,
           scaleByDistance: SHIP_MARKER.scaleByDistance,
         },
-        label: shipNameLabel(v.roster.name, v.color, 1),
+        label: shipNameLabel(v.roster.name, v.color, alpha),
       });
     }
+    // Positioned contacts only: the pump idles when none of them is in view.
+    pumpRef.current?.setPositions(
+      vessels
+        .filter((v) => v.ship !== null)
+        .map((v) => ({ lon: v.ship!.longitude, lat: v.ship!.latitude }))
+    );
+    pumpRef.current?.ensure();
     viewer.scene.requestRender();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewer, sig]);
@@ -314,6 +344,14 @@ export function CrisisShareGlobe({
   const [controlsOpen, setControlsOpen] = useState(true);
   const basemap = useLayersStore((s) => s.basemap);
   const setBasemap = useLayersStore((s) => s.setBasemap);
+  // Measuring is a viewer-side tool: nothing it draws is published, and it
+  // never touches the incident's own layers.
+  const measuring = useMeasureStore((s) => s.active);
+  const toggleMeasure = useMeasureStore((s) => s.toggle);
+
+  // Leaving the page (or a live update swapping the globe out) must not strand
+  // the tool in the store — it is a module singleton.
+  useEffect(() => () => { useMeasureStore.getState().exit(); }, []);
 
   const enabled = liveLayers.filter((id) => !offLive.has(id));
   const live = new Set<ShareLiveLayerId>(enabled);
@@ -411,6 +449,7 @@ export function CrisisShareGlobe({
             <ShareDrawLayers layers={drawLayers} />
             <SharePinsLayer groups={pinGroups} />
             <ShareShipsLayer vessels={vessels} />
+            <MeasureController />
             {live.has('radar') && <RadarTimeline />}
           </CesiumGlobe>
           {live.has('hurricanes') && <HurricaneTooltip />}
@@ -465,6 +504,18 @@ export function CrisisShareGlobe({
                     )}
                   </div>
                 )}
+                <button
+                  onClick={toggleMeasure}
+                  aria-pressed={measuring}
+                  className={`w-full rounded border px-2 py-1.5 text-[11px] font-medium transition ${
+                    measuring
+                      ? 'border-accent/50 bg-accent/20 text-accent'
+                      : 'border-white/15 text-white/60 hover:border-white/30 hover:text-white'
+                  }`}
+                  title="Measure distance between points, the length of a path, or the radius of a circle"
+                >
+                  {measuring ? 'Measuring — tap to stop' : 'Measure distance'}
+                </button>
                 <div className="flex gap-1.5">
                   <button
                     onClick={handleZoomToIncident}
@@ -486,6 +537,9 @@ export function CrisisShareGlobe({
           </div>
 
           <PickChooser />
+          {/* Anchored to the map frame (which is position:relative), so the
+              readout sits over the globe rather than the whole report. */}
+          <MeasureOverlay />
       </div>
       {/* OUTSIDE the transformed wrapper: each floating panel renders its own
           fixed-inset-0 overlay positioned from window coordinates, so it must

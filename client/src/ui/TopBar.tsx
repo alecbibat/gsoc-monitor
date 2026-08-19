@@ -370,7 +370,7 @@ function MeasureButton() {
           ? 'border-accent/40 bg-accent/10 text-accent'
           : 'border-white/10 bg-ink-900/80 text-white/40 hover:text-white/70'
       }`}
-      title="Measure distance or area"
+      title="Measure distance, area or radius"
       aria-label="Measure tool"
     >
       <svg

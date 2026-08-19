@@ -3,7 +3,11 @@ import {
   totalDistanceM,
   polygonAreaM2,
   perimeterM,
+  radiusM,
+  circleAreaM2,
+  circleCircumferenceM,
   formatDistance,
+  formatNauticalMiles,
   formatArea,
 } from './measureMath';
 
@@ -54,6 +58,7 @@ export function MeasureOverlay() {
   const active = useMeasureStore((s) => s.active);
   const mode = useMeasureStore((s) => s.mode);
   const points = useMeasureStore((s) => s.points);
+  const hover = useMeasureStore((s) => s.hover);
   const finished = useMeasureStore((s) => s.finished);
   const setMode = useMeasureStore((s) => s.setMode);
   const undo = useMeasureStore((s) => s.undo);
@@ -66,6 +71,10 @@ export function MeasureOverlay() {
   const distance = totalDistanceM(points);
   const area = polygonAreaM2(points);
   const perim = perimeterM(points);
+  // The circle's rim follows the cursor until the second click lands, so the
+  // radius reads live off the hover point while it's still being drawn.
+  const rim = points.length >= 2 ? points[1] : hover;
+  const radius = points.length >= 1 && rim ? radiusM(points[0], rim) : 0;
 
   const readout =
     mode === 'distance' ? (
@@ -73,16 +82,34 @@ export function MeasureOverlay() {
         <span className="font-mono text-[15px] font-bold tabular-nums text-accent">
           {points.length >= 2 ? formatDistance(distance) : '—'}
         </span>
-        <span className="text-[10px] uppercase tracking-wider text-white/35">
-          path distance{points.length > 0 ? ` · ${points.length} pts` : ''}
+        <span className="text-[10px] tracking-wider text-white/35">
+          {points.length >= 2
+            ? `${formatNauticalMiles(distance)} · ${points.length} pts`
+            : 'path distance'}
         </span>
+      </div>
+    ) : mode === 'radius' ? (
+      <div className="flex flex-col">
+        <span className="font-mono text-[15px] font-bold tabular-nums text-accent">
+          {radius > 0 ? formatDistance(radius) : '—'}
+        </span>
+        <span className="text-[10px] tracking-wider text-white/35">
+          {radius > 0
+            ? `radius ${formatNauticalMiles(radius)} · area ${formatArea(circleAreaM2(radius))}`
+            : 'radius'}
+        </span>
+        {radius > 0 && (
+          <span className="text-[10px] tracking-wider text-white/25">
+            circumference {formatDistance(circleCircumferenceM(radius))}
+          </span>
+        )}
       </div>
     ) : (
       <div className="flex flex-col">
         <span className="font-mono text-[15px] font-bold tabular-nums text-accent">
           {points.length >= 3 ? formatArea(area) : '—'}
         </span>
-        <span className="text-[10px] uppercase tracking-wider text-white/35">
+        <span className="text-[10px] tracking-wider text-white/35">
           {points.length >= 3 ? `area · perimeter ${formatDistance(perim)}` : 'area'}
         </span>
       </div>
@@ -99,12 +126,19 @@ export function MeasureOverlay() {
               onClick={() => setMode('distance')}
             />
             <ModeButton label="AREA" on={mode === 'area'} onClick={() => setMode('area')} />
+            <ModeButton label="RADIUS" on={mode === 'radius'} onClick={() => setMode('radius')} />
           </div>
           <div className="min-w-[150px]">{readout}</div>
         </div>
         <div className="flex items-center justify-between gap-2">
           <span className="text-[10px] text-white/30">
-            {finished ? 'Done — clear to restart' : 'Click to add · double-click to finish'}
+            {finished
+              ? 'Done — clear to restart'
+              : mode === 'radius'
+                ? points.length === 0
+                  ? 'Click the centre of the circle'
+                  : 'Click again to set the radius'
+                : 'Click to add · double-click to finish'}
           </span>
           <div className="flex items-center gap-1.5">
             <ActionButton label="Undo" onClick={undo} disabled={points.length === 0} />
@@ -115,7 +149,10 @@ export function MeasureOverlay() {
                 onClick={finish}
                 disabled={
                   (mode === 'distance' && points.length < 2) ||
-                  (mode === 'area' && points.length < 3)
+                  (mode === 'area' && points.length < 3) ||
+                  // A circle finishes on its own second click; there is no
+                  // half-drawn state worth freezing.
+                  mode === 'radius'
                 }
               />
             )}

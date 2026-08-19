@@ -2,6 +2,7 @@ import * as Cesium from 'cesium';
 import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useMeasureStore, type LngLat } from './measureStore';
+import { circleRing, radiusM } from './measureMath';
 
 const LINE_COLOR = Cesium.Color.fromCssColorString('#3ddcff');
 const FILL_COLOR = Cesium.Color.fromCssColorString('#3ddcff').withAlpha(0.16);
@@ -59,9 +60,12 @@ export function MeasureController() {
     }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
     handler.setInputAction(() => {
-      // The two clicks of a double-click already added a duplicate vertex; drop
-      // it, then finish the shape.
       const s = store();
+      // A circle closes itself on the second click, so a double-click there is
+      // just the same two clicks — leave its geometry alone.
+      if (s.mode === 'radius') return;
+      // Otherwise the two clicks of a double-click already added a duplicate
+      // vertex; drop it, then finish the shape.
       if (s.points.length > 1) s.undo();
       s.finish();
       v.scene.requestRender();
@@ -100,7 +104,49 @@ export function MeasureController() {
       });
     });
 
-    if (chain.length >= 2) {
+    if (mode === 'radius' && chain.length >= 2) {
+      // Centre + one rim point: a filled disc, its rim drawn as an explicit
+      // geodesic ring, and a dashed spoke showing the radius being measured.
+      const [center, rim] = chain;
+      const ring = circleRing(center, radiusM(center, rim));
+      const ringPositions = ring.map((p) => Cesium.Cartesian3.fromDegrees(p.lon, p.lat));
+      if (ringPositions.length > 2) {
+        ds.entities.add({
+          polygon: {
+            hierarchy: new Cesium.PolygonHierarchy(ringPositions),
+            material: FILL_COLOR,
+            outline: false,
+            arcType: Cesium.ArcType.GEODESIC,
+            height: 0,
+          },
+          polyline: {
+            positions: ringPositions,
+            width: 2.5,
+            material: LINE_COLOR,
+            clampToGround: false,
+            arcType: Cesium.ArcType.GEODESIC,
+          },
+        });
+      }
+      ds.entities.add({
+        polyline: {
+          positions: [center, rim].map((p) => Cesium.Cartesian3.fromDegrees(p.lon, p.lat)),
+          width: 2,
+          material: new Cesium.PolylineDashMaterialProperty({
+            color: LINE_COLOR,
+            dashLength: 12,
+          }),
+          clampToGround: false,
+          arcType: Cesium.ArcType.GEODESIC,
+        },
+      });
+      // The rim point isn't a placed vertex until the circle is closed, so
+      // draw it here to show what the spoke is reaching for.
+      ds.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(rim.lon, rim.lat, 0),
+        point: { pixelSize: 8, color: VERTEX_COLOR, outlineColor: LINE_COLOR, outlineWidth: 2 },
+      });
+    } else if (chain.length >= 2) {
       const positions = chain.map((p) => Cesium.Cartesian3.fromDegrees(p.lon, p.lat));
       if (mode === 'area') {
         // Close the ring back to the first point for the fill + outline.
