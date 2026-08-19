@@ -13,7 +13,8 @@ import {
 import { createPingPump, pingBillboard } from '../layers/ships/shipPing';
 import { isShipGroupId, type IncidentVessel } from './incidentShips';
 import { resetCamera } from '../cesium/flyTo';
-import { addLayerEntities } from './CrisisMapLayer';
+import { addLayerEntities, layerIdFromEntity } from './CrisisMapLayer';
+import { measureLayer } from './layerMeasure';
 import { shareLiveLayerLabel, type ShareLiveLayerId } from './shareLiveLayers';
 import { LAYER_LEGENDS } from '../layers/layerLegends';
 import type { DrawLayer } from './crisisStore';
@@ -140,6 +141,95 @@ function ShareDrawLayers({ layers }: { layers: DrawLayer[] }) {
   }, [viewer, sig]);
 
   return null;
+}
+
+// Click-to-identify for the drawn layers: tap a shape, see what it is and what
+// it measures. Read-only — the operator's version of this popup can open the
+// incident behind it, which is exactly what a share viewer must not do.
+function ShareLayerInspector({
+  layers,
+  picked,
+  onPick,
+}: {
+  layers: DrawLayer[];
+  picked: PickedShareLayer | null;
+  onPick: (p: PickedShareLayer | null) => void;
+}) {
+  const viewer = useCesiumViewer();
+  const layersRef = useRef(layers);
+  layersRef.current = layers;
+  const pickedRef = useRef(picked);
+  pickedRef.current = picked;
+
+  useEffect(() => {
+    if (!viewer) return;
+    const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    handler.setInputAction((e: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
+      // The measure tool owns the cursor while it's running; a click there is
+      // a vertex, not an inspection.
+      if (useMeasureStore.getState().active) return;
+      const hit = viewer.scene.pick(e.position);
+      const layerId = layerIdFromEntity((hit?.id as Cesium.Entity | undefined)?.id);
+      const layer = layerId ? layersRef.current.find((l) => l.id === layerId) : null;
+      if (layer) onPick({ layerId: layer.id, x: e.position.x, y: e.position.y });
+      else if (pickedRef.current) onPick(null);
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+    return () => handler.destroy();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewer]);
+
+  return null;
+}
+
+// The card itself, positioned inside the map frame at the click point.
+function ShareLayerCard({
+  layer,
+  at,
+  frame,
+  onClose,
+}: {
+  layer: DrawLayer;
+  at: { x: number; y: number };
+  frame: { width: number; height: number };
+  onClose: () => void;
+}) {
+  const measure = measureLayer(layer);
+  const CARD_W = 232;
+  // Keep the card inside the map frame however close to an edge the click was.
+  const left = Math.max(8, Math.min(at.x + 14, frame.width - CARD_W - 8));
+  const top = Math.max(8, Math.min(at.y - 8, Math.max(8, frame.height - 150)));
+
+  return (
+    <div
+      className="absolute z-30 overflow-hidden rounded-xl border border-white/15 bg-ink-950/95 shadow-2xl backdrop-blur-md"
+      style={{ left, top, width: CARD_W }}
+    >
+      <div className="h-1 w-full" style={{ background: layer.color }} />
+      <div className="flex items-start gap-2 p-3">
+        <div className="mt-0.5 h-3 w-3 shrink-0 rounded-full" style={{ background: layer.color }} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] font-semibold text-white/90">{layer.name}</div>
+          <div className="text-[10px] text-white/40">
+            {layer.type} · {layer.geometry === 'line' && layer.directional ? 'directional line' : layer.geometry}
+            {' · '}{layer.positions.length} pts
+          </div>
+          {measure.kind !== 'none' && (
+            <div className="mt-1 text-[11px] leading-snug text-accent/85">
+              {measure.primary}
+              {measure.detail && <div className="text-[10px] text-white/40">{measure.detail}</div>}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={onClose}
+          className="shrink-0 text-[12px] text-white/30 transition hover:text-white/60"
+          aria-label="Close"
+        >
+          <span aria-hidden="true">✕</span>
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // Pins for the property groups the incident team prescribed — the same markers
@@ -315,6 +405,13 @@ function zoomToPins(viewer: Cesium.Viewer, groups: LocationGroup[]): void {
   });
 }
 
+/** A drawn layer the viewer tapped, with the click point inside the map frame. */
+interface PickedShareLayer {
+  layerId: string;
+  x: number;
+  y: number;
+}
+
 const BASEMAP_ORDER: BasemapId[] = ['dark', 'light', 'satellite', 'topo'];
 
 interface Props {
@@ -348,6 +445,12 @@ export function CrisisShareGlobe({
   // never touches the incident's own layers.
   const measuring = useMeasureStore((s) => s.active);
   const toggleMeasure = useMeasureStore((s) => s.toggle);
+  // The drawn layer the viewer last tapped, if it still exists — a live
+  // snapshot update can delete the layer out from under an open card.
+  const [picked, setPicked] = useState<PickedShareLayer | null>(null);
+  const pickedLayer = picked ? drawLayers.find((l) => l.id === picked.layerId) ?? null : null;
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const frame = frameRef.current;
 
   // Leaving the page (or a live update swapping the globe out) must not strand
   // the tool in the store — it is a module singleton.
@@ -419,6 +522,7 @@ export function CrisisShareGlobe({
     <div>
       <CesiumContext.Provider value={viewer}>
       <div
+        ref={frameRef}
         className="relative h-[72vh] min-h-[440px] w-full overflow-hidden rounded-lg border border-white/10"
         // The non-none transform makes this box the containing block for
         // position:fixed descendants (hurricane tooltip, pick chooser), so
@@ -449,6 +553,7 @@ export function CrisisShareGlobe({
             <ShareDrawLayers layers={drawLayers} />
             <SharePinsLayer groups={pinGroups} />
             <ShareShipsLayer vessels={vessels} />
+            <ShareLayerInspector layers={drawLayers} picked={picked} onPick={setPicked} />
             <MeasureController />
             {live.has('radar') && <RadarTimeline />}
           </CesiumGlobe>
@@ -505,7 +610,7 @@ export function CrisisShareGlobe({
                   </div>
                 )}
                 <button
-                  onClick={toggleMeasure}
+                  onClick={() => { setPicked(null); toggleMeasure(); }}
                   aria-pressed={measuring}
                   className={`w-full rounded border px-2 py-1.5 text-[11px] font-medium transition ${
                     measuring
@@ -537,6 +642,14 @@ export function CrisisShareGlobe({
           </div>
 
           <PickChooser />
+          {picked && pickedLayer && frame && (
+            <ShareLayerCard
+              layer={pickedLayer}
+              at={picked}
+              frame={{ width: frame.clientWidth, height: frame.clientHeight }}
+              onClose={() => setPicked(null)}
+            />
+          )}
           {/* Anchored to the map frame (which is position:relative), so the
               readout sits over the globe rather than the whole report. */}
           <MeasureOverlay />

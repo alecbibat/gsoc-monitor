@@ -145,6 +145,52 @@ body {
   display: none;
 }
 
+/* Tap-to-inspect card for a drawn layer on the flat share map — same
+   dark-panel language as the globe's inspect card. */
+.leaflet-popup.crisis-map-popup .leaflet-popup-content-wrapper {
+  background: rgba(5, 7, 10, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  color: #fff;
+}
+.leaflet-popup.crisis-map-popup .leaflet-popup-content {
+  margin: 10px 12px;
+  min-width: 150px;
+}
+.leaflet-popup.crisis-map-popup .leaflet-popup-tip {
+  background: rgba(5, 7, 10, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+.leaflet-popup.crisis-map-popup a.leaflet-popup-close-button {
+  color: rgba(255, 255, 255, 0.35);
+}
+.crisis-map-popup-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+.crisis-map-popup-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  flex: none;
+}
+.crisis-map-popup-meta {
+  margin-top: 2px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.42);
+}
+.crisis-map-popup-measure {
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: rgba(61, 220, 255, 0.85);
+}
+
 /* ── Pins screensaver: Property Watch cluster + overview sitrep ───────────────
    Animation is additive signal (breathing severity, fire flicker, quake ping,
    ledger rotation), so it only runs for viewers who allow motion; the static

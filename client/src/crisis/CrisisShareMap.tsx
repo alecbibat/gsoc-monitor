@@ -2,7 +2,42 @@ import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { DrawLayer } from './crisisStore';
-import { measureLayer } from './layerMeasure';
+import { measureLayer, type LayerMeasure } from './layerMeasure';
+
+// Inspect card for one drawn layer. Built as DOM rather than an HTML string:
+// the name is incident-team input and must never be parsed as markup.
+function layerPopupContent(layer: DrawLayer, measure: LayerMeasure): HTMLElement {
+  const root = document.createElement('div');
+  root.className = 'crisis-map-popup-body';
+
+  const title = document.createElement('div');
+  title.className = 'crisis-map-popup-title';
+  const swatch = document.createElement('span');
+  swatch.className = 'crisis-map-popup-dot';
+  swatch.style.background = layer.color;
+  title.append(swatch, document.createTextNode(layer.name));
+  root.append(title);
+
+  const meta = document.createElement('div');
+  meta.className = 'crisis-map-popup-meta';
+  const shape = layer.geometry === 'line' && layer.directional ? 'directional line' : layer.geometry;
+  meta.textContent = `${layer.type} · ${shape} · ${layer.positions.length} pts`;
+  root.append(meta);
+
+  if (measure.kind !== 'none') {
+    const primary = document.createElement('div');
+    primary.className = 'crisis-map-popup-measure';
+    primary.textContent = measure.primary;
+    root.append(primary);
+    if (measure.detail) {
+      const detail = document.createElement('div');
+      detail.className = 'crisis-map-popup-meta';
+      detail.textContent = measure.detail;
+      root.append(detail);
+    }
+  }
+  return root;
+}
 
 // Interactive read-only map for the public share view. Renders ONLY the draw
 // layers belonging to the incident and opens centred on their combined extent.
@@ -139,13 +174,11 @@ export function CrisisShareMap({ layers }: { layers: DrawLayer[] }) {
         });
       }
 
-      // Same measurement the layer list and the globe label carry, so hovering
-      // a shape on the flat map answers "how far is that?" too.
+      // Hover names the shape; clicking (or tapping — phones have no hover,
+      // and most share-link viewers are on one) opens what it measures.
       const measure = measureLayer(layer);
-      shape.bindTooltip(
-        measure.kind === 'none' ? layer.name : `${layer.name} · ${measure.summary}`,
-        { direction: 'top', className: 'crisis-map-tip', sticky: true }
-      );
+      shape.bindTooltip(layer.name, { direction: 'top', className: 'crisis-map-tip', sticky: true });
+      shape.bindPopup(() => layerPopupContent(layer, measure), { className: 'crisis-map-popup' });
       shape.addTo(group);
     }
 

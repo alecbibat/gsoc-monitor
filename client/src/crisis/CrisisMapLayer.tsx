@@ -5,6 +5,17 @@ import { useCrisisStore, type DrawLayer } from './crisisStore';
 
 const ENTITY_PREFIX = 'crisis-layer-';
 
+/**
+ * The drawn layer a picked Cesium entity belongs to, or null when the pick
+ * landed on something else. Shared with the share-link globe, which does its
+ * own click-to-identify against the same entities.
+ */
+export function layerIdFromEntity(entityId: unknown): string | null {
+  return typeof entityId === 'string' && entityId.startsWith(ENTITY_PREFIX)
+    ? entityId.slice(ENTITY_PREFIX.length)
+    : null;
+}
+
 function centroid(layer: DrawLayer): { lon: number; lat: number } {
   const n = layer.positions.length;
   const sum = layer.positions.reduce(
@@ -148,10 +159,9 @@ export function CrisisMapLayer() {
       const st = useCrisisStore.getState();
       if (st.open || st.activeDrawLayerId) return; // not while editing or drawing
       const picked = viewer.scene.pick(e.position);
-      const ent = picked?.id as Cesium.Entity | undefined;
-      const entId = ent?.id;
-      if (typeof entId === 'string' && entId.startsWith(ENTITY_PREFIX)) {
-        st.setPickedLayer({ layerId: entId.slice(ENTITY_PREFIX.length), x: e.position.x, y: e.position.y });
+      const layerId = layerIdFromEntity((picked?.id as Cesium.Entity | undefined)?.id);
+      if (layerId) {
+        st.setPickedLayer({ layerId, x: e.position.x, y: e.position.y });
       } else if (st.pickedLayer) {
         st.setPickedLayer(null);
       }
