@@ -8,6 +8,7 @@ import { IcsOrgChart } from '../IcsOrgChart';
 import { ActionLog } from '../ActionLog';
 import { parseCoords } from '../parseCoords';
 import { SHARE_LIVE_LAYER_GROUPS, isShareLiveLayerId } from '../shareLiveLayers';
+import { measureLayer } from '../layerMeasure';
 import { LOCATION_GROUPS } from '../../layers/locations/locations';
 import {
   SHIP_GROUP_ICON, SHIP_GROUP_ID, SHIP_GROUP_NAME,
@@ -298,7 +299,9 @@ function MapLayersSection() {
             No map layers — create one above and draw on the live map
           </p>
         ) : (
-          drawLayers.map((layer) => (
+          drawLayers.map((layer) => {
+            const measure = measureLayer(layer);
+            return (
             <div key={layer.id} className="rounded border border-white/8 bg-white/5">
               <div className="flex items-center gap-2 px-3 py-2">
                 <div className="h-3 w-3 shrink-0 rounded-full" style={{ background: layer.color }} />
@@ -307,8 +310,17 @@ function MapLayersSection() {
                   <span className="ml-2 text-[9px] text-white/35">
                     {DRAW_LAYER_TYPES.find((t) => t.value === layer.type)?.label} · {geometryLabel(layer)}
                   </span>
-                  {layer.positions.length > 0 && (
+                  {/* Vertex count only when there is no measurement to carry
+                      it — the measurement line already ends in "N pts". */}
+                  {layer.positions.length > 0 && measure.kind === 'none' && (
                     <span className="ml-2 text-[9px] text-white/30">{layer.positions.length} pts</span>
+                  )}
+                  {/* What the shape measures — the reason it was drawn. */}
+                  {measure.kind !== 'none' && (
+                    <span className="block truncate text-[10px] text-accent/70" title={measure.summary}>
+                      {measure.primary}
+                      {measure.detail && <span className="text-white/35"> · {measure.detail}</span>}
+                    </span>
                   )}
                 </div>
                 {layer.geometry === 'line' && layer.directional && layer.positions.length >= 2 && (
@@ -361,7 +373,8 @@ function MapLayersSection() {
                 </div>
               )}
             </div>
-          ))
+            );
+          })
         )}
       </div>
     </section>

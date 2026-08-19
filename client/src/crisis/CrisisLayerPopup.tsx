@@ -1,6 +1,7 @@
 import { createPortal } from 'react-dom';
 import { useCrisisStore, incidentOfLayer, geometryLabel, type DrawLayerType } from './crisisStore';
 import { incidentStatusDef } from './taxonomy';
+import { measureLayer } from './layerMeasure';
 
 const TYPE_LABEL: Record<DrawLayerType, string> = {
   'fire-perimeter': 'Fire Perimeter',
@@ -27,6 +28,7 @@ export function CrisisLayerPopup() {
 
   if (!picked || !found) return null;
   const { inc, layer } = found;
+  const measure = measureLayer(layer);
 
   const left = Math.max(8, Math.min(picked.x + 14, window.innerWidth - POPUP_W - 8));
   const top = Math.max(8, Math.min(picked.y - 10, window.innerHeight - 200));
@@ -48,6 +50,12 @@ export function CrisisLayerPopup() {
             <div className="text-[10px] text-white/40">
               {TYPE_LABEL[layer.type]} · {geometryLabel(layer)} · {layer.positions.length} pts
             </div>
+            {measure.kind !== 'none' && (
+              <div className="text-[10px] text-accent/75">
+                {measure.primary}
+                {measure.detail && <span className="text-white/35"> · {measure.detail}</span>}
+              </div>
+            )}
           </div>
           <button
             onClick={() => setPickedLayer(null)}

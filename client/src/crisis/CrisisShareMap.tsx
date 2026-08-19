@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { DrawLayer } from './crisisStore';
+import { measureLayer } from './layerMeasure';
 
 // Interactive read-only map for the public share view. Renders ONLY the draw
 // layers belonging to the incident and opens centred on their combined extent.
@@ -138,7 +139,13 @@ export function CrisisShareMap({ layers }: { layers: DrawLayer[] }) {
         });
       }
 
-      shape.bindTooltip(layer.name, { direction: 'top', className: 'crisis-map-tip', sticky: true });
+      // Same measurement the layer list and the globe label carry, so hovering
+      // a shape on the flat map answers "how far is that?" too.
+      const measure = measureLayer(layer);
+      shape.bindTooltip(
+        measure.kind === 'none' ? layer.name : `${layer.name} · ${measure.summary}`,
+        { direction: 'top', className: 'crisis-map-tip', sticky: true }
+      );
       shape.addTo(group);
     }
 

@@ -9,6 +9,7 @@ import { useCrisisStore, geometryLabel, type Incident, type IcsRole, type Person
 import { incidentStatusDef, incidentTypeDef } from './taxonomy';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
 import { SHIP_GROUP_NAME, incidentShips, isShipGroupId } from './incidentShips';
+import { measureLayer } from './layerMeasure';
 import { usePrintStyles } from '../lib/printStyles';
 import { CorrectiveActions, FourQuestions, IcsSwimlane, ResponseMetrics, RosterTable } from './AarSections';
 
@@ -356,7 +357,11 @@ export function CrisisReportModal({ incident: incidentProp, onClose }: Props) {
           <div>
             <h2 className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-white/30">Map Layers</h2>
             <div className="space-y-3">
-              {incident.drawLayers.map((layer) => (
+              {incident.drawLayers.map((layer) => {
+                // The measurement is part of the record: "the exclusion zone
+                // was 4.2 km²" is exactly what an after-action reader needs.
+                const measure = measureLayer(layer);
+                return (
                 <div key={layer.id} className="overflow-hidden rounded-lg border border-white/8 bg-ink-950/60">
                   {layer.thumbnail && (
                     <img src={layer.thumbnail} alt={`${layer.name} map view`} className="h-40 w-full object-cover" />
@@ -365,10 +370,17 @@ export function CrisisReportModal({ incident: incidentProp, onClose }: Props) {
                     <div className="h-3 w-3 shrink-0 rounded-full" style={{ background: layer.color }} />
                     <span className="text-[11px] text-white/70">{layer.name}</span>
                     <span className="text-[9px] text-white/30">{layer.type} · {geometryLabel(layer)}</span>
+                    {measure.kind !== 'none' && (
+                      <span className="text-[9px] text-white/50">
+                        {measure.primary}
+                        {measure.detail && <span className="text-white/30"> · {measure.detail}</span>}
+                      </span>
+                    )}
                     <span className="ml-auto text-[9px] text-white/25">{layer.positions.length} points</span>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}

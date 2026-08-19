@@ -5,6 +5,7 @@ import { LOCATION_GROUPS, type LocationGroup } from '../layers/locations/locatio
 import { CrisisShareMap } from './CrisisShareMap';
 import { ShareWatchCard } from './ShareWatchCard';
 import { isShareLiveLayerId } from './shareLiveLayers';
+import { measureLayer } from './layerMeasure';
 import { incidentShipMmsis, incidentVessels, shipLocationGroup } from './incidentShips';
 import { useFleetPositions } from '../layers/ships/useFleetPositions';
 import { STATUS_TONE, lastSeenText, positionText, statusOf } from '../layers/ships/shipStatus';
@@ -745,6 +746,9 @@ export function CrisisShareView({ token }: { token: string }) {
               {drawLayers.map((layer) => {
                 const teamHidden = !layer.visible;
                 const shown = layer.visible && !offDraw.has(layer.id);
+                // Measured from the published geometry, so a viewer gets the
+                // distance or area without asking the incident team for it.
+                const measure = measureLayer(layer);
                 return (
                   <button
                     key={layer.id}
@@ -773,7 +777,14 @@ export function CrisisShareView({ token }: { token: string }) {
                       <span className="text-[10px] text-white/40">
                         {layer.type} · {layer.geometry === 'line' && layer.directional ? 'directional line' : layer.geometry}
                       </span>
-                      <span className="ml-auto text-[10px] text-white/35">{layer.positions.length} points</span>
+                      {measure.kind !== 'none' ? (
+                        <span className="ml-auto min-w-0 truncate text-[10px] text-accent/75" title={measure.summary}>
+                          {measure.primary}
+                          {measure.detail && <span className="text-white/35"> · {measure.detail}</span>}
+                        </span>
+                      ) : (
+                        <span className="ml-auto text-[10px] text-white/35">{layer.positions.length} points</span>
+                      )}
                       <span
                         className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest ${
                           teamHidden

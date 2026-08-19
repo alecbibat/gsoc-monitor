@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatBearing,
+  formatLatLon,
+  initialBearing,
   circleAreaM2,
   circleCircumferenceM,
   circleRing,
@@ -66,6 +69,27 @@ describe('circle measurements', () => {
   it('derives area and circumference from the radius', () => {
     expect(circleAreaM2(1000)).toBeCloseTo(Math.PI * 1e6, 0);
     expect(circleCircumferenceM(1000)).toBeCloseTo(2 * Math.PI * 1000, 6);
+  });
+});
+
+describe('bearing', () => {
+  it('reads due east as 090 and due north as 000', () => {
+    expect(initialBearing({ lon: 0, lat: 0 }, { lon: 1, lat: 0 })).toBeCloseTo(90, 5);
+    expect(initialBearing({ lon: 0, lat: 0 }, { lon: 0, lat: 1 })).toBeCloseTo(0, 5);
+    expect(initialBearing({ lon: 0, lat: 0 }, { lon: -1, lat: 0 })).toBeCloseTo(270, 5);
+  });
+
+  it('formats with a leading zero and a compass point', () => {
+    expect(formatBearing(72)).toBe('072° ENE');
+    expect(formatBearing(0)).toBe('000° N');
+    expect(formatBearing(359.6)).toBe('360° N'); // rounds to the same point
+  });
+});
+
+describe('positions', () => {
+  it('formats a lat/lon anyone can read back', () => {
+    expect(formatLatLon(20.8911, -156.47)).toBe('20.8911°N 156.4700°W');
+    expect(formatLatLon(-17.535, 61.82)).toBe('17.5350°S 61.8200°E');
   });
 });
 

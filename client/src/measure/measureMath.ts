@@ -107,6 +107,33 @@ export function circleCircumferenceM(radius: number): number {
   return 2 * Math.PI * radius;
 }
 
+/**
+ * Initial great-circle bearing from one point to another, in degrees from true
+ * north. What an evacuation arrow or an ingress route is actually pointing at.
+ */
+export function initialBearing(from: LngLat, to: LngLat): number {
+  const φ1 = toRad(from.lat);
+  const φ2 = toRad(to.lat);
+  const Δλ = toRad(to.lon - from.lon);
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return (((Math.atan2(y, x) * 180) / Math.PI) + 360) % 360;
+}
+
+const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+
+/** "072° ENE" — the number for plotting, the point for saying out loud. */
+export function formatBearing(deg: number): string {
+  const d = ((deg % 360) + 360) % 360;
+  return `${Math.round(d).toString().padStart(3, '0')}° ${COMPASS[Math.round(d / 22.5) % 16]}`;
+}
+
+/** "20.8911°N 156.4700°W" — a position anyone can read back over a radio. */
+export function formatLatLon(lat: number, lon: number): string {
+  return `${Math.abs(lat).toFixed(4)}°${lat >= 0 ? 'N' : 'S'} ${Math.abs(lon).toFixed(4)}°${lon >= 0 ? 'E' : 'W'}`;
+}
+
 const round0 = (n: number): string => n.toLocaleString('en-US', { maximumFractionDigits: 0 });
 
 // "1.23 km" / "840 m", with the imperial equivalent appended.
