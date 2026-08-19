@@ -176,6 +176,18 @@ export function CesiumGlobe({ children, onReady }: Props) {
       destination: Cesium.Cartesian3.fromDegrees(HOME_VIEW.lon, HOME_VIEW.lat, HOME_VIEW.height),
     });
 
+    // --- No entity camera-locking ----------------------------------------------
+    // Cesium's built-in double-click handler sets viewer.trackedEntity, which
+    // moves the camera into that entity's reference frame: the globe then spins
+    // around the ship (or pin) forever, and every camera.flyTo — Reset included
+    // — is overridden while tracking is on. Nothing here wants that mode, so
+    // drop the handler and clear the property if anything else ever sets it.
+    v.screenSpaceEventHandler.removeInputAction(Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+    v.trackedEntity = undefined;
+    const untrack = v.trackedEntityChanged.addEventListener(() => {
+      if (v!.trackedEntity !== undefined) v!.trackedEntity = undefined;
+    });
+
     // --- Make zoom and rotate distinct gestures --------------------------------
     // Cesium's default wheel/pinch zoom steers toward the cursor / pinch
     // midpoint, so zooming visibly rotates the globe whenever the pointer is
@@ -324,6 +336,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
       clearTimeout(decay);
       if (recoverTimerRef.current) clearTimeout(recoverTimerRef.current);
       v.canvas.removeEventListener('wheel', onWheel);
+      untrack();
       canvas.removeEventListener('webglcontextlost', onContextLost);
       canvas.removeEventListener('webglcontextrestored', onContextRestored);
       onReady?.(null);
