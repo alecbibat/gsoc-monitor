@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useCrisisStore, type Incident } from './crisisStore';
+import { useCrisisStore, entryTypeOf, type Incident } from './crisisStore';
 import {
   INCIDENT_CATEGORIES, incidentStatusDef, incidentTypeDef, incidentTypesInCategory,
   type IncidentType,
@@ -90,8 +90,9 @@ function IncidentCard({ incident }: { incident: Incident }) {
   const sb = incidentStatusDef(incident.incidentStatus);
   const td = incidentTypeDef(incident.incidentType);
   const assigned = incident.assignments.filter((a) => !a.endedAt).length;
-  const actions  = incident.actionLog.filter((e) => e.entryType === 'action').length;
-  const events   = incident.actionLog.filter((e) => e.entryType === 'event').length;
+  // Operator-logged counts: system (auto) entries class as info, not events.
+  const actions  = incident.actionLog.filter((e) => entryTypeOf(e) === 'action').length;
+  const events   = incident.actionLog.filter((e) => entryTypeOf(e) === 'event').length;
 
   return (
     <button
@@ -178,8 +179,8 @@ function ArchivedCard({
   const removeIncident = useCrisisStore((s) => s.removeIncident);
 
   const assigned = incident.assignments.filter((a) => !a.endedAt).length;
-  const actions  = incident.actionLog.filter((e) => e.entryType === 'action').length;
-  const events   = incident.actionLog.filter((e) => e.entryType === 'event').length;
+  const actions  = incident.actionLog.filter((e) => entryTypeOf(e) === 'action').length;
+  const events   = incident.actionLog.filter((e) => entryTypeOf(e) === 'event').length;
 
   return (
     <div className="flex flex-col rounded-xl border border-white/8 bg-ink-900/50 p-4">

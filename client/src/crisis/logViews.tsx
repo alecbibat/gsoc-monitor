@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { ActionEntryType, ActionLogEntry } from './crisisStore';
+import { entryTypeOf, type ActionEntryType, type ActionLogEntry } from './crisisStore';
 import { ZoomableImage } from './ImageLightbox';
 
 // Pieces of the Actions & Events Log shared between the incident editor
@@ -19,9 +19,9 @@ export const STRIP_STYLES: Record<ActionEntryType, string> = {
   info:   'bg-cyan-400/60',
 };
 
-// Share snapshots are stored as opaque JSON and outlive deploys — entries
-// published before entry types existed have no entryType.
-export const entryTypeOf = (e: ActionLogEntry): ActionEntryType => e.entryType ?? 'action';
+// Display type of an entry (system entries read as info) — defined next to
+// the data model, re-exported here alongside the styles keyed by it.
+export { entryTypeOf };
 
 export function fmtLogTimestamp(iso: string) {
   try {

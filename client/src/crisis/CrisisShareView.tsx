@@ -10,7 +10,7 @@ import { incidentShipMmsis, incidentVessels, shipLocationGroup } from './inciden
 import { useFleetPositions } from '../layers/ships/useFleetPositions';
 import { STATUS_TONE, lastSeenText, positionText, statusOf } from '../layers/ships/shipStatus';
 import { ImageLightbox, ZoomableImage } from './ImageLightbox';
-import { TYPE_STYLES, TimelineView, LogShowMore, DEFAULT_LOG_LIMIT } from './logViews';
+import { TYPE_STYLES, TimelineView, LogShowMore, DEFAULT_LOG_LIMIT, entryTypeOf } from './logViews';
 // Share snapshots outlive deploys, so status/type may arrive as retired ids —
 // the def lookups normalize them (contained → recovery, chemical → HazMat, …).
 import { incidentStatusDef, incidentTypeDef } from './taxonomy';
@@ -613,9 +613,11 @@ export function CrisisShareView({ token }: { token: string }) {
 
         {/* Action log */}
         {data.actionLog.length > 0 && (() => {
-          const infoCount = data.actionLog.filter((e) => e.entryType === 'info').length;
+          // Auto-generated (system) entries class as info here, so the
+          // hide-info toggle folds the state-change narration away too.
+          const infoCount = data.actionLog.filter((e) => entryTypeOf(e) === 'info').length;
           const visibleLog = hideInfo
-            ? data.actionLog.filter((e) => e.entryType !== 'info')
+            ? data.actionLog.filter((e) => entryTypeOf(e) !== 'info')
             : data.actionLog;
           const sortedLog = [...visibleLog].sort(
             (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
@@ -666,8 +668,8 @@ export function CrisisShareView({ token }: { token: string }) {
                   <div className="divide-y divide-white/6">
                     {shownLog.map((entry) => (
                       <div key={entry.id} className="flex flex-wrap items-start gap-x-3 gap-y-1 px-3 py-3 sm:flex-nowrap sm:px-4">
-                        <span className={`mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-widest ${TYPE_STYLES[entry.entryType ?? 'action']}`}>
-                          {entry.entryType ?? 'action'}
+                        <span className={`mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-widest ${TYPE_STYLES[entryTypeOf(entry)]}`}>
+                          {entryTypeOf(entry)}
                         </span>
                         <span className="shrink-0 text-[11px] text-white/45 sm:w-36">{fmtTs(entry.timestamp)}</span>
                         <p className="w-full text-[13px] leading-snug text-white/80 sm:w-auto sm:flex-1">{entry.description || <span className="text-white/30 italic">No description</span>}</p>

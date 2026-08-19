@@ -1,4 +1,4 @@
-import type { ActionLogEntry, Incident, PersonnelAssignment } from './crisisStore';
+import { entryTypeOf, type ActionLogEntry, type Incident, type PersonnelAssignment } from './crisisStore';
 
 // ── AAR response metrics (Track 6) ───────────────────────────────────────────
 // Pure computations over the incident record — every number here must be
@@ -22,6 +22,7 @@ export interface AarMetrics {
    * role and ignores same-person re-assignment. */
   commandTransfers: number;
   logTotal: number;
+  /** By displayed type — system (auto) entries class as info, matching the log views. */
   logByType: { action: number; event: number; info: number };
   operatorEntries: number;  // manually written entries (non-system)
 }
@@ -87,7 +88,7 @@ export function computeAarMetrics(inc: Incident): AarMetrics {
   const logByType = { action: 0, event: 0, info: 0 };
   let operatorEntries = 0;
   for (const e of inc.actionLog as ActionLogEntry[]) {
-    logByType[e.entryType ?? 'action'] += 1;
+    logByType[entryTypeOf(e)] += 1;
     if (!e.system) operatorEntries += 1;
   }
 

@@ -5,7 +5,7 @@
 
 import { lazy, Suspense, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { useCrisisStore, geometryLabel, type Incident, type IcsRole, type PersonnelAssignment } from './crisisStore';
+import { useCrisisStore, geometryLabel, entryTypeOf, type Incident, type IcsRole, type PersonnelAssignment } from './crisisStore';
 import { incidentStatusDef, incidentTypeDef } from './taxonomy';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
 import { SHIP_GROUP_NAME, incidentShips, isShipGroupId } from './incidentShips';
@@ -318,8 +318,8 @@ export function CrisisReportModal({ incident: incidentProp, onClose }: Props) {
                 .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
                 .map((entry) => (
                   <div key={entry.id} className="flex items-start gap-3 px-4 py-3">
-                    <span className={`print-color mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-widest ${ENTRY_STYLES[entry.entryType ?? 'action']}`}>
-                      {entry.entryType ?? 'action'}
+                    <span className={`print-color mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-widest ${ENTRY_STYLES[entryTypeOf(entry)]}`}>
+                      {entryTypeOf(entry)}
                     </span>
                     <span className="w-36 shrink-0 text-[10px] text-white/30">
                       {fmtTs(entry.timestamp)}

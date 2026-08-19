@@ -88,6 +88,17 @@ export interface ActionLogEntry {
   meta?: Record<string, string>;
 }
 
+/**
+ * How an entry reads wherever a type is displayed, filtered or counted.
+ * Auto-generated (system) entries narrate state changes, not operator events,
+ * so they class as `info` — regardless of the stored entryType (`event` on
+ * every system entry ever minted, including those in published share
+ * snapshots, which outlive deploys). Entries published before entry types
+ * existed have no entryType at all and read as `action`.
+ */
+export const entryTypeOf = (e: ActionLogEntry): ActionEntryType =>
+  e.system ? 'info' : e.entryType ?? 'action';
+
 // ICS complexity type — Type 5 (initial/minor) escalating to Type 1. Optional:
 // unset means nobody has made the call yet.
 export type ComplexityType = 'type-5' | 'type-4' | 'type-3' | 'type-2' | 'type-1';
