@@ -161,7 +161,7 @@ const STATE_WORD: Record<FeedResult | 'pending', { word: string; cls: string }> 
   pending: { word: 'SCAN', cls: 'risk-scan-wait text-amber-300/70' },
   ok: { word: 'LOCK', cls: 'text-accent-ok/90' },
   failed: { word: 'DOWN', cls: 'text-accent-danger/90' },
-  skipped: { word: 'SKIP', cls: 'text-white/30' },
+  skipped: { word: 'SKIP', cls: 'text-white/45' },
 };
 
 function Console({ feeds, elapsed }: { feeds: FeedProgress; elapsed: number }) {
@@ -176,7 +176,7 @@ function Console({ feeds, elapsed }: { feeds: FeedProgress; elapsed: number }) {
         <span className="font-mono text-[10px] tabular-nums text-white/45">{done}/{total}</span>
       </div>
 
-      <div className="mt-2 h-[3px] overflow-hidden rounded-full bg-white/8">
+      <div className="mt-2 h-[3px] overflow-hidden rounded-full bg-white/10">
         <div
           className="h-full rounded-full bg-gradient-to-r from-accent to-amber-400 transition-[width] duration-500 ease-out"
           style={{ width: `${(done / total) * 100}%` }}
@@ -191,7 +191,7 @@ function Console({ feeds, elapsed }: { feeds: FeedProgress; elapsed: number }) {
             <li key={f.id} className="risk-scan-row flex items-center gap-2.5" style={{ animationDelay: `${i * 60}ms` }}>
               <StatusDot result={result} />
               <span className={`text-[11px] leading-none ${result ? 'text-white/75' : 'text-white/45'}`}>{f.label}</span>
-              <span className="ml-auto font-mono text-[8px] tracking-wider text-white/25">{f.source}</span>
+              <span className="ml-auto font-mono text-[8px] tracking-wider text-white/40">{f.source}</span>
               <span className={`w-9 text-right font-mono text-[8px] font-bold tracking-widest ${state.cls}`}>{state.word}</span>
             </li>
           );
@@ -205,12 +205,16 @@ const fmtCoord = (v: number, pos: string, neg: string) =>
   `${Math.abs(v).toFixed(3)}° ${v >= 0 ? pos : neg}`;
 
 export function RiskScanLoading({ target, feeds }: { target: RiskTarget; feeds: FeedProgress }) {
+  const pending = WILDFIRE_FEEDS.find((f) => feeds[f.id] === undefined);
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
+    // Keyed on target identity: open() always creates a fresh target object,
+    // so retargeting mid-load restarts the clock without a remount.
+    setElapsed(0);
     const t0 = performance.now();
     const id = window.setInterval(() => setElapsed((performance.now() - t0) / 1000), 100);
     return () => window.clearInterval(id);
-  }, []);
+  }, [target]);
 
   return (
     <div
@@ -224,7 +228,7 @@ export function RiskScanLoading({ target, feeds }: { target: RiskTarget; feeds: 
             <div className="text-[10px] uppercase tracking-[0.2em] text-white/60">
               {target.groupIcon} {target.name}
             </div>
-            <div className="mt-1 text-[9px] tabular-nums text-white/30">
+            <div className="mt-1 text-[9px] tabular-nums text-white/40">
               {fmtCoord(target.lat, 'N', 'S')} · {fmtCoord(target.lon, 'E', 'W')} · rings {RISK_RINGS.map((r) => r.miles).join('/')} mi
             </div>
           </div>
@@ -232,8 +236,14 @@ export function RiskScanLoading({ target, feeds }: { target: RiskTarget; feeds: 
         <Console feeds={feeds} elapsed={elapsed} />
       </div>
 
-      <p className="font-mono text-[10px] text-white/40">
-        Cross-referencing wildfire feeds around <span className="text-white/70">{target.name}</span>
+      {/* Live terminal line: names whatever the assembly is actually waiting
+          on right now (first pending feed in manifest order). */}
+      <p className="font-mono text-[10px] text-white/45">
+        {pending === undefined
+          ? 'All feeds settled — compositing report'
+          : pending.id === 'maps'
+            ? `Rendering exposure maps — ${pending.source}`
+            : `Acquiring ${pending.label.toLowerCase()} — ${pending.source}`}
         <span className="risk-scan-cursor ml-1.5 inline-block h-[11px] w-[5px] translate-y-[2px] bg-amber-300/80" />
       </p>
     </div>

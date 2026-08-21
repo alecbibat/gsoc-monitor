@@ -138,6 +138,13 @@ export async function assembleWildfireReport(
     target.lon >= LANDFIRE_CONUS_RECT.west && target.lon <= LANDFIRE_CONUS_RECT.east &&
     target.lat >= LANDFIRE_CONUS_RECT.south && target.lat <= LANDFIRE_CONUS_RECT.north;
 
+  // HMS analysts cover North America only — outside that domain an empty
+  // point-in-polygon result is absence of coverage, not a verified clear sky.
+  const HMS_RECT = { west: -170, east: -50, south: 5, north: 72 };
+  const inHmsCoverage =
+    target.lon >= HMS_RECT.west && target.lon <= HMS_RECT.east &&
+    target.lat >= HMS_RECT.south && target.lat <= HMS_RECT.north;
+
   // Reports each feed's outcome to the loading screen the moment it settles.
   // `ok` mirrors the section's own unavailable logic for feeds that resolve
   // with an in-band error (fetchHotspotsNearPins / fetchWildfires / smoke
@@ -154,6 +161,7 @@ export async function assembleWildfireReport(
     });
 
   if (!inConus) onFeed?.('fuel', 'skipped');
+  if (!inHmsCoverage) onFeed?.('smoke', 'skipped');
 
   const [hotspotsRes, namedRes, alertsRes, countiesRes, outlookRes, fuelRes, windRes, dailyRes, smokeRes, lightningRes, wpcQpfRes] = await Promise.all([
     track('hotspots', fetchHotspotsNearPins(MAX_RING_MI * MILES_TO_M), (v) => v.hotspots !== null),
@@ -162,11 +170,16 @@ export async function assembleWildfireReport(
     track('counties', loadCounties()),
     track('outlook', api.fireOutlook()),
     inConus
-      ? track('fuel', analyzeFuelZone({ lon: target.lon, lat: target.lat }, 3 * MILES_TO_M))
+      ? track('fuel', analyzeFuelZone({ lon: target.lon, lat: target.lat }, 3 * MILES_TO_M),
+          // Mirrors the section: the empty sentinel (totalPixels 0) is a
+          // coverage hole the report calls unavailable, not a lock.
+          (v) => v.risk !== null || v.totalPixels > 0)
       : Promise.resolve({ value: null, error: 'outside CONUS' } as FeedOutcome<Awaited<ReturnType<typeof analyzeFuelZone>>>),
     track('wind', api.windForecast(target.lat, target.lon)),
     track('daily', api.weatherDaily(target.lat, target.lon)),
-    track('smoke', api.smoke(), (v) => !(v.error != null && v.polygons.length === 0)),
+    inHmsCoverage
+      ? track('smoke', api.smoke(), (v) => !(v.error != null && v.polygons.length === 0))
+      : Promise.resolve({ value: null, error: 'outside HMS coverage' } as FeedOutcome<Awaited<ReturnType<typeof api.smoke>>>),
     // Radius-filtered on the server so local strikes arrive unthinned — a
     // global 24 h window would be stride-sampled to ~nothing near any point.
     track('lightning', api.lightningHistory(1440, { lat: target.lat, lon: target.lon, radiusMi: 130 })),
@@ -440,12 +453,6 @@ export async function assembleWildfireReport(
   }
 
   // ── Smoke (NOAA HMS analyst-drawn plumes) ─────────────────────────────────
-  // HMS analysts cover North America only — outside that domain an empty
-  // point-in-polygon result is absence of coverage, not a verified clear sky.
-  const HMS_RECT = { west: -170, east: -50, south: 5, north: 72 };
-  const inHmsCoverage =
-    target.lon >= HMS_RECT.west && target.lon <= HMS_RECT.east &&
-    target.lat >= HMS_RECT.south && target.lat <= HMS_RECT.north;
   const smoke: WildfireReportData['smoke'] = {};
   const smokePolys: SmokePolygon[] = [];
   {
