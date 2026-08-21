@@ -524,6 +524,13 @@ export function incidentOfLayer(s: CrisisState, layerId: string): Incident | nul
   return s.incidents.find((i) => i.drawLayers.some((l) => l.id === layerId)) ?? null;
 }
 
+// Incidents currently open as Active in crisis response. Archived (stood-down)
+// incidents never count, even if legacy data left their stored status 'active'
+// — that combination kept the ⚠ CRISIS tab badge lit forever. Single source of
+// truth for the tab title (TitleBadge) and the top-bar crisis button.
+export const selectActiveCrisisCount = (s: CrisisState): number =>
+  s.incidents.filter((i) => i.incidentStatus === 'active' && !i.archivedAt).length;
+
 // Patch the active incident immutably.
 function patchActive(s: CrisisState, fn: (inc: Incident) => Incident): Partial<CrisisState> {
   if (!s.activeIncidentId) return {};
