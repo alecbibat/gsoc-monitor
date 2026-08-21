@@ -16,7 +16,11 @@ export function RiskReportHost() {
     // under B's header. Identity-check the store's CURRENT target too.
     const stillCurrent = () =>
       !cancelled && useRiskReportStore.getState().target === target;
-    assembleWildfireReport(target)
+    assembleWildfireReport(target, (id, result) => {
+      // Feed outcomes stream in mid-assembly; the same identity guard keeps a
+      // stale run from painting its progress under a newer target's header.
+      if (stillCurrent()) useRiskReportStore.getState().setFeedResult(id, result);
+    })
       .then((data) => { if (stillCurrent()) useRiskReportStore.getState().setData(data); })
       .catch((e) => {
         if (stillCurrent()) {

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useRiskReportStore } from './riskReportStore';
 import { RISK_LEVELS, RISK_RINGS, type RiskLevel, type SectionResult, type WildfireReportData } from './riskTypes';
@@ -7,6 +7,7 @@ import { FUEL_GROUPS, rgbCss } from '../layers/fuel/fbfm40';
 import { OUTLOOK_LEGEND } from '../layers/fireOutlook/fireOutlookMeta';
 import { QPF_LEGEND } from '../layers/precip/precipStore';
 import { usePrintStyles } from '../lib/printStyles';
+import { RiskScanLoading } from './RiskScanLoading';
 
 // Plumes are drawn as hatching + outlines so the satellite imagery (the smoke
 // itself) stays visible — the legend mirrors that with hatched swatches.
@@ -464,8 +465,18 @@ function ReportBody({ data }: { data: WildfireReportData }) {
 }
 
 export function RiskReportView() {
-  const { target, status, data, error, close } = useRiskReportStore();
+  const { target, status, data, error, close, feeds } = useRiskReportStore();
   usePrintStyles('risk-report-root');
+
+  // Exit beat: hold the acquisition screen briefly once assembly finishes so
+  // the console is seen reaching 12/12 before the report fades in — a hard
+  // cut mid-animation reads as a glitch, not a completion.
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    if (status !== 'ready') { setSettled(false); return; }
+    const id = window.setTimeout(() => setSettled(true), 450);
+    return () => window.clearTimeout(id);
+  }, [status]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
@@ -509,13 +520,8 @@ export function RiskReportView() {
         </div>
       </div>
 
-      {status === 'loading' && (
-        <div className="flex h-[60vh] items-center justify-center">
-          <div className="text-center">
-            <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-accent" />
-            <p className="mt-3 text-[12px] text-white/40">Cross-referencing wildfire feeds around {target.name}…</p>
-          </div>
-        </div>
+      {(status === 'loading' || (status === 'ready' && !settled)) && (
+        <RiskScanLoading target={target} feeds={feeds} />
       )}
       {status === 'error' && (
         <div className="flex h-[60vh] items-center justify-center">
@@ -539,7 +545,11 @@ export function RiskReportView() {
         <tbody className="print-page-tbody block">
           <tr className="block">
             <td className="block">
-              {status === 'ready' && data && <ReportBody data={data} />}
+              {status === 'ready' && settled && data && (
+                <div className="watch-ledger-in">
+                  <ReportBody data={data} />
+                </div>
+              )}
             </td>
           </tr>
         </tbody>

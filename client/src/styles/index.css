@@ -236,3 +236,59 @@ body {
   from { opacity: 0; transform: translateY(3px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* ── Wildfire risk-report loading: radar scope + acquisition console ──────────
+   Same contract as the screensaver block above: motion is additive signal
+   (sweep rotation, blip ignition, console boot-in, cursor blink) and only
+   runs for viewers who allow it — static colors and the SCAN/LOCK/DOWN/SKIP
+   state words carry the same information without it. Blip delays are negative
+   multiples of the sweep period so each ember flashes exactly as the beam
+   crosses its bearing, from the first frame. */
+@media (prefers-reduced-motion: no-preference) {
+  .risk-scan-sweep {
+    animation: risk-scan-rotate 3.6s linear infinite;
+  }
+  .risk-scan-dial {
+    animation: risk-scan-rotate 32s linear infinite reverse;
+  }
+  .risk-scan-blip {
+    animation: risk-scan-blip 3.6s linear infinite;
+  }
+  .risk-scan-echo {
+    animation: pulse-ring 2.4s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+  }
+  .risk-scan-row {
+    opacity: 0;
+    animation: risk-scan-row-in 0.45s ease-out forwards;
+  }
+  .risk-scan-wait {
+    animation: watch-pulse 1.5s ease-in-out infinite;
+  }
+  .risk-scan-lock {
+    animation: risk-scan-lock 0.55s cubic-bezier(0.2, 0.8, 0.3, 1);
+  }
+  .risk-scan-cursor {
+    animation: risk-scan-cursor 1.1s steps(1) infinite;
+  }
+}
+@keyframes risk-scan-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes risk-scan-blip {
+  0% { opacity: 1; }
+  50% { opacity: 0; }
+  100% { opacity: 0; }
+}
+@keyframes risk-scan-row-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes risk-scan-lock {
+  0% { transform: scale(2.4); filter: brightness(1.8); }
+  100% { transform: scale(1); filter: none; }
+}
+@keyframes risk-scan-cursor {
+  0%, 55% { opacity: 1; }
+  56%, 100% { opacity: 0; }
+}
