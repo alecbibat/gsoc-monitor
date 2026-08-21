@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import type { ShareLiveLayerId } from './shareLiveLayers';
 import { normalizeIncidentFields, incidentStatusDef, type IncidentStatus, type IncidentType } from './taxonomy';
+import type { ChecklistStateMap } from './checklistTemplate';
+import type { IntakeAnswers } from './intakeTemplate';
 import { incidentShipMmsis, shipListText } from './incidentShips';
 import { useAuthStore } from '../auth/authStore';
 
@@ -10,7 +12,7 @@ import { useAuthStore } from '../auth/authStore';
 // source of truth for ids, labels, colors and lifecycle). Re-exported here so
 // existing importers keep working.
 export type { IncidentStatus, IncidentType } from './taxonomy';
-export type CrisisTab = 'situation-report';
+export type CrisisTab = 'situation-report' | 'checklists' | 'intake';
 export type ActionEntryType = 'action' | 'event' | 'info';
 
 // Live save status, surfaced in the incident header. Transient UI state only —
@@ -197,6 +199,17 @@ export interface Incident {
   // locationGroupId so a shore-side incident can still involve ships (and the
   // fleet itself can be the incident's property — see SHIP_GROUP_ID).
   shipMmsis?: string[];
+  // ICS role checklist state: SPARSE map of template item id → last toggle
+  // ({ checked, at, by }); untouched items have no entry. Like the action log
+  // it is EXCLUDED from blob sync (syncCanon/IncidentSync) — every toggle goes
+  // through the per-item endpoints so concurrent responders (and share-link
+  // viewers) can't overwrite each other. Optional because incidents persisted
+  // before this feature lack the key.
+  checklists?: ChecklistStateMap;
+  // Intake questionnaire answers: SPARSE map of question id → answer text.
+  // Ordinary typed content — rides the incident blob like executiveSummary.
+  // Optional because incidents persisted before this feature lack the key.
+  intake?: IntakeAnswers;
   shareToken: string | null;  // legacy — kept for backwards compat with persisted data
   shareLinks: ShareLink[];    // all share links ever created for this incident
   archivedAt?: string | null; // set when the incident is stood down; null/absent = active
@@ -249,6 +262,11 @@ export interface CrisisPublicState {
   locationGroupId?: string | null;
   extraLocationGroups?: string[];
   shipMmsis?: string[];
+  // ICS checklist state + intake answers (optional: pre-feature snapshots lack
+  // them). Server-side, the checklist key on a snapshot is owned by the toggle
+  // endpoints — the PATCH shallow-merge deliberately skips it (crisis.ts).
+  checklists?: ChecklistStateMap;
+  intake?: IntakeAnswers;
   publishedAt: string;
   lastUpdated: string;
 }
@@ -379,6 +397,8 @@ function newIncident(type: IncidentType = 'other'): Incident {
     locationGroupId: null,
     extraLocationGroups: [],
     shipMmsis: [],
+    checklists: {},
+    intake: {},
     shareToken: null,
     shareLinks: [],
   };
@@ -453,6 +473,14 @@ interface CrisisState {
   addActionEntry: (type?: ActionEntryType) => string;
   updateActionEntry: (id: string, patch: Partial<Pick<ActionLogEntry, 'description' | 'attachmentName' | 'attachmentData' | 'entryType'>>) => void;
   removeActionEntry: (id: string) => void;
+
+  // ICS checklists — optimistic local toggle (the sync layer posts it through
+  // the per-item endpoint; see checklistSync.ts) + server-authoritative apply.
+  toggleChecklistItem: (itemId: string, checked: boolean) => void;
+  applyChecklistState: (incidentId: string, checklists: ChecklistStateMap) => void;
+
+  // Intake questionnaire
+  setIntakeAnswer: (questionId: string, answer: string) => void;
 
   // AAR — keyed by explicit incident id (the report opens from the archive
   // list, where no incident is "active"), and NOT gated on archived state.
@@ -831,6 +859,38 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
       removeActionEntry: (id) =>
         set((s) => patchActiveEditable(s, (inc) => ({ ...inc, actionLog: inc.actionLog.filter((e) => e.id !== id) }))),
 
+      // Optimistic check/uncheck with a local timestamp; the sync layer's POST
+      // comes back with the server-stamped map and replaces this via
+      // applyChecklistState. Excluded from serverCanon, so this never schedules
+      // a blob PUT. patchActiveEditable keeps archived incidents frozen.
+      toggleChecklistItem: (itemId, checked) =>
+        set((s) => patchActiveEditable(s, (inc) => ({
+          ...inc,
+          checklists: {
+            ...(inc.checklists ?? {}),
+            [itemId]: { checked, at: new Date().toISOString(), by: currentActor() },
+          },
+        }))),
+
+      // Server-authoritative checklist state (toggle responses, SSE merges).
+      // patchById, not patchActiveEditable: the response must land even if the
+      // operator has navigated away from the incident meanwhile.
+      applyChecklistState: (incidentId, checklists) =>
+        set((s) => patchById(s, incidentId, (inc) => ({ ...inc, checklists }))),
+
+      setIntakeAnswer: (questionId, answer) =>
+        set((s) => patchActiveEditable(s, (inc) => {
+          const cur = inc.intake ?? {};
+          // Keep the map sparse: clearing a field removes the key, so the
+          // share page's "at least one answer" gate stays truthful.
+          if (!answer) {
+            if (!(questionId in cur)) return inc;
+            const { [questionId]: _gone, ...rest } = cur;
+            return { ...inc, intake: rest };
+          }
+          return { ...inc, intake: { ...cur, [questionId]: answer } };
+        })),
+
       // AAR content rides the incident blob (synced by the generic watcher,
       // archived incidents included) and stays out of extractPublicState.
       updateAar: (incidentId, patch) =>
@@ -984,6 +1044,11 @@ export function extractPublicState(inc: Incident, publishedAt?: string): CrisisP
     // Vessel identities only — share viewers read live positions from the
     // public AIS endpoint, so a snapshot never carries a stale one.
     shipMmsis: incidentShipMmsis(inc.shipMmsis),
+    // Checklist state is included for completeness (new-link publishes), but
+    // the server PATCH deliberately ignores this key on live snapshots — the
+    // per-item toggle endpoints own it (see crisis.ts).
+    checklists: inc.checklists ?? {},
+    intake: inc.intake ?? {},
     publishedAt: publishedAt ?? new Date().toISOString(),
     lastUpdated: new Date().toISOString(),
   };

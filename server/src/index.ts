@@ -33,6 +33,7 @@ import crisisRouter from './routes/crisis';
 import authRouter from './routes/auth';
 import adminRouter from './routes/admin';
 import incidentsRouter from './routes/incidents';
+import iapRouter from './routes/iap';
 import watchlistRouter from './routes/watchlist';
 import intelRouter from './routes/intel';
 import { initIntelStream } from './intel/service';
@@ -96,6 +97,9 @@ function main() {
   // body from synchronously parsing 50 MB of JSON on the single dyno.
   app.use('/api/crisis', express.json({ limit: '50mb' }));
   app.use('/api/incidents', express.json({ limit: '5mb' }));
+  // IAP uploads arrive as base64 JSON from the admin panel (15 MB PDF cap
+  // -> ~20 MB encoded).
+  app.use('/api/iap', express.json({ limit: '25mb' }));
   app.use(express.json({ limit: '1mb' }));
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
@@ -106,6 +110,9 @@ function main() {
 
   // Incident CRUD (requireAuth applied inside router)
   app.use('/api/incidents', incidentsRouter);
+
+  // Incident Action Plan document library (auth/admin applied per-route)
+  app.use('/api/iap', iapRouter);
 
   // Team-shared OSINT watchlist CRUD (requireAuth applied inside router)
   app.use('/api/watchlist', watchlistRouter);

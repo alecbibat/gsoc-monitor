@@ -1,14 +1,17 @@
 import { useEffect, useRef } from 'react';
 import { useAuthStore } from '../auth/authStore';
 import { useCrisisStore, useActiveIncident, extractPublicState, type Incident } from './crisisStore';
-// serverCanon normalizes before serializing and EXCLUDES the action log.
-// Server-origin blobs may carry retired taxonomy values that the store
-// rewrites on ingest — canonicalizing both sides identically is what keeps
-// that rewrite from registering as a local edit (see syncCanon.ts for why a
-// phantom edit here is dangerous). The log is excluded because it syncs
-// through its own append-only endpoints (see logSync.ts), never via blob PUT.
-import { entryCanon, mergeActionLogs, serverCanon } from './syncCanon';
+// serverCanon normalizes before serializing and EXCLUDES the action log and
+// the checklist map. Server-origin blobs may carry retired taxonomy values
+// that the store rewrites on ingest — canonicalizing both sides identically
+// is what keeps that rewrite from registering as a local edit (see
+// syncCanon.ts for why a phantom edit here is dangerous). The log and the
+// checklists are excluded because they sync through their own per-entry
+// endpoints (logSync.ts / checklistSync.ts), never via blob PUT.
+import { entryCanon, mergeActionLogs, serverCanon, stableStringify } from './syncCanon';
 import * as logSync from './logSync';
+import { inflightChecklistIds, mergeChecklists } from './checklistSync';
+import type { ChecklistStateMap } from './checklistTemplate';
 
 // "Saved" is only truthful when the log engine is also idle (and vice versa).
 logSync.registerBlobIdleCheck(() => pending.size === 0);
@@ -30,11 +33,12 @@ function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
   const isCreate = method === 'POST';
   serverState.set(incident.id, serverCanon(incident)); // optimistic baseline
   setSync('saving');
-  // Updates omit the action log: the server preserves its own copy on blob
-  // writes (log changes travel through the append endpoints), so sending it
-  // would only waste the 5 MB body budget. Creates keep it — the insert seeds
-  // the server log with the client's initial entries.
-  const body = isCreate ? incident : { ...incident, actionLog: undefined };
+  // Updates omit the action log and the checklist map: the server preserves
+  // its own copies on blob writes (they travel through their per-entry
+  // endpoints), so sending them would only waste the 5 MB body budget.
+  // Creates keep them — the insert seeds the server with the client's
+  // initial state.
+  const body = isCreate ? incident : { ...incident, actionLog: undefined, checklists: undefined };
   return fetch(url, {
     method,
     headers: { 'Content-Type': 'application/json' },
@@ -220,14 +224,27 @@ export function IncidentSync() {
       const keep = logSync.keepLocalEntryIds();
       const mergedLog = mergeActionLogs(remoteLog, local?.actionLog ?? [], keep);
 
+      // Checklists reconcile the same way: server map wins, items with an
+      // in-flight toggle keep their local state. This also catches upserts
+      // where ONLY the checklist changed (a share-link viewer checking an
+      // item) — the blob canon excludes the map, so blobSame stays true.
+      const rawChk = (inc as { checklists?: unknown }).checklists;
+      const remoteChk: ChecklistStateMap =
+        rawChk && typeof rawChk === 'object' && !Array.isArray(rawChk)
+          ? (rawChk as ChecklistStateMap)
+          : {};
+      const mergedChk = mergeChecklists(remoteChk, local?.checklists ?? {}, inflightChecklistIds(inc.id));
+      const chkSame =
+        local !== undefined && stableStringify(mergedChk) === stableStringify(local.checklists ?? {});
+
       const canon = serverCanon(inc);
       const blobSame = serverState.get(inc.id) === canon;
       const logSame = local !== undefined && entryCanon(mergedLog) === entryCanon(local.actionLog);
-      if (blobSame && logSame) return; // our own echo / no change
+      if (blobSame && logSame && chkSame) return; // our own echo / no change
 
       serverState.set(inc.id, canon);
       logSync.applyRemoteLog(inc.id, remoteLog, keep);
-      useCrisisStore.getState().applyRemoteUpsert({ ...inc, actionLog: mergedLog });
+      useCrisisStore.getState().applyRemoteUpsert({ ...inc, actionLog: mergedLog, checklists: mergedChk });
     });
 
     es.addEventListener('delete', (e) => {

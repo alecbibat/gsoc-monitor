@@ -25,6 +25,22 @@ export const INCIDENT_TYPE_IDS: ReadonlySet<string> = new Set([
 ]);
 
 // Lifecycle statuses plus the retired three-state values.
+// Retired ids mapped forward, mirroring the client's normalizeIncidentType —
+// used where the server itself must key on a type (the per-type IAP lookup).
+const LEGACY_TYPE_ALIASES: Record<string, string> = {
+  chemical: 'hazmat',
+  security: 'violence-threat',
+};
+
+/** Canonical type id for a raw stored/snapshot value; unknown → 'other'. */
+export function normalizeIncidentTypeId(raw: string | null | undefined): string {
+  if (!raw) return 'other';
+  const mapped = Object.prototype.hasOwnProperty.call(LEGACY_TYPE_ALIASES, raw)
+    ? LEGACY_TYPE_ALIASES[raw]
+    : raw;
+  return INCIDENT_TYPE_IDS.has(mapped) ? mapped : 'other';
+}
+
 export const INCIDENT_STATUS_IDS: ReadonlySet<string> = new Set([
   'monitoring', 'active', 'recovery', 'closed',
   // retired statuses still accepted on write

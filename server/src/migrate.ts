@@ -1,4 +1,5 @@
 import { pool } from './db';
+import { IAP_SEED_BASE64, IAP_SEED_NAME } from './data/iapSeed';
 
 const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no O/0/I/1 — avoids visual ambiguity
 function randomCode(len = 8) {
@@ -107,6 +108,22 @@ export async function migrate() {
         data       JSONB       NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      -- Pre-uploaded Incident Action Plan PDFs for the share link's IAP tab.
+      -- One document per incident type; incident_type NULL is the general
+      -- default that answers for every type without its own upload. Stored as
+      -- BYTEA because the dyno filesystem is wiped on deploy and the Cloudinary
+      -- preset is image-only (routes/iap.ts).
+      CREATE TABLE IF NOT EXISTS iap_documents (
+        id            TEXT        PRIMARY KEY,
+        name          TEXT        NOT NULL,
+        incident_type TEXT,
+        content       BYTEA       NOT NULL,
+        size          INTEGER     NOT NULL,
+        updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS iap_documents_type_key
+        ON iap_documents ((COALESCE(incident_type, '__general__')));
     `);
 
     // Signup code. If SIGNUP_CODE is set in the environment it is authoritative
@@ -132,6 +149,23 @@ export async function migrate() {
         );
         console.log(`[migrate] initial signup code: ${code}`);
       }
+    }
+
+    // Seed the general-default IAP once, from the PDF baked into the build —
+    // so a fresh deploy has something in the IAP tab before anyone uploads.
+    // A one-shot settings flag (not "table empty") guards it: an admin who
+    // deletes or replaces the seed must not have it resurrect on next boot.
+    const { rows: seededRows } = await client.query("SELECT 1 FROM settings WHERE key = 'iap_seeded'");
+    if (seededRows.length === 0) {
+      const seedPdf = Buffer.from(IAP_SEED_BASE64, 'base64');
+      await client.query(
+        `INSERT INTO iap_documents (id, name, incident_type, content, size)
+         VALUES (gen_random_uuid()::text, $1, NULL, $2, $3)
+         ON CONFLICT DO NOTHING`,
+        [IAP_SEED_NAME, seedPdf, seedPdf.length]
+      );
+      await client.query("INSERT INTO settings (key, value) VALUES ('iap_seeded', '1') ON CONFLICT DO NOTHING");
+      console.log('[migrate] seeded general-default IAP document');
     }
 
     // Sunset pre-W4 links (including legacy passwordless ones, which are open

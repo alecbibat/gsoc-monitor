@@ -204,3 +204,83 @@ describe('system log events', () => {
     expect(active().actionLog[0].system).toBe('share-revoked');
   });
 });
+
+describe('ICS checklists', () => {
+  it('records checked with a timestamp, and unchecking re-stamps it', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    st.toggleChecklistItem('ic-imm-1', true);
+    const first = active().checklists!['ic-imm-1'];
+    expect(first.checked).toBe(true);
+    expect(Number.isNaN(Date.parse(first.at))).toBe(false);
+    st.toggleChecklistItem('ic-imm-1', false);
+    const second = active().checklists!['ic-imm-1'];
+    expect(second.checked).toBe(false);
+    expect(Number.isNaN(Date.parse(second.at))).toBe(false);
+  });
+
+  it('keeps the map sparse — untouched items have no entry', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    st.toggleChecklistItem('safety-imm-1', true);
+    expect(Object.keys(active().checklists!)).toEqual(['safety-imm-1']);
+  });
+
+  it('freezes toggles on archived incidents', () => {
+    const st = useCrisisStore.getState();
+    const id = st.createIncident();
+    st.standDownIncident(id, 'done');
+    st.openIncident(id);
+    const before = active();
+    st.toggleChecklistItem('ic-imm-1', true);
+    expect(active()).toBe(before);
+  });
+
+  it('applies server-authoritative state by id, archived or not', () => {
+    const st = useCrisisStore.getState();
+    const id = st.createIncident();
+    st.standDownIncident(id, 'done');
+    const serverMap = { 'ops-ong-2': { checked: true, at: '2026-08-19T10:00:00.000Z', by: 'Viewer' } };
+    st.applyChecklistState(id, serverMap);
+    expect(useCrisisStore.getState().incidents.find((i) => i.id === id)!.checklists).toEqual(serverMap);
+  });
+
+  it('publishes checklist state, always as a concrete map', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    expect(extractPublicState(active()).checklists).toEqual({});
+    st.toggleChecklistItem('ic-imm-1', true);
+    expect(extractPublicState(active()).checklists!['ic-imm-1'].checked).toBe(true);
+    // Pre-feature incidents lack the key entirely — still concrete on publish.
+    const { checklists: _c, ...legacy } = active();
+    expect(extractPublicState(legacy as Incident).checklists).toEqual({});
+  });
+});
+
+describe('intake answers', () => {
+  it('stores answers and drops cleared ones so the map stays sparse', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    st.setIntakeAnswer('iq-1', 'MV Example / WDX1234 / IMO 9999999');
+    expect(active().intake).toEqual({ 'iq-1': 'MV Example / WDX1234 / IMO 9999999' });
+    st.setIntakeAnswer('iq-1', '');
+    expect(active().intake).toEqual({});
+  });
+
+  it('freezes answers on archived incidents', () => {
+    const st = useCrisisStore.getState();
+    const id = st.createIncident();
+    st.standDownIncident(id, 'done');
+    st.openIncident(id);
+    st.setIntakeAnswer('iq-2', '48.5N 123.0W');
+    expect(active().intake ?? {}).toEqual({});
+  });
+
+  it('publishes intake answers, always as a concrete map', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    expect(extractPublicState(active()).intake).toEqual({});
+    st.setIntakeAnswer('iq-3', '0210 local / 0910Z');
+    expect(extractPublicState(active()).intake).toEqual({ 'iq-3': '0210 local / 0910Z' });
+  });
+});

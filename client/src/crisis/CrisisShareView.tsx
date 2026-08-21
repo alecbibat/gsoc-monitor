@@ -14,6 +14,14 @@ import { TYPE_STYLES, TimelineView, LogShowMore, DEFAULT_LOG_LIMIT, entryTypeOf 
 // Share snapshots outlive deploys, so status/type may arrive as retired ids —
 // the def lookups normalize them (contained → recovery, chemical → HazMat, …).
 import { incidentStatusDef, incidentTypeDef } from './taxonomy';
+import {
+  checklistTemplateFor, isChecklistStateMap,
+  type ChecklistItemState, type ChecklistStateMap,
+} from './checklistTemplate';
+import { intakeTemplateFor, isIntakeAnswers, answeredCount } from './intakeTemplate';
+import { ChecklistBoard } from './ChecklistBoard';
+import { IntakeTable } from './IntakeTable';
+import { PdfViewer } from './PdfViewer';
 
 // The live globe (Cesium + every layer component) is only loaded when the
 // incident actually prescribes live layers; plain share links keep the light
@@ -311,6 +319,21 @@ export function CrisisShareView({ token }: { token: string }) {
   // Hoisted above the paginated log rows: an SSE update can slide a row out
   // of the visible slice, and an open viewer must survive that unmount.
   const [logLightbox, setLogLightbox] = useState<{ src: string; alt?: string } | null>(null);
+  // Share-page tabs. The situation report stays mounted (CSS-hidden) so the
+  // globe keeps its camera; IAP/checklists mount on first visit and then stay
+  // (the PDF shouldn't refetch and re-render on every tab hop).
+  const [tab, setTab] = useState<'report' | 'iap' | 'checklists'>('report');
+  const openedRef = useRef<Set<string>>(new Set(['report']));
+  openedRef.current.add(tab);
+  // Optimistic overlay for this viewer's in-flight checklist toggles — an SSE
+  // update replaces the whole `data` object, so without the overlay a check
+  // would flicker off until its own fanout echo lands.
+  const [pendingChk, setPendingChk] = useState<ChecklistStateMap>({});
+  const [chkError, setChkError] = useState<string | null>(null);
+  // Optional attribution for this viewer's toggles, remembered per browser.
+  const [viewerName, setViewerName] = useState(() => {
+    try { return localStorage.getItem('gsoc-share-name') ?? ''; } catch { return ''; }
+  });
 
   // Once the globe has mounted, keep it mounted even if a live prescription
   // update empties the layer/pin lists — swapping a viewer down to the flat
@@ -440,6 +463,50 @@ export function CrisisShareView({ token }: { token: string }) {
       .catch(() => { setChecking(false); setGateError('Could not verify the password in this browser — try a current browser over HTTPS.'); });
   };
 
+  const saveViewerName = (name: string) => {
+    setViewerName(name);
+    try { localStorage.setItem('gsoc-share-name', name); } catch { /* private mode */ }
+  };
+
+  // Check/uncheck from the share page: optimistic overlay + POST to the
+  // token-gated toggle endpoint; the response (and the SSE fanout) carry the
+  // server-stamped authoritative map.
+  const toggleChecklist = (itemId: string, checked: boolean) => {
+    const name = viewerName.trim();
+    const optimistic: ChecklistItemState = {
+      checked,
+      at: new Date().toISOString(),
+      ...(name ? { by: name } : {}),
+    };
+    setChkError(null);
+    setPendingChk((p) => ({ ...p, [itemId]: optimistic }));
+    const kq = viewKey ? `?k=${viewKey}` : '';
+    fetch(`/api/crisis/share/${token}/checklist/${itemId}${kq}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ checked, ...(name ? { by: name } : {}) }),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const detail = await res.json().catch(() => ({} as { error?: string }));
+          throw new Error(detail?.error || `HTTP ${res.status}`);
+        }
+        const { checklists } = (await res.json()) as { checklists: ChecklistStateMap };
+        setData((prev) => (prev ? { ...prev, checklists } : prev));
+      })
+      .catch((e) => {
+        console.warn('[share] checklist toggle failed:', e);
+        setChkError(`Could not save the change — ${(e as Error).message}. It may be read-only on this link.`);
+      })
+      .finally(() => {
+        setPendingChk((p) => {
+          if (p[itemId] !== optimistic) return p; // a newer toggle took over
+          const { [itemId]: _done, ...rest } = p;
+          return rest;
+        });
+      });
+  };
+
   if (gone) {
     return <ClosurePage payload={gone} />;
   }
@@ -498,6 +565,24 @@ export function CrisisShareView({ token }: { token: string }) {
   );
   const drawnLayers = maskedDrawLayers.filter((l) => l.visible && l.positions.length > 0);
 
+  // Checklists / intake / IAP all key off the NORMALIZED type id — snapshots
+  // outlive deploys and can carry retired ids. Snapshot fields are untrusted
+  // JSON, so both maps are shape-guarded before use.
+  const typeId = incidentTypeDef(data.incidentType).id;
+  const checklistTpl = checklistTemplateFor(typeId);
+  const shareChecklists: ChecklistStateMap = isChecklistStateMap(data.checklists) ? data.checklists : {};
+  const effectiveChecklists: ChecklistStateMap = { ...shareChecklists, ...pendingChk };
+  const intakeTpl = intakeTemplateFor(typeId);
+  const intakeAnswers = isIntakeAnswers(data.intake) ? data.intake : {};
+  const intakeAnswered = answeredCount(intakeTpl, intakeAnswers);
+  const iapUrl = `/api/crisis/share/${token}/iap${viewKey ? `?k=${viewKey}` : ''}`;
+
+  const SHARE_TABS = [
+    { id: 'report', label: 'Situation Report' },
+    { id: 'iap', label: 'IAP' },
+    { id: 'checklists', label: 'Checklists' },
+  ] as const;
+
   return (
     <div className="min-h-screen bg-ink-950 text-white">
       {/* Header — wraps on phones (most shared-link viewers are on phones) */}
@@ -514,9 +599,25 @@ export function CrisisShareView({ token }: { token: string }) {
           <span className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-widest ${badge}`}>{status.label}</span>
           <LastUpdated iso={data.lastUpdated} closed={status.id === 'closed'} />
         </div>
+        {/* Tabs — the report is the landing view; IAP and checklists are a tap away */}
+        <div className="mx-auto mt-2 flex max-w-5xl gap-1 overflow-x-auto">
+          {SHARE_TABS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`shrink-0 rounded-md px-3 py-1.5 text-[12px] font-medium transition ${
+                tab === t.id ? 'bg-accent/15 text-accent' : 'text-white/40 hover:text-white/65'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
       </header>
 
-      <main className="mx-auto max-w-5xl space-y-8 px-4 py-6 sm:px-8 sm:py-8">
+      {/* ── Situation Report tab — kept mounted (CSS-hidden) so the globe keeps
+          its camera and the log filters survive tab hops ── */}
+      <main className={`mx-auto max-w-5xl space-y-8 px-4 py-6 sm:px-8 sm:py-8 ${tab === 'report' ? '' : 'hidden'}`}>
 
         {/* BLUF: the 30-second answer, full width and first */}
         <div>
@@ -525,6 +626,18 @@ export function CrisisShareView({ token }: { token: string }) {
             {data.executiveSummary || <span className="text-white/25 italic">No summary provided</span>}
           </p>
         </div>
+
+        {/* Intake Q&A — appears once the team has answered at least one of the
+            initial-contact questions in the Intake tab */}
+        {intakeAnswered > 0 && (
+          <div>
+            <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+              <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Intake — Initial Contact</h2>
+              <span className="text-[11px] text-white/35">{intakeAnswered} question{intakeAnswered === 1 ? '' : 's'} answered · updates live</span>
+            </div>
+            <IntakeTable template={intakeTpl} answers={intakeAnswers} />
+          </div>
+        )}
 
         {/* Affected properties next — live watch scoped to the property groups
             the incident team selected; no groups means nothing is shared here */}
@@ -841,15 +954,64 @@ export function CrisisShareView({ token }: { token: string }) {
         <p className="pb-safe border-t border-white/6 pt-4 text-center text-[9px] text-white/20">
           Published {fmtTs(data.publishedAt)} · Updates automatically in real-time
         </p>
-
-        {logLightbox && (
-          <ImageLightbox
-            src={logLightbox.src}
-            alt={logLightbox.alt}
-            onClose={() => setLogLightbox(null)}
-          />
-        )}
       </main>
+
+      {/* ── IAP tab — the pre-uploaded Incident Action Plan for this incident's
+          type (or the general default), in an in-page PDF reader ── */}
+      {openedRef.current.has('iap') && (
+        <main className={`mx-auto max-w-5xl px-4 py-6 sm:px-8 sm:py-8 ${tab === 'iap' ? '' : 'hidden'}`}>
+          <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+            <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Incident Action Plan</h2>
+            <span className="text-[11px] text-white/35">
+              Reference document for {incidentTypeDef(data.incidentType).label} incidents
+            </span>
+          </div>
+          <PdfViewer
+            url={iapUrl}
+            emptyMessage="No Incident Action Plan has been uploaded for this incident type yet — the incident team can add one from the admin panel."
+          />
+        </main>
+      )}
+
+      {/* ── Checklists tab — ICS role checklists; checking an item records a
+          timestamp (and your name, if given) for the whole response to see ── */}
+      {openedRef.current.has('checklists') && (
+        <main className={`mx-auto max-w-5xl px-4 py-6 sm:px-8 sm:py-8 ${tab === 'checklists' ? '' : 'hidden'}`}>
+          <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">ICS Role Checklists</h2>
+            <span className="text-[11px] text-white/35">Live for everyone on this link · each check is timestamped</span>
+            <label className="ml-auto flex items-center gap-1.5 text-[10px] text-white/40">
+              Your name
+              <input
+                value={viewerName}
+                onChange={(e) => saveViewerName(e.target.value)}
+                placeholder="for the record"
+                maxLength={60}
+                className="w-32 rounded border border-white/12 bg-white/8 px-2 py-1 text-[11px] text-white/80 placeholder-white/25 outline-none transition focus:border-white/25"
+              />
+            </label>
+          </div>
+          {chkError && (
+            <p className="mb-3 rounded border border-red-400/25 bg-red-400/8 px-3 py-2 text-[11px] text-red-300/90">
+              {chkError}
+            </p>
+          )}
+          <ChecklistBoard
+            template={checklistTpl}
+            state={effectiveChecklists}
+            onToggle={toggleChecklist}
+            footnote={viewerName.trim() ? `Checks are recorded as ${viewerName.trim()}` : 'Add your name above to attribute your checks (optional)'}
+          />
+        </main>
+      )}
+
+      {logLightbox && (
+        <ImageLightbox
+          src={logLightbox.src}
+          alt={logLightbox.alt}
+          onClose={() => setLogLightbox(null)}
+        />
+      )}
     </div>
   );
 }

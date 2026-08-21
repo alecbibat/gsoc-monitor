@@ -40,11 +40,15 @@ export function stableStringify(v: unknown): string | undefined {
  * all: entries go through the server's append-only log endpoints, and the
  * server preserves its own actionLog on blob writes. Log changes therefore
  * must never make the blob look edited (that PUT couldn't carry them anyway).
+ * The ICS checklist map is excluded for the same reason: toggles go through
+ * the per-item checklist endpoints (checklistSync.ts) and the server preserves
+ * its own map on blob writes.
  */
 export function serverCanon(incident: {
-  incidentType: string; incidentStatus: string; archivedAt?: string | null; actionLog?: unknown;
+  incidentType: string; incidentStatus: string; archivedAt?: string | null;
+  actionLog?: unknown; checklists?: unknown;
 }): string {
-  const { actionLog: _log, ...rest } = normalizeIncidentFields(incident);
+  const { actionLog: _log, checklists: _chk, ...rest } = normalizeIncidentFields(incident);
   return stableStringify(rest)!;
 }
 
