@@ -7,6 +7,7 @@ import { FUEL_GROUPS, rgbCss } from '../layers/fuel/fbfm40';
 import { OUTLOOK_LEGEND } from '../layers/fireOutlook/fireOutlookMeta';
 import { QPF_LEGEND } from '../layers/precip/precipStore';
 import { usePrintStyles } from '../lib/printStyles';
+import { RiskScanLoading } from './RiskScanLoading';
 
 // Plumes are drawn as hatching + outlines so the satellite imagery (the smoke
 // itself) stays visible — the legend mirrors that with hatched swatches.
@@ -464,7 +465,7 @@ function ReportBody({ data }: { data: WildfireReportData }) {
 }
 
 export function RiskReportView() {
-  const { target, status, data, error, close } = useRiskReportStore();
+  const { target, status, data, error, close, feeds } = useRiskReportStore();
   usePrintStyles('risk-report-root');
 
   useEffect(() => {
@@ -509,14 +510,7 @@ export function RiskReportView() {
         </div>
       </div>
 
-      {status === 'loading' && (
-        <div className="flex h-[60vh] items-center justify-center">
-          <div className="text-center">
-            <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-accent" />
-            <p className="mt-3 text-[12px] text-white/40">Cross-referencing wildfire feeds around {target.name}…</p>
-          </div>
-        </div>
-      )}
+      {status === 'loading' && <RiskScanLoading target={target} feeds={feeds} />}
       {status === 'error' && (
         <div className="flex h-[60vh] items-center justify-center">
           <p className="text-[13px] text-white/50">{error ?? 'Could not assemble the report.'}</p>

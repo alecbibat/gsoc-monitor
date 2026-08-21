@@ -15,6 +15,7 @@ import {
   type AlertHit, type HotspotHit, type NamedFireHit, type OutlookDayCell,
   type RiskLevel, type RiskTarget, type SectionResult, type WildfireReportData,
 } from './riskTypes';
+import type { OnFeedResult, WildfireFeedId } from './feedManifest';
 
 // ── Wildfire report assembly ─────────────────────────────────────────────────
 // Thresholds live in docs/RISK-REPORT-MATRIX.md — change them there first.
@@ -129,27 +130,47 @@ const attempt = async <T>(p: Promise<T>): Promise<FeedOutcome<T>> => {
   }
 };
 
-export async function assembleWildfireReport(target: RiskTarget): Promise<WildfireReportData> {
+export async function assembleWildfireReport(
+  target: RiskTarget,
+  onFeed?: OnFeedResult
+): Promise<WildfireReportData> {
   const inConus =
     target.lon >= LANDFIRE_CONUS_RECT.west && target.lon <= LANDFIRE_CONUS_RECT.east &&
     target.lat >= LANDFIRE_CONUS_RECT.south && target.lat <= LANDFIRE_CONUS_RECT.north;
 
+  // Reports each feed's outcome to the loading screen the moment it settles.
+  // `ok` mirrors the section's own unavailable logic for feeds that resolve
+  // with an in-band error (fetchHotspotsNearPins / fetchWildfires / smoke
+  // never reject) — the console must not show LOCK for an outage the report
+  // will then call unavailable.
+  const track = <T>(
+    id: WildfireFeedId,
+    p: Promise<T>,
+    ok: (v: T) => boolean = () => true
+  ): Promise<FeedOutcome<T>> =>
+    attempt(p).then((o) => {
+      onFeed?.(id, o.error === null && o.value !== null && ok(o.value) ? 'ok' : 'failed');
+      return o;
+    });
+
+  if (!inConus) onFeed?.('fuel', 'skipped');
+
   const [hotspotsRes, namedRes, alertsRes, countiesRes, outlookRes, fuelRes, windRes, dailyRes, smokeRes, lightningRes, wpcQpfRes] = await Promise.all([
-    attempt(fetchHotspotsNearPins(MAX_RING_MI * MILES_TO_M)),
-    attempt(fetchWildfires()),
-    attempt(fetchActiveAlerts()),
-    attempt(loadCounties()),
-    attempt(api.fireOutlook()),
+    track('hotspots', fetchHotspotsNearPins(MAX_RING_MI * MILES_TO_M), (v) => v.hotspots !== null),
+    track('named-fires', fetchWildfires(), (v) => !(v.error !== null && v.fires.length === 0)),
+    track('alerts', fetchActiveAlerts()),
+    track('counties', loadCounties()),
+    track('outlook', api.fireOutlook()),
     inConus
-      ? attempt(analyzeFuelZone({ lon: target.lon, lat: target.lat }, 3 * MILES_TO_M))
+      ? track('fuel', analyzeFuelZone({ lon: target.lon, lat: target.lat }, 3 * MILES_TO_M))
       : Promise.resolve({ value: null, error: 'outside CONUS' } as FeedOutcome<Awaited<ReturnType<typeof analyzeFuelZone>>>),
-    attempt(api.windForecast(target.lat, target.lon)),
-    attempt(api.weatherDaily(target.lat, target.lon)),
-    attempt(api.smoke()),
+    track('wind', api.windForecast(target.lat, target.lon)),
+    track('daily', api.weatherDaily(target.lat, target.lon)),
+    track('smoke', api.smoke(), (v) => !(v.error != null && v.polygons.length === 0)),
     // Radius-filtered on the server so local strikes arrive unthinned — a
     // global 24 h window would be stride-sampled to ~nothing near any point.
-    attempt(api.lightningHistory(1440, { lat: target.lat, lon: target.lon, radiusMi: 130 })),
-    attempt(fetchWpcSiteQpf(target.lat, target.lon)),
+    track('lightning', api.lightningHistory(1440, { lat: target.lat, lon: target.lon, radiusMi: 130 })),
+    track('qpf', fetchWpcSiteQpf(target.lat, target.lon)),
   ]);
 
   const sections: SectionResult[] = [];
@@ -785,6 +806,7 @@ export async function assembleWildfireReport(target: RiskTarget): Promise<Wildfi
     exposureSnapshot, alertsSnapshot, fuelSnapshot,
     qpfSnapshot, smokeSnapshot, lightningSnapshot, outlookSnapshot,
   ]);
+  onFeed?.('maps', 'ok');
 
   // ── 10-day forecast strip data ────────────────────────────────────────────
   const forecastDaily: WildfireReportData['forecastDaily'] = (() => {
