@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { entryTypeOf, extractPublicState, useCrisisStore, type ActionLogEntry, type Incident } from './crisisStore';
+import { entryTypeOf, extractPublicState, selectActiveCrisisCount, useCrisisStore, type ActionLogEntry, type Incident } from './crisisStore';
 
 // The store is a module singleton — reset between tests.
 beforeEach(() => {
@@ -282,5 +282,44 @@ describe('intake answers', () => {
     expect(extractPublicState(active()).intake).toEqual({});
     st.setIntakeAnswer('iq-3', '0210 local / 0910Z');
     expect(extractPublicState(active()).intake).toEqual({ 'iq-3': '0210 local / 0910Z' });
+  });
+});
+
+// Feeds the tab title and the top-bar crisis button: only open Active
+// incidents count.
+describe('selectActiveCrisisCount', () => {
+  const count = () => selectActiveCrisisCount(useCrisisStore.getState());
+
+  it('counts only status-active incidents', () => {
+    const st = useCrisisStore.getState();
+    expect(count()).toBe(0);
+    st.createIncident(); // new incidents start Active
+    st.createIncident();
+    expect(count()).toBe(2);
+    st.update({ incidentStatus: 'monitoring' }); // patches the active (second) incident
+    expect(count()).toBe(1);
+  });
+
+  it('drops incidents on stand-down and only counts a reopen once re-escalated', () => {
+    const st = useCrisisStore.getState();
+    const id = st.createIncident();
+    expect(count()).toBe(1);
+    st.standDownIncident(id);
+    expect(count()).toBe(0);
+    st.reopenIncident(id); // reopens as Monitoring, not Active
+    expect(count()).toBe(0);
+    st.openIncident(id);
+    st.update({ incidentStatus: 'active' });
+    expect(count()).toBe(1);
+  });
+
+  it('never counts archived incidents whose legacy status was left active', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    expect(count()).toBe(1);
+    useCrisisStore.setState((s) => ({
+      incidents: s.incidents.map((i) => ({ ...i, archivedAt: '2026-08-01T00:00:00Z' })),
+    }));
+    expect(count()).toBe(0);
   });
 });

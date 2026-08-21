@@ -10,7 +10,7 @@ import { useUiStore } from './uiStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { PinsWatchCluster } from '../screensaver/PinsWatchCluster';
 import { useMeasureStore } from '../measure/measureStore';
-import { useCrisisStore } from '../crisis/crisisStore';
+import { selectActiveCrisisCount, useCrisisStore } from '../crisis/crisisStore';
 import { useDashboardStore } from '../dashboard/dashboardStore';
 import { UserMenu } from '../auth/UserMenu';
 import {
@@ -392,8 +392,7 @@ function MeasureButton() {
 function CrisisButton() {
   const toggle       = useCrisisStore((s) => s.toggle);
   const open         = useCrisisStore((s) => s.open);
-  // Same rule as TitleBadge: archived incidents never count as active.
-  const activeCount  = useCrisisStore((s) => s.incidents.filter((i) => i.incidentStatus === 'active' && !i.archivedAt).length);
+  const activeCount  = useCrisisStore(selectActiveCrisisCount);
   const isActive     = activeCount > 0;
 
   return (
