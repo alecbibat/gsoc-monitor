@@ -179,7 +179,9 @@ function CoordImportPanel({ layer, onClose }: { layer: DrawLayer; onClose: () =>
 
 // ── Map Layers section ────────────────────────────────────────────────────────
 
-function MapLayersSection() {
+// Rendered in the crisis workspace's live-map dock (CrisisOverlay's MapDock),
+// directly under the map it edits — sized for that narrow column.
+export function MapLayersSection() {
   const inc = useActiveIncident();
   const addDrawLayer    = useCrisisStore((s) => s.addDrawLayer);
   const updateDrawLayer = useCrisisStore((s) => s.updateDrawLayer);
@@ -212,14 +214,13 @@ function MapLayersSection() {
 
   const startDraw = (layerId: string) => {
     setActiveDrawLayer(layerId);
-    close();
+    close(); // draw on the full-screen globe; finishing reopens the workspace
   };
 
   return (
     <section>
-      <div className="mb-3 flex items-center gap-3">
+      <div className="mb-1 flex items-center gap-3">
         <h3 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/65">Map Layers</h3>
-        <span className="text-[11px] text-white/40">Draw on the live map — layers stay visible while the incident is active</span>
         <button
           onClick={() => setCreating((v) => !v)}
           className="ml-auto rounded border border-white/12 px-2.5 py-1 text-[9px] text-white/45 transition hover:border-white/25 hover:text-white/70"
@@ -227,6 +228,9 @@ function MapLayersSection() {
           {creating ? 'Cancel' : '+ New Layer'}
         </button>
       </div>
+      <p className="mb-3 text-[10px] text-white/35">
+        Layers stay on the live map while the incident is active · Draw expands the map full-screen
+      </p>
 
       {creating && (
         <div className="mb-3 space-y-2.5 rounded-lg border border-white/10 bg-white/5 p-3">
@@ -780,9 +784,9 @@ export function SituationReport() {
       {/* Actions & Events Log — freezes itself so log viewing stays usable */}
       <ActionLog />
 
-      {/* Map Layers + share-map live layers */}
-      <fieldset disabled={isArchived} className="m-0 min-w-0 space-y-6 border-0 p-0">
-        <MapLayersSection />
+      {/* Share-map live layers. The drawn-layer toolkit (Map Layers) lives in
+          the workspace's live-map dock, next to the map it edits. */}
+      <fieldset disabled={isArchived} className="m-0 min-w-0 border-0 p-0">
         <LiveLayersSection />
       </fieldset>
 

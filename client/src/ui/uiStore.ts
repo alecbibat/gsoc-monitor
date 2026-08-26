@@ -33,20 +33,47 @@ export const useSectionsStore = create<SectionsState>()(
   )
 );
 
-// Width of the crisis incident-editor panel (px), persisted. null = the
-// default responsive width (46vw clamped). Set by the panel's drag handle and
-// expand toggle; ignored on mobile where the panel is always full-width.
-interface CrisisPanelState {
-  widthPx: number | null;
-  setWidthPx: (px: number | null) => void;
+// Chrome state for the crisis workspace's live-map dock — the right-hand
+// column that frames the globe while an incident is open. Width and collapsed
+// are persisted; ignored on mobile where the workspace is always full-width.
+interface CrisisDockState {
+  widthPx: number;
+  collapsed: boolean;
+  setWidthPx: (px: number) => void;
+  setCollapsed: (collapsed: boolean) => void;
 }
 
-export const useCrisisPanelStore = create<CrisisPanelState>()(
+export const CRISIS_DOCK_DEFAULT_WIDTH = 440;
+
+export const useCrisisDockStore = create<CrisisDockState>()(
   persist(
     (set) => ({
-      widthPx: null,
+      widthPx: CRISIS_DOCK_DEFAULT_WIDTH,
+      collapsed: false,
       setWidthPx: (widthPx) => set({ widthPx }),
+      setCollapsed: (collapsed) => set({ collapsed }),
     }),
-    { name: 'gsoc-crisis-panel' }
+    { name: 'gsoc-crisis-dock' }
   )
 );
+
+// Runtime-only screen rect of the dock's transparent map window. The dock
+// publishes it while mounted; the globe's container in App.tsx pins itself to
+// this rect, so the one live Cesium viewer keeps rendering — and stays
+// interactive — inside the dock's frame instead of behind the workspace.
+export interface MapFrameRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+interface CrisisMapFrameState {
+  rect: MapFrameRect | null;
+  setRect: (rect: MapFrameRect | null) => void;
+}
+
+export const useCrisisMapFrameStore = create<CrisisMapFrameState>((set) => ({
+  rect: null,
+  setRect: (rect) => set({ rect }),
+}));
