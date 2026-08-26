@@ -20,6 +20,7 @@ import {
   flightMarkerColor,
   lastSeenText,
   planeIconUri,
+  resolveTrailAltitudes,
   splitTrail,
 } from './flightMarkers';
 
@@ -114,21 +115,41 @@ export function FlightLayer() {
 
         // Skip the teardown/redraw when nothing that affects rendering changed.
         // The marker colour tracks altitude and the trail grows a point at a
-        // time, so both participate in the signature.
+        // time, so both participate — and the sig must derive `grounded`
+        // exactly as the render below does, or the live→stale flip of a
+        // transponder that went dark (nothing else changing) would never
+        // trigger the redraw that clamps and greys the marker.
         const sig =
           `${favorites.join(',')}|` +
           data.flights
             .map((f) => {
+              const grounded = f.onGround || f.lastSeenSec >= LIVE_WINDOW_SEC;
               const trail = f.trail ?? [];
               const lastPt = trail[trail.length - 1];
               return (
-                `${f.icao24}:${f.latitude}:${f.longitude}:${f.track}:${f.onGround}:` +
+                `${f.icao24}:${f.latitude}:${f.longitude}:${f.track}:${grounded}:` +
                 `${flightAlpha(f.lastSeenSec, f.onGround)}:` +
-                `${flightMarkerColor(f.altitudeFt, f.onGround)}:${trail.length}:${lastPt?.t ?? 0}`
+                `${flightMarkerColor(f.altitudeFt, grounded)}:${trail.length}:${lastPt?.t ?? 0}`
               );
             })
             .join('|');
         if (sig === lastSigRef.current) {
+          // The drawn marker is unchanged, but the panel stamped on it ages —
+          // without a re-stamp, clicking a jet parked overnight would open a
+          // panel frozen at "last seen 3m ago". Refresh the stamp in place.
+          for (const flight of data.flights) {
+            const grounded = flight.onGround || flight.lastSeenSec >= LIVE_WINDOW_SEC;
+            const panelData = flightPanelData(flight, grounded);
+            const suffixes = [
+              '',
+              '-reticle',
+              ...Array.from({ length: SHIP_MARKER.ping.count }, (_, i) => `-ping-${i}`),
+            ];
+            for (const suffix of suffixes) {
+              const e = ds.entities.getById(`flight-${flight.icao24}${suffix}`);
+              if (e) attachPanelData(e, panelData);
+            }
+          }
           setStatus();
           ensurePing();
           return;
@@ -148,7 +169,7 @@ export function FlightLayer() {
         for (const flight of data.flights) {
           if (flight.longitude == null || flight.latitude == null) continue;
 
-          const stale = flight.lastSeenSec > LIVE_WINDOW_SEC;
+          const stale = flight.lastSeenSec >= LIVE_WINDOW_SEC;
           const grounded = flight.onGround || stale;
           // Airborne: draw at true altitude. Grounded/parked: clamp to surface.
           const baseAlt = grounded ? 0 : (flight.altitudeFt ?? 0) * FT_TO_M;
@@ -210,18 +231,22 @@ export function FlightLayer() {
           attachPanelData(entity, panelData);
 
           // Altitude rainbow trail — every breadcrumb coloured by the altitude
-          // it was flown at, capped with the current position so the trail
-          // reaches the plane.
+          // it was flown at. A live aircraft's trail is capped with its current
+          // position so it reaches the plane; a stale one's is not — its marker
+          // is a synthetic surface position, and connecting the trail to it
+          // would draw a fake descent to the ground where coverage was lost.
           const pts: FlightTrackPoint[] = [...(flight.trail ?? [])];
-          pts.push({
-            lat: flight.latitude,
-            lon: flight.longitude,
-            altFt: flight.altitudeFt,
-            ground: grounded,
-            t: Date.now(),
-          });
+          if (!stale) {
+            pts.push({
+              lat: flight.latitude,
+              lon: flight.longitude,
+              altFt: flight.altitudeFt,
+              ground: flight.onGround,
+              t: Date.now(),
+            });
+          }
           const trailAlpha = FLIGHT_MARKER.trail.alpha * alpha;
-          for (const seg of splitTrail(pts)) {
+          for (const seg of splitTrail(resolveTrailAltitudes(pts))) {
             trailInstances.push(
               new Cesium.GeometryInstance({
                 geometry: new Cesium.PolylineGeometry({

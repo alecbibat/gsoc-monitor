@@ -24,7 +24,8 @@ interface AdsbAircraft {
   baro_rate?: number; // vertical rate, ft/min
   geom_rate?: number;
   squawk?: string;
-  seen?: number; // seconds since last message
+  seen?: number; // seconds since last message of any kind
+  seen_pos?: number; // seconds since the last decoded *position*
 }
 
 interface NormalizedFlight {
@@ -69,7 +70,11 @@ function normalizeOne(a: AdsbAircraft): NormalizedFlight | null {
           ? a.geom_rate
           : null,
     squawk: a.squawk ?? null,
-    lastSeenSec: typeof a.seen === 'number' ? a.seen : 0,
+    // Age of the *position*, not of any message: a fringe-coverage aircraft can
+    // keep chirping (seen ≈ 0) while its lat/lon is minutes old (seen_pos
+    // growing), and the whole point of lastSeenSec is fix freshness.
+    lastSeenSec:
+      typeof a.seen_pos === 'number' ? a.seen_pos : typeof a.seen === 'number' ? a.seen : 0,
   };
 }
 
@@ -121,6 +126,37 @@ export function recordTrackPoint(pts: FlightTrackPoint[], p: FlightTrackPoint): 
   while (pts.length > MAX_TRACK_POINTS || (pts.length > 0 && pts[0].t < cutoff)) pts.shift();
 }
 
+// Recording only purges when a new moving fix arrives, so a parked aircraft
+// would otherwise keep yesterday's trail on the map (and in the snapshot)
+// forever. Run the age cutoff on every poll instead.
+function pruneHistories(): void {
+  const cutoff = Date.now() - MAX_TRACK_AGE_MS;
+  for (const pts of history.values()) {
+    let dropped = false;
+    while (pts.length > 0 && pts[0].t < cutoff) {
+      pts.shift();
+      dropped = true;
+    }
+    if (dropped) snapshotDirty = true;
+  }
+}
+
+// The recording cap (2,500 points) is the fidelity we keep in memory and in
+// the snapshot; the wire doesn't need it. Uniform stride anchored at the end,
+// so the newest breadcrumbs always survive and the response stays a few dozen
+// KB instead of ~600 KB per poll once trails fill.
+const MAX_SERVED_TRAIL_POINTS = 700;
+export function decimateTrail(
+  pts: FlightTrackPoint[],
+  max: number = MAX_SERVED_TRAIL_POINTS
+): FlightTrackPoint[] {
+  if (pts.length <= max) return pts;
+  const stride = Math.ceil(pts.length / max);
+  const out: FlightTrackPoint[] = [];
+  for (let i = pts.length - 1; i >= 0; i -= stride) out.push(pts[i]);
+  return out.reverse();
+}
+
 // --- Postgres persistence ----------------------------------------------------
 // Last-known positions and trails survive restarts and deploys via the shared
 // `snapshots` key/value table (same pattern as the wind grid). The dyno
@@ -154,9 +190,14 @@ function saveSnapshot(): void {
        ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
       [SNAPSHOT_KEY, JSON.stringify(snap)]
     )
-    .catch((err) =>
-      console.warn('[flights] snapshot save failed:', err instanceof Error ? err.message : err)
-    );
+    .catch((err) => {
+      console.warn('[flights] snapshot save failed:', err instanceof Error ? err.message : err);
+      // Re-arm so a later poll retries: without this, a transient failure on
+      // the LAST save of a flight (aircraft then powers down, so no new fix
+      // ever re-dirties) would silently lose the landing and parked position.
+      snapshotDirty = true;
+      lastSaveAt = 0;
+    });
 }
 
 // Restore last-known positions from Postgres. Retries briefly because the
@@ -234,9 +275,12 @@ function applyFix(reg: string, f: NormalizedFlight): void {
   const prev = lastKnown.get(reg);
   const moved =
     !prev || haversineM(prev.latitude, prev.longitude, f.latitude, f.longitude) >= MIN_TRACK_MOVE_M;
-  // Re-serving the same stale message shifts fixAt by clock jitter only; skip
-  // those so the snapshot isn't rewritten for nothing.
-  if (prev && !moved && fixAt <= prev.updatedAt + 2_000) return;
+  // Never apply a fix older than what we already hold (a stale cache node, or
+  // a second staler entry in the same response, would jump the plane backwards
+  // and break the trail's time ordering). For an unmoved position also skip the
+  // re-served same message, whose fixAt shifts by clock jitter only — otherwise
+  // the snapshot would be rewritten for nothing.
+  if (prev && fixAt <= prev.updatedAt + (moved ? 0 : 2_000)) return;
 
   lastKnown.set(reg, { ...f, updatedAt: fixAt });
   let pts = history.get(reg);
@@ -277,6 +321,7 @@ function poll(): Promise<void> {
   pollInFlight = (async () => {
     await Promise.allSettled(TRACKED_TAILS.map((reg) => fetchTail(reg)));
     lastPollAt = Date.now();
+    pruneHistories();
     saveSnapshot();
   })().finally(() => {
     pollInFlight = null;
@@ -325,7 +370,7 @@ router.get('/registrations', async (_req, res) => {
         lastSeenSec: Math.max(0, Math.round((now - f.updatedAt) / 1000)),
         // `track` is already the ground-track heading, so the breadcrumb
         // history travels as `trail`.
-        trail: history.get(reg) ?? [],
+        trail: decimateTrail(history.get(reg) ?? []),
       },
     ];
   });

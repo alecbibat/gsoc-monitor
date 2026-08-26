@@ -111,6 +111,30 @@ export function planeIconUri(color: string): string {
 }
 
 /**
+ * An airborne fix can arrive with no altitude (MLAT/TIS-B, baro dropout); a
+ * vertex at the raw `altFt ?? 0` would spike the trail from cruise down to the
+ * surface and back. Carry the last known altitude forward instead (a ground
+ * fix resets the reference to 0), and drop airborne fixes seen before any
+ * altitude reference exists.
+ */
+export function resolveTrailAltitudes(points: FlightTrackPoint[]): FlightTrackPoint[] {
+  let lastAlt: number | null = null;
+  const out: FlightTrackPoint[] = [];
+  for (const p of points) {
+    if (p.ground) {
+      lastAlt = 0;
+      out.push(p);
+    } else if (p.altFt != null) {
+      lastAlt = p.altFt;
+      out.push(p);
+    } else if (lastAlt != null) {
+      out.push({ ...p, altFt: lastAlt });
+    }
+  }
+  return out;
+}
+
+/**
  * Split a trail into contiguous runs: a long reporting gap (out of receiver
  * coverage, transponder off) becomes a break instead of a misleading straight
  * chord across it. Consecutive near-identical fixes are dropped so the

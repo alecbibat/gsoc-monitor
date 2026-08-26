@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { recordTrackPoint, type FlightTrackPoint } from './flights';
+import { decimateTrail, recordTrackPoint, type FlightTrackPoint } from './flights';
 
 const HOUR = 3_600_000;
 
@@ -44,5 +44,22 @@ describe('recordTrackPoint', () => {
     expect(pts.length).toBe(2_500);
     // Oldest points were shifted off, newest kept.
     expect(pts[pts.length - 1].lat).toBeCloseTo(2.599);
+  });
+});
+
+describe('decimateTrail', () => {
+  it('passes short trails through untouched', () => {
+    const pts = Array.from({ length: 500 }, (_, i) => pt({ lat: i * 0.001, t: i * 10_000 }));
+    expect(decimateTrail(pts)).toBe(pts);
+  });
+
+  it('bounds long trails while always keeping the newest fix', () => {
+    const pts = Array.from({ length: 2_500 }, (_, i) => pt({ lat: i * 0.001, t: i * 10_000 }));
+    const out = decimateTrail(pts);
+    expect(out.length).toBeLessThanOrEqual(700);
+    expect(out.length).toBeGreaterThan(500);
+    expect(out[out.length - 1]).toBe(pts[pts.length - 1]);
+    // Still time-ordered after the stride.
+    for (let i = 1; i < out.length; i++) expect(out[i].t).toBeGreaterThan(out[i - 1].t);
   });
 });

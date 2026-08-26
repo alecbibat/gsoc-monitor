@@ -6,6 +6,7 @@ import {
   flightAlpha,
   flightMarkerColor,
   lastSeenText,
+  resolveTrailAltitudes,
   splitTrail,
 } from './flightMarkers';
 
@@ -78,6 +79,35 @@ describe('splitTrail', () => {
     const segs = splitTrail([pt({ t: 0 }), pt({ t: 10_000 }), pt({ lat: 1, t: 20_000 })]);
     expect(segs).toHaveLength(1);
     expect(segs[0]).toHaveLength(2);
+  });
+});
+
+describe('resolveTrailAltitudes', () => {
+  it('carries the last known altitude across an airborne altitude dropout', () => {
+    const out = resolveTrailAltitudes([
+      pt({ altFt: 30_000, t: 0 }),
+      pt({ lat: 1, altFt: null, t: 10_000 }),
+      pt({ lat: 2, altFt: 31_000, t: 20_000 }),
+    ]);
+    expect(out.map((p) => p.altFt)).toEqual([30_000, 30_000, 31_000]);
+  });
+
+  it('resets the reference to the surface at a ground fix', () => {
+    const out = resolveTrailAltitudes([
+      pt({ altFt: 5_000, t: 0 }),
+      pt({ lat: 1, altFt: 0, ground: true, t: 10_000 }),
+      pt({ lat: 2, altFt: null, t: 20_000 }),
+    ]);
+    expect(out[2].altFt).toBe(0);
+  });
+
+  it('drops airborne fixes seen before any altitude reference exists', () => {
+    const out = resolveTrailAltitudes([
+      pt({ altFt: null, t: 0 }),
+      pt({ lat: 1, altFt: 20_000, t: 10_000 }),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].altFt).toBe(20_000);
   });
 });
 
