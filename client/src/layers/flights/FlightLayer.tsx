@@ -111,6 +111,10 @@ export function FlightLayer() {
         const data = await api.flightsByTail();
         if (cancelled) return;
 
+        // Publish the full list (even when the redraw below is skipped) so an
+        // open details panel tracks live state instead of its click snapshot.
+        useFlightsStatus.getState().setFlights(data.flights);
+
         const setStatus = () =>
           useFlightsStatus.getState().setStatus({
             tooWideView: false,

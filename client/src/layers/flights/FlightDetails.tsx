@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLayersStore } from '../../store/layersStore';
+import { useFlightsStatus } from './flightsStore';
 import type { AircraftInfo } from '../../types';
 import { aircraftTypeText } from './flightMarkers';
 
@@ -20,14 +21,22 @@ interface Props {
   };
 }
 
-export function FlightDetails({ payload }: Props) {
+export function FlightDetails({ payload: snapshot }: Props) {
   const favorites = useLayersStore((s) => s.flightFavorites);
   const toggleFavorite = useLayersStore((s) => s.toggleFlightFavorite);
-  const isFavorite = favorites.includes(payload.icao24);
+  const isFavorite = favorites.includes(snapshot.icao24);
+  // Prefer the layer's live poll over the click-time snapshot, so a docked
+  // panel keeps ticking — the "last seen" clock, and airframe data whose
+  // registry lookup can land minutes after the panel was opened.
+  const live = useFlightsStatus((s) => s.flights.find((f) => f.icao24 === snapshot.icao24));
+  const payload = live ?? snapshot;
   // A dead CDN link should drop the whole photo block, caption included —
   // keyed by URL so a broken image for one aircraft can't suppress another's
   // if the panel is ever reused with a different payload.
   const [brokenSrc, setBrokenSrc] = useState<string | null>(null);
+  // A fresh click on the marker stamps a new snapshot — take it as the cue to
+  // retry a photo that failed transiently, instead of hiding it forever.
+  useEffect(() => setBrokenSrc(null), [snapshot]);
 
   const num = (n: number | null, suffix: string) =>
     n != null ? `${Math.round(n).toLocaleString()} ${suffix}` : '—';
