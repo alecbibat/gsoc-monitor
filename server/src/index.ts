@@ -9,7 +9,7 @@ import { migrate } from './migrate';
 import alertsRouter from './routes/alerts';
 import earthquakesRouter from './routes/earthquakes';
 import radarRouter from './routes/radar';
-import flightsRouter from './routes/flights';
+import flightsRouter, { initFlightsTracker } from './routes/flights';
 import geocodeRouter from './routes/geocode';
 import shipsRouter, { initShipsStream } from './routes/ships';
 import newsRouter from './routes/news';
@@ -148,6 +148,9 @@ function main() {
   app.use('/api/briefing', briefingRouter);
 
   initShipsStream();
+  // Background ADS-B poller: keeps last-known aircraft positions and altitude
+  // trails accumulating (and persisted) even when no client is connected.
+  initFlightsTracker();
   // Persistent Blitzortung collector → rolling buffer behind /api/lightning so
   // the client can request the last 1/6/12/24h of strikes.
   initLightningStream();
