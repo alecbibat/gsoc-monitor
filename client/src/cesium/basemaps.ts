@@ -41,43 +41,43 @@ const ESRI_LABELS: ImagerySource = {
 };
 
 export const BASEMAPS: Record<BasemapId, BasemapDef> = {
+  // Dark/Light are Esri's gray canvas services — same keyless host as the
+  // World Imagery + labels services below. (Previously CARTO raster tiles,
+  // which now watermark every request made without an API key.) Both canvas
+  // services stop at LOD 16.
   dark: {
     label: 'Dark',
-    attribution: '© CARTO © OpenStreetMap contributors',
+    attribution: 'Esri Dark Gray Canvas · © OpenStreetMap contributors',
     build: () =>
       new Cesium.UrlTemplateImageryProvider({
-        url: 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png',
-        subdomains: ['a', 'b', 'c', 'd'],
-        maximumLevel: 18,
-        credit: new Cesium.Credit('© CARTO © OpenStreetMap contributors'),
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+        maximumLevel: 16,
+        credit: new Cesium.Credit('Esri, HERE, Garmin, © OpenStreetMap contributors'),
       }),
     overlay: {
       build: () =>
         new Cesium.UrlTemplateImageryProvider({
-          url: 'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png',
-          subdomains: ['a', 'b', 'c', 'd'],
-          maximumLevel: 18,
-          credit: new Cesium.Credit('© CARTO'),
+          url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+          maximumLevel: 16,
+          credit: new Cesium.Credit('Esri'),
         }),
     },
   },
   light: {
     label: 'Light',
-    attribution: '© CARTO © OpenStreetMap contributors',
+    attribution: 'Esri Light Gray Canvas · © OpenStreetMap contributors',
     build: () =>
       new Cesium.UrlTemplateImageryProvider({
-        url: 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',
-        subdomains: ['a', 'b', 'c', 'd'],
-        maximumLevel: 18,
-        credit: new Cesium.Credit('© CARTO © OpenStreetMap contributors'),
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+        maximumLevel: 16,
+        credit: new Cesium.Credit('Esri, HERE, Garmin, © OpenStreetMap contributors'),
       }),
     overlay: {
       build: () =>
         new Cesium.UrlTemplateImageryProvider({
-          url: 'https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png',
-          subdomains: ['a', 'b', 'c', 'd'],
-          maximumLevel: 18,
-          credit: new Cesium.Credit('© CARTO'),
+          url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+          maximumLevel: 16,
+          credit: new Cesium.Credit('Esri'),
         }),
     },
   },

@@ -42,7 +42,7 @@ function layerPopupContent(layer: DrawLayer, measure: LayerMeasure): HTMLElement
 // Interactive read-only map for the public share view. Renders ONLY the draw
 // layers belonging to the incident and opens centred on their combined extent.
 //
-// Leaflet (raster OSM/CARTO tiles) is used rather than Cesium: the share page
+// Leaflet (raster OSM/Esri tiles) is used rather than Cesium: the share page
 // is a standalone document with no other globe, the tiles are fetched directly
 // by the viewer's browser, and there is zero WebGL/GPU cost.
 
@@ -117,10 +117,14 @@ export function CrisisShareMap({ layers }: { layers: DrawLayer[] }) {
     });
     map.setView([20, 0], 2);
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
-      subdomains: 'abcd',
-      maxZoom: 19,
-      attribution: '© CARTO © OpenStreetMap contributors',
+    // Esri's dark-gray canvas ships base and labels as separate services, so
+    // this is two layers where CARTO's dark_all was one.
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 16,
+      attribution: 'Esri, HERE, Garmin, © OpenStreetMap contributors',
+    }).addTo(map);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 16,
     }).addTo(map);
 
     // Don't hijack page scroll: scroll-zoom only after the map gains focus

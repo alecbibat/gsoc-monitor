@@ -26,7 +26,7 @@ export const WILDFIRE_FEEDS = [
   { id: 'smoke', label: 'Smoke plumes', source: 'NOAA HMS' },
   { id: 'lightning', label: 'Lightning · 24 h', source: 'BLITZORTUNG' },
   { id: 'qpf', label: 'Forecast rainfall', source: 'NOAA WPC' },
-  { id: 'maps', label: 'Exposure map render', source: 'CARTO · OSM' },
+  { id: 'maps', label: 'Exposure map render', source: 'Esri · OSM' },
 ] as const satisfies readonly WildfireFeedDef[];
 
 export type WildfireFeedId = (typeof WILDFIRE_FEEDS)[number]['id'];

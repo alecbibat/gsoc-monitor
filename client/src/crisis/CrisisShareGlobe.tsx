@@ -685,7 +685,7 @@ export function CrisisShareGlobe({
           );
         })}
         <span className="ml-auto text-[9px] text-white/30">
-          Click a chip to toggle · drag to explore · © CARTO © OpenStreetMap contributors
+          Click a chip to toggle · drag to explore · © Esri © OpenStreetMap contributors
         </span>
       </div>
 
