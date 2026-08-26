@@ -93,6 +93,16 @@ export interface NwsAlertFeature {
   geometry: GeoJSON.Geometry | null;
 }
 
+// One breadcrumb of an aircraft's trail; `ground` marks taxi/parked fixes so
+// the trail can clamp them to the surface, `altFt` colours the airborne ones.
+export interface FlightTrackPoint {
+  lat: number;
+  lon: number;
+  altFt: number | null;
+  ground: boolean;
+  t: number;
+}
+
 export interface FlightState {
   icao24: string;
   callsign: string | null;
@@ -107,6 +117,7 @@ export interface FlightState {
   verticalRateFpm: number | null;
   squawk: string | null;
   lastSeenSec: number;
+  trail?: FlightTrackPoint[];
 }
 
 export interface SatelliteTle {
