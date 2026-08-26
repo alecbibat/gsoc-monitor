@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   useCrisisStore, useActiveIncident, extractPublicState, type CrisisTab,
@@ -7,8 +7,12 @@ import { incidentStatusDef, incidentTypeDef } from './taxonomy';
 import { StandDownModal } from './StandDownModal';
 import { useAuthStore } from '../auth/authStore';
 import { useIsMobile } from '../ui/useIsMobile';
-import { useCrisisPanelStore } from '../ui/uiStore';
-import { SituationReport } from './tabs/SituationReport';
+import {
+  CRISIS_DOCK_DEFAULT_WIDTH, useCrisisDockStore, useCrisisMapFrameStore,
+} from '../ui/uiStore';
+import { useCesiumViewer } from '../cesium/CesiumContext';
+import { flyToBoundingBox } from '../cesium/flyTo';
+import { SituationReport, MapLayersSection } from './tabs/SituationReport';
 import { IntakeTab } from './tabs/Intake';
 import { ChecklistsTab } from './tabs/Checklists';
 import { IncidentList } from './IncidentList';
@@ -292,7 +296,121 @@ function SyncIndicator() {
   );
 }
 
-// ── Incident detail (right-side panel, leaves the globe visible on the left) ───
+// ── Live-map dock ─────────────────────────────────────────────────────────────
+
+// The right-hand column of the crisis workspace. Its map window is
+// deliberately transparent and pointer-events-none: the overlay root lets
+// hits fall through there to the globe frame below (App.tsx pins the live
+// viewer to this window's rect), so the map stays fully interactive inside
+// the dock. The drawn-layer toolkit sits directly beneath the map it edits.
+function MapDock({ isArchived }: { isArchived: boolean }) {
+  const viewer   = useCesiumViewer();
+  const inc      = useActiveIncident();
+  const width    = useCrisisDockStore((s) => s.widthPx);
+  const setWidth = useCrisisDockStore((s) => s.setWidthPx);
+  const setRect  = useCrisisMapFrameStore((s) => s.setRect);
+  const holeRef  = useRef<HTMLDivElement>(null);
+
+  // Publish the map window's screen rect (and clear it on unmount) so the
+  // globe's container can dock itself to exactly this box.
+  useEffect(() => {
+    const el = holeRef.current;
+    if (!el) return;
+    const publish = () => {
+      const r = el.getBoundingClientRect();
+      setRect({ left: r.left, top: r.top, width: r.width, height: r.height });
+    };
+    publish();
+    const ro = new ResizeObserver(publish);
+    ro.observe(el);
+    window.addEventListener('resize', publish);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', publish);
+      setRect(null);
+    };
+  }, [setRect]);
+
+  // Left-edge drag: the dock is right-anchored, so its width is the distance
+  // from the pointer to the right viewport edge.
+  const startResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const move = (ev: PointerEvent) => {
+      const max = Math.min(720, Math.round(window.innerWidth * 0.5));
+      setWidth(Math.min(Math.max(360, window.innerWidth - ev.clientX), max));
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  const drawnLayers = (inc?.drawLayers ?? []).filter((l) => l.visible && l.positions.length > 0);
+
+  const zoomToIncident = () => {
+    if (!viewer || drawnLayers.length === 0) return;
+    let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+    for (const layer of drawnLayers) {
+      for (const p of layer.positions) {
+        if (p.lon < w) w = p.lon;
+        if (p.lon > e) e = p.lon;
+        if (p.lat < s) s = p.lat;
+        if (p.lat > n) n = p.lat;
+      }
+    }
+    // Pad the extent so a single point still frames as a sensible area.
+    const padLon = Math.max(0.05, (e - w) * 0.2);
+    const padLat = Math.max(0.05, (n - s) * 0.2);
+    flyToBoundingBox(viewer, w - padLon, s - padLat, e + padLon, n + padLat);
+  };
+
+  return (
+    <aside
+      className="pointer-events-none relative flex shrink-0 flex-col border-l border-white/10"
+      style={{ width, minWidth: 360, maxWidth: '50vw' }}
+    >
+      {/* Drag-to-resize handle */}
+      <div
+        onPointerDown={startResize}
+        onDoubleClick={() => setWidth(CRISIS_DOCK_DEFAULT_WIDTH)}
+        title="Drag to resize · double-click to reset"
+        className="group pointer-events-auto absolute inset-y-0 left-0 z-10 w-2 cursor-col-resize"
+      >
+        <div className="mx-auto h-full w-0.5 bg-transparent transition group-hover:bg-accent/40" />
+      </div>
+
+      {/* Map window header */}
+      <div className="pointer-events-auto flex shrink-0 items-center gap-2 border-b border-white/10 bg-ink-900 px-3.5 py-2">
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-ok shadow-glow" />
+        <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/55">Live Map</span>
+        <span className="truncate text-[9px] text-white/35">Drawn layers · live feeds</span>
+        <button
+          onClick={zoomToIncident}
+          disabled={drawnLayers.length === 0}
+          className="ml-auto shrink-0 rounded border border-white/12 px-2 py-1 text-[9px] text-white/45 transition hover:border-white/25 hover:text-white/70 disabled:opacity-30"
+          title="Frame the incident's drawn layers"
+        >
+          Zoom to incident
+        </button>
+      </div>
+
+      {/* Transparent map window — the live globe shows through and stays
+          interactive (see GlobeFrame in App.tsx). */}
+      <div ref={holeRef} className="pointer-events-none h-[46%] min-h-[240px] shrink-0 border-b border-white/10" />
+
+      {/* Map tooling directly under the map it edits */}
+      <div className="pointer-events-auto min-h-0 flex-1 overflow-y-auto bg-ink-950 px-4 py-4">
+        <fieldset disabled={isArchived} className="m-0 min-w-0 border-0 p-0">
+          <MapLayersSection />
+        </fieldset>
+      </div>
+    </aside>
+  );
+}
+
+// ── Incident detail (full-screen workspace with a docked live map) ────────────
 
 function IncidentDetail() {
   const close            = useCrisisStore((s) => s.close);
@@ -306,28 +424,9 @@ function IncidentDetail() {
   const [showReport, setShowReport] = useState(false);
   const [showStandDown, setShowStandDown] = useState(false);
   const isMobile = useIsMobile();
-  const panelWidth = useCrisisPanelStore((s) => s.widthPx);
-  const setPanelWidth = useCrisisPanelStore((s) => s.setWidthPx);
-
-  // Left-edge drag: the panel is right-anchored, so its width is the distance
-  // from the pointer to the right viewport edge.
-  const startResize = (e: React.PointerEvent) => {
-    e.preventDefault();
-    const move = (ev: PointerEvent) => {
-      const max = Math.round(window.innerWidth * 0.96);
-      setPanelWidth(Math.min(Math.max(460, window.innerWidth - ev.clientX), max));
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-  };
-
-  const isWide = panelWidth !== null && panelWidth > window.innerWidth * 0.7;
-  const toggleWide = () =>
-    setPanelWidth(isWide ? null : Math.round(window.innerWidth * 0.94));
+  const dockCollapsed = useCrisisDockStore((s) => s.collapsed);
+  const setDockCollapsed = useCrisisDockStore((s) => s.setCollapsed);
+  const showDock = !isMobile && !dockCollapsed;
 
   if (!inc) return null;
   const isArchived = !!inc.archivedAt;
@@ -337,37 +436,10 @@ function IncidentDetail() {
 
   return (
     <>
-    <div className="pointer-events-none fixed inset-0 z-[2000] flex">
-      {/* Left: transparent — the live globe shows through and stays interactive */}
-      <div className="pointer-events-none relative flex-1">
-        <div className="absolute left-5 top-5 rounded-lg border border-white/10 bg-ink-950/70 px-3 py-1.5 backdrop-blur-sm">
-          <div className="text-[8px] font-bold uppercase tracking-[0.18em] text-white/35">Live Map</div>
-          <div className="text-[11px] text-white/60">Drawn layers shown · drag to explore</div>
-        </div>
-      </div>
-
-      {/* Right: opaque editing panel. Default width keeps the globe's centre
-          visible; the left-edge drag handle and the expand button let the
-          operator take as much room as the work needs (persisted). */}
-      {/* /95 (not /98): Tailwind's default opacity scale has no 98 step, so
-          bg-ink-950/98 silently compiled to no background at all. */}
-      <div
-        className="pointer-events-auto relative flex h-full w-full flex-col border-l border-white/10 bg-ink-950/95 pb-safe shadow-2xl backdrop-blur-sm md:w-[46vw] md:min-w-[460px]"
-        style={!isMobile && panelWidth !== null ? { width: panelWidth, minWidth: 460, maxWidth: '96vw' } : { maxWidth: isMobile ? undefined : 720 }}
-      >
-        {/* Drag-to-resize handle (desktop) */}
-        {!isMobile && (
-          <div
-            onPointerDown={startResize}
-            onDoubleClick={() => setPanelWidth(null)}
-            title="Drag to resize · double-click to reset"
-            className="group absolute inset-y-0 left-0 z-10 w-2 cursor-col-resize"
-          >
-            <div className="mx-auto h-full w-0.5 bg-transparent transition group-hover:bg-accent/40" />
-          </div>
-        )}
-        {/* Header */}
-        <header className="flex shrink-0 items-center gap-3 border-b border-white/10 bg-ink-900/70 px-5 py-3">
+    <div className="pointer-events-none fixed inset-0 z-[2000] flex flex-col">
+      {/* Header spans the whole workspace. Surfaces are solid: this is a full
+          takeover, and translucent inks let the HUD underneath ghost through. */}
+      <header className="pointer-events-auto flex shrink-0 items-center gap-3 border-b border-white/10 bg-ink-900 px-5 py-3">
           <button
             onClick={backToList}
             className="flex items-center gap-1 rounded border border-white/10 px-2.5 py-1.5 text-[11px] text-white/45 transition hover:border-white/22 hover:text-white"
@@ -392,7 +464,7 @@ function IncidentDetail() {
             </div>
             <div className="min-w-0">
               <div className="truncate text-[9px] font-bold uppercase tracking-[0.18em] text-white/35">
-                Situation Report
+                Crisis Response
                 <span className="text-white/20"> · </span>
                 <span style={{ color: td.color }} title={`Incident type: ${td.label}`}>{td.icon} {td.label}</span>
               </div>
@@ -461,28 +533,21 @@ function IncidentDetail() {
 
             {!isMobile && (
               <button
-                onClick={toggleWide}
-                className="flex items-center gap-1.5 rounded border border-white/12 px-2.5 py-1.5 text-[11px] text-white/50 transition hover:border-white/22 hover:text-white"
-                title={isWide ? 'Restore split view (map + report)' : 'Expand the workspace (map stays live behind it)'}
-                aria-label={isWide ? 'Restore split view' : 'Expand workspace'}
+                onClick={() => setDockCollapsed(!dockCollapsed)}
+                className={`flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-[11px] transition ${
+                  dockCollapsed
+                    ? 'border-white/12 text-white/50 hover:border-white/22 hover:text-white'
+                    : 'border-accent/30 bg-accent/8 text-accent/80 hover:border-accent/50 hover:text-accent'
+                }`}
+                title={dockCollapsed ? 'Show the live-map dock' : 'Hide the map — full-width workspace'}
+                aria-pressed={!dockCollapsed}
               >
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  {isWide ? (
-                    <>
-                      <polyline points="10 4 4 4 4 10" />
-                      <polyline points="14 20 20 20 20 14" />
-                      <line x1="4" y1="4" x2="10" y2="10" />
-                      <line x1="20" y1="20" x2="14" y2="14" />
-                    </>
-                  ) : (
-                    <>
-                      <polyline points="15 3 21 3 21 9" />
-                      <polyline points="9 21 3 21 3 15" />
-                      <line x1="21" y1="3" x2="14" y2="10" />
-                      <line x1="3" y1="21" x2="10" y2="14" />
-                    </>
-                  )}
+                  <polygon points="1 6 8 3 16 6 23 3 23 18 16 21 8 18 1 21 1 6" />
+                  <line x1="8" y1="3" x2="8" y2="18" />
+                  <line x1="16" y1="6" x2="16" y2="21" />
                 </svg>
+                Map
               </button>
             )}
             <button
@@ -496,34 +561,43 @@ function IncidentDetail() {
               Esc
             </button>
           </div>
-        </header>
+      </header>
 
-        {/* Tabs */}
-        <div className="flex shrink-0 gap-1 border-b border-white/8 bg-ink-900/40 px-5 py-2">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setTab(tab.id)}
-              className={`rounded-md px-3.5 py-1.5 text-[12px] font-medium transition ${
-                activeTab === tab.id ? 'bg-accent/15 text-accent' : 'text-white/40 hover:text-white/65'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-          {['Resource Tracker', 'Comms Log'].map((label) => (
-            <button key={label} disabled className="cursor-not-allowed rounded-md px-3.5 py-1.5 text-[12px] font-medium text-white/18" title="Coming soon">
-              {label}
-            </button>
-          ))}
+      <div className="flex min-h-0 flex-1">
+        {/* Primary workspace: tabs + tab content */}
+        <div className="pointer-events-auto flex min-w-0 flex-1 flex-col bg-ink-950 pb-safe">
+          {/* Tabs */}
+          <div className="flex shrink-0 gap-1 border-b border-white/8 bg-ink-900/40 px-5 py-2">
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setTab(tab.id)}
+                className={`rounded-md px-3.5 py-1.5 text-[12px] font-medium transition ${
+                  activeTab === tab.id ? 'bg-accent/15 text-accent' : 'text-white/40 hover:text-white/65'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+            {/* /20, not /18: slash opacities outside Tailwind's scale don't
+                generate, and the un-styled text renders bright instead of faint. */}
+            {['Resource Tracker', 'Comms Log'].map((label) => (
+              <button key={label} disabled className="cursor-not-allowed rounded-md px-3.5 py-1.5 text-[12px] font-medium text-white/20" title="Coming soon">
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* Content */}
+          <main className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+            {activeTab === 'situation-report' && <SituationReport />}
+            {activeTab === 'intake' && <IntakeTab />}
+            {activeTab === 'checklists' && <ChecklistsTab />}
+          </main>
         </div>
 
-        {/* Content */}
-        <main className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-          {activeTab === 'situation-report' && <SituationReport />}
-          {activeTab === 'intake' && <IntakeTab />}
-          {activeTab === 'checklists' && <ChecklistsTab />}
-        </main>
+        {/* Live-map dock (desktop; the Map header button hides it) */}
+        {showDock && <MapDock isArchived={isArchived} />}
       </div>
     </div>
 
@@ -542,8 +616,8 @@ function IncidentDetail() {
 function IncidentListShell() {
   const close = useCrisisStore((s) => s.close);
   return (
-    <div className="fixed inset-0 z-[2000] flex flex-col bg-ink-950/95 backdrop-blur-sm">
-      <header className="flex shrink-0 items-center gap-4 border-b border-white/10 bg-ink-900/70 px-6 py-3.5">
+    <div className="fixed inset-0 z-[2000] flex flex-col bg-ink-950">
+      <header className="flex shrink-0 items-center gap-4 border-b border-white/10 bg-ink-900 px-6 py-3.5">
         <div className="flex items-center gap-2.5">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />

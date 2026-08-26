@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import type * as Cesium from 'cesium';
 import { ShareErrorBoundary } from './crisis/ShareErrorBoundary';
 import { CesiumContext } from './cesium/CesiumContext';
@@ -66,6 +66,7 @@ import { CrisisDrawController } from './crisis/CrisisDrawController';
 import { CrisisLayerPopup } from './crisis/CrisisLayerPopup';
 import { IncidentSync } from './crisis/IncidentSync';
 import { useCrisisStore } from './crisis/crisisStore';
+import { useCrisisMapFrameStore } from './ui/uiStore';
 import { useDashboardStore } from './dashboard/dashboardStore';
 import { useRiskReportStore } from './riskreport/riskReportStore';
 import { AuthGate } from './auth/AuthGate';
@@ -91,6 +92,38 @@ const DashboardView = lazy(() =>
 const RiskReportHost = lazy(() =>
   import('./riskreport/RiskReportHost').then((m) => ({ default: m.RiskReportHost }))
 );
+
+// While a crisis incident is open, the workspace overlay owns the screen and
+// this wrapper pins the (single, always-mounted) globe into the dock's map
+// window instead of the full viewport. Resizing the container keeps the
+// Cesium viewer alive — reparenting would destroy and rebuild it — so camera,
+// imagery and layers survive every open/close. z-50 keeps the frame above the
+// base HUD (legends are z-30) but below the z-[2000] overlay, whose
+// transparent map window is the only place it shows through. Drawing mode
+// closes the overlay, so the frame snaps back to full viewport for it.
+function GlobeFrame({ viewer, children }: { viewer: Cesium.Viewer | null; children: ReactNode }) {
+  const docked = useCrisisStore((s) => s.open && s.activeIncidentId !== null);
+  const rect = useCrisisMapFrameStore((s) => s.rect);
+  const frame = docked ? rect : null;
+
+  // Kick Cesium after every frame change — its own per-tick size check picks
+  // resizes up eventually, but an explicit resize+render avoids a stale
+  // stretched frame in requestRenderMode.
+  useEffect(() => {
+    if (!viewer || viewer.isDestroyed()) return;
+    viewer.resize();
+    viewer.scene.requestRender();
+  }, [viewer, frame]);
+
+  return (
+    <div
+      className={frame ? 'fixed z-[50] overflow-hidden' : 'absolute inset-0'}
+      style={frame ? { left: frame.left, top: frame.top, width: frame.width, height: frame.height } : undefined}
+    >
+      {children}
+    </div>
+  );
+}
 
 function CrisisOverlayGate() {
   const open = useCrisisStore((s) => s.open);
@@ -148,6 +181,7 @@ export default function App() {
           and the transparent Cesium canvas sits above that. */}
       <div className="relative h-full w-full overflow-hidden bg-black">
         <StarField />
+        <GlobeFrame viewer={viewer}>
         <CesiumGlobe onReady={setViewer}>
           <RadarLayer />
           <EarthquakeLayer />
@@ -179,6 +213,7 @@ export default function App() {
           <CrisisMapLayer />
           <ShipModelLayer />
         </CesiumGlobe>
+        </GlobeFrame>
         <TopBar />
         <TitleBadge />
         <Sidebar />
