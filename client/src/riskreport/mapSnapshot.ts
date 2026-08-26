@@ -1,18 +1,18 @@
 // ── Canvas map snapshots for the risk report ─────────────────────────────────
-// Small, deterministic map images rendered off-DOM: CARTO dark tiles as the
-// base, optional ArcGIS export overlays (LANDFIRE fuels, WPC QPF) fetched for
-// the exact canvas bbox, and vector overlays (rings, hotspots, alert polygons)
-// drawn on top. Result is a data-URL <img>, which both the on-screen report
-// and the print pipeline handle natively. Every network piece is best-effort:
-// failed tiles leave dark background, a fully failed snapshot returns null and
-// the report simply omits that map.
+// Small, deterministic map images rendered off-DOM: Esri dark-gray canvas
+// tiles as the base, optional ArcGIS export overlays (LANDFIRE fuels, WPC QPF)
+// fetched for the exact canvas bbox, and vector overlays (rings, hotspots,
+// alert polygons) drawn on top. Result is a data-URL <img>, which both the
+// on-screen report and the print pipeline handle natively. Every network piece
+// is best-effort: failed tiles leave dark background, a fully failed snapshot
+// returns null and the report simply omits that map.
 
 const TILE = 256;
-const SUBDOMAINS = ['a', 'b', 'c', 'd'];
-const BASE_URL = (s: string, z: number, x: number, y: number) =>
-  `https://${s}.basemaps.cartocdn.com/dark_nolabels/${z}/${x}/${y}.png`;
-const LABELS_URL = (s: string, z: number, x: number, y: number) =>
-  `https://${s}.basemaps.cartocdn.com/dark_only_labels/${z}/${x}/${y}.png`;
+// Esri tile paths are z/y/x; the builders still take slippy (z, x, y).
+const BASE_URL = (z: number, x: number, y: number) =>
+  `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/${z}/${y}/${x}`;
+const LABELS_URL = (z: number, x: number, y: number) =>
+  `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/${z}/${y}/${x}`;
 
 const MERC_MAX = 20037508.342789244;
 
@@ -55,8 +55,8 @@ export interface SnapshotOptions {
   height: number;
   /**
    * Alternative base-tile source (slippy XYZ), e.g. NASA GIBS true color.
-   * Defaults to CARTO dark. `maxZoom` caps the chosen zoom for sources with
-   * limited levels.
+   * Defaults to the Esri dark-gray canvas. `maxZoom` caps the chosen zoom for
+   * sources with limited levels.
    */
   base?: {
     url: (z: number, x: number, y: number) => string;
@@ -67,7 +67,7 @@ export interface SnapshotOptions {
   overlayAlpha?: number;
   /** Vector drawing pass, on top of everything. */
   draw?: (ctx: CanvasRenderingContext2D, proj: SnapshotProjection) => void;
-  /** Render the CARTO labels layer above overlays (default true). */
+  /** Render the place-label layer above overlays (default true). */
   labels?: boolean;
   attribution?: string;
 }
@@ -147,11 +147,8 @@ export async function renderMapSnapshot(opts: SnapshotOptions): Promise<string |
     const y1 = Math.floor((originY + h) / TILE);
     const maxTile = 2 ** zoom;
 
-    // URL builders take slippy (z, x, y); CARTO picks a subdomain by tile hash.
-    const carto = (tpl: typeof BASE_URL) => (z: number, x: number, y: number) =>
-      tpl(SUBDOMAINS[(x + y) % SUBDOMAINS.length], z, x, y);
-    const baseUrlOf = opts.base?.url ?? carto(BASE_URL);
-    const labelsUrlOf = carto(LABELS_URL);
+    const baseUrlOf = opts.base?.url ?? BASE_URL;
+    const labelsUrlOf = LABELS_URL;
 
     const drawTile = async (
       urlOf: (z: number, x: number, y: number) => string,
@@ -196,7 +193,7 @@ export async function renderMapSnapshot(opts: SnapshotOptions): Promise<string |
     if (opts.draw) opts.draw(ctx, proj);
 
     // Attribution strip ('' opts out — tiny multiples carry it in the caption).
-    const attr = opts.attribution ?? '© CARTO © OpenStreetMap contributors';
+    const attr = opts.attribution ?? '© Esri © OpenStreetMap contributors';
     if (attr) {
       ctx.font = `${10 * scale}px Inter, sans-serif`;
       const tw = ctx.measureText(attr).width;

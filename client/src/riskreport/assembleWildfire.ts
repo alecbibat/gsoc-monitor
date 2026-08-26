@@ -584,7 +584,7 @@ export async function assembleWildfireReport(
     fitRadiusM: MAX_RING_MI * MILES_TO_M,
     width: MAP_W,
     height: 420,
-    attribution: '© CARTO © OSM · hotspots NASA FIRMS · incidents NIFC',
+    attribution: '© Esri © OSM · hotspots NASA FIRMS · incidents NIFC',
     draw: (ctx, proj) => {
       for (const ring of RISK_RINGS) {
         drawRing(ctx, proj, target.lat, target.lon, ring.miles * MILES_TO_M, {
@@ -628,7 +628,7 @@ export async function assembleWildfireReport(
         fitRadiusM: 60 * MILES_TO_M,
         width: MAP_W,
         height: 340,
-        attribution: '© CARTO © OSM · alerts NWS',
+        attribution: '© Esri © OSM · alerts NWS',
         draw: (ctx, proj) => {
           for (const s of alertShapes) {
             drawPolygon(ctx, proj, s.rings, { fill: `${s.colorHex}38`, stroke: s.colorHex, width: 3 });
@@ -654,7 +654,7 @@ export async function assembleWildfireReport(
           `?bbox=${proj.bbox3857.join(',')}` +
           `&bboxSR=3857&imageSR=3857&size=${proj.width},${proj.height}` +
           '&format=png32&transparent=true&f=image',
-        attribution: '© CARTO © OSM · fuels LANDFIRE LF2024 FBFM40',
+        attribution: '© Esri © OSM · fuels LANDFIRE LF2024 FBFM40',
         draw: (ctx, proj) => {
           drawRing(ctx, proj, target.lat, target.lon, 3 * MILES_TO_M, {
             stroke: 'rgba(255,255,255,0.85)', width: 3, label: '3 mi analysis ring',
@@ -678,7 +678,7 @@ export async function assembleWildfireReport(
       `&bboxSR=3857&imageSR=3857&size=${proj.width},${proj.height}` +
       `&layers=show:${QPF_LAYER['72h']}` +
       '&format=png32&transparent=true&f=image',
-    attribution: '© CARTO © OSM · QPF NOAA/WPC',
+    attribution: '© Esri © OSM · QPF NOAA/WPC',
     draw: (ctx, proj) => {
       // High-contrast ring: dark casing under a bright dashed stroke — the
       // faint cyan version disappeared against the QPF ramp.
@@ -706,7 +706,7 @@ export async function assembleWildfireReport(
           fitRadiusM: 250 * MILES_TO_M,
           width: MAP_W,
           height: 380,
-          attribution: '© CARTO © OSM · outlook NWCG Predictive Services',
+          attribution: '© Esri © OSM · outlook NWCG Predictive Services',
           draw: (ctx, proj) => {
             for (const p of outlookValue.psas) {
               const st = outlookStyle(p.days[outlookTodayIdx]?.dryness ?? null, p.days[outlookTodayIdx]?.type ?? null);
@@ -753,7 +753,7 @@ export async function assembleWildfireReport(
         `/default/${smokeImageryDate}/GoogleMapsCompatible_Level9/${z}/${y}/${x}.jpg`,
       maxZoom: 9,
     },
-    attribution: 'NASA GIBS MODIS Aqua · smoke NOAA HMS · labels © CARTO',
+    attribution: 'NASA GIBS MODIS Aqua · smoke NOAA HMS · labels © Esri',
     draw: (ctx, proj) => {
       const DENSITY_RANK: Record<string, number> = { Light: 0, Medium: 1, Heavy: 2 };
       const ordered = smokePolys.slice().sort((a, b) => (DENSITY_RANK[a.density] ?? 0) - (DENSITY_RANK[b.density] ?? 0));
@@ -791,7 +791,7 @@ export async function assembleWildfireReport(
         fitRadiusM: 110 * MILES_TO_M,
         width: MAP_W,
         height: 400,
-        attribution: '© CARTO © OSM · strikes Blitzortung.org',
+        attribution: '© Esri © OSM · strikes Blitzortung.org',
         draw: (ctx, proj) => {
           const nowS = Date.now() / 1000;
           for (const s of strikes.slice().sort((a, b) => a.t - b.t)) {
@@ -883,7 +883,7 @@ export async function assembleWildfireReport(
       { name: 'NOAA HMS', detail: 'analyst-drawn smoke plumes from GOES/VIIRS imagery, latest analysis day' },
       { name: 'NASA GIBS', detail: 'MODIS Aqua true-color daily mosaic (satellite snapshot base)' },
       { name: 'Blitzortung.org', detail: 'community lightning detection network, past 24 h of strikes' },
-      { name: 'CARTO · OpenStreetMap', detail: 'map snapshot base tiles' },
+      { name: 'Esri · OpenStreetMap', detail: 'map snapshot base tiles' },
     ],
     gaps,
     maps: {
