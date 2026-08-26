@@ -103,6 +103,23 @@ export interface FlightTrackPoint {
   t: number;
 }
 
+// Static airframe identity looked up from registry/photo services, served
+// alongside the live state once the server has resolved it.
+export interface AircraftPhoto {
+  src: string;
+  link: string;
+  photographer: string;
+}
+
+export interface AircraftInfo {
+  manufacturer: string | null;
+  model: string | null;
+  icaoType: string | null;
+  owner: string | null;
+  photo: AircraftPhoto | null;
+  fetchedAt: number;
+}
+
 export interface FlightState {
   icao24: string;
   callsign: string | null;
@@ -118,6 +135,7 @@ export interface FlightState {
   squawk: string | null;
   lastSeenSec: number;
   trail?: FlightTrackPoint[];
+  aircraftInfo?: AircraftInfo | null;
 }
 
 export interface SatelliteTle {
