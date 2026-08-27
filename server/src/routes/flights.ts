@@ -5,9 +5,39 @@ import { fetchAircraftInfo, type AircraftInfo } from '../aircraftInfo';
 
 const router = Router();
 
-// The only aircraft this app tracks. Uses adsb.fi's per-registration endpoint
-// so they appear anywhere in the world regardless of camera viewport.
-const TRACKED_TAILS = ['N10AZ', 'N14NA', 'N154LA'] as const;
+// Aircraft this app tracks, by named group. Uses adsb.fi's per-registration
+// endpoint so they appear anywhere in the world regardless of camera viewport.
+//
+//   company           — the operator's own tails: full-rate tracking.
+//   hurricane-hunters — NOAA's reconnaissance fleet (the USAF WC-130Js fly
+//                       under mission callsigns on military hexes, so the
+//                       per-registration endpoint can't see them).
+//   fire-tankers      — 10 Tanker's DC-10 VLAT fleet; extend this roster with
+//                       other verified registrations as needed.
+//
+// Special groups poll on a slower fixed clock (SPECIAL_POLL_MS) so the total
+// request rate stays well inside adsb.fi's guidance.
+export type FlightGroupId = 'company' | 'hurricane-hunters' | 'fire-tankers';
+
+interface TrackedAircraft {
+  reg: string;
+  group: FlightGroupId;
+}
+
+const TRACKED: TrackedAircraft[] = [
+  { reg: 'N10AZ', group: 'company' },
+  { reg: 'N14NA', group: 'company' },
+  { reg: 'N154LA', group: 'company' },
+  { reg: 'N42RF', group: 'hurricane-hunters' }, // WP-3D Orion "Kermit"
+  { reg: 'N43RF', group: 'hurricane-hunters' }, // WP-3D Orion "Miss Piggy"
+  { reg: 'N49RF', group: 'hurricane-hunters' }, // Gulfstream IV-SP "Gonzo"
+  { reg: 'N17085', group: 'fire-tankers' }, // Tanker 910
+  { reg: 'N522AX', group: 'fire-tankers' }, // Tanker 911
+  { reg: 'N603AX', group: 'fire-tankers' }, // Tanker 912
+  { reg: 'N612AX', group: 'fire-tankers' }, // Tanker 914
+];
+const TRACKED_TAILS = TRACKED.map((t) => t.reg);
+const GROUP_OF = new Map(TRACKED.map((t) => [t.reg, t.group]));
 
 // adsb.fi open data API — free, no authentication. Per-registration endpoint
 // returns an array of matching aircraft (usually 0 or 1 per registration).
@@ -158,6 +188,92 @@ export function decimateTrail(
   return out.reverse();
 }
 
+// --- Takeoff / landing events ------------------------------------------------
+// Every grounded↔airborne transition the tracker witnesses becomes a feed
+// event ("N10AZ departed …"). The client resolves the coordinates to a nearby
+// city for display, so events carry only raw state.
+export interface FlightEvent {
+  id: string;
+  reg: string;
+  group: FlightGroupId;
+  kind: 'takeoff' | 'landing';
+  lat: number;
+  lon: number;
+  t: number;
+}
+
+const events: FlightEvent[] = [];
+const MAX_EVENTS = 200;
+// A flip only becomes an event once the NEW state has persisted this long —
+// confirm-then-emit, so a single glitched fix or a touch-and-go bounce never
+// produces a phantom departure/arrival (the flip is dropped the moment the
+// state reverts to the confirmed one).
+const EVENT_MIN_HELD_MS = 2 * 60_000;
+
+interface PendingTransition {
+  kind: 'takeoff' | 'landing';
+  lat: number;
+  lon: number;
+  /** Fix time of the first flip — becomes the event's timestamp when confirmed. */
+  sinceT: number;
+}
+
+export interface TransitionTracker {
+  /** The last on-ground state that persisted long enough to be believed. */
+  confirmedOnGround: boolean;
+  pending: PendingTransition | null;
+}
+
+/**
+ * Advance one aircraft's takeoff/landing state machine with a fresh fix.
+ * Exported for tests.
+ */
+export function advanceTransition(
+  s: TransitionTracker | undefined,
+  onGround: boolean,
+  lat: number,
+  lon: number,
+  fixAt: number
+): { state: TransitionTracker; emit: PendingTransition | null } {
+  if (!s) {
+    // First sighting: adopt the state, never emit — we didn't witness a flip.
+    return { state: { confirmedOnGround: onGround, pending: null }, emit: null };
+  }
+  if (onGround === s.confirmedOnGround) {
+    // Back to (or still in) the believed state — any pending flip was jitter.
+    return { state: { confirmedOnGround: s.confirmedOnGround, pending: null }, emit: null };
+  }
+  if (!s.pending) {
+    return {
+      state: {
+        confirmedOnGround: s.confirmedOnGround,
+        pending: { kind: onGround ? 'landing' : 'takeoff', lat, lon, sinceT: fixAt },
+      },
+      emit: null,
+    };
+  }
+  if (fixAt - s.pending.sinceT >= EVENT_MIN_HELD_MS) {
+    return { state: { confirmedOnGround: onGround, pending: null }, emit: s.pending };
+  }
+  return { state: s, emit: null };
+}
+
+const transitions = new Map<string, TransitionTracker>();
+
+function recordFlightEvent(reg: string, e: PendingTransition): void {
+  events.push({
+    id: `${reg}-${e.kind}-${e.sinceT}`,
+    reg,
+    group: GROUP_OF.get(reg) ?? 'company',
+    kind: e.kind,
+    lat: e.lat,
+    lon: e.lon,
+    t: e.sinceT,
+  });
+  if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS);
+  snapshotDirty = true;
+}
+
 // --- Static airframe metadata ------------------------------------------------
 // Make/model/operator and a photo per tail (see ../aircraftInfo). An airframe's
 // identity is permanent, so a successful lookup is cached in memory and in the
@@ -222,6 +338,8 @@ interface FlightsSnapshot {
   history: Array<{ reg: string; pts: FlightTrackPoint[] }>;
   /** Absent in snapshots written before airframe metadata existed. */
   aircraft?: Array<{ reg: string; info: AircraftInfo }>;
+  /** Absent in snapshots written before the takeoff/landing feed existed. */
+  events?: FlightEvent[];
   savedAt: number;
 }
 
@@ -237,6 +355,7 @@ function saveSnapshot(): void {
     flights: [...lastKnown.entries()].map(([reg, flight]) => ({ reg, flight })),
     history: [...history.entries()].map(([reg, pts]) => ({ reg, pts })),
     aircraft: [...aircraft.entries()].map(([reg, info]) => ({ reg, info })),
+    events: [...events],
     savedAt: Date.now(),
   };
   pool
@@ -297,6 +416,18 @@ async function loadSnapshot(attempts = 5): Promise<void> {
         if (existing && existing.fetchedAt >= info.fetchedAt) continue;
         aircraft.set(reg, info);
       }
+      {
+        // Same merge discipline as the trails: a live poll may have recorded
+        // events while this load was retrying — prepend the persisted feed.
+        const cutoffEvents = Date.now() - 7 * 24 * 60 * 60_000;
+        const restoredEvents = (snap.events ?? []).filter(
+          (e) => tails.has(e?.reg) && typeof e?.t === 'number' && e.t >= cutoffEvents
+        );
+        const oldestLive = events[0]?.t ?? Infinity;
+        const merged = [...restoredEvents.filter((e) => e.t < oldestLive), ...events];
+        events.length = 0;
+        events.push(...merged.slice(-MAX_EVENTS));
+      }
       if (restored > 0) {
         const ageMin = Math.round((Date.now() - (snap.savedAt ?? 0)) / 60_000);
         console.log(`[flights] restored ${restored} aircraft from snapshot (${ageMin} min old)`);
@@ -317,12 +448,16 @@ async function loadSnapshot(attempts = 5): Promise<void> {
 
 // --- Background polling ------------------------------------------------------
 // The tracker polls continuously so trails keep accumulating and last-known
-// positions stay fresh even with no client connected: near-live cadence while
-// someone is watching, a slow keep-warm tick otherwise. Both stay well inside
-// adsb.fi's 1 req/s guidance (3 small requests per tick).
+// positions stay fresh even with no client connected: near-live cadence for
+// the company tails while someone is watching, a slow keep-warm tick
+// otherwise. The special groups (hunters, tankers) ride a fixed 60s clock
+// regardless — mission aircraft don't need 10s fidelity, and the combined
+// request rate stays well inside adsb.fi's 1 req/s guidance.
 const FAST_POLL_MS = 10_000;
 const IDLE_POLL_MS = 60_000;
+const SPECIAL_POLL_MS = 60_000;
 const WATCH_WINDOW_MS = 5 * 60_000;
+let lastSpecialPollAt = 0;
 
 let lastClientAt = 0;
 let lastPollAt = 0;
@@ -342,6 +477,16 @@ function applyFix(reg: string, f: NormalizedFlight): void {
   // re-served same message, whose fixAt shifts by clock jitter only — otherwise
   // the snapshot would be rewritten for nothing.
   if (prev && fixAt <= prev.updatedAt + (moved ? 0 : 2_000)) return;
+
+  const trans = advanceTransition(
+    transitions.get(reg),
+    f.onGround,
+    f.latitude,
+    f.longitude,
+    fixAt
+  );
+  transitions.set(reg, trans.state);
+  if (trans.emit) recordFlightEvent(reg, trans.emit);
 
   lastKnown.set(reg, { ...f, updatedAt: fixAt });
   let pts = history.get(reg);
@@ -365,7 +510,12 @@ async function fetchTail(reg: string): Promise<void> {
     headers: { 'User-Agent': config.nwsUserAgent, Accept: 'application/json' },
     signal: AbortSignal.timeout(10_000),
   });
-  if (!r.ok) return;
+  if (!r.ok) {
+    // Being throttled must be visible — aircraft silently freezing on the map
+    // is the exact failure an operator can't diagnose from the client.
+    if (r.status === 429) console.warn('[flights] adsb.fi throttled (429) for', reg);
+    return;
+  }
   const json = (await r.json()) as { ac?: AdsbAircraft[] };
   for (const a of json.ac ?? []) {
     const f = normalizeOne(a);
@@ -380,7 +530,18 @@ async function fetchTail(reg: string): Promise<void> {
 function poll(): Promise<void> {
   if (pollInFlight) return pollInFlight;
   pollInFlight = (async () => {
-    await Promise.allSettled(TRACKED_TAILS.map((reg) => fetchTail(reg)));
+    const includeSpecials = Date.now() - lastSpecialPollAt >= SPECIAL_POLL_MS - 1_000;
+    // Company tails go out together (a 3-request burst, as ever); the special
+    // rosters trickle sequentially behind them so a specials tick never slams
+    // adsb.fi with a 10-wide burst.
+    const company = TRACKED.filter((t) => t.group === 'company');
+    const specials = includeSpecials ? TRACKED.filter((t) => t.group !== 'company') : [];
+    await Promise.allSettled(company.map((t) => fetchTail(t.reg)));
+    for (const t of specials) {
+      await fetchTail(t.reg).catch(() => {});
+      await new Promise((res) => setTimeout(res, 150));
+    }
+    if (includeSpecials) lastSpecialPollAt = Date.now();
     lastPollAt = Date.now();
     pruneHistories();
     // Airframe metadata lookups run beside the poll, not in it — the retry
@@ -433,6 +594,7 @@ router.get('/registrations', async (_req, res) => {
     return [
       {
         ...f,
+        group: GROUP_OF.get(reg) ?? 'company',
         lastSeenSec: Math.max(0, Math.round((now - f.updatedAt) / 1000)),
         // `track` is already the ground-track heading, so the breadcrumb
         // history travels as `trail`.
@@ -441,7 +603,12 @@ router.get('/registrations', async (_req, res) => {
       },
     ];
   });
-  res.json({ flights, trackedTails: [...TRACKED_TAILS] });
+  res.json({
+    flights,
+    trackedTails: [...TRACKED_TAILS],
+    // Newest first; the sidebar feed only shows a handful.
+    events: events.slice(-40).reverse(),
+  });
 });
 
 export default router;

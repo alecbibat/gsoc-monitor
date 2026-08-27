@@ -1,4 +1,4 @@
-import type { AircraftInfo, FlightTrackPoint } from '../../types';
+import type { AircraftInfo, FlightGroupId, FlightTrackPoint } from '../../types';
 
 /**
  * The aircraft map marker and trail palette.
@@ -122,11 +122,25 @@ export function aircraftTypeText(
   return name || info?.icaoType || feedType || null;
 }
 
-function planeImage(color: string): string {
+// One silhouette per group, all nose-up so billboard rotation works the same:
+//   company           — the original swept business-jet dart.
+//   hurricane-hunters — straight-wing four-engine turboprop (P-3 planform).
+//   fire-tankers      — fat-fuselage wide-body with broad swept wings.
+const SILHOUETTES: Record<FlightGroupId, string> = {
+  company:
+    '<path d="M32 2 L36 22 L58 40 L58 46 L36 38 L36 50 L46 58 L46 62 L32 58 L18 62 L18 58 L28 50 L28 38 L6 46 L6 40 L28 22 Z"/>',
+  'hurricane-hunters':
+    '<path d="M32 2 L35 8 L35 22 L60 24 L60 32 L35 32 L35 46 L45 50 L45 56 L34 54 L32 60 L30 54 L19 56 L19 50 L29 46 L29 32 L4 32 L4 24 L29 22 L29 8 Z"/>' +
+    '<circle cx="13" cy="24" r="3"/><circle cx="22" cy="23" r="3"/>' +
+    '<circle cx="42" cy="23" r="3"/><circle cx="51" cy="24" r="3"/>',
+  'fire-tankers':
+    '<path d="M32 2 L38 10 L38 24 L62 42 L62 49 L38 40 L38 48 L50 58 L50 63 L32 57 L14 63 L14 58 L26 48 L26 40 L2 49 L2 42 L26 24 L26 10 Z"/>',
+};
+
+function planeImage(color: string, variant: FlightGroupId): string {
   const svg =
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">' +
-    '<path d="M32 2 L36 22 L58 40 L58 46 L36 38 L36 50 L46 58 L46 62 L32 58 L18 62 L18 58 L28 50 L28 38 L6 46 L6 40 L28 22 Z" ' +
-    `fill="${color}" stroke="#05222b" stroke-width="2"/></svg>`;
+    `<g fill="${color}" stroke="#05222b" stroke-width="2">${SILHOUETTES[variant]}</g></svg>`;
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
@@ -144,11 +158,12 @@ function chevronImage(color: string): string {
 
 const uriCache = new Map<string, string>();
 
-export function planeIconUri(color: string): string {
-  let uri = uriCache.get(`plane|${color}`);
+export function planeIconUri(color: string, variant: FlightGroupId = 'company'): string {
+  const key = `plane|${variant}|${color}`;
+  let uri = uriCache.get(key);
   if (uri === undefined) {
-    uri = planeImage(color);
-    uriCache.set(`plane|${color}`, uri);
+    uri = planeImage(color, variant);
+    uriCache.set(key, uri);
   }
   return uri;
 }
