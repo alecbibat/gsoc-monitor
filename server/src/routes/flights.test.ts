@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   advanceTransition,
   decimateTrail,
+  iconExpired,
   recordTrackPoint,
   type FlightTrackPoint,
   type TransitionTracker,
@@ -39,6 +40,13 @@ describe('recordTrackPoint', () => {
     const pts: FlightTrackPoint[] = [pt({ lat: 0, t: 0 }), pt({ lat: 0.01, t: 12 * HOUR })];
     recordTrackPoint(pts, pt({ lat: 0.02, t: 25 * HOUR }));
     expect(pts.map((p) => p.t)).toEqual([12 * HOUR, 25 * HOUR]);
+  });
+
+  it('honours a per-group trail window when given one', () => {
+    const TWO_H = 2 * 3_600_000;
+    const pts: FlightTrackPoint[] = [pt({ lat: 0, t: 0 }), pt({ lat: 0.01, t: TWO_H / 2 })];
+    recordTrackPoint(pts, pt({ lat: 0.02, t: TWO_H + 60_000 }), TWO_H);
+    expect(pts.map((p) => p.t)).toEqual([TWO_H / 2, TWO_H + 60_000]);
   });
 
   it('caps the trail length', () => {
@@ -113,6 +121,20 @@ describe('advanceTransition', () => {
     ]);
     expect(emitted).toEqual([{ kind: 'landing', t: 30_000 }]);
     expect(state.confirmedOnGround).toBe(true);
+  });
+});
+
+describe('iconExpired', () => {
+  const TWO_H = 2 * 3_600_000;
+
+  it('never expires company tails, however stale', () => {
+    expect(iconExpired('N10AZ', 0, 365 * 24 * 3_600_000)).toBe(false);
+  });
+
+  it('hides special-roster aircraft past their 2h TTL and shows them within it', () => {
+    expect(iconExpired('N42RF', 1_000_000, 1_000_000 + TWO_H + 1)).toBe(true);
+    expect(iconExpired('N42RF', 1_000_000, 1_000_000 + TWO_H - 60_000)).toBe(false);
+    expect(iconExpired('N612AX', 1_000_000, 1_000_000 + TWO_H + 1)).toBe(true);
   });
 });
 
