@@ -39,6 +39,36 @@ const TRACKED: TrackedAircraft[] = [
 const TRACKED_TAILS = TRACKED.map((t) => t.reg);
 const GROUP_OF = new Map(TRACKED.map((t) => [t.reg, t.group]));
 
+// Per-group display persistence. Company tails are assets — they stay on the
+// map forever at last-known position with a day of trail. The special rosters
+// are mission context: they appear while operating (and for iconTtlMs after
+// going dark), drag a short trail, then clear off the globe until their next
+// mission. Hidden aircraft stay in lastKnown/the snapshot, so they reappear
+// the moment they transmit again.
+interface GroupConfig {
+  /** How long a trail breadcrumb lives. */
+  trailAgeMs: number;
+  /** Hide the marker this long after the last fix; null = keep forever. */
+  iconTtlMs: number | null;
+}
+
+const HOUR_MS = 60 * 60_000;
+const GROUP_CONFIG: Record<FlightGroupId, GroupConfig> = {
+  company: { trailAgeMs: 24 * HOUR_MS, iconTtlMs: null },
+  'hurricane-hunters': { trailAgeMs: 2 * HOUR_MS, iconTtlMs: 2 * HOUR_MS },
+  'fire-tankers': { trailAgeMs: 2 * HOUR_MS, iconTtlMs: 2 * HOUR_MS },
+};
+
+function configFor(reg: string): GroupConfig {
+  return GROUP_CONFIG[GROUP_OF.get(reg) ?? 'company'];
+}
+
+/** Whether a tail's marker has aged off the map. Exported for tests. */
+export function iconExpired(reg: string, updatedAt: number, now: number): boolean {
+  const ttl = configFor(reg).iconTtlMs;
+  return ttl !== null && now - updatedAt > ttl;
+}
+
 // adsb.fi open data API — free, no authentication. Per-registration endpoint
 // returns an array of matching aircraft (usually 0 or 1 per registration).
 interface AdsbAircraft {
@@ -134,7 +164,8 @@ export interface FlightTrackPoint {
 const history = new Map<string, FlightTrackPoint[]>();
 
 const MAX_TRACK_POINTS = 2500; // ~7h of continuous flight at the 10s cadence
-const MAX_TRACK_AGE_MS = 24 * 60 * 60_000;
+// Default trail window; each group overrides via GROUP_CONFIG.trailAgeMs.
+const DEFAULT_TRACK_AGE_MS = 24 * 60 * 60_000;
 const MIN_TRACK_MOVE_M = 30; // ignore transponder jitter while parked
 
 function haversineM(aLat: number, aLon: number, bLat: number, bLon: number): number {
@@ -149,20 +180,25 @@ function haversineM(aLat: number, aLon: number, bLat: number, bLon: number): num
 
 // Append a fix to a trail in place, applying the movement threshold and the
 // age/count caps. Exported for tests.
-export function recordTrackPoint(pts: FlightTrackPoint[], p: FlightTrackPoint): void {
+export function recordTrackPoint(
+  pts: FlightTrackPoint[],
+  p: FlightTrackPoint,
+  maxAgeMs: number = DEFAULT_TRACK_AGE_MS
+): void {
   const last = pts[pts.length - 1];
   if (last && haversineM(last.lat, last.lon, p.lat, p.lon) < MIN_TRACK_MOVE_M) return;
   pts.push(p);
-  const cutoff = p.t - MAX_TRACK_AGE_MS;
+  const cutoff = p.t - maxAgeMs;
   while (pts.length > MAX_TRACK_POINTS || (pts.length > 0 && pts[0].t < cutoff)) pts.shift();
 }
 
 // Recording only purges when a new moving fix arrives, so a parked aircraft
 // would otherwise keep yesterday's trail on the map (and in the snapshot)
-// forever. Run the age cutoff on every poll instead.
+// forever. Run each group's age cutoff on every poll instead.
 function pruneHistories(): void {
-  const cutoff = Date.now() - MAX_TRACK_AGE_MS;
-  for (const pts of history.values()) {
+  const now = Date.now();
+  for (const [reg, pts] of history) {
+    const cutoff = now - configFor(reg).trailAgeMs;
     let dropped = false;
     while (pts.length > 0 && pts[0].t < cutoff) {
       pts.shift();
@@ -397,9 +433,10 @@ async function loadSnapshot(attempts = 5): Promise<void> {
         lastKnown.set(reg, flight);
         restored++;
       }
-      const cutoff = Date.now() - MAX_TRACK_AGE_MS;
+      const restoredAt = Date.now();
       for (const { reg, pts } of snap.history ?? []) {
         if (!tails.has(reg) || !Array.isArray(pts)) continue;
+        const cutoff = restoredAt - configFor(reg).trailAgeMs;
         const kept = pts.filter((p) => typeof p?.lat === 'number' && p.t >= cutoff);
         if (kept.length === 0) continue;
         // A client request can trigger a live poll while this load is still
@@ -494,13 +531,17 @@ function applyFix(reg: string, f: NormalizedFlight): void {
     pts = [];
     history.set(reg, pts);
   }
-  recordTrackPoint(pts, {
-    lat: f.latitude,
-    lon: f.longitude,
-    altFt: f.altitudeFt,
-    ground: f.onGround,
-    t: fixAt,
-  });
+  recordTrackPoint(
+    pts,
+    {
+      lat: f.latitude,
+      lon: f.longitude,
+      altFt: f.altitudeFt,
+      ground: f.onGround,
+      t: fixAt,
+    },
+    configFor(reg).trailAgeMs
+  );
   snapshotDirty = true;
 }
 
@@ -590,7 +631,9 @@ router.get('/registrations', async (_req, res) => {
   const now = Date.now();
   const flights = TRACKED_TAILS.flatMap((reg) => {
     const f = lastKnown.get(reg);
-    if (!f) return [];
+    // A special-roster aircraft past its icon TTL is hidden, not forgotten —
+    // it stays persisted and reappears the moment it transmits again.
+    if (!f || iconExpired(reg, f.updatedAt, now)) return [];
     return [
       {
         ...f,
