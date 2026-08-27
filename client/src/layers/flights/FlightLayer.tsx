@@ -15,6 +15,7 @@ import {
   LIVE_WINDOW_SEC,
   TRAIL_LIGHT,
   TRAIL_SAT,
+  aircraftTypeText,
   altitudeHue,
   flightAlpha,
   flightMarkerColor,
@@ -39,7 +40,11 @@ function flightPanelData(flight: FlightState, grounded: boolean) {
     id: `flight-${flight.icao24}`,
     kind: 'flights' as const,
     title: flight.registration ?? flight.callsign?.trim() ?? flight.icao24.toUpperCase(),
-    subtitle: [flight.type, grounded ? 'On ground' : 'Airborne', lastSeenText(flight.lastSeenSec)]
+    subtitle: [
+      aircraftTypeText(flight.aircraftInfo, flight.type),
+      grounded ? 'On ground' : 'Airborne',
+      lastSeenText(flight.lastSeenSec),
+    ]
       .filter(Boolean)
       .join(' · '),
     payload: { ...flight },
@@ -106,6 +111,10 @@ export function FlightLayer() {
         const data = await api.flightsByTail();
         if (cancelled) return;
 
+        // Publish the full list (even when the redraw below is skipped) so an
+        // open details panel tracks live state instead of its click snapshot.
+        useFlightsStatus.getState().setFlights(data.flights);
+
         const setStatus = () =>
           useFlightsStatus.getState().setStatus({
             tooWideView: false,
@@ -129,7 +138,10 @@ export function FlightLayer() {
               return (
                 `${f.icao24}:${f.latitude}:${f.longitude}:${f.track}:${grounded}:` +
                 `${flightAlpha(f.lastSeenSec, f.onGround)}:` +
-                `${flightMarkerColor(f.altitudeFt, grounded)}:${trail.length}:${lastPt?.t ?? 0}`
+                `${flightMarkerColor(f.altitudeFt, grounded)}:${trail.length}:${lastPt?.t ?? 0}:` +
+                // The registry lookup can land minutes after the aircraft is
+                // first drawn, and the nametag's type line must pick it up.
+                `${aircraftTypeText(f.aircraftInfo, f.type) ?? ''}`
               );
             })
             .join('|');
@@ -222,8 +234,15 @@ export function FlightLayer() {
               // Default depth test — aircraft on the far side of the planet are
               // occluded by the globe (same pattern as the satellite layer).
             },
+            // Two-line nametag: registration on top, airframe type beneath it
+            // (Cesium labels render \n as a line break on the shared plate).
             label: shipNameLabel(
-              flight.registration ?? flight.callsign?.trim() ?? flight.icao24.toUpperCase(),
+              [
+                flight.registration ?? flight.callsign?.trim() ?? flight.icao24.toUpperCase(),
+                aircraftTypeText(flight.aircraftInfo, flight.type),
+              ]
+                .filter(Boolean)
+                .join('\n'),
               color,
               alpha
             ),

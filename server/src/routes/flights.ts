@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db';
 import { config } from '../config';
+import { fetchAircraftInfo, type AircraftInfo } from '../aircraftInfo';
 
 const router = Router();
 
@@ -157,6 +158,57 @@ export function decimateTrail(
   return out.reverse();
 }
 
+// --- Static airframe metadata ------------------------------------------------
+// Make/model/operator and a photo per tail (see ../aircraftInfo). An airframe's
+// identity is permanent, so a successful lookup is cached in memory and in the
+// snapshot; a slow refresh picks up photo/owner changes, and misses (either
+// service down) are retried on a shorter clock.
+const aircraft = new Map<string, AircraftInfo>();
+const aircraftAttemptAt = new Map<string, number>();
+const INFO_RETRY_MS = 6 * 60 * 60_000;
+const INFO_REFRESH_MS = 7 * 24 * 60 * 60_000;
+
+let infoRefreshInFlight = false;
+
+async function refreshAircraftInfo(): Promise<void> {
+  if (infoRefreshInFlight) return;
+  infoRefreshInFlight = true;
+  try {
+    const now = Date.now();
+    for (const reg of TRACKED_TAILS) {
+      const have = aircraft.get(reg);
+      // A partial result (registry without photo, or photo without registry)
+      // stays on the short retry clock so the gap fills as soon as the other
+      // service recovers; only a complete record earns the slow refresh.
+      const complete = have != null && have.model !== null && have.photo !== null;
+      if (have && now - have.fetchedAt < (complete ? INFO_REFRESH_MS : INFO_RETRY_MS)) continue;
+      const attempted = aircraftAttemptAt.get(reg) ?? 0;
+      if (now - attempted < INFO_RETRY_MS) continue;
+      aircraftAttemptAt.set(reg, now);
+      try {
+        const info = await fetchAircraftInfo(reg, config.nwsUserAgent);
+        if (info) {
+          // Merge onto what we had: one service failing on a refresh must not
+          // erase the fields the previous lookup already resolved.
+          aircraft.set(reg, {
+            manufacturer: info.manufacturer ?? have?.manufacturer ?? null,
+            model: info.model ?? have?.model ?? null,
+            icaoType: info.icaoType ?? have?.icaoType ?? null,
+            owner: info.owner ?? have?.owner ?? null,
+            photo: info.photo ?? have?.photo ?? null,
+            fetchedAt: info.fetchedAt,
+          });
+          snapshotDirty = true;
+        }
+      } catch {
+        // Retried after INFO_RETRY_MS.
+      }
+    }
+  } finally {
+    infoRefreshInFlight = false;
+  }
+}
+
 // --- Postgres persistence ----------------------------------------------------
 // Last-known positions and trails survive restarts and deploys via the shared
 // `snapshots` key/value table (same pattern as the wind grid). The dyno
@@ -168,6 +220,8 @@ const SNAPSHOT_KEY = 'flights:v1';
 interface FlightsSnapshot {
   flights: Array<{ reg: string; flight: StoredFlight }>;
   history: Array<{ reg: string; pts: FlightTrackPoint[] }>;
+  /** Absent in snapshots written before airframe metadata existed. */
+  aircraft?: Array<{ reg: string; info: AircraftInfo }>;
   savedAt: number;
 }
 
@@ -182,6 +236,7 @@ function saveSnapshot(): void {
   const snap: FlightsSnapshot = {
     flights: [...lastKnown.entries()].map(([reg, flight]) => ({ reg, flight })),
     history: [...history.entries()].map(([reg, pts]) => ({ reg, pts })),
+    aircraft: [...aircraft.entries()].map(([reg, info]) => ({ reg, info })),
     savedAt: Date.now(),
   };
   pool
@@ -235,6 +290,12 @@ async function loadSnapshot(attempts = 5): Promise<void> {
         const oldestLive = live[0]?.t ?? Infinity;
         const merged = [...kept.filter((p) => p.t < oldestLive), ...live];
         history.set(reg, merged.slice(-MAX_TRACK_POINTS));
+      }
+      for (const { reg, info } of snap.aircraft ?? []) {
+        if (!tails.has(reg) || typeof info?.fetchedAt !== 'number') continue;
+        const existing = aircraft.get(reg);
+        if (existing && existing.fetchedAt >= info.fetchedAt) continue;
+        aircraft.set(reg, info);
       }
       if (restored > 0) {
         const ageMin = Math.round((Date.now() - (snap.savedAt ?? 0)) / 60_000);
@@ -322,6 +383,10 @@ function poll(): Promise<void> {
     await Promise.allSettled(TRACKED_TAILS.map((reg) => fetchTail(reg)));
     lastPollAt = Date.now();
     pruneHistories();
+    // Airframe metadata lookups run beside the poll, not in it — the retry
+    // clocks make this a no-op almost always, and the snapshot save catches
+    // the result on a later cycle.
+    void refreshAircraftInfo();
     saveSnapshot();
   })().finally(() => {
     pollInFlight = null;
@@ -341,6 +406,7 @@ function scheduleNextPoll(): void {
 export function initFlightsTracker(): void {
   void (async () => {
     await loadSnapshot();
+    void refreshAircraftInfo();
     await poll();
     scheduleNextPoll();
   })();
@@ -371,6 +437,7 @@ router.get('/registrations', async (_req, res) => {
         // `track` is already the ground-track heading, so the breadcrumb
         // history travels as `trail`.
         trail: decimateTrail(history.get(reg) ?? []),
+        aircraftInfo: aircraft.get(reg) ?? null,
       },
     ];
   });

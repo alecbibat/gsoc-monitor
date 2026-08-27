@@ -1,4 +1,4 @@
-import type { FlightTrackPoint } from '../../types';
+import type { AircraftInfo, FlightTrackPoint } from '../../types';
 
 /**
  * The aircraft map marker and trail palette.
@@ -90,6 +90,27 @@ export const FLIGHT_MARKER = {
     gapSplitMs: 15 * 60_000,
   },
 } as const;
+
+/**
+ * Human-readable airframe type: "Cessna Citation Excel" when the registry
+ * lookup has landed, degrading to the ICAO type designator (registry's, then
+ * the ADS-B feed's own `t` field), and null when nothing is known yet. Some
+ * registries bake the manufacturer into the model name — don't say it twice.
+ */
+export function aircraftTypeText(
+  info: Pick<AircraftInfo, 'manufacturer' | 'model' | 'icaoType'> | null | undefined,
+  feedType: string | null
+): string | null {
+  const make = info?.manufacturer?.trim() ?? '';
+  const model = info?.model?.trim() ?? '';
+  const name =
+    make && model
+      ? model.toLowerCase().startsWith(make.toLowerCase())
+        ? model
+        : `${make} ${model}`
+      : model || make;
+  return name || info?.icaoType || feedType || null;
+}
 
 function planeImage(color: string): string {
   const svg =

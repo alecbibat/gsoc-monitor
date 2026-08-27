@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { FlightTrackPoint } from '../../types';
 import {
   FLIGHT_GROUND_COLOR,
+  aircraftTypeText,
   altitudeHue,
   flightAlpha,
   flightMarkerColor,
@@ -79,6 +80,34 @@ describe('splitTrail', () => {
     const segs = splitTrail([pt({ t: 0 }), pt({ t: 10_000 }), pt({ lat: 1, t: 20_000 })]);
     expect(segs).toHaveLength(1);
     expect(segs[0]).toHaveLength(2);
+  });
+});
+
+describe('aircraftTypeText', () => {
+  const info = (partial: Record<string, string | null>) => ({
+    manufacturer: null,
+    model: null,
+    icaoType: null,
+    ...partial,
+  });
+
+  it('joins manufacturer and model', () => {
+    expect(aircraftTypeText(info({ manufacturer: 'Cessna', model: 'Citation Excel' }), 'C56X')).toBe(
+      'Cessna Citation Excel'
+    );
+  });
+
+  it('does not repeat a manufacturer already baked into the model name', () => {
+    expect(aircraftTypeText(info({ manufacturer: 'Pilatus', model: 'Pilatus PC-12/47E' }), null)).toBe(
+      'Pilatus PC-12/47E'
+    );
+  });
+
+  it("degrades to the registry's ICAO code, then the feed's, then null", () => {
+    expect(aircraftTypeText(info({ icaoType: 'C56X' }), 'XXXX')).toBe('C56X');
+    expect(aircraftTypeText(info({}), 'PC12')).toBe('PC12');
+    expect(aircraftTypeText(null, 'PC12')).toBe('PC12');
+    expect(aircraftTypeText(undefined, null)).toBeNull();
   });
 });
 
