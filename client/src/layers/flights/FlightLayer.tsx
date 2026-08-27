@@ -17,6 +17,8 @@ import {
   TRAIL_SAT,
   aircraftTypeText,
   altitudeHue,
+  chevronIconUri,
+  chevronPlacements,
   flightAlpha,
   flightMarkerColor,
   lastSeenText,
@@ -66,6 +68,7 @@ export function FlightLayer() {
   const favorites = useLayersStore((s) => s.flightFavorites);
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
   const trailsRef = useRef<Cesium.PrimitiveCollection | null>(null);
+  const chevronsRef = useRef<Cesium.BillboardCollection | null>(null);
   const lastSigRef = useRef<string>('');
 
   useEffect(() => {
@@ -78,22 +81,31 @@ export function FlightLayer() {
     const trails = new Cesium.PrimitiveCollection();
     trailsRef.current = trails;
     viewer.scene.primitives.add(trails);
+    // Direction chevrons along the trails — plain billboards, not clickable,
+    // so a raw collection is cheaper than entities.
+    const chevrons = new Cesium.BillboardCollection();
+    chevronsRef.current = chevrons;
+    viewer.scene.primitives.add(chevrons);
     return () => {
       viewer.dataSources.remove(ds, true);
       dsRef.current = null;
       viewer.scene.primitives.remove(trails);
       trailsRef.current = null;
+      viewer.scene.primitives.remove(chevrons);
+      chevronsRef.current = null;
     };
   }, [viewer]);
 
   useEffect(() => {
     const ds = dsRef.current;
     const trails = trailsRef.current;
-    if (!viewer || !ds || !trails) return;
+    const chevrons = chevronsRef.current;
+    if (!viewer || !ds || !trails || !chevrons) return;
 
     if (!active) {
       ds.entities.removeAll();
       trails.removeAll();
+      chevrons.removeAll();
       lastSigRef.current = '';
       viewer.scene.requestRender();
       return;
@@ -170,6 +182,7 @@ export function FlightLayer() {
 
         ds.entities.removeAll();
         trails.removeAll();
+        chevrons.removeAll();
         pump.setPositions(
           data.flights
             .filter((f) => f.longitude != null && f.latitude != null)
@@ -265,7 +278,18 @@ export function FlightLayer() {
             });
           }
           const trailAlpha = FLIGHT_MARKER.trail.alpha * alpha;
-          for (const seg of splitTrail(resolveTrailAltitudes(pts))) {
+          const resolved = resolveTrailAltitudes(pts);
+          // Comet taper: alpha ramps from faint at the oldest fix to full at
+          // the newest, so the bright end always leads in the direction of
+          // travel. Chevrons along the trail make the direction explicit.
+          const t0 = resolved[0]?.t ?? 0;
+          const tN = resolved[resolved.length - 1]?.t ?? 0;
+          const taper = (t: number) =>
+            tN > t0
+              ? FLIGHT_MARKER.trail.taperFrom +
+                (1 - FLIGHT_MARKER.trail.taperFrom) * ((t - t0) / (tN - t0))
+              : 1;
+          for (const seg of splitTrail(resolved)) {
             trailInstances.push(
               new Cesium.GeometryInstance({
                 geometry: new Cesium.PolylineGeometry({
@@ -273,12 +297,30 @@ export function FlightLayer() {
                     Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.ground ? 0 : (p.altFt ?? 0) * FT_TO_M)
                   ),
                   width: FLIGHT_MARKER.trail.widthPx,
-                  colors: seg.map((p) => altitudeCesiumColor(p.altFt, p.ground, trailAlpha)),
+                  colors: seg.map((p) =>
+                    altitudeCesiumColor(p.altFt, p.ground, trailAlpha * taper(p.t))
+                  ),
                   colorsPerVertex: true,
                   vertexFormat: Cesium.PolylineColorAppearance.VERTEX_FORMAT,
                 }),
               })
             );
+            for (const c of chevronPlacements(seg)) {
+              chevrons.add({
+                image: chevronIconUri(flightMarkerColor(c.altFt, c.ground)),
+                position: Cesium.Cartesian3.fromDegrees(
+                  c.lon,
+                  c.lat,
+                  c.ground ? 0 : (c.altFt ?? 0) * FT_TO_M
+                ),
+                width: FLIGHT_MARKER.trail.chevronPx,
+                height: FLIGHT_MARKER.trail.chevronPx,
+                rotation: Cesium.Math.toRadians(-c.bearingDeg),
+                alignedAxis: Cesium.Cartesian3.UNIT_Z,
+                color: Cesium.Color.WHITE.withAlpha(trailAlpha * taper(c.t)),
+                scaleByDistance: SHIP_MARKER.scaleByDistance,
+              });
+            }
           }
         }
 
