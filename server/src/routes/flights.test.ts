@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { decimateTrail, recordTrackPoint, type FlightTrackPoint } from './flights';
+import {
+  advanceTransition,
+  decimateTrail,
+  recordTrackPoint,
+  type FlightTrackPoint,
+  type TransitionTracker,
+} from './flights';
 
 const HOUR = 3_600_000;
 
@@ -44,6 +50,69 @@ describe('recordTrackPoint', () => {
     expect(pts.length).toBe(2_500);
     // Oldest points were shifted off, newest kept.
     expect(pts[pts.length - 1].lat).toBeCloseTo(2.599);
+  });
+});
+
+describe('advanceTransition', () => {
+  const MIN = 2 * 60_000;
+
+  // Run a sequence of (onGround, fixAt) fixes through the machine.
+  function run(fixes: Array<[boolean, number]>) {
+    let state: TransitionTracker | undefined;
+    const emitted: Array<{ kind: string; t: number }> = [];
+    for (const [onGround, t] of fixes) {
+      const r = advanceTransition(state, onGround, 10, 20, t);
+      state = r.state;
+      if (r.emit) emitted.push({ kind: r.emit.kind, t: r.emit.sinceT });
+    }
+    return { state: state!, emitted };
+  }
+
+  it('emits a takeoff only after the airborne state persists, stamped at the flip', () => {
+    const { emitted } = run([
+      [true, 0],
+      [true, 10_000],
+      [false, 20_000], // wheels up
+      [false, 20_000 + MIN], // still airborne two minutes later
+    ]);
+    expect(emitted).toEqual([{ kind: 'takeoff', t: 20_000 }]);
+  });
+
+  it('drops a single glitched fix without ever emitting', () => {
+    const { emitted, state } = run([
+      [false, 0],
+      [true, 10_000], // one bogus ground fix at cruise
+      [false, 20_000],
+      [false, 20_000 + MIN],
+    ]);
+    expect(emitted).toEqual([]);
+    expect(state.confirmedOnGround).toBe(false);
+  });
+
+  it('a touch-and-go bounce produces no phantom events either way', () => {
+    const { emitted } = run([
+      [false, 0],
+      [true, 10_000],
+      [true, 40_000],
+      [false, 60_000], // climbing again before the landing confirms
+      [false, 60_000 + MIN],
+    ]);
+    expect(emitted).toEqual([]);
+  });
+
+  it('never emits for the first sighting, whatever the state', () => {
+    expect(advanceTransition(undefined, false, 0, 0, 5_000_000).emit).toBeNull();
+    expect(advanceTransition(undefined, true, 0, 0, 5_000_000).emit).toBeNull();
+  });
+
+  it('emits a landing once the ground state holds', () => {
+    const { emitted, state } = run([
+      [false, 0],
+      [true, 30_000],
+      [true, 30_000 + MIN + 1],
+    ]);
+    expect(emitted).toEqual([{ kind: 'landing', t: 30_000 }]);
+    expect(state.confirmedOnGround).toBe(true);
   });
 });
 

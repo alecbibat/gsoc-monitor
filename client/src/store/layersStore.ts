@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { BasemapId, LayerId, SatelliteGroup } from '../types';
+import type { BasemapId, FlightGroupId, LayerId, SatelliteGroup } from '../types';
 
 interface LayersState {
   active: Record<LayerId, boolean>;
@@ -11,6 +11,8 @@ interface LayersState {
   setFlightFavoritesOnly: (v: boolean) => void;
   flightFavorites: string[];
   toggleFlightFavorite: (icao24: string) => void;
+  flightGroups: Record<FlightGroupId, boolean>;
+  toggleFlightGroup: (g: FlightGroupId) => void;
   shipFavoritesOnly: boolean;
   setShipFavoritesOnly: (v: boolean) => void;
   shipFavorites: string[];
@@ -72,6 +74,11 @@ export const useLayersStore = create<LayersState>()(
       setBasemap: (id) => set({ basemap: id }),
       flightFavoritesOnly: false,
       setFlightFavoritesOnly: (v) => set({ flightFavoritesOnly: v }),
+      flightGroups: { company: true, 'hurricane-hunters': true, 'fire-tankers': true },
+      toggleFlightGroup: (g) =>
+        set((state) => ({
+          flightGroups: { ...state.flightGroups, [g]: !state.flightGroups[g] },
+        })),
       flightFavorites: [],
       toggleFlightFavorite: (icao24) => {
         const current = get().flightFavorites;
@@ -117,6 +124,7 @@ export const useLayersStore = create<LayersState>()(
         basemap: state.basemap,
         flightFavoritesOnly: state.flightFavoritesOnly,
         flightFavorites: state.flightFavorites,
+        flightGroups: state.flightGroups,
         shipFavoritesOnly: state.shipFavoritesOnly,
         shipFavorites: state.shipFavorites,
         shipPaths: state.shipPaths,

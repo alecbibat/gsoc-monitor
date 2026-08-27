@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useLayersStore } from '../store/layersStore';
 import { useFlightsStatus } from '../layers/flights/flightsStore';
+import { FlightGroupControls } from '../layers/flights/FlightGroupControls';
 import { useAlertsStatus } from '../layers/alerts/alertsStore';
 import { useEarthquakesStatus } from '../layers/earthquakes/earthquakesStore';
 import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
@@ -108,7 +109,9 @@ export function Sidebar() {
   // message during storms) — subscribe to just the fields the sidebar renders,
   // shallow-compared, so bulk payloads (strike buffers, wind grids, event
   // lists) can't re-render all ~30 toggles per write.
-  const flightsStatus = useFlightsStatus(useShallow((s) => ({ count: s.count, error: s.error })));
+  const flightsStatus = useFlightsStatus(
+    useShallow((s) => ({ count: s.count, total: s.total, error: s.error }))
+  );
   const alertsStatus = useAlertsStatus(useShallow((s) => ({ count: s.count, error: s.error })));
   const earthquakesCount = useEarthquakesStatus((s) => s.count);
   const earthquakesError = useEarthquakesStatus((s) => s.error);
@@ -677,9 +680,13 @@ export function Sidebar() {
             statusText={
               flightsStatus.error
                 ? flightsStatus.error
-                : `${flightsStatus.count} of 3 tails tracked`
+                : flightsStatus.total > 0
+                  ? `${flightsStatus.count} of ${flightsStatus.total} aircraft tracked`
+                  : 'connecting…'
             }
-          />
+          >
+            <FlightGroupControls />
+          </LayerToggle>
           <LayerToggle
             label="Ships (AIS)"
             active={active.ships}

@@ -103,6 +103,21 @@ export interface FlightTrackPoint {
   t: number;
 }
 
+// Which tracked roster an aircraft belongs to.
+export type FlightGroupId = 'company' | 'hurricane-hunters' | 'fire-tankers';
+
+// A takeoff or landing the tracker witnessed. Coordinates are raw; the client
+// resolves them to a nearby city for display.
+export interface FlightEvent {
+  id: string;
+  reg: string;
+  group: FlightGroupId;
+  kind: 'takeoff' | 'landing';
+  lat: number;
+  lon: number;
+  t: number;
+}
+
 // Static airframe identity looked up from registry/photo services, served
 // alongside the live state once the server has resolved it.
 export interface AircraftPhoto {
@@ -134,6 +149,7 @@ export interface FlightState {
   verticalRateFpm: number | null;
   squawk: string | null;
   lastSeenSec: number;
+  group?: FlightGroupId;
   trail?: FlightTrackPoint[];
   aircraftInfo?: AircraftInfo | null;
 }

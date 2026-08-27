@@ -66,6 +66,7 @@ export function FlightLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.flights);
   const favorites = useLayersStore((s) => s.flightFavorites);
+  const groups = useLayersStore((s) => s.flightGroups);
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
   const trailsRef = useRef<Cesium.PrimitiveCollection | null>(null);
   const chevronsRef = useRef<Cesium.BillboardCollection | null>(null);
@@ -124,13 +125,19 @@ export function FlightLayer() {
         if (cancelled) return;
 
         // Publish the full list (even when the redraw below is skipped) so an
-        // open details panel tracks live state instead of its click snapshot.
-        useFlightsStatus.getState().setFlights(data.flights);
+        // open details panel tracks live state instead of its click snapshot,
+        // and the sidebar feed gets the takeoff/landing events.
+        useFlightsStatus.getState().setFlights(data.flights, data.events ?? []);
+
+        // Group sub-toggles filter what's drawn; an unknown/missing group
+        // (older server, future roster) defaults to visible.
+        const visible = data.flights.filter((f) => groups[f.group ?? 'company'] !== false);
 
         const setStatus = () =>
           useFlightsStatus.getState().setStatus({
             tooWideView: false,
-            count: data.flights.length,
+            count: visible.length,
+            total: data.trackedTails?.length ?? data.flights.length,
             error: null,
           });
 
@@ -142,7 +149,7 @@ export function FlightLayer() {
         // trigger the redraw that clamps and greys the marker.
         const sig =
           `${favorites.join(',')}|` +
-          data.flights
+          visible
             .map((f) => {
               const grounded = f.onGround || f.lastSeenSec >= LIVE_WINDOW_SEC;
               const trail = f.trail ?? [];
@@ -161,7 +168,7 @@ export function FlightLayer() {
           // The drawn marker is unchanged, but the panel stamped on it ages —
           // without a re-stamp, clicking a jet parked overnight would open a
           // panel frozen at "last seen 3m ago". Refresh the stamp in place.
-          for (const flight of data.flights) {
+          for (const flight of visible) {
             const grounded = flight.onGround || flight.lastSeenSec >= LIVE_WINDOW_SEC;
             const panelData = flightPanelData(flight, grounded);
             const suffixes = [
@@ -184,14 +191,14 @@ export function FlightLayer() {
         trails.removeAll();
         chevrons.removeAll();
         pump.setPositions(
-          data.flights
+          visible
             .filter((f) => f.longitude != null && f.latitude != null)
             .map((f) => ({ lon: f.longitude as number, lat: f.latitude as number }))
         );
 
         const trailInstances: Cesium.GeometryInstance[] = [];
 
-        for (const flight of data.flights) {
+        for (const flight of visible) {
           if (flight.longitude == null || flight.latitude == null) continue;
 
           const stale = flight.lastSeenSec >= LIVE_WINDOW_SEC;
@@ -237,7 +244,7 @@ export function FlightLayer() {
             id: `flight-${flight.icao24}`,
             position: at(ALT_ICON),
             billboard: {
-              image: planeIconUri(color),
+              image: planeIconUri(color, flight.group ?? 'company'),
               width: iconSize,
               height: iconSize,
               rotation: Cesium.Math.toRadians(-(flight.track ?? 0)),
@@ -352,7 +359,10 @@ export function FlightLayer() {
       stopPolling();
       pump.dispose();
     };
-  }, [viewer, active, favorites]);
+    // A group/favorite toggle restarts the effect, whose first poll refetches
+    // /registrations — deliberate: the route answers from memory (~1 RTT), and
+    // one code path for "what's drawn" beats a second local-refilter path.
+  }, [viewer, active, favorites, groups]);
 
   return null;
 }
