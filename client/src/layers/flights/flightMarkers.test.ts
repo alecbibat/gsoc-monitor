@@ -4,11 +4,13 @@ import {
   FLIGHT_GROUND_COLOR,
   aircraftTypeText,
   altitudeHue,
+  chevronPlacements,
   flightAlpha,
   flightMarkerColor,
   lastSeenText,
   resolveTrailAltitudes,
   splitTrail,
+  trailBearing,
 } from './flightMarkers';
 
 function pt(partial: Partial<FlightTrackPoint>): FlightTrackPoint {
@@ -137,6 +139,43 @@ describe('resolveTrailAltitudes', () => {
     ]);
     expect(out).toHaveLength(1);
     expect(out[0].altFt).toBe(20_000);
+  });
+});
+
+describe('trailBearing', () => {
+  it('returns compass bearings for the cardinal directions', () => {
+    expect(trailBearing(0, 0, 1, 0)).toBeCloseTo(0);
+    expect(trailBearing(0, 0, 0, 1)).toBeCloseTo(90);
+    expect(trailBearing(1, 0, 0, 0)).toBeCloseTo(180);
+    expect(trailBearing(0, 1, 0, 0)).toBeCloseTo(270);
+  });
+});
+
+describe('chevronPlacements', () => {
+  // A straight northbound run: each 0.05° of latitude is ~5.56 km.
+  const northbound = (n: number) =>
+    Array.from({ length: n }, (_, i) => pt({ lat: i * 0.05, t: i * 10_000 }));
+
+  it('spaces chevrons by travelled distance, pointing along the track', () => {
+    const placements = chevronPlacements(northbound(100), 10_000, 5);
+    expect(placements.length).toBeGreaterThan(2);
+    expect(placements.length).toBeLessThanOrEqual(5);
+    for (const c of placements) {
+      expect(c.bearingDeg).toBeCloseTo(0);
+      // Never on the segment endpoints — the plane icon marks the head.
+      expect(c.lat).toBeGreaterThan(0);
+      expect(c.lat).toBeLessThan(99 * 0.05);
+    }
+  });
+
+  it('widens the spacing instead of exceeding the chevron budget', () => {
+    const many = chevronPlacements(northbound(200), 1_000, 8);
+    expect(many.length).toBeLessThanOrEqual(8);
+  });
+
+  it('skips segments too short to carry a chevron', () => {
+    expect(chevronPlacements(northbound(2))).toEqual([]);
+    expect(chevronPlacements([])).toEqual([]);
   });
 });
 

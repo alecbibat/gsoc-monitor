@@ -88,6 +88,16 @@ export const FLIGHT_MARKER = {
     alpha: 0.85,
     /** A reporting gap longer than this splits the trail instead of drawing a chord. */
     gapSplitMs: 15 * 60_000,
+    /**
+     * Comet taper: vertex alpha ramps from this fraction of the trail's base
+     * alpha at the oldest fix up to the full value at the newest, so the
+     * bright end is always where the aircraft is heading.
+     */
+    taperFrom: 0.35,
+    /** Direction chevrons along the trail. */
+    chevronPx: 13,
+    chevronMinSpacingM: 30_000,
+    chevronMaxPerTrail: 48,
   },
 } as const;
 
@@ -120,13 +130,34 @@ function planeImage(color: string): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
+// A chevron pointing up (north at rotation 0, same convention as the plane
+// icon), colour over a dark underlay so it stays legible on any basemap.
+function chevronImage(color: string): string {
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">' +
+    '<path d="M14 44 L32 20 L50 44" stroke="#05222b" stroke-width="11" fill="none" ' +
+    'stroke-linecap="round" stroke-linejoin="round"/>' +
+    `<path d="M14 44 L32 20 L50 44" stroke="${color}" stroke-width="6" fill="none" ` +
+    'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
 const uriCache = new Map<string, string>();
 
 export function planeIconUri(color: string): string {
-  let uri = uriCache.get(color);
+  let uri = uriCache.get(`plane|${color}`);
   if (uri === undefined) {
     uri = planeImage(color);
-    uriCache.set(color, uri);
+    uriCache.set(`plane|${color}`, uri);
+  }
+  return uri;
+}
+
+export function chevronIconUri(color: string): string {
+  let uri = uriCache.get(`chevron|${color}`);
+  if (uri === undefined) {
+    uri = chevronImage(color);
+    uriCache.set(`chevron|${color}`, uri);
   }
   return uri;
 }
@@ -151,6 +182,75 @@ export function resolveTrailAltitudes(points: FlightTrackPoint[]): FlightTrackPo
     } else if (lastAlt != null) {
       out.push({ ...p, altFt: lastAlt });
     }
+  }
+  return out;
+}
+
+function haversineM(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const R = 6_371_000;
+  const dLat = ((bLat - aLat) * Math.PI) / 180;
+  const dLon = ((bLon - aLon) * Math.PI) / 180;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((aLat * Math.PI) / 180) * Math.cos((bLat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+/** Initial great-circle bearing from point 1 to point 2, degrees [0, 360). */
+export function trailBearing(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const p1 = (aLat * Math.PI) / 180;
+  const p2 = (bLat * Math.PI) / 180;
+  const dLon = ((bLon - aLon) * Math.PI) / 180;
+  const y = Math.sin(dLon) * Math.cos(p2);
+  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dLon);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+/** A direction chevron to draw on the trail: where, how high, which way. */
+export interface ChevronPlacement {
+  lat: number;
+  lon: number;
+  altFt: number | null;
+  ground: boolean;
+  t: number;
+  bearingDeg: number;
+}
+
+/**
+ * Walk one contiguous trail segment and pick the fixes to carry a direction
+ * chevron: one every `minSpacingM` of travel, widened so a long trail never
+ * exceeds `maxCount` chevrons. Fixes arrive every few seconds, so snapping to
+ * the nearest fix (rather than interpolating between them) is invisible at any
+ * real zoom. The bearing looks across the chevron's neighbours to smooth
+ * fix-to-fix jitter. The segment's endpoints never get a chevron — the plane
+ * icon itself marks the head.
+ */
+export function chevronPlacements(
+  seg: FlightTrackPoint[],
+  minSpacingM: number = FLIGHT_MARKER.trail.chevronMinSpacingM,
+  maxCount: number = FLIGHT_MARKER.trail.chevronMaxPerTrail
+): ChevronPlacement[] {
+  if (seg.length < 3) return [];
+  let total = 0;
+  for (let i = 1; i < seg.length; i++) {
+    total += haversineM(seg[i - 1].lat, seg[i - 1].lon, seg[i].lat, seg[i].lon);
+  }
+  const spacing = Math.max(minSpacingM, total / maxCount);
+  const out: ChevronPlacement[] = [];
+  let sinceLast = 0;
+  for (let i = 1; i < seg.length - 1; i++) {
+    sinceLast += haversineM(seg[i - 1].lat, seg[i - 1].lon, seg[i].lat, seg[i].lon);
+    if (sinceLast < spacing) continue;
+    sinceLast = 0;
+    const p = seg[i];
+    out.push({
+      lat: p.lat,
+      lon: p.lon,
+      altFt: p.altFt,
+      ground: p.ground,
+      t: p.t,
+      bearingDeg: trailBearing(seg[i - 1].lat, seg[i - 1].lon, seg[i + 1].lat, seg[i + 1].lon),
+    });
   }
   return out;
 }
