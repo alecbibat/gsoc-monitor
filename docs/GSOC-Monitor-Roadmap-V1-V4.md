@@ -24,7 +24,7 @@ Each version is sized in relative effort, tied to the concrete gaps found in the
 - **Pull-only.** No background monitoring, no notifications, no history.
 - **US-centric data.** Fuels, air quality, alerts, gauges, outages and named fires are US or CONUS; the fleet sails internationally.
 - **Browser-print reports.** No server-side PDF, no persisted or structured exports.
-- **Security posture.** Nine high-severity findings, concentrated in session revocation, abuse of public routes and operator sync (see the companion bug report).
+- **Security and stability posture.** Nine high-severity findings, concentrated in session revocation, abuse of public routes, operator sync and the wall-display recovery path (see the companion bug report).
 - **Thin automated testing.** Unit tests on pure logic only; no route, database or layer tests.
 
 # V1 — Trusted Operating Picture (the MVP)
