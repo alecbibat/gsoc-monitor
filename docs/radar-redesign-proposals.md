@@ -1,5 +1,7 @@
 # Radar Redesign Proposals
 
+> **Superseded.** After these proposals were written, research showed RainViewer's free tier had been locked down (Jan 2026: max zoom 7, one color scheme, past-only) — the old system's foundation no longer existed, so the radar was rebuilt from scratch rather than reworked. The system that was actually built (new sources, engine, and UI) is documented in [`radar-rebuild.md`](./radar-rebuild.md).
+
 Three plans for scrapping the current precipitation-radar implementation and rebuilding it, with a recommendation. Written against the code as of `main` (Aug 2026).
 
 ---

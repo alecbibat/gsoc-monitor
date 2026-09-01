@@ -5,7 +5,7 @@ Global Situational & Operational Conditions Monitor — a real-time 3D globe das
 ## Phase 1 features
 
 - **3D globe** — CesiumJS with starfield, real sun lighting (day/night terminator), dark/light/satellite/topo basemaps plus an Earth map type: NASA's daily MODIS true-color mosaic with an AM/PM (Terra/Aqua) toggle and a date picker back to Feb 2000.
-- **Precipitation radar** — RainViewer animated tiles with adjustable 30/60/120-min playback window and opacity control.
+- **Precipitation radar** — NOAA NEXRAD HD composite for the US (5-min frames via Iowa Environmental Mesonet) layered over RainViewer's global composite, recolored through one unified palette with animated playback, live pinning, and 1h/2h windows (see `docs/radar-rebuild.md`).
 - **Earthquakes** — USGS live feed, magnitude-scaled colored points, click for details panel.
 - **NWS Weather Alerts** — every active alert, including zone/county-based ones (winter, heat, flood, red-flag) resolved to polygons server-side; severity-coded overlays with full alert text in click panels.
 - **Live flights** — adsb.fi ADS-B (free, no key), plane icons rotated to heading, favorites list, auto-refresh when camera moves.
@@ -39,7 +39,8 @@ npm run dev:client
 | NWS (api.weather.gov) | No key needed | Set `NWS_USER_AGENT` to identify your app per NWS policy: `"my-app (me@email.com)"`. Used for both alerts and zone-geometry lookups. |
 | USGS Earthquakes | No key needed | Fully public. |
 | CelesTrak (satellites) | No key needed | Public TLE data; the server caches each group for 2h per CelesTrak's guidance. |
-| RainViewer | No key needed | Fully public tile CDN. |
+| IEM NEXRAD (radar, US) | No key needed | Iowa State's academic tile cache of the NOAA NEXRAD N0Q composite; best-effort service, no SLA. |
+| RainViewer (radar, global) | No key needed | Free tier: past radar only, max zoom 7, one color scheme (since Jan 2026); attribution required. |
 | NASA GIBS (Earth basemap) | No key needed | Public WMTS tiles of the daily MODIS Terra/Aqua true-color mosaic, fetched straight from the browser (no server involvement). |
 | Nominatim (geocoding) | No key needed | Uses OSM data; `NWS_USER_AGENT` string is also used here as User-Agent per their policy. |
 
