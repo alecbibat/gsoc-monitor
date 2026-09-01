@@ -1,24 +1,23 @@
-// Pixel pipeline that turns RainViewer's raw data tiles into polished overlay
-// imagery. Radar tiles arrive as scheme-0 encodings (R = (dBZ+32) & 127, bit 7
-// = snow, alpha 0 where no echo) with server smoothing off; we decode to a
-// data field, smooth it ourselves (normalized-convolution blur, so echo edges
-// feather without the magnitude draining into a fake light-rain halo), then
-// map through a palette LUT with per-pixel alpha. Doing the smoothing in data
-// space — before colors exist — is what keeps gradients clean; blurring after
-// palettization would smear unrelated hues together.
+// Pixel pipeline that turns pre-colored source tiles into the unified storm
+// palette. Both sources serve tiles painted in documented house ramps, so the
+// pipeline is: invert served color → dBZ magnitude (nearest-anchor lookup),
+// smooth in DATA space (normalized-convolution blur, so echo edges feather
+// without magnitude draining into a fake light-rain halo), then map through
+// the storm LUT with per-pixel alpha. Smoothing before colors exist is what
+// keeps gradients clean at high zoom — blurring after palettization would
+// smear unrelated hues together. This is the same trick zoom.earth leans on:
+// coarse (~1 km) data made street-zoom-smooth by interpolation, not more data.
 
-import type { RadarLut } from './palettes';
+import type { InversionAnchor } from './sources';
+import { US_COVERAGE_BOXES } from './sources';
 
 type SourceImage = HTMLImageElement | ImageBitmap | HTMLCanvasElement;
 
 // Cesium fetches imagery as ImageBitmaps created with flipY (an upload-time
-// optimization: pre-flipped bitmaps skip the UNPACK_FLIP_Y_WEBGL pass, while
-// canvas/image sources are flipped during texture upload instead). Reading a
-// pre-flipped bitmap with drawImage therefore yields upside-down rows — and
-// returning a normal-orientation canvas is exactly right, because Cesium
-// flips canvases at upload. Un-flip bitmaps here so both conventions align;
-// without this every tile renders vertically mirrored, i.e. precipitation
-// draws at the wrong latitude within its tile.
+// optimization). Reading a pre-flipped bitmap with drawImage yields
+// upside-down rows — and returning a normal-orientation canvas is exactly
+// right, because Cesium flips canvases at upload. Un-flip bitmaps here so
+// both conventions align.
 function drawSourceUpright(ctx: CanvasRenderingContext2D, img: SourceImage, h: number) {
   if (typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap) {
     ctx.save();
@@ -70,14 +69,11 @@ function padWithEdgeExtend(src: HTMLCanvasElement, w: number, h: number, p: numb
   const c = pad.ctx;
   c.clearRect(0, 0, pad.canvas.width, pad.canvas.height);
   c.imageSmoothingEnabled = false;
-  // center
   c.drawImage(src, p, p);
-  // edges (1px strips stretched into the ring)
-  c.drawImage(src, 0, 0, w, 1, p, 0, w, p); // top
-  c.drawImage(src, 0, h - 1, w, 1, p, h + p, w, p); // bottom
-  c.drawImage(src, 0, 0, 1, h, 0, p, p, h); // left
-  c.drawImage(src, w - 1, 0, 1, h, w + p, p, p, h); // right
-  // corners (1px pixels stretched)
+  c.drawImage(src, 0, 0, w, 1, p, 0, w, p);
+  c.drawImage(src, 0, h - 1, w, 1, p, h + p, w, p);
+  c.drawImage(src, 0, 0, 1, h, 0, p, p, h);
+  c.drawImage(src, w - 1, 0, 1, h, w + p, p, p, h);
   c.drawImage(src, 0, 0, 1, 1, 0, 0, p, p);
   c.drawImage(src, w - 1, 0, 1, 1, w + p, 0, p, p);
   c.drawImage(src, 0, h - 1, 1, 1, 0, h + p, p, p);
@@ -86,46 +82,13 @@ function padWithEdgeExtend(src: HTMLCanvasElement, w: number, h: number, p: numb
   return pad;
 }
 
-// RainViewer's tile CDN ignores the {color} path segment and serves one fixed
-// house palette for every scheme id (verified 2026-08 via the /api/radar/diag
-// endpoint: scheme 0, 2 and 4 requests returned byte-identical tiles) — a
-// blue ramp for light→moderate rain rising through yellow, orange and red,
-// with alpha-feathered edges. So instead of decoding a raw data product that
-// does not exist, we invert that served palette: each pixel's color is
-// matched to the nearest anchor on the ramp below, giving back an intensity
-// on this pipeline's internal magnitude scale (2·(dBZ+32)), which then flows
-// through the same blur + custom-palette LUT as before. Anchors beyond the
-// observed colors (orange → red → magenta) extend the ramp so extreme cores
-// keep grading instead of clipping; colors that drift off the ramp entirely
-// (if RainViewer ever changes palette) degrade to the nearest anchor's
-// intensity — never to noise.
-const PALETTE_ANCHORS: Array<[number, number, number, number]> = [
-  // [r, g, b, dBZ-equivalent]
-  [0, 60, 92, 3],
-  [0, 71, 104, 6],
-  [0, 78, 120, 10],
-  [0, 85, 136, 14],
-  [0, 98, 149, 19],
-  [0, 112, 163, 24],
-  [0, 127, 180, 29],
-  [255, 238, 0, 33],
-  [255, 210, 0, 38],
-  [255, 180, 0, 43],
-  [255, 150, 0, 47],
-  [255, 110, 0, 51],
-  [255, 60, 0, 55],
-  [230, 0, 0, 60],
-  [180, 0, 40, 64],
-  [255, 0, 255, 68],
-  [255, 255, 255, 70],
-];
-
-// Quantized RGB (5 bits/channel) → magnitude byte (2·(dBZ+32)). 32 KB, built
-// once on first use.
-let inversionLut: Uint8Array | null = null;
-function getPaletteInversionLut(): Uint8Array {
-  if (inversionLut) return inversionLut;
-  const lut = new Uint8Array(32 * 32 * 32);
+// Quantized RGB (5 bits/channel) → magnitude byte. 32 KB per anchor set,
+// built once on first use and cached per anchor array.
+const inversionLutCache = new WeakMap<InversionAnchor[], Uint8Array>();
+export function getInversionLut(anchors: InversionAnchor[]): Uint8Array {
+  let lut = inversionLutCache.get(anchors);
+  if (lut) return lut;
+  lut = new Uint8Array(32 * 32 * 32);
   for (let r = 0; r < 32; r++) {
     for (let g = 0; g < 32; g++) {
       for (let b = 0; b < 32; b++) {
@@ -133,37 +96,63 @@ function getPaletteInversionLut(): Uint8Array {
         const pg = g * 8 + 4;
         const pb = b * 8 + 4;
         let bestD = Infinity;
-        let bestDbz = 0;
-        for (const [ar, ag, ab, dbz] of PALETTE_ANCHORS) {
-          const d = (pr - ar) ** 2 + (pg - ag) ** 2 + (pb - ab) ** 2;
+        let bestM = 0;
+        for (const a of anchors) {
+          const d = (pr - a.r) ** 2 + (pg - a.g) ** 2 + (pb - a.b) ** 2;
           if (d < bestD) {
             bestD = d;
-            bestDbz = dbz;
+            bestM = a.magnitude;
           }
         }
-        lut[(r << 10) | (g << 5) | b] = Math.min(255, Math.round(2 * (bestDbz + 32)));
+        lut[(r << 10) | (g << 5) | b] = bestM;
       }
     }
   }
-  inversionLut = lut;
+  inversionLutCache.set(anchors, lut);
   return lut;
 }
 
-// How much data-space smoothing a tile needs. RainViewer's radar mosaic is
-// ~1 km resolution; past level ~6 the 512px tiles out-resolve the data and the
-// raw field turns blocky, so smoothing scales up with zoom (capped — beyond
-// the native level Cesium upsamples our smoothed texture bilinearly anyway,
-// which is the same trick zoom.earth leans on).
-export function radarBlurPx(level: number): number {
-  if (!canvasFilterSupported()) return 0;
-  // Floor of 1.5px at every level: real mosaics are speckled at national zoom
-  // even where the data out-resolves the tile, and the served palette's hard
-  // blue→yellow step needs a few pixels of data-space diffusion or the
-  // moderate-to-heavy transition renders as an abrupt ring.
-  return Math.min(4, Math.max(1.5, 0.7 * 2 ** Math.max(0, level - 6)));
+// Per-pixel geographic coordinates of a web-mercator tile, for the coverage
+// mask below. Row latitudes and column longitudes are each 1-D, so compute
+// them once per tile instead of per pixel.
+function tileLonLatAxes(z: number, x: number, y: number, size: number) {
+  const n = size * 2 ** z;
+  const lons = new Float64Array(size);
+  const lats = new Float64Array(size);
+  for (let i = 0; i < size; i++) {
+    lons[i] = ((x * size + i + 0.5) / n) * 360 - 180;
+    const t = Math.PI - (2 * Math.PI * (y * size + i + 0.5)) / n;
+    lats[i] = (Math.atan(Math.sinh(t)) * 180) / Math.PI;
+  }
+  return { lons, lats };
 }
 
-export function recolorRadarTile(img: SourceImage, lut: RadarLut, blurPx: number): HTMLCanvasElement {
+function inUsCoverage(lon: number, lat: number): boolean {
+  for (const [w, s, e, nn] of US_COVERAGE_BOXES) {
+    if (lon >= w && lon <= e && lat >= s && lat <= nn) return true;
+  }
+  return false;
+}
+
+// How much data-space smoothing a tile needs. Sources are ~1 km data; past
+// the level where tiles out-resolve the data the raw field turns blocky, so
+// smoothing scales up with zoom (capped — beyond maximumLevel Cesium
+// magnifies our smoothed texture bilinearly, which does the rest).
+export function blurPxForLevel(level: number, nativeLevel: number): number {
+  if (!canvasFilterSupported()) return 0;
+  return Math.min(4, Math.max(1.2, 0.7 * 2 ** Math.max(0, level - (nativeLevel - 3))));
+}
+
+export interface RecolorOptions {
+  inversion: Uint8Array; // from getInversionLut
+  lut: Uint8ClampedArray; // storm palette, indexed by magnitude byte
+  blurPx: number;
+  // When set, pixels inside the US HD coverage boxes are cleared — used on
+  // the global source in `auto` mode so the two products never double-paint.
+  maskUsCoverage?: { z: number; x: number; y: number };
+}
+
+export function recolorTile(img: SourceImage, opts: RecolorOptions): HTMLCanvasElement {
   const w = img.width;
   const h = img.height;
 
@@ -172,34 +161,42 @@ export function recolorRadarTile(img: SourceImage, lut: RadarLut, blurPx: number
   drawSourceUpright(src.ctx, img, h);
   const sd = src.ctx.getImageData(0, 0, w, h).data;
 
-  // Decode into an opaque field image: R = magnitude (2·(dBZ+32)) scaled by
-  // presence, G = presence (the tile's own alpha — RainViewer feathers echo
-  // edges with semi-transparent pixels, which flows straight into the
-  // normalized convolution below), B unused. Opaque alpha keeps the blur a
-  // plain linear filter (no premultiplication distortion).
-  const inv = getPaletteInversionLut();
+  let axes: { lons: Float64Array; lats: Float64Array } | null = null;
+  if (opts.maskUsCoverage) {
+    const m = opts.maskUsCoverage;
+    axes = tileLonLatAxes(m.z, m.x, m.y, w);
+  }
+
+  // Decode into an opaque field image: R = magnitude scaled by presence,
+  // G = presence (the tile's own alpha — both sources feather echo edges with
+  // semi-transparent pixels, which flows straight into the normalized
+  // convolution below). Opaque alpha keeps the blur a plain linear filter.
+  const inv = opts.inversion;
   const field = scratch('field', w, h);
   const fd = field.ctx.createImageData(w, h);
   const f = fd.data;
-  for (let i = 0; i < sd.length; i += 4) {
-    const a = sd[i + 3];
-    if (a >= 8) {
-      const key =
-        ((sd[i] >> 3) << 10) | ((sd[i + 1] >> 3) << 5) | (sd[i + 2] >> 3);
+  for (let py = 0; py < h; py++) {
+    const rowMaskable = axes !== null;
+    for (let px = 0; px < w; px++) {
+      const i = (py * w + px) * 4;
+      const a = sd[i + 3];
+      f[i + 3] = 255;
+      if (a < 8) continue;
+      if (rowMaskable && inUsCoverage(axes!.lons[px], axes!.lats[py])) continue;
+      const key = ((sd[i] >> 3) << 10) | ((sd[i + 1] >> 3) << 5) | (sd[i + 2] >> 3);
       f[i] = Math.round((inv[key] * a) / 255);
       f[i + 1] = a;
     }
-    f[i + 3] = 255;
   }
   field.ctx.putImageData(fd, 0, 0);
 
   let bd: Uint8ClampedArray;
-  if (blurPx > 0) {
-    const p = Math.ceil(blurPx * 2) + 1;
+  if (opts.blurPx > 0) {
+    const p = Math.ceil(opts.blurPx * 2) + 1;
     const pad = padWithEdgeExtend(field.canvas, w, h, p);
     const blur = scratch('blur', w + 2 * p, h + 2 * p);
     blur.ctx.clearRect(0, 0, blur.canvas.width, blur.canvas.height);
-    blur.ctx.filter = `blur(${blurPx}px)`;
+    blur.ctx.filter = `blur(${opts.blurPx}px)`;
     blur.ctx.drawImage(pad.canvas, 0, 0);
     blur.ctx.filter = 'none';
     bd = blur.ctx.getImageData(p, p, w, h).data;
@@ -214,57 +211,54 @@ export function recolorRadarTile(img: SourceImage, lut: RadarLut, blurPx: number
   if (!outCtx) throw new Error('2d canvas unavailable');
   const od = outCtx.createImageData(w, h);
   const o = od.data;
-  const rain = lut.rain;
-  const snow = lut.snow;
+  const lut = opts.lut;
   for (let i = 0; i < bd.length; i += 4) {
     const presence = bd[i + 1];
     if (presence < 10) continue;
     // Normalized convolution: average magnitude over the echo-covered part of
     // the kernel, so edges feather in alpha without fading in intensity.
-    let m = Math.round((bd[i] * 255) / presence) >> 1;
-    if (m > 127) m = 127;
-    // Snow channel is currently never set (see the encoding note above), but
-    // the plumbing stays for when a reliable snow signal exists.
-    const isSnow = bd[i + 2] * 2 > presence;
-    const l = isSnow ? snow : rain;
-    const a = l[m * 4 + 3];
+    let m = Math.round((bd[i] * 255) / presence);
+    if (m > 255) m = 255;
+    const a = lut[m * 4 + 3];
     if (a === 0) continue;
     // Presence doubles as the edge ramp; a slight power curve tightens the
     // outer fringe so light rain doesn't grow a huge soft skirt.
     const edge = Math.pow(presence / 255, 1.3);
-    o[i] = l[m * 4];
-    o[i + 1] = l[m * 4 + 1];
-    o[i + 2] = l[m * 4 + 2];
+    o[i] = lut[m * 4];
+    o[i + 1] = lut[m * 4 + 1];
+    o[i + 2] = lut[m * 4 + 2];
     o[i + 3] = a * edge;
   }
   outCtx.putImageData(od, 0, 0);
   return out;
 }
 
-// Infrared satellite tile → keyed cloud overlay via a 256-entry luminance LUT.
-export function recolorCloudTile(img: SourceImage, cloudLut: Uint8ClampedArray): HTMLCanvasElement {
+// Agency style keeps the source's own colors, but the global source in `auto`
+// mode still needs the coverage mask so it never double-paints under the HD
+// layer — a clear-pixels-only pass.
+export function maskTile(
+  img: SourceImage,
+  tile: { z: number; x: number; y: number }
+): HTMLCanvasElement {
   const w = img.width;
   const h = img.height;
   const src = scratch('src', w, h);
   src.ctx.clearRect(0, 0, w, h);
   drawSourceUpright(src.ctx, img, h);
-  const sd = src.ctx.getImageData(0, 0, w, h).data;
-
+  const data = src.ctx.getImageData(0, 0, w, h);
+  const d = data.data;
+  const { lons, lats } = tileLonLatAxes(tile.z, tile.x, tile.y, w);
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      const i = (py * w + px) * 4;
+      if (d[i + 3] !== 0 && inUsCoverage(lons[px], lats[py])) d[i + 3] = 0;
+    }
+  }
   const out = document.createElement('canvas');
   out.width = w;
   out.height = h;
-  const outCtx = out.getContext('2d');
-  if (!outCtx) throw new Error('2d canvas unavailable');
-  const od = outCtx.createImageData(w, h);
-  const o = od.data;
-  for (let i = 0; i < sd.length; i += 4) {
-    if (sd[i + 3] < 128) continue; // outside coverage
-    const v = sd[i];
-    o[i] = cloudLut[v * 4];
-    o[i + 1] = cloudLut[v * 4 + 1];
-    o[i + 2] = cloudLut[v * 4 + 2];
-    o[i + 3] = cloudLut[v * 4 + 3];
-  }
-  outCtx.putImageData(od, 0, 0);
+  const ctx = out.getContext('2d');
+  if (!ctx) throw new Error('2d canvas unavailable');
+  ctx.putImageData(data, 0, 0);
   return out;
 }

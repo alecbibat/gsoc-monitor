@@ -31,7 +31,7 @@ export const SHARE_LIVE_LAYER_GROUPS: ShareLiveLayerGroup[] = [
   {
     name: 'Weather',
     layers: [
-      { id: 'radar',      label: 'Precipitation Radar',    hint: 'RainViewer composite · animated' },
+      { id: 'radar',      label: 'Precipitation Radar',    hint: 'NEXRAD HD (US) + global · animated' },
       { id: 'precip',     label: 'Precip Forecast (WPC)',  hint: 'NOAA QPF accumulation' },
       { id: 'hurricanes', label: 'Hurricanes',             hint: 'NHC + JTWC tracks & cones' },
       { id: 'lightning',  label: 'Lightning',              hint: 'Blitzortung · live strikes' },

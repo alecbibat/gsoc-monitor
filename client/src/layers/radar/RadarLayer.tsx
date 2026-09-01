@@ -5,83 +5,177 @@ import { addImageryBelowLabels } from '../../cesium/imageryOrder';
 import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
 import { startVisiblePolling } from '../../lib/poll';
-import type { RadarFrame } from '../../types';
-import { useRadarStore, buildTimeline, nowIndex } from './radarStore';
-import { CLIENT_RECOLOR, makeCloudProvider, makeRadarProvider } from './RainViewerImagery';
+import { useRadarStore, buildTimeline, type TimelineSlot } from './radarStore';
+import { makeGlobalProvider, makeUsProvider, styleAlphaCeiling } from './providers';
+import { SIM } from './sources';
 
-// Frame cadence during playback (ms). The dissolve occupies almost the whole
-// interval — the incoming frame fades in continuously on top of the held one
-// (zoom.earth's rolling dissolve), so playback reads as motion, not a
-// slideshow. The small gap below the cadence absorbs timer jitter so a
-// dissolve normally completes before the next tick supersedes it.
-const FRAME_MS = 800;
-const FADE_MS = 720;
-// Clouds sit dimmer than radar in combined mode so precipitation stays the
-// subject of the composition.
-const CLOUD_ALPHA = 0.7;
+// Playback cadence and the crossfade between frames.
+const FRAME_MS = 900;
+const FADE_MS = 500;
 
-// Index of the satellite frame nearest in time to `time`, or -1 when nothing
-// is within tolerance. Radar and IR frames are both ~10-minute cadences but
-// not perfectly aligned, so playback pairs each radar frame with its closest
-// cloud snapshot (nowcast frames just reuse the latest clouds).
-function nearestFrameIndex(frames: RadarFrame[], time: number, maxDeltaSec = 3600): number {
-  let best = -1;
-  let bestDelta = maxDeltaSec + 1;
-  for (let i = 0; i < frames.length; i++) {
-    const d = Math.abs(frames[i].time - time);
-    if (d < bestDelta) {
-      bestDelta = d;
-      best = i;
+// One animated source ("channel"): US HD or global. Frame layers are created
+// lazily the first time a frame is shown or preloaded, then RETAINED, and
+// playback animates ONLY layer alphas. This is load-bearing, not a cache
+// nicety: every ImageryLayer add/remove makes Cesium's surface re-attach
+// imagery across all rendered globe tiles, and doing that per playback tick
+// keeps the quadtree from ever settling (verified empirically — the globe
+// stops refining and the radar never draws). After one playback loop the
+// stack is stable and ticks touch nothing but alphas. Stack mutations happen
+// only when the frame list itself changes (a new frame every 5–10 minutes,
+// or a settings change), via syncFrames' diff.
+class ChannelRenderer {
+  private layers = new Map<string, Cesium.ImageryLayer>();
+  private shownKey: string | null = null;
+  private fadeRaf: number | null = null;
+  private fadeFromKey: string | null = null;
+  private fadeToKey: string | null = null;
+  private alphaTarget = 1;
+
+  constructor(private viewer: Cesium.Viewer) {}
+
+  private ensure(key: string, make: () => Cesium.ImageryProvider): Cesium.ImageryLayer {
+    let layer = this.layers.get(key);
+    if (!layer) {
+      layer = addImageryBelowLabels(this.viewer, make());
+      layer.alpha = 0;
+      this.layers.set(key, layer);
+    }
+    return layer;
+  }
+
+  private cancelFade(finalize: boolean) {
+    if (this.fadeRaf != null) {
+      cancelAnimationFrame(this.fadeRaf);
+      this.fadeRaf = null;
+    }
+    if (finalize && this.fadeToKey) this.applyInstant(this.fadeToKey);
+    this.fadeFromKey = null;
+    this.fadeToKey = null;
+  }
+
+  private applyInstant(key: string | null) {
+    for (const [k, l] of this.layers) l.alpha = k === key ? this.alphaTarget : 0;
+    this.shownKey = key;
+  }
+
+  setAlphaTarget(alpha: number) {
+    this.alphaTarget = alpha;
+    if (this.fadeRaf == null && this.shownKey) {
+      const l = this.layers.get(this.shownKey);
+      if (l) l.alpha = alpha;
     }
   }
-  return best;
+
+  show(key: string, make: () => Cesium.ImageryProvider, fade: boolean) {
+    if (this.viewer.isDestroyed()) return;
+    if (this.fadeToKey === key) return; // already fading to it
+    this.cancelFade(true);
+    if (this.shownKey === key) {
+      const l = this.layers.get(key);
+      if (l) l.alpha = this.alphaTarget;
+      return;
+    }
+    const to = this.ensure(key, make);
+    const fromKey = this.shownKey;
+    const from = fromKey ? this.layers.get(fromKey) : undefined;
+    if (!fade || !from) {
+      this.applyInstant(key);
+      return;
+    }
+    // Which of the two sits higher in the imagery stack decides the dip-free
+    // direction: an incoming layer ABOVE fades in over the held one; an
+    // incoming layer BELOW is held at target while the outgoing fades away to
+    // reveal it (the loop-wrap case).
+    const stack = this.viewer.imageryLayers;
+    const incomingAbove = stack.indexOf(to) > stack.indexOf(from);
+    if (!incomingAbove) to.alpha = this.alphaTarget;
+    this.fadeFromKey = fromKey;
+    this.fadeToKey = key;
+    this.shownKey = key;
+    const t0 = performance.now();
+    const tick = () => {
+      this.fadeRaf = null;
+      if (this.viewer.isDestroyed()) return;
+      if (this.fadeToKey !== key) return; // superseded
+      const t = Math.min(1, (performance.now() - t0) / FADE_MS);
+      if (incomingAbove) to.alpha = this.alphaTarget * t;
+      else from.alpha = this.alphaTarget * (1 - t);
+      this.viewer.scene.requestRender();
+      if (t < 1) {
+        this.fadeRaf = requestAnimationFrame(tick);
+      } else {
+        this.fadeFromKey = null;
+        this.fadeToKey = null;
+        this.applyInstant(key);
+        this.viewer.scene.requestRender();
+      }
+    };
+    this.fadeRaf = requestAnimationFrame(tick);
+  }
+
+  // Nothing to display for the current slot (e.g. source has no frame).
+  clear() {
+    this.cancelFade(false);
+    this.applyInstant(null);
+  }
+
+  // Warm the next frame's layer (created at alpha 0 so its tiles load early).
+  ensurePreload(key: string, make: () => Cesium.ImageryProvider) {
+    if (this.viewer.isDestroyed()) return;
+    this.ensure(key, make);
+  }
+
+  // Reconcile the layer set against the current timeline: drop frames that
+  // left it and batch-create the ones it gained (at alpha 0, so their tiles
+  // load while playback is elsewhere). One batch mutation per manifest change
+  // lets the globe surface re-settle once, instead of once per playback tick
+  // as frames appear.
+  syncFrames(frames: Array<{ key: string; make: () => Cesium.ImageryProvider }>) {
+    if (this.viewer.isDestroyed()) return;
+    const valid = new Set(frames.map((f) => f.key));
+    for (const [k, l] of this.layers) {
+      if (valid.has(k)) continue;
+      if (k === this.shownKey || k === this.fadeFromKey || k === this.fadeToKey) continue;
+      this.viewer.imageryLayers.remove(l, true);
+      this.layers.delete(k);
+    }
+    for (const f of frames) this.ensure(f.key, f.make);
+  }
+
+  destroy() {
+    this.cancelFade(false);
+    if (!this.viewer.isDestroyed()) {
+      for (const l of this.layers.values()) this.viewer.imageryLayers.remove(l, true);
+    }
+    this.layers.clear();
+    this.shownKey = null;
+  }
 }
 
 export function RadarLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.radar);
-  const host = useRadarStore((s) => s.host);
-  const frames = useRadarStore((s) => s.frames);
-  const nowcastFrames = useRadarStore((s) => s.nowcastFrames);
-  const satelliteFrames = useRadarStore((s) => s.satelliteFrames);
-  const mode = useRadarStore((s) => s.mode);
+  const globalHost = useRadarStore((s) => s.globalHost);
+  const globalFrames = useRadarStore((s) => s.globalFrames);
+  const usFrames = useRadarStore((s) => s.usFrames);
+  const coverage = useRadarStore((s) => s.coverage);
+  const style = useRadarStore((s) => s.style);
   const windowMinutes = useRadarStore((s) => s.windowMinutes);
   const currentIndex = useRadarStore((s) => s.currentIndex);
   const opacity = useRadarStore((s) => s.opacity);
   const playing = useRadarStore((s) => s.playing);
-  const palette = useRadarStore((s) => s.palette);
-  const setCurrentIndex = useRadarStore((s) => s.setCurrentIndex);
 
-  // One imagery layer per timeline frame (radar, or clouds in satellite
-  // mode); playback crossfades their alphas.
-  const animLayersRef = useRef<Cesium.ImageryLayer[]>([]);
-  // Combined mode only: keyed-cloud layers under the radar, one per distinct
-  // satellite frame the timeline maps onto.
-  const cloudLayersRef = useRef<Cesium.ImageryLayer[]>([]);
-  // timeline index → index into cloudLayersRef (-1 = no clouds for frame).
-  const cloudMapRef = useRef<number[]>([]);
-  // Which timeline index is currently displayed, the in-flight fade, and the
-  // frame that fade is heading toward (used to finalize a superseded fade).
-  const shownIndexRef = useRef<number | null>(null);
-  const fadeRafRef = useRef<number | null>(null);
-  const fadeTargetRef = useRef<number | null>(null);
+  const usChannel = useRef<ChannelRenderer | null>(null);
+  const globalChannel = useRef<ChannelRenderer | null>(null);
 
-  // Fetch manifest periodically.
+  // Fetch the merged manifest periodically while the layer is on.
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
     const load = async () => {
       try {
-        const manifest = await api.radarManifest();
-        if (cancelled) return;
-        useRadarStore
-          .getState()
-          .setManifest(
-            manifest.host,
-            manifest.radar.past,
-            manifest.radar.nowcast ?? [],
-            manifest.satellite?.infrared ?? []
-          );
+        const manifest = await api.radarManifest(SIM);
+        if (!cancelled) useRadarStore.getState().setManifest(manifest);
       } catch (err) {
         console.error('Failed to load radar manifest', err);
       }
@@ -93,210 +187,133 @@ export function RadarLayer() {
     };
   }, [active]);
 
-  const cancelFade = () => {
-    if (fadeRafRef.current != null) {
-      cancelAnimationFrame(fadeRafRef.current);
-      fadeRafRef.current = null;
-    }
-    fadeTargetRef.current = null;
-  };
-
-  // Target alphas for the current mode/opacity. With client recoloring the
-  // per-pixel translucency lives in the palette and the layer runs at full
-  // strength; pass-through server tiles are solid colors, so cap the layer
-  // alpha to keep the basemap readable underneath.
-  const targets = () => {
-    const s = useRadarStore.getState();
-    return {
-      anim: s.opacity * (CLIENT_RECOLOR ? 1 : 0.8),
-      cloud: s.opacity * CLOUD_ALPHA,
-    };
-  };
-
-  // Snap every layer to a frame with no fade (initial display, scrubbing
-  // resets, opacity changes).
-  const applyInstant = (idx: number) => {
-    const t = targets();
-    animLayersRef.current.forEach((l, i) => {
-      l.alpha = i === idx ? t.anim : 0;
-    });
-    const cloudIdx = cloudMapRef.current[idx] ?? -1;
-    cloudLayersRef.current.forEach((l, i) => {
-      l.alpha = i === cloudIdx ? t.cloud : 0;
-    });
-    shownIndexRef.current = idx;
-  };
-
-  // Rebuild the layer stack when the mode / frames / window / palette change.
+  // (Re)create the channel renderers when the layer/coverage/style flips.
+  // A WebGL context loss destroys the viewer before the context value swaps
+  // to the rebuilt one, so both the body and the cleanup guard isDestroyed —
+  // touching a destroyed viewer's imageryLayers throws and would blank the
+  // whole app during the recovery path.
   useEffect(() => {
-    // A WebGL context loss destroys the viewer before the context value flips
-    // to the rebuilt one, so a stale-but-destroyed viewer can reach both this
-    // body (via e.g. a manifest update) and the cleanup below. Touching a
-    // destroyed viewer's imageryLayers throws and would blank the whole app —
-    // exactly during the recovery path.
     if (!viewer || viewer.isDestroyed()) return;
-
-    if (!active || !host) {
-      viewer.scene.requestRender();
-      return;
-    }
-
-    const timeline = buildTimeline({
-      mode,
-      frames,
-      nowcastFrames,
-      satelliteFrames,
-      windowMinutes,
-    });
-    if (timeline.length === 0) {
-      viewer.scene.requestRender();
-      return;
-    }
-
-    // Combined mode: animated keyed-cloud layers below the radar, each radar
-    // frame paired with its nearest-in-time IR snapshot so clouds move with
-    // the precipitation (added first so they stack under the radar).
-    if (mode === 'combined' && satelliteFrames.length > 0) {
-      const satIdxPerFrame = timeline.map((t) => nearestFrameIndex(satelliteFrames, t.time));
-      const layerBySatIdx = new Map<number, number>();
-      for (const satIdx of satIdxPerFrame) {
-        if (satIdx >= 0 && !layerBySatIdx.has(satIdx)) {
-          const layer = addImageryBelowLabels(
-            viewer,
-            makeCloudProvider(host, satelliteFrames[satIdx])
-          );
-          layer.alpha = 0;
-          layerBySatIdx.set(satIdx, cloudLayersRef.current.length);
-          cloudLayersRef.current.push(layer);
-        }
-      }
-      cloudMapRef.current = satIdxPerFrame.map((satIdx) => layerBySatIdx.get(satIdx) ?? -1);
-    } else {
-      cloudMapRef.current = [];
-    }
-
-    const makeProvider =
-      mode === 'satellite'
-        ? (f: RadarFrame) => makeCloudProvider(host, f)
-        : (f: RadarFrame) => makeRadarProvider(host, f, palette);
-
-    animLayersRef.current = timeline.map((t) => {
-      const layer = addImageryBelowLabels(viewer, makeProvider(t.frame));
-      layer.alpha = 0;
-      return layer;
-    });
-
-    // Start paused on "now" (latest observed) so the first thing shown is the
-    // current conditions; playback runs forward into the forecast then loops.
-    const startIdx = nowIndex(timeline);
-    applyInstant(startIdx);
-    setCurrentIndex(startIdx);
+    if (!active) return;
+    // Global first so its layers tend to sit under the HD channel's.
+    if (coverage !== 'us') globalChannel.current = new ChannelRenderer(viewer);
+    if (coverage !== 'global') usChannel.current = new ChannelRenderer(viewer);
     viewer.scene.requestRender();
-
     return () => {
-      cancelFade();
-      if (!viewer.isDestroyed()) {
-        for (const l of [...cloudLayersRef.current, ...animLayersRef.current]) {
-          viewer.imageryLayers.remove(l, true);
-        }
-      }
-      cloudLayersRef.current = [];
-      animLayersRef.current = [];
-      cloudMapRef.current = [];
-      shownIndexRef.current = null;
+      usChannel.current?.destroy();
+      globalChannel.current?.destroy();
+      usChannel.current = null;
+      globalChannel.current = null;
+      if (!viewer.isDestroyed()) viewer.scene.requestRender();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewer, active, host, frames, nowcastFrames, satelliteFrames, mode, windowMinutes, palette]);
+  }, [viewer, active, coverage, style, globalHost]);
 
-  // Dissolve to the current frame whenever the index moves.
+  // Reconcile frame layers with the timeline — only when the frame lists /
+  // window actually change, never per playback tick.
   useEffect(() => {
-    if (!viewer || viewer.isDestroyed()) return;
-    const layers = animLayersRef.current;
-    if (layers.length === 0) return;
-    const to = Math.min(Math.max(0, currentIndex), layers.length - 1);
-    // A dissolve still in flight when the next index arrives finalizes to its
-    // own target first, so the new dissolve starts from what is (nearly) on
-    // screen instead of a stale origin.
-    if (fadeRafRef.current != null && fadeTargetRef.current != null) {
-      shownIndexRef.current = fadeTargetRef.current;
+    if (!viewer || viewer.isDestroyed() || !active) return;
+    const s = useRadarStore.getState();
+    const timeline = buildTimeline(s);
+    const maskUs = coverage === 'auto';
+    const usSeen = new Set<number>();
+    const globalSeen = new Set<string>();
+    const usEntries: Array<{ key: string; make: () => Cesium.ImageryProvider }> = [];
+    const globalEntries: Array<{ key: string; make: () => Cesium.ImageryProvider }> = [];
+    for (const slot of timeline) {
+      if (slot.us != null && !usSeen.has(slot.us)) {
+        usSeen.add(slot.us);
+        const t = slot.us;
+        usEntries.push({ key: `us|${style}|${t}`, make: () => makeUsProvider(t, style) });
+      }
+      if (slot.global != null && s.globalAvailable && !globalSeen.has(slot.global.path)) {
+        globalSeen.add(slot.global.path);
+        const f = slot.global;
+        globalEntries.push({
+          key: `rv|${style}|${maskUs ? 'm' : 'f'}|${f.path}`,
+          make: () => makeGlobalProvider(s.globalHost, f, style, maskUs),
+        });
+      }
     }
-    const from = shownIndexRef.current;
-    cancelFade();
-    // Dissolve only during playback. Scrubbing pauses playback and moves the
-    // index faster than any fade — snap instantly so the frame under the
-    // handle is always the one displayed.
-    if (from == null || from === to || !useRadarStore.getState().playing) {
-      applyInstant(to);
+    usChannel.current?.syncFrames(usEntries);
+    globalChannel.current?.syncFrames(globalEntries);
+    viewer.scene.requestRender();
+  }, [viewer, active, usFrames, globalFrames, globalHost, windowMinutes, coverage, style]);
+
+  // Show the current slot (and preload the next) whenever anything moves.
+  // Pure alpha work in the steady state.
+  useEffect(() => {
+    if (!viewer || viewer.isDestroyed() || !active) return;
+    const s = useRadarStore.getState();
+    const timeline = buildTimeline(s);
+    if (timeline.length === 0) {
+      usChannel.current?.clear();
+      globalChannel.current?.clear();
       viewer.scene.requestRender();
       return;
     }
-    const t0 = performance.now();
-    const fromCloud = cloudMapRef.current[from] ?? -1;
-    const toCloud = cloudMapRef.current[to] ?? -1;
-    // Layers are stacked in timeline order, so during forward playback the
-    // incoming frame sits ABOVE the held one: ramping it in on top never dips
-    // combined coverage (zoom.earth's rolling dissolve). On the loop wrap the
-    // incoming frame is below — hold it at target and fade the old one out to
-    // reveal it, which is equally dip-free at full opacity.
-    const forward = to > from;
-    fadeTargetRef.current = to;
-    const tick = () => {
-      if (viewer.isDestroyed()) {
-        fadeRafRef.current = null;
-        return;
-      }
-      const t = Math.min(1, (performance.now() - t0) / FADE_MS);
-      const tgt = targets();
-      layers.forEach((l, i) => {
-        if (i === to) l.alpha = forward ? tgt.anim * t : tgt.anim;
-        else if (i === from) l.alpha = forward ? tgt.anim : tgt.anim * (1 - t);
-        else l.alpha = 0;
-      });
-      cloudLayersRef.current.forEach((l, i) => {
-        if (fromCloud === toCloud) {
-          l.alpha = i === toCloud ? tgt.cloud : 0;
-        } else if (i === toCloud) {
-          l.alpha = forward ? tgt.cloud * t : tgt.cloud;
-        } else if (i === fromCloud) {
-          l.alpha = forward ? tgt.cloud : tgt.cloud * (1 - t);
-        } else {
-          l.alpha = 0;
-        }
-      });
-      viewer.scene.requestRender();
-      if (t < 1) {
-        fadeRafRef.current = requestAnimationFrame(tick);
-      } else {
-        fadeRafRef.current = null;
-        fadeTargetRef.current = null;
-        shownIndexRef.current = to;
-        applyInstant(to);
-        viewer.scene.requestRender();
-      }
-    };
-    fadeRafRef.current = requestAnimationFrame(tick);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewer, currentIndex]);
+    const idx = Math.min(Math.max(0, currentIndex), timeline.length - 1);
+    const slot = timeline[idx];
+    const next = timeline[(idx + 1) % timeline.length];
+    const maskUs = coverage === 'auto';
+    // Dissolve only during playback; scrubbing moves faster than any fade, so
+    // snap so the frame under the handle is always the one displayed.
+    const fade = s.playing;
 
-  // Re-apply alphas when opacity moves (mid-fade the ticker reads the store
-  // itself, so only the settled state needs a nudge).
-  useEffect(() => {
-    if (!viewer || viewer.isDestroyed()) return;
-    if (fadeRafRef.current == null && shownIndexRef.current != null) {
-      applyInstant(shownIndexRef.current);
-      viewer.scene.requestRender();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewer, opacity]);
+    const applyChannel = (
+      channel: ChannelRenderer | null,
+      cur: { key: string; make: () => Cesium.ImageryProvider } | null,
+      pre: { key: string; make: () => Cesium.ImageryProvider } | null,
+      alpha: number
+    ) => {
+      if (!channel) return;
+      channel.setAlphaTarget(alpha);
+      if (cur) channel.show(cur.key, cur.make, fade);
+      else channel.clear();
+      if (pre && pre.key !== cur?.key) channel.ensurePreload(pre.key, pre.make);
+    };
+
+    const alpha = opacity * styleAlphaCeiling(style);
+    const usFor = (sl: TimelineSlot) =>
+      sl.us != null
+        ? { key: `us|${style}|${sl.us}`, make: () => makeUsProvider(sl.us!, style) }
+        : null;
+    const globalFor = (sl: TimelineSlot) =>
+      sl.global != null && s.globalAvailable
+        ? {
+            key: `rv|${style}|${maskUs ? 'm' : 'f'}|${sl.global.path}`,
+            make: () => makeGlobalProvider(s.globalHost, sl.global!, style, maskUs),
+          }
+        : null;
+
+    applyChannel(usChannel.current, usFor(slot), next !== slot ? usFor(next) : null, alpha);
+    applyChannel(
+      globalChannel.current,
+      globalFor(slot),
+      next !== slot ? globalFor(next) : null,
+      alpha
+    );
+    viewer.scene.requestRender();
+  }, [
+    viewer,
+    active,
+    currentIndex,
+    usFrames,
+    globalFrames,
+    globalHost,
+    coverage,
+    style,
+    windowMinutes,
+    opacity,
+  ]);
 
   // Playback ticker.
   useEffect(() => {
     if (!viewer || !active || !playing) return;
     const interval = setInterval(() => {
       const s = useRadarStore.getState();
-      const tl = buildTimeline(s);
-      if (tl.length === 0) return;
-      s.setCurrentIndex((s.currentIndex + 1) % tl.length);
+      const len = buildTimeline(s).length;
+      if (len < 2) return;
+      s.setCurrentIndex((Math.min(s.currentIndex, len - 1) + 1) % len);
     }, FRAME_MS);
     return () => clearInterval(interval);
   }, [viewer, active, playing]);

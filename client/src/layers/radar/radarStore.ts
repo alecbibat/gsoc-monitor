@@ -1,126 +1,158 @@
 import { create } from 'zustand';
-import type { RadarFrame } from '../../types';
-import type { RadarPaletteId } from './palettes';
+import type { RadarFrame, RadarManifest } from '../../types';
+import type { RadarStyle } from './palettes';
+import type { RadarCoverage } from './sources';
 
-export type RadarMode = 'radar' | 'satellite' | 'combined';
-
-// One slot on the playback timeline: a frame, its time (epoch seconds), and
-// whether it's a forecast (nowcast) frame rather than an observed one.
-export interface TimelineFrame {
-  frame: RadarFrame;
-  time: number;
-  forecast: boolean;
+// One slot on the playback timeline. Slots are the union of both sources'
+// frame times inside the window; each carries whichever source frames are
+// near enough in time to show for it (5-min HD frames fill between 10-min
+// global frames in auto mode, and vice versa outside HD coverage).
+export interface TimelineSlot {
+  time: number; // epoch seconds
+  us: number | null; // HD frame time to display, or null
+  global: RadarFrame | null; // global frame to display, or null
 }
 
 interface RadarState {
-  host: string;
-  frames: RadarFrame[]; // observed (past) radar
-  nowcastFrames: RadarFrame[]; // RainViewer forecast/nowcast radar
-  satelliteFrames: RadarFrame[];
-  mode: RadarMode;
-  windowMinutes: 30 | 60 | 120;
+  // Data (from /api/radar)
+  globalHost: string;
+  globalFrames: RadarFrame[]; // past only — the free tier has no nowcast
+  usFrames: number[]; // epoch seconds, minute % 5, oldest → newest
+  globalAvailable: boolean; // false when RainViewer is down/unreachable
+  // Settings
+  coverage: RadarCoverage;
+  style: RadarStyle;
+  windowMinutes: 60 | 120;
+  opacity: number;
+  // Playback
   currentIndex: number;
   playing: boolean;
-  opacity: number;
-  palette: RadarPaletteId;
-  setManifest: (
-    host: string,
-    frames: RadarFrame[],
-    nowcastFrames: RadarFrame[],
-    satelliteFrames: RadarFrame[]
-  ) => void;
-  setMode: (m: RadarMode) => void;
-  setWindowMinutes: (m: 30 | 60 | 120) => void;
+  setManifest: (m: RadarManifest) => void;
+  setCoverage: (c: RadarCoverage) => void;
+  setStyle: (s: RadarStyle) => void;
+  setWindowMinutes: (m: 60 | 120) => void;
+  setOpacity: (o: number) => void;
   setCurrentIndex: (i: number) => void;
   setPlaying: (p: boolean) => void;
-  setOpacity: (o: number) => void;
-  setPalette: (p: RadarPaletteId) => void;
 }
 
-// RainViewer republishes an identical manifest on most polls; comparing
-// signatures lets setManifest skip the write so the imagery-layer stack isn't
-// torn down and re-downloaded for no visual change.
-function manifestSig(
-  host: string,
-  frames: RadarFrame[],
-  nowcastFrames: RadarFrame[],
-  satelliteFrames: RadarFrame[]
-): string {
-  return (
-    `${host}|${frames.map((f) => f.path).join(',')}` +
-    `|${nowcastFrames.map((f) => f.path).join(',')}` +
-    `|${satelliteFrames.map((f) => f.path).join(',')}`
-  );
+// Merge tolerance when a HD and a global frame land on (nearly) the same
+// timestamp — they become one slot, keyed to the HD time.
+const SLOT_MERGE_SEC = 150;
+// How far a source frame may sit from a slot's time and still be shown for
+// it: half a cadence step plus slack, per source.
+const US_SHOW_TOLERANCE = 180;
+const GLOBAL_SHOW_TOLERANCE = 360;
+
+function nearestUs(frames: number[], time: number): number | null {
+  let best: number | null = null;
+  let bestD = US_SHOW_TOLERANCE + 1;
+  for (const t of frames) {
+    const d = Math.abs(t - time);
+    if (d < bestD) {
+      bestD = d;
+      best = t;
+    }
+  }
+  return best;
+}
+
+function nearestGlobal(frames: RadarFrame[], time: number): RadarFrame | null {
+  let best: RadarFrame | null = null;
+  let bestD = GLOBAL_SHOW_TOLERANCE + 1;
+  for (const f of frames) {
+    const d = Math.abs(f.time - time);
+    if (d < bestD) {
+      bestD = d;
+      best = f;
+    }
+  }
+  return best;
+}
+
+// The ordered playback timeline for the current coverage + window. Takes the
+// whole store state (EarthTimeBar calls it that way to decide its offset).
+export function buildTimeline(s: {
+  coverage: RadarCoverage;
+  windowMinutes: number;
+  usFrames: number[];
+  globalFrames: RadarFrame[];
+}): TimelineSlot[] {
+  const useUs = s.coverage !== 'global';
+  const useGlobal = s.coverage !== 'us';
+  const usTimes = useUs ? s.usFrames : [];
+  const globalTimes = useGlobal ? s.globalFrames.map((f) => f.time) : [];
+  if (usTimes.length === 0 && globalTimes.length === 0) return [];
+
+  const latest = Math.max(usTimes[usTimes.length - 1] ?? 0, globalTimes[globalTimes.length - 1] ?? 0);
+  const windowStart = latest - s.windowMinutes * 60;
+
+  // Union of times inside the window, HD times absorbing near-duplicates.
+  const times: number[] = usTimes.filter((t) => t >= windowStart);
+  for (const t of globalTimes) {
+    if (t < windowStart) continue;
+    if (!times.some((u) => Math.abs(u - t) <= SLOT_MERGE_SEC)) times.push(t);
+  }
+  times.sort((a, b) => a - b);
+
+  return times.map((time) => ({
+    time,
+    us: useUs ? nearestUs(usTimes, time) : null,
+    global: useGlobal ? nearestGlobal(s.globalFrames, time) : null,
+  }));
+}
+
+// Manifests mostly repeat between polls; comparing signatures lets
+// setManifest skip the write so nothing downstream rebuilds for no change.
+function manifestSig(host: string, globalFrames: RadarFrame[], usFrames: number[]): string {
+  return `${host}|${globalFrames.map((f) => f.path).join(',')}|${usFrames.join(',')}`;
 }
 
 export const useRadarStore = create<RadarState>((set) => ({
-  host: '',
-  frames: [],
-  nowcastFrames: [],
-  satelliteFrames: [],
-  // Default to plain radar until the keyed-cloud rendering is calibrated
-  // against real RainViewer IR tiles (see CLIENT_RECOLOR in
-  // RainViewerImagery.ts); then 'combined' — radar over keyed clouds, the
-  // zoom.earth composition — becomes the default again.
-  mode: 'radar',
-  // Default to the full ~2h window so the scrubber spans a satisfying range
-  // (plus the forecast frames appended after "now").
-  windowMinutes: 120,
+  globalHost: '',
+  globalFrames: [],
+  usFrames: [],
+  globalAvailable: true,
+  coverage: 'auto',
+  style: 'storm',
+  windowMinutes: 60,
+  opacity: 1,
   currentIndex: 0,
   playing: true,
-  // Full layer opacity by default: translucency now lives in the palette
-  // per-pixel (light rain airy, cores solid), not in a flat layer fade.
-  opacity: 1,
-  palette: 'storm',
-  setManifest: (host, frames, nowcastFrames, satelliteFrames) =>
-    set((s) =>
-      manifestSig(host, frames, nowcastFrames, satelliteFrames) ===
-      manifestSig(s.host, s.frames, s.nowcastFrames, s.satelliteFrames)
-        ? {}
-        : { host, frames, nowcastFrames, satelliteFrames }
-    ),
-  setMode: (mode) => set({ mode, currentIndex: 0 }),
-  setWindowMinutes: (m) => set({ windowMinutes: m }),
-  setCurrentIndex: (i) => set({ currentIndex: i }),
-  setPlaying: (playing) => set({ playing }),
+  setManifest: (m) =>
+    set((s) => {
+      const host = m.global?.host ?? '';
+      const globalFrames = m.global?.frames ?? [];
+      const usFrames = m.us?.frames ?? [];
+      if (
+        manifestSig(host, globalFrames, usFrames) ===
+        manifestSig(s.globalHost, s.globalFrames, s.usFrames)
+      ) {
+        return { globalAvailable: m.global != null };
+      }
+      // Live pinning: a view sitting on the newest frame follows new frames
+      // as they arrive instead of drifting into the past.
+      const oldLen = buildTimeline(s).length;
+      const next = { ...s, globalHost: host, globalFrames, usFrames };
+      const newLen = buildTimeline(next).length;
+      const wasLive = oldLen === 0 || s.currentIndex >= oldLen - 1;
+      return {
+        globalHost: host,
+        globalFrames,
+        usFrames,
+        globalAvailable: m.global != null,
+        currentIndex: wasLive ? Math.max(0, newLen - 1) : Math.min(s.currentIndex, newLen - 1),
+      };
+    }),
+  setCoverage: (coverage) =>
+    set((s) => ({
+      coverage,
+      // Land on "now" in the new coverage's timeline.
+      currentIndex: Math.max(0, buildTimeline({ ...s, coverage }).length - 1),
+    })),
+  setStyle: (style) => set({ style }),
+  setWindowMinutes: (windowMinutes) => set({ windowMinutes }),
   setOpacity: (opacity) => set({ opacity }),
-  setPalette: (palette) => set({ palette }),
+  setCurrentIndex: (currentIndex) => set({ currentIndex }),
+  setPlaying: (playing) => set({ playing }),
 }));
-
-export function framesInWindow(frames: RadarFrame[], windowMinutes: number): RadarFrame[] {
-  const count = Math.max(1, Math.round(windowMinutes / 10));
-  return frames.slice(Math.max(0, frames.length - count));
-}
-
-// The full ordered playback timeline for the current mode: observed frames
-// (within the window) followed by the forecast frames. Satellite mode has no
-// forecast product, so it's just the windowed satellite frames.
-export function buildTimeline(s: {
-  mode: RadarMode;
-  frames: RadarFrame[];
-  nowcastFrames: RadarFrame[];
-  satelliteFrames: RadarFrame[];
-  windowMinutes: number;
-}): TimelineFrame[] {
-  if (s.mode === 'satellite') {
-    return framesInWindow(s.satelliteFrames, s.windowMinutes).map((f) => ({
-      frame: f,
-      time: f.time,
-      forecast: false,
-    }));
-  }
-  const past = framesInWindow(s.frames, s.windowMinutes).map((f) => ({
-    frame: f,
-    time: f.time,
-    forecast: false,
-  }));
-  const fcst = s.nowcastFrames.map((f) => ({ frame: f, time: f.time, forecast: true }));
-  return [...past, ...fcst];
-}
-
-// Index of the "now" frame (the last observed frame) within a timeline.
-export function nowIndex(timeline: TimelineFrame[]): number {
-  const firstForecast = timeline.findIndex((t) => t.forecast);
-  if (firstForecast === -1) return Math.max(0, timeline.length - 1);
-  return Math.max(0, firstForecast - 1);
-}

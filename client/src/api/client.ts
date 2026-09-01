@@ -45,7 +45,8 @@ export const api = {
     getJson<GeoJSON.FeatureCollection>(
       `/api/earthquakes?magnitude=${magnitude}&period=${period}`
     ),
-  radarManifest: () => getJson<import('../types').RadarManifest>('/api/radar'),
+  radarManifest: (sim = false) =>
+    getJson<import('../types').RadarManifest>(sim ? '/api/radar-sim/manifest' : '/api/radar'),
   flights: (lat: number, lon: number, dist: number) =>
     getJson<{ flights: import('../types').FlightState[] }>(
       `/api/flights?lat=${lat}&lon=${lon}&dist=${dist}`

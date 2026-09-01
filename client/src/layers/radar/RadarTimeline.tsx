@@ -1,41 +1,39 @@
 import { useMemo, useRef } from 'react';
 import { useLayersStore } from '../../store/layersStore';
-import { useRadarStore, buildTimeline, nowIndex } from './radarStore';
+import { useRadarStore, buildTimeline } from './radarStore';
 
 // Local clock time, e.g. "2:40 PM".
 function fmtClock(sec: number): string {
   return new Date(sec * 1000).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
-// Offset from "now", e.g. "Now", "+20 min", "−1h 10m".
+// Offset from the newest frame, e.g. "−35 min", "−1h 10m".
 function fmtRel(deltaSec: number): string {
-  const m = Math.round(deltaSec / 60);
-  if (m === 0) return 'Now';
-  const sign = m > 0 ? '+' : '−';
-  const a = Math.abs(m);
-  if (a < 60) return `${sign}${a} min`;
-  return `${sign}${Math.floor(a / 60)}h ${a % 60}m`;
+  const m = Math.round(Math.abs(deltaSec) / 60);
+  if (m === 0) return 'now';
+  if (m < 60) return `−${m} min`;
+  return `−${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-// A Zoom Earth-style precipitation timeline: a draggable scrubber spanning the
-// observed window into the short-range forecast, with a play/pause control, a
-// "now" divider, and the current frame's time. Mounts only while the radar
-// layer is on.
+// The zoom.earth-style playback pill: play/pause, a draggable scrubber over
+// the observed window with a tick per frame, and a live readout that pins to
+// the newest frame as new data arrives. Mounts only while the radar layer is
+// on. (Height is load-bearing: EarthTimeBar offsets itself 5.75rem up to
+// stack above this bar — change one, change both.)
 export function RadarTimeline() {
   const active = useLayersStore((s) => s.active.radar);
-  const mode = useRadarStore((s) => s.mode);
-  const frames = useRadarStore((s) => s.frames);
-  const nowcastFrames = useRadarStore((s) => s.nowcastFrames);
-  const satelliteFrames = useRadarStore((s) => s.satelliteFrames);
+  const coverage = useRadarStore((s) => s.coverage);
   const windowMinutes = useRadarStore((s) => s.windowMinutes);
+  const usFrames = useRadarStore((s) => s.usFrames);
+  const globalFrames = useRadarStore((s) => s.globalFrames);
   const currentIndex = useRadarStore((s) => s.currentIndex);
   const playing = useRadarStore((s) => s.playing);
   const setCurrentIndex = useRadarStore((s) => s.setCurrentIndex);
   const setPlaying = useRadarStore((s) => s.setPlaying);
 
   const timeline = useMemo(
-    () => buildTimeline({ mode, frames, nowcastFrames, satelliteFrames, windowMinutes }),
-    [mode, frames, nowcastFrames, satelliteFrames, windowMinutes]
+    () => buildTimeline({ coverage, windowMinutes, usFrames, globalFrames }),
+    [coverage, windowMinutes, usFrames, globalFrames]
   );
   const trackRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
@@ -44,14 +42,12 @@ export function RadarTimeline() {
 
   const n = timeline.length;
   const idx = Math.min(Math.max(0, currentIndex), n - 1);
-  const nIdx = nowIndex(timeline);
   const cur = timeline[idx];
-  const nowTime = timeline[nIdx].time;
+  const latest = timeline[n - 1].time;
+  const isLive = idx === n - 1;
 
   const pct = (i: number) => (n > 1 ? (i / (n - 1)) * 100 : 100);
-  const nowPct = pct(nIdx);
   const curPct = pct(idx);
-  const hasForecast = nIdx < n - 1;
 
   const seek = (clientX: number) => {
     const el = trackRef.current;
@@ -90,27 +86,19 @@ export function RadarTimeline() {
             }}
             className="relative h-1.5 cursor-pointer rounded-full bg-white/15"
           >
-            {/* Forecast zone (hatched) from "now" to the end */}
-            {hasForecast && (
-              <div
-                className="absolute inset-y-0 rounded-r-full"
-                style={{
-                  left: `${nowPct}%`,
-                  right: 0,
-                  backgroundImage:
-                    'repeating-linear-gradient(45deg, rgba(255,210,80,0.45) 0 4px, rgba(255,210,80,0.12) 4px 8px)',
-                }}
-              />
-            )}
             {/* Played progress */}
             <div
               className="absolute inset-y-0 left-0 rounded-full bg-sky-400/70"
               style={{ width: `${curPct}%` }}
             />
-            {/* "Now" divider */}
-            {hasForecast && (
-              <div className="absolute -inset-y-1 w-px bg-white/60" style={{ left: `${nowPct}%` }} />
-            )}
+            {/* One tick per frame */}
+            {timeline.map((slot, i) => (
+              <div
+                key={slot.time}
+                className="absolute top-1/2 h-2.5 w-px -translate-y-1/2 bg-white/20"
+                style={{ left: `${pct(i)}%` }}
+              />
+            ))}
             {/* Handle */}
             <div
               className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-sky-300 bg-ink-900 shadow"
@@ -121,22 +109,24 @@ export function RadarTimeline() {
           {/* End labels */}
           <div className="mt-1 flex justify-between text-[9px] text-white/35">
             <span>{fmtClock(timeline[0].time)}</span>
-            {hasForecast && (
-              <span className="text-amber-300/70" style={{ marginRight: `${100 - nowPct}%` }}>
-                now
-              </span>
-            )}
-            <span>{fmtClock(timeline[n - 1].time)}</span>
+            <span>{fmtClock(latest)}</span>
           </div>
         </div>
 
         {/* Current frame readout */}
-        <div className="w-[72px] shrink-0 text-right">
+        <div className="w-[76px] shrink-0 text-right">
           <div className="font-mono text-[15px] font-bold leading-none tabular-nums text-white">
             {fmtClock(cur.time)}
           </div>
-          <div className={`mt-0.5 text-[10px] ${cur.forecast ? 'text-amber-300' : 'text-white/45'}`}>
-            {cur.forecast ? `forecast ${fmtRel(cur.time - nowTime)}` : fmtRel(cur.time - nowTime)}
+          <div className="mt-0.5 text-[10px]">
+            {isLive ? (
+              <span className="inline-flex items-center gap-1 font-semibold text-accent-ok">
+                <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent-ok" />
+                LIVE
+              </span>
+            ) : (
+              <span className="text-white/45">{fmtRel(cur.time - latest)}</span>
+            )}
           </div>
         </div>
       </div>

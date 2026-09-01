@@ -173,15 +173,13 @@ export interface RadarFrame {
   path: string;
 }
 
+// Merged manifest from /api/radar: the global (RainViewer) frame list plus a
+// server-computed schedule of US NEXRAD HD frames (IEM's 5-minute composite;
+// the frame times ARE the tile URLs, so no upstream manifest exists for it).
 export interface RadarManifest {
-  host: string;
-  radar: {
-    past: RadarFrame[];
-    nowcast: RadarFrame[];
-  };
-  satellite: {
-    infrared: RadarFrame[];
-  };
+  global: { host: string; frames: RadarFrame[] } | null;
+  us: { frames: number[]; intervalSec: number };
+  generated: number;
 }
 
 export interface ShipTrackPoint {

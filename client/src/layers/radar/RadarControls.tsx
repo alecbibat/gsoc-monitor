@@ -1,46 +1,54 @@
 import { useRadarStore } from './radarStore';
-import type { RadarMode } from './radarStore';
-import type { RadarPaletteId } from './palettes';
+import type { RadarCoverage } from './sources';
+import type { RadarStyle } from './palettes';
 
-const WINDOWS: Array<30 | 60 | 120> = [30, 60, 120];
-const MODES: Array<{ value: RadarMode; label: string }> = [
-  { value: 'radar', label: 'Radar' },
-  { value: 'satellite', label: 'Clouds' },
-  { value: 'combined', label: 'Combined' },
+const COVERAGES: Array<{ value: RadarCoverage; label: string; title: string }> = [
+  { value: 'auto', label: 'Auto', title: 'HD NEXRAD over the US, global composite elsewhere' },
+  { value: 'us', label: 'US HD', title: 'NEXRAD only (CONUS · AK · HI · PR), 5-min frames' },
+  { value: 'global', label: 'Global', title: 'RainViewer worldwide composite, 10-min frames' },
 ];
-// Client-side palettes (see palettes.ts) — applied to raw dBZ tiles.
-const PALETTES: Array<{ value: RadarPaletteId; label: string }> = [
-  { value: 'storm', label: 'Storm' },     // zoom.earth-class default
-  { value: 'classic', label: 'Classic' }, // familiar meteorology greens
-  { value: 'blue', label: 'Blue' },       // subdued single-hue
-  { value: 'mono', label: 'Mono' },       // grayscale
+
+const STYLES: Array<{ value: RadarStyle; label: string; title: string }> = [
+  { value: 'storm', label: 'Storm', title: 'Unified zoom.earth-style palette across both sources' },
+  { value: 'agency', label: 'Agency', title: 'Each source’s own colors (NWS ramp / Universal Blue)' },
 ];
+
+const WINDOWS: Array<60 | 120> = [60, 120];
+
+function ago(sec: number | undefined, now: number): string | null {
+  if (!sec) return null;
+  const m = Math.max(0, Math.round((now - sec) / 60));
+  return `${m} min ago`;
+}
 
 export function RadarControls() {
-  const mode = useRadarStore((s) => s.mode);
-  const setMode = useRadarStore((s) => s.setMode);
+  const coverage = useRadarStore((s) => s.coverage);
+  const setCoverage = useRadarStore((s) => s.setCoverage);
+  const style = useRadarStore((s) => s.style);
+  const setStyle = useRadarStore((s) => s.setStyle);
   const windowMinutes = useRadarStore((s) => s.windowMinutes);
   const setWindowMinutes = useRadarStore((s) => s.setWindowMinutes);
-  const playing = useRadarStore((s) => s.playing);
-  const setPlaying = useRadarStore((s) => s.setPlaying);
   const opacity = useRadarStore((s) => s.opacity);
   const setOpacity = useRadarStore((s) => s.setOpacity);
-  const palette = useRadarStore((s) => s.palette);
-  const setPalette = useRadarStore((s) => s.setPalette);
+  const usFrames = useRadarStore((s) => s.usFrames);
+  const globalFrames = useRadarStore((s) => s.globalFrames);
+  const globalAvailable = useRadarStore((s) => s.globalAvailable);
 
-  // The palette only affects the precipitation overlay, not the IR satellite.
-  const showPalette = mode !== 'satellite';
+  const now = Date.now() / 1000;
+  const usAge = ago(usFrames[usFrames.length - 1], now);
+  const globalAge = ago(globalFrames[globalFrames.length - 1]?.time, now);
 
   return (
     <div className="mt-2 space-y-2 rounded-md bg-black/20 p-2">
-      {/* Mode selector */}
+      {/* Coverage */}
       <div className="flex items-center gap-1">
-        {MODES.map(({ value, label }) => (
+        {COVERAGES.map(({ value, label, title }) => (
           <button
             key={value}
-            onClick={() => setMode(value)}
+            onClick={() => setCoverage(value)}
+            title={title}
             className={`flex-1 rounded px-1 py-1 text-[11px] font-medium transition ${
-              mode === value
+              coverage === value
                 ? 'bg-sky-500/30 text-sky-300'
                 : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/70'
             }`}
@@ -50,53 +58,42 @@ export function RadarControls() {
         ))}
       </div>
 
-      {/* Time window + play/pause (hidden in satellite-only with no window concept) */}
-      <div className="flex items-center gap-1.5">
+      {/* Style + window */}
+      <div className="flex items-center gap-1">
+        {STYLES.map(({ value, label, title }) => (
+          <button
+            key={value}
+            onClick={() => setStyle(value)}
+            title={title}
+            className={`flex-1 rounded px-1 py-1 text-[11px] font-medium transition ${
+              style === value
+                ? 'bg-sky-500/30 text-sky-300'
+                : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/70'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
         {WINDOWS.map((w) => (
           <button
             key={w}
             onClick={() => setWindowMinutes(w)}
-            className={`flex-1 rounded px-1.5 py-1 text-[11px] font-medium transition ${
+            className={`flex-1 rounded px-1 py-1 text-[11px] font-medium transition ${
               windowMinutes === w
                 ? 'bg-accent/20 text-accent'
                 : 'bg-white/5 text-white/50 hover:bg-white/10'
             }`}
           >
-            {w}m
+            {w / 60}h
           </button>
         ))}
-        <button
-          onClick={() => setPlaying(!playing)}
-          className="rounded bg-white/5 px-2 py-1 text-[11px] font-medium text-white/70 hover:bg-white/10"
-        >
-          {playing ? '⏸' : '▶'}
-        </button>
       </div>
-
-      {/* Precipitation palette */}
-      {showPalette && (
-        <div className="flex items-center gap-1">
-          {PALETTES.map(({ value, label }) => (
-            <button
-              key={value}
-              onClick={() => setPalette(value)}
-              className={`flex-1 rounded px-1 py-1 text-[11px] font-medium transition ${
-                palette === value
-                  ? 'bg-sky-500/30 text-sky-300'
-                  : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/70'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
 
       <label className="flex items-center gap-2 text-[11px] text-white/50">
         Opacity
         <input
           type="range"
-          min={0.1}
+          min={0.2}
           max={1}
           step={0.05}
           value={opacity}
@@ -104,6 +101,17 @@ export function RadarControls() {
           className="flex-1 accent-accent"
         />
       </label>
+
+      {/* Source freshness */}
+      <div className="text-[10px] leading-4 text-white/35">
+        {coverage !== 'global' && <div>NEXRAD HD {usAge ? `· ${usAge}` : '· loading'}</div>}
+        {coverage !== 'us' &&
+          (globalAvailable ? (
+            <div>Global {globalAge ? `· ${globalAge}` : '· loading'}</div>
+          ) : (
+            <div className="text-accent-warn">Global source unavailable</div>
+          ))}
+      </div>
     </div>
   );
 }

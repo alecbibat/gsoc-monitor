@@ -28,6 +28,21 @@ interface BasemapDef {
   overlay?: ImagerySource;
 }
 
+// Radar sim harness (?radarsim=1): remote basemap hosts may be unreachable in
+// the sandboxes the sim runs in, so the dark basemap swaps to Cesium's
+// bundled Natural Earth II tileset — offline, real coastlines, levels 0–2.
+const RADAR_SIM =
+  typeof location !== 'undefined' && new URLSearchParams(location.search).has('radarsim');
+
+function buildSimBasemap(): Cesium.ImageryProvider {
+  return new Cesium.UrlTemplateImageryProvider({
+    url: Cesium.buildModuleUrl('Assets/Textures/NaturalEarthII') + '/{z}/{x}/{reverseY}.jpg',
+    tilingScheme: new Cesium.GeographicTilingScheme(),
+    maximumLevel: 2,
+    credit: new Cesium.Credit('Natural Earth II'),
+  });
+}
+
 // Esri's transparent boundaries + place labels (countries, states/provinces,
 // cities): light text with dark halos, designed to overlay photographic
 // imagery. Shared by the map types whose base is raw satellite imagery.
@@ -49,11 +64,13 @@ export const BASEMAPS: Record<BasemapId, BasemapDef> = {
     label: 'Dark',
     attribution: 'Esri Dark Gray Canvas · © OpenStreetMap contributors',
     build: () =>
-      new Cesium.UrlTemplateImageryProvider({
-        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
-        maximumLevel: 16,
-        credit: new Cesium.Credit('Esri, HERE, Garmin, © OpenStreetMap contributors'),
-      }),
+      RADAR_SIM
+        ? buildSimBasemap()
+        : new Cesium.UrlTemplateImageryProvider({
+            url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+            maximumLevel: 16,
+            credit: new Cesium.Credit('Esri, HERE, Garmin, © OpenStreetMap contributors'),
+          }),
     overlay: {
       build: () =>
         new Cesium.UrlTemplateImageryProvider({

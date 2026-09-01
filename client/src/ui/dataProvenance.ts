@@ -18,12 +18,12 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     info: {
       name: 'Precipitation Radar',
       icon: '🌧',
-      source: 'RainViewer',
+      source: 'NOAA NEXRAD (via Iowa Environmental Mesonet) + RainViewer',
       method:
-        'Aggregates national weather-service radar mosaics into map tiles, refreshed roughly every 10 minutes.',
+        'US/AK/HI/PR radar is the official NEXRAD N0Q composite served as map tiles by Iowa State’s Environmental Mesonet, new frame every 5 minutes; the rest of the world falls back to RainViewer’s global composite (10-minute frames).',
       trust:
-        'Composites official meteorological radar networks (e.g. NOAA/NWS NEXRAD in the US) — the same feed many consumer weather apps use.',
-      url: 'https://www.rainviewer.com',
+        'The US layer is the same NOAA/NWS NEXRAD network feed used by radar.weather.gov, composited by a long-running academic service; both sources are recolored client-side through one calibrated palette.',
+      url: 'https://mesonet.agron.iastate.edu/docs/nexrad_mosaic/',
     },
   },
   {

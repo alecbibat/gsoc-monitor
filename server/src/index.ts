@@ -9,6 +9,7 @@ import { migrate } from './migrate';
 import alertsRouter from './routes/alerts';
 import earthquakesRouter from './routes/earthquakes';
 import radarRouter from './routes/radar';
+import radarSimRouter from './routes/radarSim';
 import flightsRouter, { initFlightsTracker } from './routes/flights';
 import geocodeRouter from './routes/geocode';
 import shipsRouter, { initShipsStream } from './routes/ships';
@@ -126,6 +127,11 @@ function main() {
   app.use('/api/alerts', alertsRouter);
   app.use('/api/earthquakes', earthquakesRouter);
   app.use('/api/radar', radarRouter);
+  // Synthetic radar tiles for development/testing (?radarsim=1 in the client):
+  // exercises the full radar pipeline without egress to the weather hosts.
+  if (process.env.NODE_ENV !== 'production') {
+    app.use('/api/radar-sim', radarSimRouter);
+  }
   app.use('/api/flights', flightsRouter);
   app.use('/api/geocode', geocodeRouter);
   app.use('/api/ships', shipsRouter);
