@@ -1,10 +1,22 @@
 {
   "name": "GSOC Monitor",
   "description": "Real-time 3D globe situational awareness dashboard",
-  "keywords": ["node", "express", "react", "cesium", "globe", "dashboard"],
+  "keywords": [
+    "node",
+    "express",
+    "react",
+    "cesium",
+    "globe",
+    "dashboard"
+  ],
   "env": {
     "NWS_USER_AGENT": {
       "description": "Contact string (app name + email) sent to api.weather.gov per NWS API policy, e.g. \"gsoc-monitor (you@email.com)\"",
+      "required": false
+    },
+    "NODE_ENV": {
+      "description": "Set to \"production\" in deployed environments: gates off the dev-only /api/radar-sim routes and keys secure-cookie/SSL behavior.",
+      "value": "production",
       "required": false
     }
   },

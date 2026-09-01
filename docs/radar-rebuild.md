@@ -19,7 +19,7 @@ pixels. None of that was fixable by tuning.
 
 | Channel | Source | Coverage | Cadence | Native detail | Colors |
 |---|---|---|---|---|---|
-| **US HD** | NOAA NEXRAD N0Q composite via [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu/docs/nexrad_mosaic/) | CONUS + AK + HI + PR | 5 min | ~1 km (≈ z12) | documented ramp (`composite_n0q`: index i ⇒ dBZ = (i−65)/2) |
+| **US HD** | NOAA NEXRAD N0Q composite via [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu/docs/nexrad_mosaic/) | CONUS + AK + HI + PR + Guam | 5 min | ~1 km (≈ z12) | documented ramp (`composite_n0q`: index i ⇒ dBZ = (i−65)/2) |
 | **Global** | RainViewer free tier | worldwide | 10 min | z7 max (hard cap) | Universal Blue (calibrated anchors) |
 
 - US HD frames use IEM's **immutable timestamped URLs**
@@ -29,7 +29,7 @@ pixels. None of that was fixable by tuning.
   TMS, despite the `1.0.0` path (the server is configured `tms_type=google`).
 - `/api/radar` returns a merged manifest: RainViewer's past frames (proxied +
   cached 2 min, stale-on-error) plus a clock-derived IEM frame schedule
-  (lagged 7 min so advertised frames exist). A RainViewer outage degrades to
+  (lagged 8 min — the top of IEM's documented generation delay — so advertised frames exist). A RainViewer outage degrades to
   HD-only instead of failing.
 - Both tile sets are fetched browser-direct (CORS `*` on both hosts), never
   proxied through the dyno.
@@ -44,7 +44,9 @@ pixels. None of that was fixable by tuning.
   (normalized-convolution blur, edge-padded) → one zoom.earth-style palette
   with per-pixel alpha. `Agency`: each source's native colors, zero pixel
   processing — the robustness fallback if either provider ever repaints.
-- **Window** — 1h / 2h. **Opacity** slider.
+- **Window** — 1h / 2h (default 2h). **Opacity** slider. Changing window or
+  receiving new frames preserves the moment under a paused/scrubbed handle
+  (anchored by time, not index) and keeps a LIVE view pinned LIVE.
 
 ## Rendering engine (the part that is load-bearing)
 
@@ -97,9 +99,11 @@ route to the real hosts.
   street-level global radar ever matters, the options are national-network
   adapters (MSC GeoMet for Canada is an easy first: 1 km, 6-min WMS).
 - **IEM is a best-effort academic service** (no SLA; outages documented).
-  Degradation path: HD tiles simply stop arriving and Auto mode still shows
-  the global layer underneath; a stale-frames warning chip is a possible
-  follow-up.
+  Degradation path: the server health-probes IEM each manifest cycle and
+  reports `us.available`; when it goes false, Auto coverage drops the HD
+  channel, stops masking the global layer over the US, and the sidebar shows
+  a warning — radar over the US degrades to the global composite instead of
+  a radar-shaped hole.
 - **Verify once from a real browser** that both hosts still send
   `Access-Control-Allow-Origin: *` (researched from their configs, not
   curl-able from the build sandbox).

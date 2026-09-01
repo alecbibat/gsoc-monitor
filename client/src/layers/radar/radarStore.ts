@@ -19,6 +19,7 @@ interface RadarState {
   globalFrames: RadarFrame[]; // past only — the free tier has no nowcast
   usFrames: number[]; // epoch seconds, minute % 5, oldest → newest
   globalAvailable: boolean; // false when RainViewer is down/unreachable
+  usAvailable: boolean; // false when the server's IEM health probe fails
   // Settings
   coverage: RadarCoverage;
   style: RadarStyle;
@@ -77,8 +78,12 @@ export function buildTimeline(s: {
   windowMinutes: number;
   usFrames: number[];
   globalFrames: RadarFrame[];
+  usAvailable?: boolean;
 }): TimelineSlot[] {
-  const useUs = s.coverage !== 'global';
+  // When the server's IEM health probe fails, auto coverage degrades to the
+  // global layer alone (and RadarLayer stops masking it over the US) — but an
+  // explicit 'us' selection keeps trying, so the operator can see it recover.
+  const useUs = s.coverage === 'us' || (s.coverage === 'auto' && (s.usAvailable ?? true));
   const useGlobal = s.coverage !== 'us';
   const usTimes = useUs ? s.usFrames : [];
   const globalTimes = useGlobal ? s.globalFrames.map((f) => f.time) : [];
@@ -108,14 +113,33 @@ function manifestSig(host: string, globalFrames: RadarFrame[], usFrames: number[
   return `${host}|${globalFrames.map((f) => f.path).join(',')}|${usFrames.join(',')}`;
 }
 
+// Index of the slot whose time is nearest `time` — how a paused/scrubbed
+// view keeps showing the same MOMENT when the timeline's contents shift
+// (every manifest poll slides the window forward by one slot, so preserving
+// the numeric index would silently advance the frame under the handle).
+function nearestSlotIndex(timeline: TimelineSlot[], time: number): number {
+  let best = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < timeline.length; i++) {
+    const d = Math.abs(timeline[i].time - time);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
 export const useRadarStore = create<RadarState>((set) => ({
   globalHost: '',
   globalFrames: [],
   usFrames: [],
   globalAvailable: true,
+  usAvailable: true,
   coverage: 'auto',
   style: 'storm',
-  windowMinutes: 60,
+  // Default to the full 2h window so the scrubber spans a satisfying range.
+  windowMinutes: 120,
   opacity: 1,
   currentIndex: 0,
   playing: true,
@@ -124,24 +148,34 @@ export const useRadarStore = create<RadarState>((set) => ({
       const host = m.global?.host ?? '';
       const globalFrames = m.global?.frames ?? [];
       const usFrames = m.us?.frames ?? [];
+      const availability = {
+        globalAvailable: m.global != null,
+        usAvailable: m.us?.available !== false,
+      };
       if (
         manifestSig(host, globalFrames, usFrames) ===
         manifestSig(s.globalHost, s.globalFrames, s.usFrames)
       ) {
-        return { globalAvailable: m.global != null };
+        return availability;
       }
       // Live pinning: a view sitting on the newest frame follows new frames
-      // as they arrive instead of drifting into the past.
-      const oldLen = buildTimeline(s).length;
-      const next = { ...s, globalHost: host, globalFrames, usFrames };
-      const newLen = buildTimeline(next).length;
-      const wasLive = oldLen === 0 || s.currentIndex >= oldLen - 1;
+      // as they arrive; a paused/scrubbed view stays anchored to the same
+      // TIME (not the same index — the window slides underneath it).
+      const oldTimeline = buildTimeline(s);
+      const next = { ...s, ...availability, globalHost: host, globalFrames, usFrames };
+      const newTimeline = buildTimeline(next);
+      const wasLive = oldTimeline.length === 0 || s.currentIndex >= oldTimeline.length - 1;
+      const heldTime = oldTimeline[Math.min(s.currentIndex, oldTimeline.length - 1)]?.time;
       return {
         globalHost: host,
         globalFrames,
         usFrames,
-        globalAvailable: m.global != null,
-        currentIndex: wasLive ? Math.max(0, newLen - 1) : Math.min(s.currentIndex, newLen - 1),
+        ...availability,
+        currentIndex: wasLive
+          ? Math.max(0, newTimeline.length - 1)
+          : heldTime != null
+            ? nearestSlotIndex(newTimeline, heldTime)
+            : 0,
       };
     }),
   setCoverage: (coverage) =>
@@ -151,7 +185,23 @@ export const useRadarStore = create<RadarState>((set) => ({
       currentIndex: Math.max(0, buildTimeline({ ...s, coverage }).length - 1),
     })),
   setStyle: (style) => set({ style }),
-  setWindowMinutes: (windowMinutes) => set({ windowMinutes }),
+  setWindowMinutes: (windowMinutes) =>
+    set((s) => {
+      // Re-anchor into the resized timeline: LIVE stays LIVE, a scrubbed view
+      // keeps its moment.
+      const oldTimeline = buildTimeline(s);
+      const newTimeline = buildTimeline({ ...s, windowMinutes });
+      const wasLive = oldTimeline.length === 0 || s.currentIndex >= oldTimeline.length - 1;
+      const heldTime = oldTimeline[Math.min(s.currentIndex, oldTimeline.length - 1)]?.time;
+      return {
+        windowMinutes,
+        currentIndex: wasLive
+          ? Math.max(0, newTimeline.length - 1)
+          : heldTime != null
+            ? nearestSlotIndex(newTimeline, heldTime)
+            : 0,
+      };
+    }),
   setOpacity: (opacity) => set({ opacity }),
   setCurrentIndex: (currentIndex) => set({ currentIndex }),
   setPlaying: (playing) => set({ playing }),

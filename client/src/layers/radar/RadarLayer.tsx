@@ -30,17 +30,64 @@ class ChannelRenderer {
   private fadeFromKey: string | null = null;
   private fadeToKey: string | null = null;
   private alphaTarget = 1;
+  private validKeys: Set<string> | null = null;
 
-  constructor(private viewer: Cesium.Viewer) {}
+  // `insertBelow` pins this channel's layers UNDER another channel's stack:
+  // the global channel passes the HD channel's lowest layer so the coarse
+  // composite always composites beneath the ~1 km product where their
+  // coverage fringes overlap. Without it every new layer lands at the
+  // below-labels anchor, i.e. above all earlier radar layers regardless of
+  // channel.
+  constructor(
+    private viewer: Cesium.Viewer,
+    private insertBelow?: () => Cesium.ImageryLayer | null
+  ) {}
+
+  // The channel's lowest layer in the imagery stack (for insertBelow peers).
+  lowestLayer(): Cesium.ImageryLayer | null {
+    let lowest: Cesium.ImageryLayer | null = null;
+    let lowestIdx = Infinity;
+    const stack = this.viewer.imageryLayers;
+    for (const l of this.layers.values()) {
+      const idx = stack.indexOf(l);
+      if (idx >= 0 && idx < lowestIdx) {
+        lowestIdx = idx;
+        lowest = l;
+      }
+    }
+    return lowest;
+  }
 
   private ensure(key: string, make: () => Cesium.ImageryProvider): Cesium.ImageryLayer {
     let layer = this.layers.get(key);
     if (!layer) {
-      layer = addImageryBelowLabels(this.viewer, make());
+      const anchor = this.insertBelow?.();
+      if (anchor) {
+        const idx = this.viewer.imageryLayers.indexOf(anchor);
+        layer =
+          idx >= 0
+            ? this.viewer.imageryLayers.addImageryProvider(make(), idx)
+            : addImageryBelowLabels(this.viewer, make());
+      } else {
+        layer = addImageryBelowLabels(this.viewer, make());
+      }
       layer.alpha = 0;
       this.layers.set(key, layer);
     }
     return layer;
+  }
+
+  // Frames can leave the timeline while their layer is on screen (the window
+  // slides under a paused view); syncFrames must spare those layers, so reap
+  // them here as soon as the display moves off them.
+  private reapInvalid() {
+    if (!this.validKeys || this.viewer.isDestroyed()) return;
+    for (const [k, l] of this.layers) {
+      if (this.validKeys.has(k)) continue;
+      if (k === this.shownKey || k === this.fadeFromKey || k === this.fadeToKey) continue;
+      this.viewer.imageryLayers.remove(l, true);
+      this.layers.delete(k);
+    }
   }
 
   private cancelFade(finalize: boolean) {
@@ -56,6 +103,7 @@ class ChannelRenderer {
   private applyInstant(key: string | null) {
     for (const [k, l] of this.layers) l.alpha = k === key ? this.alphaTarget : 0;
     this.shownKey = key;
+    this.reapInvalid();
   }
 
   setAlphaTarget(alpha: number) {
@@ -130,15 +178,12 @@ class ChannelRenderer {
   // load while playback is elsewhere). One batch mutation per manifest change
   // lets the globe surface re-settle once, instead of once per playback tick
   // as frames appear.
+  // Layers currently shown or mid-fade are spared here and reaped by
+  // reapInvalid the moment the display moves off them.
   syncFrames(frames: Array<{ key: string; make: () => Cesium.ImageryProvider }>) {
     if (this.viewer.isDestroyed()) return;
-    const valid = new Set(frames.map((f) => f.key));
-    for (const [k, l] of this.layers) {
-      if (valid.has(k)) continue;
-      if (k === this.shownKey || k === this.fadeFromKey || k === this.fadeToKey) continue;
-      this.viewer.imageryLayers.remove(l, true);
-      this.layers.delete(k);
-    }
+    this.validKeys = new Set(frames.map((f) => f.key));
+    this.reapInvalid();
     for (const f of frames) this.ensure(f.key, f.make);
   }
 
@@ -164,6 +209,7 @@ export function RadarLayer() {
   const currentIndex = useRadarStore((s) => s.currentIndex);
   const opacity = useRadarStore((s) => s.opacity);
   const playing = useRadarStore((s) => s.playing);
+  const usAvailable = useRadarStore((s) => s.usAvailable);
 
   const usChannel = useRef<ChannelRenderer | null>(null);
   const globalChannel = useRef<ChannelRenderer | null>(null);
@@ -195,9 +241,15 @@ export function RadarLayer() {
   useEffect(() => {
     if (!viewer || viewer.isDestroyed()) return;
     if (!active) return;
-    // Global first so its layers tend to sit under the HD channel's.
-    if (coverage !== 'us') globalChannel.current = new ChannelRenderer(viewer);
     if (coverage !== 'global') usChannel.current = new ChannelRenderer(viewer);
+    // The global channel anchors its layers below the HD channel's, so the
+    // coarse composite always draws under the ~1 km product.
+    if (coverage !== 'us') {
+      globalChannel.current = new ChannelRenderer(
+        viewer,
+        () => usChannel.current?.lowestLayer() ?? null
+      );
+    }
     viewer.scene.requestRender();
     return () => {
       usChannel.current?.destroy();
@@ -214,7 +266,7 @@ export function RadarLayer() {
     if (!viewer || viewer.isDestroyed() || !active) return;
     const s = useRadarStore.getState();
     const timeline = buildTimeline(s);
-    const maskUs = coverage === 'auto';
+    const maskUs = coverage === 'auto' && s.usAvailable;
     const usSeen = new Set<number>();
     const globalSeen = new Set<string>();
     const usEntries: Array<{ key: string; make: () => Cesium.ImageryProvider }> = [];
@@ -237,7 +289,7 @@ export function RadarLayer() {
     usChannel.current?.syncFrames(usEntries);
     globalChannel.current?.syncFrames(globalEntries);
     viewer.scene.requestRender();
-  }, [viewer, active, usFrames, globalFrames, globalHost, windowMinutes, coverage, style]);
+  }, [viewer, active, usFrames, globalFrames, globalHost, windowMinutes, coverage, style, usAvailable]);
 
   // Show the current slot (and preload the next) whenever anything moves.
   // Pure alpha work in the steady state.
@@ -254,7 +306,7 @@ export function RadarLayer() {
     const idx = Math.min(Math.max(0, currentIndex), timeline.length - 1);
     const slot = timeline[idx];
     const next = timeline[(idx + 1) % timeline.length];
-    const maskUs = coverage === 'auto';
+    const maskUs = coverage === 'auto' && s.usAvailable;
     // Dissolve only during playback; scrubbing moves faster than any fade, so
     // snap so the frame under the handle is always the one displayed.
     const fade = s.playing;
@@ -304,6 +356,7 @@ export function RadarLayer() {
     style,
     windowMinutes,
     opacity,
+    usAvailable,
   ]);
 
   // Playback ticker.

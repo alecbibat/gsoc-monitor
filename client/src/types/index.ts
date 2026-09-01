@@ -178,7 +178,8 @@ export interface RadarFrame {
 // the frame times ARE the tile URLs, so no upstream manifest exists for it).
 export interface RadarManifest {
   global: { host: string; frames: RadarFrame[] } | null;
-  us: { frames: number[]; intervalSec: number };
+  // `available` is the server's IEM health probe; absent means healthy.
+  us: { frames: number[]; intervalSec: number; available?: boolean };
   generated: number;
 }
 

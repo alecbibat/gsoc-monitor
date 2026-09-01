@@ -25,11 +25,15 @@ import { blurPxForLevel, getInversionLut, maskTile, recolorTile } from './recolo
 import type { RadarFrame } from '../../types';
 
 // ---------------------------------------------------------------------------
-// Decoded-tile LRU cache. 256px RGBA ≈ 0.26 MB; 512px ≈ 1 MB. The cap keeps
-// worst-case memory around ~120 MB while comfortably holding a full playback
-// loop of visible tiles for both sources.
+// Decoded-tile LRU cache, bounded by BYTES (w·h·4 per canvas), not entries —
+// 512px global tiles weigh ~1 MB against ~0.26 MB for 256px HD tiles, so an
+// entry-count cap would swing 4× with the tile mix. ~120 MB comfortably holds
+// a full playback loop of visible tiles for both sources.
 const tileCache = new Map<string, HTMLCanvasElement>();
-const TILE_CACHE_MAX = 320;
+const TILE_CACHE_MAX_BYTES = 120 * 1024 * 1024;
+let tileCacheBytes = 0;
+
+const canvasBytes = (c: HTMLCanvasElement) => c.width * c.height * 4;
 
 function cacheGet(key: string): HTMLCanvasElement | undefined {
   const hit = tileCache.get(key);
@@ -42,11 +46,19 @@ function cacheGet(key: string): HTMLCanvasElement | undefined {
 }
 
 function cachePut(key: string, canvas: HTMLCanvasElement) {
-  tileCache.delete(key);
+  const prev = tileCache.get(key);
+  if (prev) {
+    tileCache.delete(key);
+    tileCacheBytes -= canvasBytes(prev);
+  }
   tileCache.set(key, canvas);
-  if (tileCache.size > TILE_CACHE_MAX) {
+  tileCacheBytes += canvasBytes(canvas);
+  while (tileCacheBytes > TILE_CACHE_MAX_BYTES && tileCache.size > 1) {
     const oldest = tileCache.keys().next().value;
-    if (oldest !== undefined) tileCache.delete(oldest);
+    if (oldest === undefined) break;
+    const evicted = tileCache.get(oldest);
+    tileCache.delete(oldest);
+    if (evicted) tileCacheBytes -= canvasBytes(evicted);
   }
 }
 

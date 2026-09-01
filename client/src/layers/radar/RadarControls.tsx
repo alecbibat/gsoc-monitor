@@ -33,6 +33,7 @@ export function RadarControls() {
   const usFrames = useRadarStore((s) => s.usFrames);
   const globalFrames = useRadarStore((s) => s.globalFrames);
   const globalAvailable = useRadarStore((s) => s.globalAvailable);
+  const usAvailable = useRadarStore((s) => s.usAvailable);
 
   const now = Date.now() / 1000;
   const usAge = ago(usFrames[usFrames.length - 1], now);
@@ -104,7 +105,14 @@ export function RadarControls() {
 
       {/* Source freshness */}
       <div className="text-[10px] leading-4 text-white/35">
-        {coverage !== 'global' && <div>NEXRAD HD {usAge ? `· ${usAge}` : '· loading'}</div>}
+        {coverage !== 'global' &&
+          (usAvailable ? (
+            <div>NEXRAD HD {usAge ? `· ${usAge}` : '· loading'}</div>
+          ) : (
+            <div className="text-accent-warn">
+              NEXRAD HD unavailable{coverage === 'auto' ? ' — showing global' : ''}
+            </div>
+          ))}
         {coverage !== 'us' &&
           (globalAvailable ? (
             <div>Global {globalAge ? `· ${globalAge}` : '· loading'}</div>

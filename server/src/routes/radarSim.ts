@@ -101,9 +101,10 @@ const RV_STEPS: Array<[number, number, number, number]> = [
 // Same boxes the client masks with — sim HD tiles paint only inside them.
 const US_BOXES: Array<[number, number, number, number]> = [
   [-127.5, 21.5, -66.0, 50.5],
-  [-170.0, 52.0, -129.5, 71.5],
+  [-171.5, 52.0, -129.5, 71.5],
   [-160.8, 18.4, -154.5, 22.6],
   [-67.5, 17.5, -64.2, 18.9],
+  [144.0, 12.9, 145.3, 14.1],
 ];
 
 function inUs(lon: number, lat: number): boolean {
@@ -243,7 +244,7 @@ router.get('/manifest', (_req, res) => {
   }
   res.json({
     global: { host: '', frames: rvFrames },
-    us: { frames: usFrames, intervalSec: US_INTERVAL },
+    us: { frames: usFrames, intervalSec: US_INTERVAL, available: true },
     generated: nowSec,
   });
 });

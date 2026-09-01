@@ -22,11 +22,12 @@ const router = Router();
 
 const US_INTERVAL_SEC = 300;
 // Newest frame the client should ask for: enough lag that IEM has generated
-// and cached it. Too eager means blank HD tiles for the newest frame.
-const US_LAG_SEC = 420;
-// IEM keeps timestamped frames for ~14 days; publish 2 hours (matches the
-// widest client window).
-const US_FRAME_COUNT = 24;
+// and cached it (composites run ~3–8 minutes behind wall clock — the lag must
+// cover the slow end or the newest advertised frame's tiles don't exist yet).
+const US_LAG_SEC = 480;
+// IEM keeps timestamped frames for ~14 days; publish 2 hours — N frames span
+// (N−1) intervals, so 120 min of 5-min frames needs 25.
+const US_FRAME_COUNT = 25;
 
 function usFrames(nowSec: number): number[] {
   const latest = Math.floor((nowSec - US_LAG_SEC) / US_INTERVAL_SEC) * US_INTERVAL_SEC;
@@ -64,11 +65,31 @@ router.get('/', async (_req, res) => {
     console.error('[radar] RainViewer manifest unavailable:', err);
   }
 
+  // Health-probe IEM (a tiny z0 tile of the mutable "latest" layer) so the
+  // client can degrade auto coverage honestly: when the HD source is down,
+  // the global layer stops being masked over the US instead of leaving a
+  // radar-shaped hole. Cached alongside the manifest cadence; a probe error
+  // reports unavailable rather than failing the endpoint.
+  const usAvailable = await cache
+    .getOrFetch(
+      'radar:iem-health',
+      2 * 60_000,
+      async () => {
+        const res = await fetch(
+          'https://mesonet.agron.iastate.edu/c/tile.py/1.0.0/ridge::USCOMP-N0Q-0/0/0/0.png',
+          { signal: AbortSignal.timeout(6_000) }
+        );
+        return res.ok;
+      },
+      { staleOnError: true }
+    )
+    .catch(() => false);
+
   const nowSec = Math.floor(Date.now() / 1000);
   res.set('Cache-Control', 'public, max-age=60');
   res.json({
     global,
-    us: { frames: usFrames(nowSec), intervalSec: US_INTERVAL_SEC },
+    us: { frames: usFrames(nowSec), intervalSec: US_INTERVAL_SEC, available: usAvailable },
     generated: nowSec,
   });
 });

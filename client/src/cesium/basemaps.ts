@@ -32,7 +32,9 @@ interface BasemapDef {
 // the sandboxes the sim runs in, so the dark basemap swaps to Cesium's
 // bundled Natural Earth II tileset — offline, real coastlines, levels 0–2.
 const RADAR_SIM =
-  typeof location !== 'undefined' && new URLSearchParams(location.search).has('radarsim');
+  import.meta.env.DEV &&
+  typeof location !== 'undefined' &&
+  new URLSearchParams(location.search).has('radarsim');
 
 function buildSimBasemap(): Cesium.ImageryProvider {
   return new Cesium.UrlTemplateImageryProvider({

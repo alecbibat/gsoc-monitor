@@ -29,8 +29,13 @@ export type RadarCoverage = 'auto' | 'us' | 'global';
 // Dev/test harness: `?radarsim=1` swaps both sources (and the manifest) for
 // the local synthetic-tile server so the full pipeline can run — and be
 // screenshotted — in sandboxes with no egress to the real weather hosts.
+// Dev-gated to match the server (which only mounts /api/radar-sim outside
+// production): without the gate, the query param on a production URL would
+// silently point the radar at endpoints that don't exist.
 export const SIM =
-  typeof location !== 'undefined' && new URLSearchParams(location.search).has('radarsim');
+  import.meta.env.DEV &&
+  typeof location !== 'undefined' &&
+  new URLSearchParams(location.search).has('radarsim');
 
 // ---------------------------------------------------------------------------
 // US HD (IEM NEXRAD N0Q)
@@ -65,9 +70,10 @@ export function usTileTemplate(timeSec: number): string {
 // on different clocks — overlaying both reads as ghosting).
 export const US_COVERAGE_BOXES: Array<[west: number, south: number, east: number, north: number]> = [
   [-127.5, 21.5, -66.0, 50.5], // CONUS
-  [-170.0, 52.0, -129.5, 71.5], // Alaska
+  [-171.5, 52.0, -129.5, 71.5], // Alaska (incl. Aleutian coverage to the product's -171 extent)
   [-160.8, 18.4, -154.5, 22.6], // Hawaii
   [-67.5, 17.5, -64.2, 18.9], // Puerto Rico / USVI
+  [144.0, 12.9, 145.3, 14.1], // Guam (the composite includes GUCOMP)
 ];
 
 // ---------------------------------------------------------------------------
