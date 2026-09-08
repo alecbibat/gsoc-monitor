@@ -67,7 +67,6 @@ import { CrisisLayerPopup } from './crisis/CrisisLayerPopup';
 import { IncidentSync } from './crisis/IncidentSync';
 import { useCrisisStore } from './crisis/crisisStore';
 import { useCrisisMapFrameStore } from './ui/uiStore';
-import { useDashboardStore } from './dashboard/dashboardStore';
 import { useRiskReportStore } from './riskreport/riskReportStore';
 import { AuthGate } from './auth/AuthGate';
 
@@ -79,15 +78,12 @@ const CrisisShareView = lazy(() =>
   import('./crisis/CrisisShareView').then((m) => ({ default: m.CrisisShareView }))
 );
 
-// The crisis overlay and status dashboard are full-screen views that render
-// nothing until the operator opens them, so their whole UI trees stay out of
-// the entry chunk. Both gates only subscribe to the (eager) stores; share-link
-// auto-publish keeps running in the always-mounted IncidentSync.
+// The crisis overlay is a full-screen view that renders nothing until the
+// operator opens it, so its whole UI tree stays out of the entry chunk. The
+// gate only subscribes to the (eager) store; share-link auto-publish keeps
+// running in the always-mounted IncidentSync.
 const CrisisOverlay = lazy(() =>
   import('./crisis/CrisisOverlay').then((m) => ({ default: m.CrisisOverlay }))
-);
-const DashboardView = lazy(() =>
-  import('./dashboard/DashboardView').then((m) => ({ default: m.DashboardView }))
 );
 const RiskReportHost = lazy(() =>
   import('./riskreport/RiskReportHost').then((m) => ({ default: m.RiskReportHost }))
@@ -131,16 +127,6 @@ function CrisisOverlayGate() {
   return (
     <Suspense fallback={null}>
       <CrisisOverlay />
-    </Suspense>
-  );
-}
-
-function DashboardGate() {
-  const open = useDashboardStore((s) => s.open);
-  if (!open) return null;
-  return (
-    <Suspense fallback={null}>
-      <DashboardView />
     </Suspense>
   );
 }
@@ -253,7 +239,6 @@ export default function App() {
         <CrisisDrawController />
         <CrisisLayerPopup />
         <IncidentSync />
-        <DashboardGate />
         <RiskReportGate />
       </div>
     </CesiumContext.Provider>

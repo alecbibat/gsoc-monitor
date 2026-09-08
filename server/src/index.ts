@@ -28,7 +28,6 @@ import riversRouter, { initRiversStream } from './routes/rivers';
 import fireOutlookRouter from './routes/fireOutlook';
 import jtwcRouter from './routes/jtwc';
 import outagesRouter, { initOutagesStream } from './routes/outages';
-import briefingRouter from './routes/briefing';
 import crisisRouter from './routes/crisis';
 import authRouter from './routes/auth';
 import adminRouter from './routes/admin';
@@ -145,7 +144,6 @@ function main() {
   app.use('/api/fire-outlook', fireOutlookRouter);
   app.use('/api/jtwc-invests', jtwcRouter);
   app.use('/api/outages', outagesRouter);
-  app.use('/api/briefing', briefingRouter);
 
   initShipsStream();
   // Background ADS-B poller: keeps last-known aircraft positions and altitude
