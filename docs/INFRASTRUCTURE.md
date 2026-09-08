@@ -105,7 +105,6 @@ positions, SSE client sets, and the auth failed-login rate-limit map.
 |---|---|---|---|
 | **Heroku** | — | Hosting + Postgres add-on | Paid (dyno + DB plan) |
 | **Cloudinary** | hardcoded cloud/preset | All incident photos + map thumbnails | Free tier / paid by usage |
-| **Anthropic** | `ANTHROPIC_API_KEY`, `BRIEFING_MODEL` | AI duty-officer briefing (`/api/briefing`). Default model `claude-opus-4-8`. Falls back to a deterministic rules engine with no key. Responses cached 10 min by payload hash. | Metered |
 | **Google Maps Platform** | `VITE_GOOGLE_MAPS_KEY` | Photorealistic 3D tiles (Map Tiles API). Baked into the bundle at build time. | **Billable per usage** |
 | **Cesium ion** | `VITE_CESIUM_ION_TOKEN` | World Terrain + OSM Buildings. Falls back to the rate-limited demo token. | Free tier |
 | **AISStream** | `AISSTREAM_API_KEY` | Live ship AIS over `wss://stream.aisstream.io` | Free |
@@ -186,6 +185,6 @@ Not bugs — things worth a deliberate decision.
 4. **`VITE_GOOGLE_MAPS_KEY` is public and billable.** It ships in the JavaScript bundle. Apply HTTP-referrer restrictions and a quota cap in Google Cloud.
 5. **`share_access_log` accumulates IP addresses with no retention policy.** Every other high-volume table is pruned; this one is not.
 6. **Single dyno with no shared cache.** Scaling past one web dyno will break the in-memory TTL cache, the intel buffer, the lightning collector, and SSE fanout — all of which assume one process. `cache.ts` notes this explicitly.
-7. **The README is out of date.** It describes "Phase 1" and lists only keyless feeds. It predates the database, auth, incidents/crisis system, IAP library, OSINT intel, and the Anthropic briefing.
+7. **The README is out of date.** It describes "Phase 1" and lists only keyless feeds. It predates the database, auth, incidents/crisis system, IAP library, and OSINT intel.
 8. **CruiseMapper is scraped, not APIed.** It sits behind Cloudflare and may be blocked; check `/api/ships/debug`. Worth confirming it's acceptable under their terms.
 9. **A hardcoded PulsePoint passphrase** (`server/src/intel/adapters.ts`) is the publicly known constant for decrypting their public CAD feed — not a secret of ours, but it does mean the feed depends on an undocumented interface.
