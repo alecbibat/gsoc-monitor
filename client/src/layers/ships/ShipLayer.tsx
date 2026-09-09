@@ -42,6 +42,8 @@ function shipPanelData(ship: ShipState) {
 
 // How far ahead to project the dead-reckoning "future path".
 const FUTURE_HOURS = 6;
+// Fastest speed worth projecting; the fleet's top speeds are ~15–19 kt.
+const MAX_PROJECTED_KT = 40;
 
 // Sub-metre altitude lifts that break the depth tie between the billboards
 // stacked on a ship's position, so the hull always draws over its own reticle
@@ -240,8 +242,16 @@ export function ShipLayer() {
           }
 
           // Future path — dead-reckoning projection along current course/speed.
+          // No fleet ship does 40 kt: anything faster is a parse artefact or
+          // the AIS "not available" sentinel, and would draw a line across an
+          // ocean.
           const travelBearing = ship.course ?? ship.heading;
-          if (ship.speedKt != null && ship.speedKt > 0.5 && travelBearing != null) {
+          if (
+            ship.speedKt != null &&
+            ship.speedKt > 0.5 &&
+            ship.speedKt <= MAX_PROJECTED_KT &&
+            travelBearing != null
+          ) {
             const distM = ship.speedKt * 1852 * FUTURE_HOURS;
             const pts: Cesium.Cartesian3[] = [];
             for (let i = 0; i <= 16; i++) {

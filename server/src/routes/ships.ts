@@ -805,7 +805,9 @@ function handleMessage(raw: string) {
       shipType: sd?.shipType ?? existing?.shipType ?? null,
       latitude: lat,
       longitude: lon,
-      speedKt: typeof pr.Sog === 'number' ? pr.Sog : existing?.speedKt ?? null,
+      // AIS encodes "speed not available" as 102.3 kt; passing it through
+      // would draw a 600 nm dead-reckoning line on the map.
+      speedKt: typeof pr.Sog === 'number' && pr.Sog < 102.2 ? pr.Sog : existing?.speedKt ?? null,
       heading:
         typeof pr.TrueHeading === 'number' && pr.TrueHeading !== 511
           ? pr.TrueHeading
