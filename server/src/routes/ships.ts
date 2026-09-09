@@ -1800,6 +1800,109 @@ export function initShipsStream() {
   });
 }
 
+// --- Dead-reckoning estimate -------------------------------------------------
+// When a vessel is out of receiver range her last fix is the truth, but after
+// a day at sea it is the truth about somewhere she no longer is. Showing a
+// three-week-old departure port as her position is not "cautious", it is
+// wrong by an ocean. So alongside the fix we publish where she would be if she
+// had held the course and speed she was last making.
+//
+// This is standard dead reckoning and it is an ESTIMATE, never a fix. It is
+// computed fresh on each response from the held fix, so it never enters the
+// tracked map, never joins the breadcrumb trail, and never takes part in fix
+// acceptance. The client draws it distinctly and the panel states both
+// positions, so nobody mistakes it for a report from the ship.
+export const DR_MIN_AGE_MS = 30 * 60_000; // below this the fix is current enough
+export const DR_MIN_SPEED_KT = 0.5;
+// Past this, a held course is no longer a safe assumption: the ship has made
+// port, altered for weather, or begun her approach. Better an honest stale fix
+// than a confident guess.
+export const DR_MAX_HOURS = Math.max(1, Number(process.env.SHIPS_DR_MAX_HOURS) || 48);
+// Uncertainty grows with the distance run: speed varies, courses get altered.
+// A sixth of the run is a rough field estimate, not a computed error bound.
+export const DR_UNCERTAINTY_FRACTION = 0.15;
+export const DR_MIN_UNCERTAINTY_NM = 5;
+// AIS navigational statuses that mean "not going anywhere": moored, anchored,
+// aground. A stale fix for a docked ship is simply correct.
+const DR_STATIONARY_STATUS = new Set([1, 5, 6]);
+
+export interface DeadReckoning {
+  lat: number;
+  lon: number;
+  /** The fix this was projected from. */
+  fromFixAt: number;
+  /** Hours of projection applied. */
+  hoursAhead: number;
+  /** Distance run along the projection. */
+  distanceNm: number;
+  /** Rough radius the ship is likely within, in nautical miles. */
+  uncertaintyNm: number;
+  courseDeg: number;
+  speedKt: number;
+}
+
+/** Point `distNm` along a great circle from a start point on a fixed bearing. */
+export function projectGreatCircle(
+  lat: number,
+  lon: number,
+  bearingDeg: number,
+  distNm: number
+): [number, number] {
+  const d = (distNm * 1852) / 6_371_000;
+  const th = (bearingDeg * Math.PI) / 180;
+  const p1 = (lat * Math.PI) / 180;
+  const l1 = (lon * Math.PI) / 180;
+  const sinP2 = Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(th);
+  const p2 = Math.asin(Math.max(-1, Math.min(1, sinP2)));
+  const l2 =
+    l1 + Math.atan2(Math.sin(th) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * sinP2);
+  // Normalise into [-180, 180] so a projection across the antimeridian stays
+  // a valid longitude instead of running off to 190 degrees east. l2 lands in
+  // [-2pi, 2pi], which this single shift covers; applying it twice would push
+  // a legitimate longitude back out the other side.
+  const lonDeg = ((((l2 * 180) / Math.PI + 540) % 360) + 360) % 360 - 180;
+  return [(p2 * 180) / Math.PI, lonDeg];
+}
+
+export interface DrInput {
+  latitude: number;
+  longitude: number;
+  speedKt: number | null;
+  course: number | null;
+  heading: number | null;
+  navStatus: number | null;
+  updatedAt: number;
+}
+
+/** Where the ship would be having held her last course and speed, or null. */
+export function deadReckon(v: DrInput, now: number): DeadReckoning | null {
+  const ageMs = now - v.updatedAt;
+  if (ageMs < DR_MIN_AGE_MS) return null;
+  if (ageMs > DR_MAX_HOURS * 3_600_000) return null;
+  if (v.navStatus != null && DR_STATIONARY_STATUS.has(v.navStatus)) return null;
+  const speedKt = v.speedKt;
+  if (speedKt == null || !Number.isFinite(speedKt) || speedKt < DR_MIN_SPEED_KT) return null;
+  // Course over ground is where she is going; heading is only where she points.
+  const bearing = v.course ?? v.heading;
+  if (bearing == null || !Number.isFinite(bearing)) return null;
+
+  const hoursAhead = ageMs / 3_600_000;
+  const distanceNm = speedKt * hoursAhead;
+  const [lat, lon] = projectGreatCircle(v.latitude, v.longitude, bearing, distanceNm);
+  return {
+    lat,
+    lon,
+    fromFixAt: v.updatedAt,
+    hoursAhead: Math.round(hoursAhead * 10) / 10,
+    distanceNm: Math.round(distanceNm),
+    uncertaintyNm: Math.round(
+      Math.max(DR_MIN_UNCERTAINTY_NM, distanceNm * DR_UNCERTAINTY_FRACTION)
+    ),
+    courseDeg: bearing,
+    speedKt,
+  };
+}
+
 router.get('/', (_req, res) => {
   if (!config.aisstreamApiKey && !paidConfigured()) {
     res.json({ source: 'no-key', ships: [], updated: Date.now() });
@@ -1821,6 +1924,9 @@ router.get('/', (_req, res) => {
     ...v,
     lastSeenSec: (now - v.updatedAt) / 1000,
     track: history.get(v.mmsi) ?? [],
+    // Derived per response, never stored: see deadReckon above. `latitude` and
+    // `longitude` remain the last reported fix in every case.
+    estimated: deadReckon(v, now),
   }));
 
   res.json({

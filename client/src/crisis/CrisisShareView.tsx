@@ -683,7 +683,14 @@ export function CrisisShareView({ token }: { token: string }) {
                     </div>
                     {v.ship ? (
                       <div className="mt-1.5 space-y-0.5 text-[11px] text-white/55">
-                        <p>{positionText(v.ship.latitude, v.ship.longitude)} · reported {lastSeenText(v.ship.lastSeenSec)}</p>
+                        <p>
+                          {/* An estimate is always labelled: a share link is
+                              read by people who cannot ask where it came from. */}
+                          {v.ship.estimated
+                            ? `${positionText(v.ship.estimated.lat, v.ship.estimated.lon)} (estimated)`
+                            : positionText(v.ship.latitude, v.ship.longitude)}{' '}
+                          · reported {lastSeenText(v.ship.lastSeenSec)}
+                        </p>
                         {v.ship.destination && (
                           <p>
                             Destination {v.ship.destination}

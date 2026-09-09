@@ -11,6 +11,7 @@
 // live, never frozen into the record or the share snapshot.
 import type { Location, LocationGroup } from '../layers/locations/locations';
 import { FLEET_ROSTER, fleetColor, type FleetRosterShip } from '../layers/ships/fleet';
+import { shipDisplayPosition } from '../layers/ships/shipStatus';
 import type { ShipState } from '../types';
 
 /** Id used wherever a location group id is expected (Property field, snapshots). */
@@ -74,7 +75,13 @@ export function shipLocationGroup(
 ): LocationGroup | null {
   const locations: Location[] = incidentVessels(mmsis, ships)
     .filter((v): v is IncidentVessel & { ship: ShipState } => v.ship !== null)
-    .map((v) => ({ name: v.roster.name, lat: v.ship.latitude, lon: v.ship.longitude }));
+    .map((v) => {
+      // Crisis surfaces pin the vessel where she is believed to be now, which
+      // is her estimate once the fix is stale. The name carries a tilde so a
+      // share-link viewer is never shown a guess as a certainty.
+      const at = shipDisplayPosition(v.ship);
+      return { name: at.estimated ? `~${v.roster.name}` : v.roster.name, lat: at.lat, lon: at.lon };
+    });
   if (locations.length === 0) return null;
   return {
     id: SHIP_GROUP_ID,

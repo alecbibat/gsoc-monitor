@@ -8,9 +8,12 @@ import { startVisiblePolling } from '../../lib/poll';
 import type { ShipState } from '../../types';
 import { useShipsStatus } from './shipsStore';
 import {
+  LAST_FIX_PX,
   SHIP_MARKER,
   shipAlpha,
+  shipEstimateHullUri,
   shipHullUri,
+  shipLastFixUri,
   shipNameLabel,
   shipReticleUri,
 } from './shipMarkers';
@@ -151,7 +154,11 @@ export function ShipLayer() {
           visible
             .map(
               (s) =>
-                `${s.mmsi}:${s.latitude}:${s.longitude}:${s.heading}:${s.course}:${shipAlpha(s.lastSeenSec)}:${showNames ? s.name ?? '' : ''}`
+                `${s.mmsi}:${s.latitude}:${s.longitude}:${s.heading}:${s.course}:${shipAlpha(s.lastSeenSec)}:${showNames ? s.name ?? '' : ''}:` +
+                // A dead-reckoned marker creeps forward between fixes, so the
+                // estimate has to take part or the redraw would be skipped and
+                // the ship would appear frozen.
+                (s.estimated ? `${s.estimated.lat.toFixed(4)},${s.estimated.lon.toFixed(4)}` : '')
             )
             .join('|');
         if (sig === lastSigRef.current) {
@@ -162,16 +169,30 @@ export function ShipLayer() {
         lastSigRef.current = sig;
 
         ds.entities.removeAll();
-        pump.setPositions(visible.map((s) => ({ lon: s.longitude, lat: s.latitude })));
+        pump.setPositions(
+          visible.map((s) => ({
+            lon: s.estimated ? s.estimated.lon : s.longitude,
+            lat: s.estimated ? s.estimated.lat : s.latitude,
+          }))
+        );
 
         for (const ship of visible) {
           const isFavorite = favorites.includes(ship.mmsi);
           const color = shipColor(ship.shipType);
           const bearing = ship.heading ?? ship.course ?? 0;
 
+          // A stale fix is a true statement about somewhere the ship no longer
+          // is. When the server can dead-reckon her forward, the marker goes to
+          // that estimate so the map is approximately right rather than wrong
+          // by an ocean, and it is drawn hollow and dashed so no one reads it
+          // as a position she transmitted.
+          const est = ship.estimated ?? null;
+          const markerLon = est ? est.lon : ship.longitude;
+          const markerLat = est ? est.lat : ship.latitude;
+
           const alpha = shipAlpha(ship.lastSeenSec);
           const tint = Cesium.Color.WHITE.withAlpha(alpha);
-          const position = Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude, ALT_PING);
+          const position = Cesium.Cartesian3.fromDegrees(markerLon, markerLat, ALT_PING);
 
           // Rings first: they expand out from under the marker and must not
           // cover it, so they sit lowest in the stack.
@@ -188,7 +209,7 @@ export function ShipLayer() {
 
           const reticle = ds.entities.add({
             id: `ship-${ship.mmsi}-reticle`,
-            position: Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude, ALT_RETICLE),
+            position: Cesium.Cartesian3.fromDegrees(markerLon, markerLat, ALT_RETICLE),
             billboard: {
               image: shipReticleUri(color, isFavorite),
               width: SHIP_MARKER.reticlePx,
@@ -204,9 +225,9 @@ export function ShipLayer() {
           const hullSize = isFavorite ? SHIP_MARKER.favoriteHullPx : SHIP_MARKER.hullPx;
           const entity = ds.entities.add({
             id: `ship-${ship.mmsi}`,
-            position: Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude, ALT_HULL),
+            position: Cesium.Cartesian3.fromDegrees(markerLon, markerLat, ALT_HULL),
             billboard: {
-              image: shipHullUri(color, isFavorite),
+              image: est ? shipEstimateHullUri(color) : shipHullUri(color, isFavorite),
               width: hullSize,
               height: hullSize,
               rotation: Cesium.Math.toRadians(-bearing),
@@ -216,11 +237,68 @@ export function ShipLayer() {
               // Default depth test so ships on the far side of the globe stay hidden.
             },
             label: showNames
-              ? shipNameLabel(ship.name?.trim() || `MMSI ${ship.mmsi}`, color, alpha)
+              ? shipNameLabel(
+                  // The tilde is the map's shorthand for "estimated", so a
+                  // nametag alone tells you whether to trust the position.
+                  `${est ? '~' : ''}${ship.name?.trim() || `MMSI ${ship.mmsi}`}`,
+                  color,
+                  alpha
+                )
               : undefined,
           });
 
           attachPanelData(entity, shipPanelData(ship));
+
+          if (est) {
+            const cesEst = Cesium.Color.fromCssColorString(color);
+            // How far off the estimate could be. Drawn as ground geometry so it
+            // reads as an area of sea rather than a target.
+            const uncertainty = ds.entities.add({
+              id: `ship-${ship.mmsi}-uncertainty`,
+              position: Cesium.Cartesian3.fromDegrees(markerLon, markerLat),
+              ellipse: {
+                semiMajorAxis: est.uncertaintyNm * 1852,
+                semiMinorAxis: est.uncertaintyNm * 1852,
+                material: cesEst.withAlpha(0.08),
+                outline: true,
+                outlineColor: cesEst.withAlpha(0.45),
+                outlineWidth: 1,
+              },
+            });
+            attachPanelData(uncertainty, shipPanelData(ship));
+
+            // The run from the last reported position to the estimate.
+            ds.entities.add({
+              id: `ship-${ship.mmsi}-dr-leg`,
+              polyline: {
+                positions: [
+                  Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude),
+                  Cesium.Cartesian3.fromDegrees(markerLon, markerLat),
+                ],
+                width: 1.5,
+                clampToGround: true,
+                material: new Cesium.PolylineDashMaterialProperty({
+                  color: cesEst.withAlpha(0.7),
+                  dashLength: 10,
+                }),
+              },
+            });
+
+            // ...and a marker left behind at that last reported position, so
+            // the confirmed fix stays visible instead of being replaced.
+            const fixMark = ds.entities.add({
+              id: `ship-${ship.mmsi}-last-fix`,
+              position: Cesium.Cartesian3.fromDegrees(ship.longitude, ship.latitude, ALT_RETICLE),
+              billboard: {
+                image: shipLastFixUri(color),
+                width: LAST_FIX_PX,
+                height: LAST_FIX_PX,
+                color: tint,
+                scaleByDistance: SHIP_MARKER.scaleByDistance,
+              },
+            });
+            attachPanelData(fixMark, shipPanelData(ship));
+          }
 
           if (!showPaths) continue;
           const cesColor = Cesium.Color.fromCssColorString(color);
@@ -245,8 +323,13 @@ export function ShipLayer() {
           // No fleet ship does 40 kt: anything faster is a parse artefact or
           // the AIS "not available" sentinel, and would draw a line across an
           // ocean.
+          // Skipped when the marker is already a dead-reckoned estimate: the
+          // leg from the fix to that estimate is the same projection, and
+          // running it six hours further from an estimated start compounds the
+          // error without telling the operator anything new.
           const travelBearing = ship.course ?? ship.heading;
           if (
+            !est &&
             ship.speedKt != null &&
             ship.speedKt > 0.5 &&
             ship.speedKt <= MAX_PROJECTED_KT &&

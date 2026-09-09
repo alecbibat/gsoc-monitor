@@ -210,6 +210,25 @@ export interface ShipState {
   reception?: ShipReception; // how the ship's transmission reached that feed
   receivedAt?: number; // when the server ingested the fix, epoch ms
   track?: ShipTrackPoint[];
+  /**
+   * Where the ship would be having held her last course and speed. Present
+   * only while the fix is stale enough to be misleading and the projection is
+   * still credible. `latitude`/`longitude` above always remain the last
+   * position she actually reported.
+   */
+  estimated?: ShipEstimate | null;
+}
+
+/** A dead-reckoned position. An estimate, never a report from the vessel. */
+export interface ShipEstimate {
+  lat: number;
+  lon: number;
+  fromFixAt: number; // the fix it was projected from, epoch ms
+  hoursAhead: number;
+  distanceNm: number;
+  uncertaintyNm: number;
+  courseDeg: number;
+  speedKt: number;
 }
 
 export type ShipFixSource =

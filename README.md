@@ -102,6 +102,25 @@ will sit at her last coastal position for days and the app has no way to know
 a better position exists. Set `MARINETRAFFIC_API_KEY` (or
 `VESSELFINDER_API_KEY` with their satellite add-on) to close that gap.
 
+### Dead-reckoning estimates
+
+A last known fix is a true statement about somewhere the ship no longer is.
+Once it is over 30 minutes old, the server also publishes where she would be
+having held her last course and speed, and the map draws the marker there.
+
+The estimate is derived on every response from the held fix. It never enters
+the tracked map, never joins the breadcrumb trail, and never takes part in fix
+acceptance, so it cannot contaminate the position record. It is suppressed for
+a ship that was moored, anchored or aground, and abandoned once the fix passes
+`SHIPS_DR_MAX_HOURS` (default 48), because past that a held course is no longer
+a safe assumption.
+
+Because an estimate must never be mistaken for a report from the vessel, it is
+drawn as a hollow dashed hull inside a ring showing roughly how far off it
+could be, with the last confirmed position still marked and a dashed leg
+between the two. Nametags, the fleet digest and share links prefix it with `~`,
+and the detail panel gives both positions and how the projection was built.
+
 `GET /api/ships/debug` shows which source supplied each ship's position, how it
 was received, how old the fix is, what every other source said about her on the
 last cycle, and every fix that was refused with the speed it would have implied.

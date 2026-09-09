@@ -4,6 +4,7 @@ import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useScreensaverStore, type Poi } from './screensaverStore';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
 import { useShipsStatus } from '../layers/ships/shipsStore';
+import { shipDisplayPosition } from '../layers/ships/shipStatus';
 import { FLEET_ROSTER } from '../layers/ships/fleet';
 
 const OVERVIEW_ALT = 9_000_000;
@@ -66,8 +67,9 @@ function buildShipEntries(): ShipEntry[] {
   return useShipsStatus.getState().ships.flatMap((ship) => {
     const fleet = FLEET_ROSTER.find((f) => f.mmsi === ship.mmsi);
     if (!fleet) return [];
-    const lat = ship.latitude;
-    const lon = ship.longitude;
+    // The tour visits the marker, so it follows the dead-reckoned estimate
+    // when there is one rather than parking on a stale fix.
+    const { lat, lon } = shipDisplayPosition(ship);
     if (
       !Number.isFinite(lat) ||
       !Number.isFinite(lon) ||

@@ -3,6 +3,7 @@ import {
   HEAL_MIN_REPEATS,
   MAX_PLAUSIBLE_KT,
   betterCandidate,
+  deadReckon,
   evaluateCandidate,
   mtErrorText,
   mtRow,
@@ -595,5 +596,110 @@ describe('mtRows / mtErrorText', () => {
     expect(mtRows('<html>')).toBeNull();
     expect(mtRows({ unexpected: true })).toBeNull();
     expect(mtErrorText({ unexpected: true })).toBeNull();
+  });
+});
+
+// Great-circle distance in nautical miles, for asserting how far an estimate
+// really is from the fix it was projected from.
+function nmBetween(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const R = 6_371_000;
+  const dLat = ((bLat - aLat) * Math.PI) / 180;
+  const dLon = ((bLon - aLon) * Math.PI) / 180;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((aLat * Math.PI) / 180) * Math.cos((bLat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return (2 * R * Math.asin(Math.sqrt(s))) / 1852;
+}
+
+describe('deadReckon', () => {
+  const base = {
+    latitude: 52.0,
+    longitude: -175.0,
+    speedKt: 15,
+    course: 270,
+    heading: 268,
+    navStatus: 0,
+    updatedAt: T0,
+  };
+
+  it('says nothing while the fix is still current', () => {
+    expect(deadReckon(base, T0 + 5 * MIN)).toBeNull();
+  });
+
+  it('projects along the last course at the last speed', () => {
+    // 15 kt for 24 h is 360 nm of ocean covered.
+    const dr = deadReckon(base, T0 + 24 * HOUR);
+    expect(dr).not.toBeNull();
+    expect(dr!.distanceNm).toBe(360);
+    expect(dr!.hoursAhead).toBe(24);
+    // The estimate really is that far from the fix. Asserting the distance
+    // rather than a latitude keeps this honest about great-circle travel:
+    // a course of 270 does not hold a parallel, it bends away from the vertex.
+    expect(nmBetween(base.latitude, base.longitude, dr!.lat, dr!.lon)).toBeCloseTo(360, 0);
+    expect(dr!.lat).toBeLessThan(52.0);
+  });
+
+  it('puts the ship nearer the truth than the stale fix does', () => {
+    // The whole point: after a day at sea the fix is 360 nm behind her.
+    const dr = deadReckon(base, T0 + 24 * HOUR)!;
+    const fixErr = 360;
+    expect(dr.uncertaintyNm).toBeLessThan(fixErr);
+  });
+
+  it('grows its uncertainty with the distance run', () => {
+    const short = deadReckon(base, T0 + 2 * HOUR)!;
+    const long = deadReckon(base, T0 + 40 * HOUR)!;
+    expect(long.uncertaintyNm).toBeGreaterThan(short.uncertaintyNm);
+    expect(short.uncertaintyNm).toBeGreaterThanOrEqual(5);
+  });
+
+  it('refuses to guess once the course assumption has expired', () => {
+    expect(deadReckon(base, T0 + 49 * HOUR)).toBeNull();
+    expect(deadReckon(base, T0 + 30 * 24 * HOUR)).toBeNull();
+  });
+
+  it('leaves a stationary ship where she is', () => {
+    for (const navStatus of [1, 5, 6]) {
+      expect(deadReckon({ ...base, navStatus }, T0 + 24 * HOUR)).toBeNull();
+    }
+    expect(deadReckon({ ...base, speedKt: 0 }, T0 + 24 * HOUR)).toBeNull();
+    expect(deadReckon({ ...base, speedKt: 0.2 }, T0 + 24 * HOUR)).toBeNull();
+  });
+
+  it('needs a direction of travel', () => {
+    expect(deadReckon({ ...base, course: null, heading: null }, T0 + 24 * HOUR)).toBeNull();
+    // Falls back to heading when course over ground is absent.
+    expect(deadReckon({ ...base, course: null }, T0 + 24 * HOUR)).not.toBeNull();
+    expect(deadReckon({ ...base, speedKt: null }, T0 + 24 * HOUR)).toBeNull();
+  });
+
+  it('stays a valid longitude when the projection crosses the antimeridian', () => {
+    // Star Seeker's actual track: heading west out of the Gulf of Alaska, she
+    // crosses the date line on the way to Japan. A projection that ran off to
+    // 185 degrees east would put her marker nowhere.
+    const dr = deadReckon({ ...base, longitude: -175.0, course: 270 }, T0 + 24 * HOUR)!;
+    expect(dr.lon).toBeGreaterThanOrEqual(-180);
+    expect(dr.lon).toBeLessThanOrEqual(180);
+    // Westward from 175W for 360 nm lands just past the line, in the east.
+    expect(dr.lon).toBeGreaterThan(170);
+    expect(nmBetween(base.latitude, -175.0, dr.lat, dr.lon)).toBeCloseTo(360, 0);
+  });
+
+  it('keeps every projection inside valid coordinates', () => {
+    for (const course of [0, 45, 90, 135, 180, 225, 270, 315, 359]) {
+      for (const longitude of [-179.5, -90, 0, 90, 179.5]) {
+        const dr = deadReckon({ ...base, longitude, course }, T0 + 40 * HOUR)!;
+        expect(dr.lon).toBeGreaterThanOrEqual(-180);
+        expect(dr.lon).toBeLessThanOrEqual(180);
+        expect(dr.lat).toBeGreaterThanOrEqual(-90);
+        expect(dr.lat).toBeLessThanOrEqual(90);
+      }
+    }
+  });
+
+  it('projects eastward course correctly', () => {
+    const dr = deadReckon({ ...base, course: 90 }, T0 + 10 * HOUR)!;
+    expect(dr.lon).toBeGreaterThan(-175.0);
+    expect(nmBetween(base.latitude, base.longitude, dr.lat, dr.lon)).toBeCloseTo(150, 0);
   });
 });

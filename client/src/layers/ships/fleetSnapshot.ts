@@ -13,7 +13,7 @@ import { FLEET_ROSTER, fleetColor, type FleetRosterShip } from './fleet';
 // statusOf/StatusKind moved to shipStatus.ts so lighter consumers (the crisis
 // vessel picker, the share page) can read a ship's status without pulling this
 // module's coastline and city datasets. Re-exported here for existing callers.
-import { statusOf, type StatusKind } from './shipStatus';
+import { statusOf, type StatusKind, shipDisplayPosition } from './shipStatus';
 import { landRings } from './worldLand';
 import { nearestMajorCity, type NearestCity } from './majorCities';
 
@@ -106,13 +106,19 @@ async function assembleRows(): Promise<SnapshotRow[]> {
       roster,
       ship,
       place: null,
-      near: ship ? nearestMajorCity(ship.latitude, ship.longitude) : null,
+      // Everything the digest says about where a ship is comes from her
+      // displayed position, so the "nearest city" line cannot name a port she
+      // left days ago while the map draws her mid-ocean.
+      near: ship
+        ? nearestMajorCity(shipDisplayPosition(ship).lat, shipDisplayPosition(ship).lon)
+        : null,
     };
   });
   await Promise.allSettled(
     rows.map(async (row) => {
       if (!row.ship) return;
-      row.place = await placeName(row.ship.latitude, row.ship.longitude, timeoutSignal(7_000));
+      const at = shipDisplayPosition(row.ship);
+      row.place = await placeName(at.lat, at.lon, timeoutSignal(7_000));
     })
   );
   return rows;
@@ -438,7 +444,7 @@ export function renderFleetSnapshot(rows: SnapshotRow[], generatedAt: number): H
   ctx.clip();
 
   const win = fitWindow(
-    live.map((r) => ({ lat: r.ship.latitude, lon: r.ship.longitude })),
+    live.map((r) => shipDisplayPosition(r.ship)),
     mapW,
     MAP_H
   );
@@ -525,10 +531,8 @@ export function renderFleetSnapshot(rows: SnapshotRow[], generatedAt: number): H
   for (const r of live) {
     const track = r.ship.track ?? [];
     if (track.length < 2) continue;
-    const pts = [...track.map((p) => ({ lat: p.lat, lon: p.lon })), {
-      lat: r.ship.latitude,
-      lon: r.ship.longitude,
-    }];
+    const at = shipDisplayPosition(r.ship);
+    const pts = [...track.map((p) => ({ lat: p.lat, lon: p.lon })), { lat: at.lat, lon: at.lon }];
     const lons = new Array<number>(pts.length);
     lons[pts.length - 1] = nearestLonCopy(pts[pts.length - 1].lon, win);
     for (let i = pts.length - 2; i >= 0; i--) {
@@ -552,11 +556,10 @@ export function renderFleetSnapshot(rows: SnapshotRow[], generatedAt: number): H
     y: number;
     row: SnapshotRow & { ship: ShipState };
   }
-  const markers: Marker[] = live.map((r) => ({
-    x: px(nearestLonCopy(r.ship.longitude, win)),
-    y: py(r.ship.latitude),
-    row: r,
-  }));
+  const markers: Marker[] = live.map((r) => {
+    const at = shipDisplayPosition(r.ship);
+    return { x: px(nearestLonCopy(at.lon, win)), y: py(at.lat), row: r };
+  });
 
   for (const m of markers) {
     const color = fleetColor(m.row.roster.cls);
@@ -699,7 +702,8 @@ export function renderFleetSnapshot(rows: SnapshotRow[], generatedAt: number): H
   ctx.font = `400 10.5px ${SANS}`;
   ctx.fillStyle = C.ink3;
   ctx.fillText(
-    'Positions are each ship’s last AIS fix · destinations & ETAs are as reported by the ship (ETA in UTC and Denver time)',
+    'Positions are each ship’s last AIS fix · ~ marks a dead-reckoning estimate from that fix, not a reported position' +
+      ' · destinations & ETAs are as reported by the ship (ETA in UTC and Denver time)',
     PAD,
     footY
   );
@@ -839,7 +843,14 @@ function drawTable(
     // Position (mono).
     ctx.fillStyle = C.ink2;
     ctx.font = `400 11px ${MONO}`;
-    ctx.fillText(fmtCoord(s.latitude, s.longitude), colX[3] + 10, mid);
+    // A leading tilde is the digest's mark for an estimated position; the
+    // legend under the table spells it out.
+    const shown = shipDisplayPosition(s);
+    ctx.fillText(
+      `${shown.estimated ? '~' : ''}${fmtCoord(shown.lat, shown.lon)}`,
+      colX[3] + 10,
+      mid
+    );
 
     // Speed.
     ctx.fillStyle = C.ink2;
