@@ -36,8 +36,8 @@ DB-backed routes but does not take the dyno down).
 
 | Table | Holds | Sensitivity |
 |---|---|---|
-| `users` | email, name, **bcrypt password hash** (cost 12), role | Credentials |
-| `settings` | key/value — `signup_code`, `iap_seeded` | Access control |
+| `users` | email, name, **bcrypt password hash** (cost 12, nullable for SSO-only accounts), role, SSO provider/subject | Credentials |
+| `settings` | key/value — `signup_code`, `iap_seeded`, `share_password_fallback` | Access control |
 | `incidents` | Whole incident record as **JSONB** — action logs, ICS role assignments, **personnel names, titles, phone numbers, email addresses**, checklists, intake answers | **PII** |
 | `share_links` | Public share token, full incident **snapshot JSONB**, SHA-256 password hash, `expires_at`, `label`, `revoked_at` | **PII, externally reachable** |
 | `share_access_log` | token, timestamp, **viewer IP address**, user agent | **PII / audit** |
@@ -90,12 +90,19 @@ positions, SSE client sets, and the auth failed-login rate-limit map.
 
 ## 3. Authentication
 
+Two ways in, both ending at the same place: a signed `gsoc_auth` cookie. Every
+protected route reads only that cookie, so adding SSO required no change to any
+data route.
+
 - **JWT** in an `httpOnly` cookie named `gsoc_auth`, 30-day expiry, signed with `JWT_SECRET`. `secure` flag only set when `NODE_ENV=production`. `sameSite: lax`.
-- **Passwords:** bcrypt, cost 12 (`bcryptjs`, pure JS).
-- **Signup is gated by a shared code** stored in `settings.signup_code` — set from `SIGNUP_CODE` (authoritative, re-applied on every boot) or randomly generated once and printed to the logs.
-- **First registered user automatically becomes admin.**
+- **Passwords:** bcrypt, cost 12 (`bcryptjs`, pure JS). `users.password_hash` is **nullable** — an SSO-only account has none.
+- **SSO:** OIDC authorization-code flow with PKCE (`openid-client` v5, pinned to the last CommonJS line), `server/src/routes/sso.ts`. ID tokens are validated against the IdP's JWKS; the app additionally enforces an email-domain allowlist and `email_verified`. Issuer discovery is lazy and memoized so the dyno boots with the IdP unreachable.
+- **Account linking:** matched on the IdP subject first (`users.sso_subject`, unique per provider), falling back to email **once**, to attach the subject to a row an admin pre-created. Linking updates the existing row, so the user's `id` — and therefore `watchlist_sources.added_by` and their name across incident logs — survives.
+- **Rollout modes** (`PASSWORD_LOGIN_MODE`): `all` → `admin-only` → `off`. `admin-only` is the intended end state: one break-glass admin keeps a password, everyone else is SSO.
+- **Signup is gated by a shared code** stored in `settings.signup_code` — set from `SIGNUP_CODE` (authoritative, re-applied on every boot) or randomly generated once and printed to the logs. Closed entirely by `SIGNUP_ENABLED=false`.
+- **First registered user automatically becomes admin** (both signup paths).
 - In-memory brake: 10 failed attempts per IP per 10 minutes.
-- **Share links bypass auth entirely** — they're public URLs, optionally password-gated (SHA-256), with TTL, labels and revocation. Every open is logged with IP + user agent.
+- **Share links require an account.** They are no longer public. The generated link password is accepted only while an admin has opened the time-boxed break-glass window in `settings.share_password_fallback` (default 12h, max 72h, self-expiring) — for an IdP outage. Links published before passwords existed are gated too. TTL, labels, revocation and the access log are unchanged; the log now records `user_id`/`user_email`/`via`, so an open is attributable to a person rather than an IP.
 
 ---
 
@@ -179,7 +186,7 @@ those providers**, and they are unaffected by any server-side caching or rate li
 
 Not bugs — things worth a deliberate decision.
 
-1. **Share links are the widest attack surface.** They are unauthenticated URLs carrying a full incident snapshot, including personnel names, phone numbers, emails, and Cloudinary photo URLs. Mitigations already present: optional SHA-256 password, TTL, revocation, and an IP-logging access table. Worth confirming the default TTL matches policy.
+1. **Share links now require an account** (SSO or password), which closes what was the widest attack surface: they used to be unauthenticated URLs carrying a full incident snapshot — personnel names, phone numbers, emails, Cloudinary photo URLs. The SHA-256 link password survives only as an admin-enabled, self-expiring break-glass for IdP outages. Residual risk: while that window is open, anyone holding a link and its password can read that incident, so it should be closed as soon as SSO is back. Cloudinary photo URLs inside a snapshot remain public regardless (see 2).
 2. **Cloudinary images are public URLs.** Anyone with the link can fetch an incident photo without authenticating, indefinitely, even after the share link is revoked or the incident deleted. Nothing in the app deletes Cloudinary assets.
 3. **The unsigned upload preset is world-writable.** Cloud name + preset are in the shipped bundle. Consider folder scoping, allowed formats, and an upload rate limit in the Cloudinary console.
 4. **`VITE_GOOGLE_MAPS_KEY` is public and billable.** It ships in the JavaScript bundle. Apply HTTP-referrer restrictions and a quota cap in Google Cloud.

@@ -22,7 +22,30 @@ declare global {
 }
 
 export function signToken(user: AuthUser): string {
-  return jwt.sign(user, jwtSecret(), { expiresIn: '30d' });
+  return jwt.sign(
+    { id: user.id, email: user.email, name: user.name, role: user.role },
+    jwtSecret(),
+    { expiresIn: '30d' }
+  );
+}
+
+/**
+ * The signed-in user, or null — never throws and never writes a response.
+ *
+ * Routes that are reachable without an account (the share-link read paths) need
+ * to know *whether* a session exists without 401ing on its own; requireAuth
+ * answers the response itself, so it can't be reused there. An unset JWT_SECRET
+ * degrades to "not signed in" rather than a 500, because these callers have a
+ * second way in (the break-glass link password).
+ */
+export function readAuthUser(req: Request): AuthUser | null {
+  try {
+    const token: string | undefined = req.cookies?.gsoc_auth;
+    if (!token) return null;
+    return jwt.verify(token, jwtSecret()) as AuthUser;
+  } catch {
+    return null;
+  }
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {

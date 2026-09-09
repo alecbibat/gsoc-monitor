@@ -24,6 +24,25 @@ export async function migrate() {
         created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
+      -- Identity federation (SSO). The IdP's stable subject id is the durable
+      -- join key: email is only used to LINK an existing row on first SSO
+      -- login, because people change names and companies change domains, and
+      -- re-keying on a changed email would orphan everything the user authored
+      -- (watchlist_sources.added_by, their name on every crisis log entry).
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS sso_subject  TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS sso_provider TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS sso_linked_at TIMESTAMPTZ;
+
+      -- An SSO-only account has no password at all. Existing rows keep theirs,
+      -- so password login is unaffected for everyone who already has one.
+      ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+
+      -- One app account per IdP subject. Partial so the many NULLs (password
+      -- users, and accounts pre-created by an admin but not yet linked) don't
+      -- collide with each other.
+      CREATE UNIQUE INDEX IF NOT EXISTS users_sso_subject_key
+        ON users (sso_provider, sso_subject) WHERE sso_subject IS NOT NULL;
+
       -- App-wide key/value config (signup code, etc.)
       CREATE TABLE IF NOT EXISTS settings (
         key   TEXT PRIMARY KEY,
@@ -71,6 +90,14 @@ export async function migrate() {
       );
       CREATE INDEX IF NOT EXISTS share_access_log_token_idx
         ON share_access_log (token, at DESC);
+
+      -- Share links now require a signed-in account, so an open is attributable
+      -- to a person rather than just an IP. NULL means the open came through
+      -- the break-glass link-password path (see settings.share_password_fallback),
+      -- which is anonymous by nature — worth being able to tell apart in an AAR.
+      ALTER TABLE share_access_log ADD COLUMN IF NOT EXISTS user_id    UUID;
+      ALTER TABLE share_access_log ADD COLUMN IF NOT EXISTS user_email TEXT;
+      ALTER TABLE share_access_log ADD COLUMN IF NOT EXISTS via        TEXT;
 
       -- Team-shared OSINT watchlist. Each row is one intel source (news site,
       -- Google-News topic, scanner agency, crime dataset, social account) the

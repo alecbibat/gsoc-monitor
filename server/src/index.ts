@@ -30,6 +30,7 @@ import jtwcRouter from './routes/jtwc';
 import outagesRouter, { initOutagesStream } from './routes/outages';
 import crisisRouter from './routes/crisis';
 import authRouter from './routes/auth';
+import ssoRouter from './routes/sso';
 import adminRouter from './routes/admin';
 import incidentsRouter from './routes/incidents';
 import iapRouter from './routes/iap';
@@ -103,7 +104,10 @@ function main() {
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
-  // Auth + admin (no requireAuth here — middleware is applied per-router)
+  // Auth + admin (no requireAuth here — middleware is applied per-router).
+  // The SSO router mounts first so /api/auth/sso/* is matched before the
+  // password routes' own paths.
+  app.use('/api/auth/sso', ssoRouter);
   app.use('/api/auth', authRouter);
   app.use('/api/admin', adminRouter);
 
