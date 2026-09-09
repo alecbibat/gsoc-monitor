@@ -110,15 +110,17 @@ failed-login rate-limit map.
 | **Cloudinary** | hardcoded cloud/preset | All incident photos + map thumbnails | Free tier / paid by usage |
 | **Google Maps Platform** | `VITE_GOOGLE_MAPS_KEY` | Photorealistic 3D tiles (Map Tiles API). Baked into the bundle at build time. | **Billable per usage** |
 | **Cesium ion** | `VITE_CESIUM_ION_TOKEN` | World Terrain + OSM Buildings. Falls back to the rate-limited demo token. | Free tier |
-| **AISStream** | `AISSTREAM_API_KEY` | Live ship AIS over `wss://stream.aisstream.io` | Free |
-| **VesselFinder** | `VESSELFINDER_API_KEY` | Optional paid AIS by IMO | Paid |
-| **MyShipTracking** | `MYSHIPTRACKING_API_KEY` | Optional paid AIS alternative | Paid |
+| **AISStream** | `AISSTREAM_API_KEY` | Live ship AIS over `wss://stream.aisstream.io`. Community **shore** receivers, so coastal only. | Free |
+| **MarineTraffic** | `MARINETRAFFIC_API_KEY` | Positions by MMSI carrying **satellite and roaming** AIS. The only configured source that can see a vessel in open ocean. | Paid |
+| **VesselFinder** | `VESSELFINDER_API_KEY` | Positions by IMO; satellite is a paid add-on. | Paid |
+| **MyShipTracking** | `MYSHIPTRACKING_API_KEY` | Positions by IMO. | Paid |
 | **PurpleAir** | `PURPLEAIR_API_KEY` | Air quality sensors | Paid/registered |
 | **AirNow** | `AIRNOW_API_KEY` | EPA air quality | Free, registration |
 | **NPS Data API** | `NPS_API_KEY` | Park news/alerts. Defaults to `DEMO_KEY` (rate-limited). | Free |
 
 Other env vars: `PORT`, `NODE_ENV`, `NWS_USER_AGENT` (contact string required by NWS
-and Nominatim policy), `SHIPS_SCRAPE_CRUISEMAPPER`, `SHIPS_POLL_MINUTES`,
+and Nominatim policy), `MARINETRAFFIC_TIMESPAN_MIN`,
+`SHIPS_SCRAPE_CRUISEMAPPER`, `SHIPS_POLL_MINUTES`,
 `SHIPS_SNAPSHOT_PATH`, `AIS_MMSI_FILTER`.
 
 > **`VITE_*` vars are build-time.** They are compiled into the public JavaScript

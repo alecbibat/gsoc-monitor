@@ -18,11 +18,21 @@ const NAV_STATUS: Record<number, string> = {
 // Which feed the shown position came from — the first thing to know when a
 // marker looks wrong (coastal live AIS vs the satellite-backed scrape).
 const SOURCE_LABEL: Record<string, string> = {
-  aisstream: 'Live AIS (coastal receivers)',
-  cruisemapper: 'CruiseMapper (satellite AIS)',
+  aisstream: 'Live AIS',
+  cruisemapper: 'CruiseMapper',
   vesselfinder: 'VesselFinder',
   myshiptracking: 'MyShipTracking',
+  marinetraffic: 'MarineTraffic',
   snapshot: 'Restored last-known',
+};
+
+// How the transmission was received. This is what decides whether a vessel can
+// be seen at all once she leaves the coast, so it is worth stating plainly
+// rather than leaving an operator to infer it from a stale timestamp.
+const RECEPTION_LABEL: Record<string, string> = {
+  terrestrial: 'Terrestrial (shore receivers, coastal only)',
+  satellite: 'Satellite',
+  roaming: 'Roaming (relayed by partner fleet)',
 };
 
 interface Props {
@@ -43,6 +53,7 @@ interface Props {
     etaText?: string | null;
     lastSeenSec: number;
     source?: string | null;
+    reception?: string | null;
     receivedAt?: number | null;
   };
 }
@@ -143,12 +154,20 @@ export function ShipDetails({ payload }: Props) {
 
         <dt className="text-white/40">Source</dt>
         <dd>{payload.source ? (SOURCE_LABEL[payload.source] ?? payload.source) : '—'}</dd>
+
+        <dt className="text-white/40">Received via</dt>
+        <dd>
+          {payload.reception ? (RECEPTION_LABEL[payload.reception] ?? payload.reception) : '—'}
+        </dd>
       </dl>
 
       {isStale && (
         <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-200/80">
-          Showing last known position — this vessel is likely outside coastal AIS
-          range and will update when it reports again.
+          {payload.reception === 'satellite' || payload.reception === 'roaming'
+            ? // Offshore coverage reports every few hours rather than every
+              // few minutes, so an old fix here is normal, not a gap.
+              'Showing last known position. Offshore reception reports at long intervals, so this updates less often than a coastal fix.'
+            : 'Showing last known position — this vessel is likely outside coastal AIS range and will update when it reports again.'}
         </div>
       )}
     </div>

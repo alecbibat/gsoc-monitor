@@ -2,14 +2,19 @@ import { describe, expect, it } from 'vitest';
 import {
   HEAL_MIN_REPEATS,
   MAX_PLAUSIBLE_KT,
+  betterCandidate,
   evaluateCandidate,
+  mtRow,
+  normalizeMtSpeed,
   parseAisTimeUtc,
   parseCruiseMapper,
   parseReportedAgo,
   type CandidateFix,
   type FixDecision,
+  type FixSource,
   type HeldFix,
   type PendingOverride,
+  type SourceCandidate,
 } from './ships';
 
 const MIN = 60_000;
@@ -427,5 +432,141 @@ ${'<p>filler</p>'.repeat(40)}
     const r = parseCruiseMapper(html, ship, now);
     expect(r.pos?.lat).toBeCloseTo(49.2827);
     expect(r.pos?.fixAtKnown).toBe(false);
+  });
+});
+
+describe('normalizeMtSpeed', () => {
+  // MarineTraffic's SPEED scaling differs by protocol version, so the reader
+  // has to survive raw knots, knots x10 and knots x100 without a config flag.
+  it('reads each scaling as the same vessel speed', () => {
+    expect(normalizeMtSpeed(14.2)).toBeCloseTo(14.2);
+    expect(normalizeMtSpeed(142)).toBeCloseTo(14.2);
+    expect(normalizeMtSpeed(1420)).toBeCloseTo(14.2);
+  });
+
+  it('keeps a stopped ship at zero and rejects nonsense', () => {
+    expect(normalizeMtSpeed(0)).toBe(0);
+    expect(normalizeMtSpeed(null)).toBeNull();
+    expect(normalizeMtSpeed(-3)).toBeNull();
+    expect(normalizeMtSpeed(NaN)).toBeNull();
+    // 500 kt is not a ship at any scaling that leaves it above 40.
+    expect(normalizeMtSpeed(500_000)).toBeNull();
+  });
+});
+
+describe('mtRow', () => {
+  const ship = { mmsi: '311001759', imo: 9904819, name: 'Star Seeker' };
+  const now = Date.UTC(2026, 8, 9, 12, 0, 0);
+
+  it('maps a roaming position report', () => {
+    const r = mtRow(
+      {
+        MMSI: '311001759',
+        LAT: '51.98760',
+        LON: '-170.12340',
+        SPEED: '142',
+        COURSE: '265',
+        HEADING: '267',
+        STATUS: '0',
+        TIMESTAMP: '2026-09-09T10:30:00.000Z',
+        DSRC: 'ROAM',
+      },
+      ship,
+      now
+    );
+    expect(r.lat).toBeCloseTo(51.9876);
+    expect(r.lon).toBeCloseTo(-170.1234);
+    expect(r.speedKt).toBeCloseTo(14.2);
+    expect(r.reception).toBe('roaming');
+    expect(r.t).toBe(Date.UTC(2026, 8, 9, 10, 30, 0));
+    expect(r.fixAtKnown).toBe(true);
+    // Identity comes from our own fleet table, never from the response.
+    expect(r.imo).toBe(9904819);
+    expect(r.mmsi).toBe('311001759');
+  });
+
+  it('recognises the terrestrial and satellite source codes', () => {
+    const at = (dsrc: string) =>
+      mtRow({ LAT: 1, LON: 2, TIMESTAMP: '2026-09-09T10:30:00Z', DSRC: dsrc }, ship, now).reception;
+    expect(at('TER')).toBe('terrestrial');
+    expect(at('SAT')).toBe('satellite');
+    expect(at('ROAM')).toBe('roaming');
+    expect(at('')).toBeNull();
+    expect(at('something-else')).toBeNull();
+  });
+
+  it('falls back to the poll time when the row carries no timestamp', () => {
+    const r = mtRow({ LAT: 1, LON: 2 }, ship, now);
+    expect(r.t).toBe(now);
+    expect(r.fixAtKnown).toBe(false);
+  });
+
+  it('accepts an epoch-seconds timestamp', () => {
+    const r = mtRow({ LAT: 1, LON: 2, TIMESTAMP: 1_757_414_400 }, ship, now);
+    expect(r.t).toBe(1_757_414_400_000);
+    expect(r.fixAtKnown).toBe(true);
+  });
+});
+
+describe('betterCandidate', () => {
+  const ORDER: FixSource[] = ['marinetraffic', 'vesselfinder', 'myshiptracking', 'cruisemapper'];
+  const rank = (s: FixSource) => {
+    const i = ORDER.indexOf(s);
+    return i === -1 ? ORDER.length : i;
+  };
+  const at = Date.UTC(2026, 8, 9, 12, 0, 0);
+
+  function candidate(source: FixSource, over: Partial<CandidateRow> = {}): SourceCandidate {
+    return {
+      source,
+      row: {
+        imo: 9904819,
+        mmsi: '311001759',
+        lat: 52,
+        lon: -175,
+        speedKt: 14,
+        courseDeg: 265,
+        headingDeg: 265,
+        navStatus: 0,
+        destination: null,
+        etaText: null,
+        name: 'Star Seeker',
+        t: at,
+        fixAtKnown: true,
+        fixPrecisionMs: 0,
+        reception: null,
+        ...over,
+      },
+    };
+  }
+  type CandidateRow = SourceCandidate['row'];
+
+  it('prefers a source that says when the ship reported', () => {
+    // The scrape's untimed answer is stamped with our clock, so it looks
+    // newest. It must not beat a real timestamp from half an hour ago.
+    const timed = candidate('marinetraffic', { t: at - 30 * MIN, fixAtKnown: true });
+    const untimed = candidate('cruisemapper', { t: at, fixAtKnown: false, lat: 49.29, lon: -123.12 });
+    expect(betterCandidate(untimed, timed, rank)).toBe(timed);
+    expect(betterCandidate(timed, untimed, rank)).toBe(timed);
+  });
+
+  it('prefers the newer fix when both state a time', () => {
+    const older = candidate('marinetraffic', { t: at - 3 * HOUR });
+    const newer = candidate('cruisemapper', { t: at - 10 * MIN });
+    expect(betterCandidate(older, newer, rank)).toBe(newer);
+    expect(betterCandidate(newer, older, rank)).toBe(newer);
+  });
+
+  it('breaks an exact tie on coverage rank', () => {
+    const mt = candidate('marinetraffic');
+    const cm = candidate('cruisemapper');
+    expect(betterCandidate(cm, mt, rank)).toBe(mt);
+    expect(betterCandidate(mt, cm, rank)).toBe(mt);
+  });
+
+  it('lets a fresher lower-ranked source beat a stale better-covered one', () => {
+    const staleMt = candidate('marinetraffic', { t: at - 8 * HOUR });
+    const freshCm = candidate('cruisemapper', { t: at - 5 * MIN });
+    expect(betterCandidate(staleMt, freshCm, rank)).toBe(freshCm);
   });
 });

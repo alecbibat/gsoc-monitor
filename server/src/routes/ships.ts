@@ -59,11 +59,28 @@ interface VesselData {
   updatedAt: number;        // FIX time: when the ship reported this position (see applyFix)
   receivedAt: number;       // when this server ingested the fix
   source: FixSource;        // which feed the position came from
+  reception: Reception;     // how the ship's transmission reached that feed
 }
 
 // Which feed a position came from. 'snapshot' marks a fix restored from a
 // persisted snapshot that was written before sources were recorded.
-export type FixSource = 'aisstream' | 'cruisemapper' | 'vesselfinder' | 'myshiptracking' | 'snapshot';
+export type FixSource =
+  | 'aisstream'
+  | 'cruisemapper'
+  | 'vesselfinder'
+  | 'myshiptracking'
+  | 'marinetraffic'
+  | 'snapshot';
+
+// How a position reached the feed that reported it. This is the distinction
+// that decides whether a ship mid-ocean can be seen at all:
+//   terrestrial — a shore station heard it; coastal waters only.
+//   satellite   — a low-earth-orbit receiver heard it; global, higher latency.
+//   roaming     — another vessel in a partner fleet relayed it; fills the gaps
+//                 satellites and shore stations leave.
+// Free aisstream is terrestrial only, so a ship in mid-Pacific is invisible to
+// it however healthy the connection looks. null means the feed did not say.
+export type Reception = 'terrestrial' | 'satellite' | 'roaming' | null;
 
 // Side-cache for static data that may arrive before a position report.
 interface StaticInfo {
@@ -450,6 +467,7 @@ const acceptedBySource: Record<FixSource, number> = {
   cruisemapper: 0,
   vesselfinder: 0,
   myshiptracking: 0,
+  marinetraffic: 0,
   snapshot: 0,
 };
 let healedCount = 0;
@@ -695,6 +713,7 @@ function restoreSnapshot(snap: Snapshot | null | undefined, from: string): numbe
       etaAt: v.etaAt ?? null,
       receivedAt: typeof v.receivedAt === 'number' ? v.receivedAt : v.updatedAt,
       source: v.source ?? 'snapshot',
+      reception: v.reception ?? null,
     });
     allowedMmsis.add(v.mmsi);
     restored++;
@@ -842,6 +861,9 @@ function handleMessage(raw: string) {
       updatedAt: fixAt,
       receivedAt: now,
       source: 'aisstream',
+      // aisstream is a community network of shore-based receivers, so every
+      // position it carries was heard from land by definition.
+      reception: 'terrestrial',
     };
 
     if (isAllowed(mmsi, record.imo)) {
@@ -987,6 +1009,7 @@ interface PaidPosition {
   t: number; // fix time (ms) — receipt time when the provider gave none
   fixAtKnown: boolean; // whether `t` came from the provider
   fixPrecisionMs: number; // rounding of `t` (0 for exact timestamps)
+  reception: Reception; // how the transmission reached the provider, if stated
 }
 
 let paidProvider: FixSource | null = null;
@@ -1049,8 +1072,94 @@ async function fetchVesselFinder(key: string): Promise<PaidPosition[]> {
       t: Number.isNaN(t) ? Date.now() : t,
       fixAtKnown: !Number.isNaN(t),
       fixPrecisionMs: 0,
+      reception: null,
     };
   });
+}
+
+// --- MarineTraffic (Kpler) AIS API ------------------------------------------
+// The one source here that carries ROAMING AIS as well as satellite, which is
+// what lets it hold a position for a ship in mid-ocean when the terrestrial
+// feeds and the CruiseMapper scrape have nothing newer than her last port. No
+// amount of parsing gets a position out of a source that never received one,
+// so when the fleet is at sea this is the feed that has the answer.
+//
+// PS07 (single vessel positions): one request per MMSI, which needs no fleet
+// set up in the MarineTraffic account.
+const MT_DSRC: Record<string, Reception> = {
+  TER: 'terrestrial',
+  SAT: 'satellite',
+  ROAM: 'roaming',
+};
+
+// MarineTraffic's SPEED scaling is documented inconsistently across protocol
+// versions and endpoints: raw knots in some responses, knots x10 in others,
+// and the XML protocol divides by 100. Reading it wrong by a factor of ten
+// would drive the dead-reckoning projection, so take the first interpretation
+// that lands in a real vessel's range rather than trusting one convention.
+export function normalizeMtSpeed(raw: number | null): number | null {
+  if (raw === null || !Number.isFinite(raw) || raw < 0) return null;
+  for (const divisor of [1, 10, 100]) {
+    const kt = raw / divisor;
+    if (kt <= 40) return kt;
+  }
+  return null;
+}
+
+// One MarineTraffic position row -> our shape. Exported for tests: the live
+// API needs a paid key, so the field mapping is verified against fixtures.
+export function mtRow(v: Record<string, unknown>, ship: FleetShip, now: number): PaidPosition {
+  const ts = pickField<string | number>(v, 'TIMESTAMP', 'timestamp');
+  const t = typeof ts === 'number' ? ts * (ts < 1e12 ? 1000 : 1) : ts ? Date.parse(String(ts)) : NaN;
+  const dsrc = String(pickField<string>(v, 'DSRC', 'dsrc') ?? '').trim().toUpperCase();
+  const heading = pnum(pickField(v, 'HEADING', 'heading'));
+  const course = pnum(pickField(v, 'COURSE', 'course'));
+  return {
+    imo: ship.imo,
+    mmsi: ship.mmsi,
+    lat: pnum(pickField(v, 'LAT', 'lat', 'LATITUDE', 'latitude')),
+    lon: pnum(pickField(v, 'LON', 'lon', 'LONGITUDE', 'longitude')),
+    speedKt: normalizeMtSpeed(pnum(pickField(v, 'SPEED', 'speed'))),
+    courseDeg: course,
+    headingDeg: heading,
+    navStatus: pnum(pickField(v, 'STATUS', 'status')),
+    destination: (pickField<string>(v, 'DESTINATION', 'destination') ?? null) || null,
+    etaText: pickEtaText(v, 'ETA', 'eta'),
+    name: ship.name,
+    t: Number.isNaN(t) ? now : t,
+    fixAtKnown: !Number.isNaN(t),
+    fixPrecisionMs: 0,
+    reception: MT_DSRC[dsrc] ?? null,
+  };
+}
+
+async function fetchMarineTraffic(key: string): Promise<PaidPosition[]> {
+  const out: PaidPosition[] = [];
+  const span = config.marinetrafficTimespanMin;
+  for (const ship of FLEET) {
+    const now = Date.now();
+    try {
+      const data = await fetchJson(
+        `https://services.marinetraffic.com/api/exportvessel/v:5/${encodeURIComponent(key)}` +
+          `/timespan:${span}/protocol:jsono/mmsi:${ship.mmsi}`
+      );
+      // jsono answers with an array of objects; an empty array simply means
+      // the vessel was not heard inside the timespan.
+      const rows = Array.isArray(data) ? (data as Record<string, unknown>[]) : [];
+      let best: PaidPosition | null = null;
+      for (const row of rows) {
+        const r = mtRow(row, ship, now);
+        if (r.lat == null || r.lon == null) continue;
+        if (!best || r.t > best.t) best = r;
+      }
+      if (best) out.push(best);
+    } catch (err) {
+      // One vessel's failure must not cost the rest of the fleet its poll.
+      console.warn(`[ships] marinetraffic ${ship.name} failed:`, err instanceof Error ? err.message : err);
+    }
+    await sleep(400);
+  }
+  return out;
 }
 
 // --- CruiseMapper free scrape ----------------------------------------------
@@ -1290,6 +1399,8 @@ export function parseCruiseMapper(html: string, ship: FleetShip, now = Date.now(
       t: age ? now - age.ageMs : now,
       fixAtKnown: age !== null,
       fixPrecisionMs: age ? age.precisionMs : 0,
+      // The page shows a position without saying how it was received.
+      reception: null,
     },
     strategy,
     ageText: age?.text ?? null,
@@ -1383,6 +1494,7 @@ async function fetchMyShipTracking(key: string): Promise<PaidPosition[]> {
       t: Number.isNaN(t) ? Date.now() : t,
       fixAtKnown: !Number.isNaN(t),
       fixPrecisionMs: 0,
+      reception: null,
     };
   });
 }
@@ -1419,48 +1531,211 @@ function applyPaidPosition(r: PaidPosition, source: FixSource): boolean {
     updatedAt: fixAt,
     receivedAt: now,
     source,
+    reception: r.reception,
   };
   return applyFix(record, r.fixAtKnown, r.fixPrecisionMs);
 }
 
-async function pollPaidPositions() {
-  try {
-    let rows: PaidPosition[];
-    let provider: FixSource;
-    if (config.vesselfinderApiKey) {
-      provider = paidProvider = 'vesselfinder';
-      rows = await fetchVesselFinder(config.vesselfinderApiKey);
-    } else if (config.myshiptrackingApiKey) {
-      provider = paidProvider = 'myshiptracking';
-      rows = await fetchMyShipTracking(config.myshiptrackingApiKey);
-    } else if (config.cruisemapperScrape) {
-      provider = paidProvider = 'cruisemapper';
-      rows = await fetchCruiseMapper();
-    } else {
-      return;
-    }
-    let offered = 0;
-    let applied = 0;
-    for (const r of rows) {
-      if (r.lat != null && r.lon != null) {
-        offered++;
-        if (applyPaidPosition(r, provider)) applied++;
-      }
-    }
-    paidLastOk = Date.now();
-    paidLastError = null;
-    paidLastCount = applied;
-    paidLastOffered = offered;
-  } catch (err) {
-    paidLastError = String(err);
-    console.error('[ships] paid poll failed:', err);
+// --- Provider registry -------------------------------------------------------
+// Every configured source is polled on every cycle, and the best candidate per
+// ship wins. This replaces an if/else chain that ran only the FIRST configured
+// source: with one feed there was no second opinion, so when that feed had no
+// position for a vessel at sea — or served her last port call instead — the
+// map had nothing better to show and no way to know it was wrong.
+//
+// Listed best-coverage-first. That order is only the tie-break; a fresher fix
+// from a lower-ranked source still wins.
+interface PositionProvider {
+  source: FixSource;
+  label: string;
+  fetch: () => Promise<PaidPosition[]>;
+}
+
+function activeProviders(): PositionProvider[] {
+  const out: PositionProvider[] = [];
+  if (config.marinetrafficApiKey) {
+    out.push({
+      source: 'marinetraffic',
+      label: 'MarineTraffic',
+      fetch: () => fetchMarineTraffic(config.marinetrafficApiKey),
+    });
   }
+  if (config.vesselfinderApiKey) {
+    out.push({
+      source: 'vesselfinder',
+      label: 'VesselFinder',
+      fetch: () => fetchVesselFinder(config.vesselfinderApiKey),
+    });
+  }
+  if (config.myshiptrackingApiKey) {
+    out.push({
+      source: 'myshiptracking',
+      label: 'MyShipTracking',
+      fetch: () => fetchMyShipTracking(config.myshiptrackingApiKey),
+    });
+  }
+  if (config.cruisemapperScrape) {
+    out.push({ source: 'cruisemapper', label: 'CruiseMapper', fetch: fetchCruiseMapper });
+  }
+  return out;
+}
+
+export interface SourceCandidate {
+  source: FixSource;
+  row: PaidPosition;
+}
+
+// Which of two positions for the same ship to believe. A source that states
+// when the ship reported beats one that does not, because an unstated time is
+// stamped with our own clock and would always look like the newest. Then the
+// newer fix. Then coverage rank, so a satellite/roaming feed settles a tie
+// against a scrape of a web page.
+export function betterCandidate(
+  a: SourceCandidate,
+  b: SourceCandidate,
+  rank: (s: FixSource) => number
+): SourceCandidate {
+  if (a.row.fixAtKnown !== b.row.fixAtKnown) return a.row.fixAtKnown ? a : b;
+  if (a.row.t !== b.row.t) return a.row.t > b.row.t ? a : b;
+  return rank(a.source) <= rank(b.source) ? a : b;
+}
+
+// The fleet MMSI a provider row belongs to, or null when it names no ship we
+// track.
+function fleetKeyOf(r: PaidPosition): string | null {
+  const ship =
+    (r.imo != null ? FLEET.find((s) => s.imo === r.imo) : undefined) ??
+    (r.mmsi ? FLEET.find((s) => s.mmsi === r.mmsi) : undefined);
+  return ship?.mmsi ?? r.mmsi ?? (r.imo != null ? `imo-${r.imo}` : null);
+}
+
+// What each source said about each ship on the last cycle, and which answer
+// was used. This is the view that makes a coverage gap obvious: a feed with
+// no row for a vessel simply is not listed against her.
+interface SourceReport {
+  source: FixSource;
+  lat: number;
+  lon: number;
+  fixAt: number;
+  fixAtKnown: boolean;
+  fixAgeMin: number;
+  reception: Reception;
+  won: boolean;
+  accepted: boolean | null; // null: not the winner, so never offered to applyFix
+}
+const lastCycleReports = new Map<string, SourceReport[]>();
+
+interface ProviderStat {
+  source: FixSource;
+  label: string;
+  lastRunAt: number | null;
+  lastOkAt: number | null;
+  lastError: string | null;
+  rows: number;
+  tookMs: number;
+}
+const providerStats = new Map<FixSource, ProviderStat>();
+
+async function pollPositions() {
+  const providers = activeProviders();
+  if (providers.length === 0) return;
+
+  const started = Date.now();
+  const settled = await Promise.all(
+    providers.map(async (p) => {
+      const t0 = Date.now();
+      try {
+        const rows = await p.fetch();
+        providerStats.set(p.source, {
+          source: p.source,
+          label: p.label,
+          lastRunAt: t0,
+          lastOkAt: Date.now(),
+          lastError: null,
+          rows: rows.length,
+          tookMs: Date.now() - t0,
+        });
+        return { provider: p, rows };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        providerStats.set(p.source, {
+          source: p.source,
+          label: p.label,
+          lastRunAt: t0,
+          lastOkAt: providerStats.get(p.source)?.lastOkAt ?? null,
+          lastError: msg,
+          rows: 0,
+          tookMs: Date.now() - t0,
+        });
+        console.error(`[ships] ${p.label} poll failed:`, msg);
+        return { provider: p, rows: [] as PaidPosition[] };
+      }
+    })
+  );
+
+  const rank = (s: FixSource) => {
+    const i = providers.findIndex((p) => p.source === s);
+    return i === -1 ? providers.length : i;
+  };
+
+  // Collect every source's answer per ship, then apply only the winner. Handing
+  // applyFix each answer in turn would let whichever arrived first claim an
+  // empty slot and make the better answer look like a backwards jump.
+  const byShip = new Map<string, SourceCandidate[]>();
+  for (const { provider, rows } of settled) {
+    for (const row of rows) {
+      if (row.lat == null || row.lon == null) continue;
+      const key = fleetKeyOf(row);
+      if (!key) continue;
+      const list = byShip.get(key);
+      if (list) list.push({ source: provider.source, row });
+      else byShip.set(key, [{ source: provider.source, row }]);
+    }
+  }
+
+  lastCycleReports.clear();
+  let offered = 0;
+  let applied = 0;
+  for (const [key, candidates] of byShip) {
+    const winner = candidates.reduce((best, c) => betterCandidate(best, c, rank));
+    offered++;
+    const ok = applyPaidPosition(winner.row, winner.source);
+    if (ok) applied++;
+    lastCycleReports.set(
+      key,
+      candidates.map((c) => ({
+        source: c.source,
+        lat: c.row.lat as number,
+        lon: c.row.lon as number,
+        fixAt: c.row.t,
+        fixAtKnown: c.row.fixAtKnown,
+        fixAgeMin: Math.round((started - c.row.t) / 60_000),
+        reception: c.row.reception,
+        won: c === winner,
+        accepted: c === winner ? ok : null,
+      }))
+    );
+  }
+
+  // Kept for the plain-language diagnosis: the source whose answer is on the
+  // map for the most ships right now.
+  const wins = new Map<FixSource, number>();
+  for (const reports of lastCycleReports.values()) {
+    const w = reports.find((r) => r.won);
+    if (w) wins.set(w.source, (wins.get(w.source) ?? 0) + 1);
+  }
+  paidProvider =
+    [...wins.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? providers[0]?.source ?? null;
+
+  const errors = [...providerStats.values()].filter((s) => s.lastError);
+  paidLastError = errors.length === providers.length && errors.length > 0 ? errors[0].lastError : null;
+  if (errors.length < providers.length) paidLastOk = Date.now();
+  paidLastCount = applied;
+  paidLastOffered = offered;
 }
 
 function paidConfigured(): boolean {
-  return Boolean(
-    config.vesselfinderApiKey || config.myshiptrackingApiKey || config.cruisemapperScrape
-  );
+  return activeProviders().length > 0;
 }
 
 export function initShipsStream() {
@@ -1478,8 +1753,8 @@ export function initShipsStream() {
   // loadSnapshot never throws; the Postgres read is bounded by its retries.
   void loadSnapshot().finally(() => {
     if (!paidConfigured()) return;
-    void pollPaidPositions();
-    setInterval(pollPaidPositions, PAID_POLL_MS);
+    void pollPositions();
+    setInterval(pollPositions, PAID_POLL_MS);
   });
   // Heroku sends SIGTERM before a dyno restart and allows ~30 s of grace —
   // flush a pending save so the restart resumes from the very last fix.
@@ -1563,9 +1838,12 @@ function trackedByImo() {
       lon: v?.longitude ?? null,
       lastSeenSec: v ? Math.round((now - v.updatedAt) / 1000) : null,
       source: v?.source ?? null,
+      reception: v?.reception ?? null,
       fixAt: v?.updatedAt ?? null,
       fixAgeMin: v ? Math.round((now - v.updatedAt) / 60_000) : null,
       receivedAt: v?.receivedAt ?? null,
+      // What every polled source said about this ship on the last cycle.
+      reportedBy: v ? (lastCycleReports.get(v.mmsi) ?? []) : [],
       lastRejection: rej
         ? {
             at: rej.at,
@@ -1583,6 +1861,8 @@ function trackedByImo() {
 
 function providerLabel(): string {
   switch (paidProvider) {
+    case 'marinetraffic':
+      return 'MarineTraffic';
     case 'cruisemapper':
       return 'CruiseMapper';
     case 'vesselfinder':
@@ -1621,7 +1901,19 @@ function diagnose(perImo: ReturnType<typeof trackedByImo>): string {
       refused > 0 || stale > 0
         ? ` In the last 24 h ${refused} fix(es) were refused as implausible jumps and ${stale} as older than the held fix — see fixes.rejections.`
         : '';
-    return `${head}${via}.${aisSupp}${refusedNote}`;
+    // The failure that looks like a bug but is a coverage gap: every ship is
+    // on the map, yet the positions are days old because no configured source
+    // can hear a vessel away from the coast. Say so, with the remedy.
+    const oldest = Math.max(0, ...perImo.filter((p) => p.matched).map((p) => p.fixAgeMin ?? 0));
+    const hasOffshore = Boolean(config.marinetrafficApiKey || config.vesselfinderApiKey);
+    const coverageNote =
+      oldest >= 12 * 60 && !hasOffshore
+        ? ` Oldest fix is ${Math.round(oldest / 60)} h old and no source carrying satellite or roaming AIS is configured` +
+          ' (aisstream is shore receivers only; the CruiseMapper scrape shows whatever that page has). A ship offshore' +
+          ' will sit at her last coastal position until she is heard again — set MARINETRAFFIC_API_KEY or' +
+          ' VESSELFINDER_API_KEY to close that gap.'
+        : '';
+    return `${head}${via}.${aisSupp}${refusedNote}${coverageNote}`;
   }
 
   // No ships shown — diagnose the by-IMO source first, then aisstream.
@@ -1669,6 +1961,22 @@ router.get('/debug', (_req, res) => {
       lastCount: paidLastCount,
       lastError: paidLastError,
       scrapeNote: lastScrapeNote,
+      // Every source polled this cycle, in tie-break order, with what it cost
+      // and whether it answered. A source absent from a ship's `reportedBy`
+      // list simply had no position for her.
+      providers: activeProviders().map((p) => {
+        const stat = providerStats.get(p.source);
+        return {
+          source: p.source,
+          label: p.label,
+          rows: stat?.rows ?? null,
+          lastRunAt: stat?.lastRunAt ?? null,
+          lastOkAt: stat?.lastOkAt ?? null,
+          lastError: stat?.lastError ?? null,
+          tookMs: stat?.tookMs ?? null,
+        };
+      }),
+      carriesRoamingOrSatellite: Boolean(config.marinetrafficApiKey || config.vesselfinderApiKey),
       // Per ship: which parse strategy produced the coordinates, the page's
       // own fix age, and why a page was skipped.
       scrape: [...scrapeResults.values()],

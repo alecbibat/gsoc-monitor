@@ -80,6 +80,32 @@ gsoc-monitor/
     └── src/routes/           # earthquakes, alerts, radar, flights, geocode
 ```
 
+## Ship positions and AIS coverage
+
+Every position source that is configured gets polled on each cycle, and the
+best answer per ship wins: a source that states *when* the ship reported beats
+one that does not, then the newer fix, then coverage rank. A position is only
+accepted if it is newer than the one held and the implied speed is realistic,
+so a feed re-serving an old port call cannot move a vessel backwards.
+
+Coverage is what decides whether a ship can be seen at all:
+
+| Reception | Who hears it | Where it works |
+|---|---|---|
+| Terrestrial | Shore-based receivers (this is all free AISStream carries) | Coastal waters |
+| Satellite | Low-earth-orbit receivers | Global, reports every few hours |
+| Roaming | Relayed by another vessel in a partner fleet | Fills open-ocean and congested gaps |
+
+A fleet that stays inshore is fine on the free sources. A fleet that crosses
+oceans needs a source carrying satellite or roaming AIS, otherwise a vessel
+will sit at her last coastal position for days and the app has no way to know
+a better position exists. Set `MARINETRAFFIC_API_KEY` (or
+`VESSELFINDER_API_KEY` with their satellite add-on) to close that gap.
+
+`GET /api/ships/debug` shows which source supplied each ship's position, how it
+was received, how old the fix is, what every other source said about her on the
+last cycle, and every fix that was refused with the speed it would have implied.
+
 ## Adding more layers
 
 The architecture is designed for easy extension. For each new layer:
