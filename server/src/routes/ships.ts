@@ -1133,6 +1133,34 @@ export function mtRow(v: Record<string, unknown>, ship: FleetShip, now: number):
   };
 }
 
+// MarineTraffic's own error text, when it reports one in the body.
+export function mtErrorText(data: unknown): string | null {
+  const errs = (data as { errors?: unknown } | null)?.errors;
+  if (!Array.isArray(errs) || errs.length === 0) return null;
+  return errs
+    .map((e) => {
+      const o = e as Record<string, unknown>;
+      return [o.code, o.detail ?? o.message ?? o.title].filter(Boolean).join(': ');
+    })
+    .filter(Boolean)
+    .join('; ');
+}
+
+// Position rows out of whichever envelope the response used. null means the
+// body was neither a row list nor an empty result, so the caller should treat
+// it as a failure rather than as "the vessel was not heard".
+export function mtRows(data: unknown): Record<string, unknown>[] | null {
+  if (Array.isArray(data)) return data as Record<string, unknown>[];
+  if (data && typeof data === 'object') {
+    if (mtErrorText(data)) return null;
+    for (const key of ['DATA', 'data', 'rows', 'positions']) {
+      const v = (data as Record<string, unknown>)[key];
+      if (Array.isArray(v)) return v as Record<string, unknown>[];
+    }
+  }
+  return null;
+}
+
 async function fetchMarineTraffic(key: string): Promise<PaidPosition[]> {
   const out: PaidPosition[] = [];
   const span = config.marinetrafficTimespanMin;
@@ -1143,9 +1171,14 @@ async function fetchMarineTraffic(key: string): Promise<PaidPosition[]> {
         `https://services.marinetraffic.com/api/exportvessel/v:5/${encodeURIComponent(key)}` +
           `/timespan:${span}/protocol:jsono/mmsi:${ship.mmsi}`
       );
-      // jsono answers with an array of objects; an empty array simply means
-      // the vessel was not heard inside the timespan.
-      const rows = Array.isArray(data) ? (data as Record<string, unknown>[]) : [];
+      // The jsono protocol answers with a bare array of objects, but the API
+      // has also been seen wrapping rows in an envelope and reporting failures
+      // as an `errors` array under HTTP 200. Treat a reported error as a
+      // failure rather than silently reading it as "no position".
+      const rows = mtRows(data);
+      if (rows === null) {
+        throw new Error(mtErrorText(data) ?? 'unrecognised response shape');
+      }
       let best: PaidPosition | null = null;
       for (const row of rows) {
         const r = mtRow(row, ship, now);

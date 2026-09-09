@@ -4,7 +4,9 @@ import {
   MAX_PLAUSIBLE_KT,
   betterCandidate,
   evaluateCandidate,
+  mtErrorText,
   mtRow,
+  mtRows,
   normalizeMtSpeed,
   parseAisTimeUtc,
   parseCruiseMapper,
@@ -568,5 +570,30 @@ describe('betterCandidate', () => {
     const staleMt = candidate('marinetraffic', { t: at - 8 * HOUR });
     const freshCm = candidate('cruisemapper', { t: at - 5 * MIN });
     expect(betterCandidate(staleMt, freshCm, rank)).toBe(freshCm);
+  });
+});
+
+describe('mtRows / mtErrorText', () => {
+  it('reads a bare array of rows', () => {
+    expect(mtRows([{ LAT: 1 }])).toEqual([{ LAT: 1 }]);
+    expect(mtRows([])).toEqual([]);
+  });
+
+  it('reads rows out of an envelope', () => {
+    expect(mtRows({ DATA: [{ LAT: 1 }] })).toEqual([{ LAT: 1 }]);
+    expect(mtRows({ data: [{ LAT: 2 }] })).toEqual([{ LAT: 2 }]);
+  });
+
+  it('treats a reported error as a failure, not an empty result', () => {
+    const body = { errors: [{ code: 'API-ERR-01', detail: 'Invalid API key' }] };
+    expect(mtRows(body)).toBeNull();
+    expect(mtErrorText(body)).toBe('API-ERR-01: Invalid API key');
+  });
+
+  it('treats an unrecognised body as a failure', () => {
+    expect(mtRows(null)).toBeNull();
+    expect(mtRows('<html>')).toBeNull();
+    expect(mtRows({ unexpected: true })).toBeNull();
+    expect(mtErrorText({ unexpected: true })).toBeNull();
   });
 });
