@@ -15,6 +15,16 @@ const NAV_STATUS: Record<number, string> = {
   15: 'Not defined',
 };
 
+// Which feed the shown position came from — the first thing to know when a
+// marker looks wrong (coastal live AIS vs the satellite-backed scrape).
+const SOURCE_LABEL: Record<string, string> = {
+  aisstream: 'Live AIS (coastal receivers)',
+  cruisemapper: 'CruiseMapper (satellite AIS)',
+  vesselfinder: 'VesselFinder',
+  myshiptracking: 'MyShipTracking',
+  snapshot: 'Restored last-known',
+};
+
 interface Props {
   payload: {
     mmsi: string;
@@ -32,6 +42,8 @@ interface Props {
     etaUtc?: number | null;
     etaText?: string | null;
     lastSeenSec: number;
+    source?: string | null;
+    receivedAt?: number | null;
   };
 }
 
@@ -128,6 +140,9 @@ export function ShipDetails({ payload }: Props) {
 
         <dt className="text-white/40">Last AIS</dt>
         <dd className={isStale ? 'text-amber-300/90' : undefined}>{fmtAge(payload.lastSeenSec)}</dd>
+
+        <dt className="text-white/40">Source</dt>
+        <dd>{payload.source ? (SOURCE_LABEL[payload.source] ?? payload.source) : '—'}</dd>
       </dl>
 
       {isStale && (

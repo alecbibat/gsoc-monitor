@@ -43,7 +43,7 @@ DB-backed routes but does not take the dyno down).
 | `share_access_log` | token, timestamp, **viewer IP address**, user agent | **PII / audit** |
 | `watchlist_sources` | OSINT source definitions (URL, kind, config) — *sources only, never the items* | Low |
 | `lightning_chunks` | Gzipped binary strike history (`BYTEA`), ~290 rows/day, pruned to a 24h window | Low |
-| `snapshots` | Small key/value JSONB, e.g. the ~80 KB wind grid | Low |
+| `snapshots` | Small key/value JSONB: the ~80 KB wind grid (`wind-grid`), the flight tracker's last-known positions and trails (`flights:v1`), and the fleet's last accepted ship fixes and 72h trails (`ships:v1`) | Low |
 | `iap_documents` | **Incident Action Plan PDFs stored as `BYTEA`**, 15 MB cap, one per incident type + a general default | Operational |
 
 PDFs go in Postgres rather than object storage for two stated reasons: the dyno
@@ -68,16 +68,19 @@ Notes worth knowing:
 
 | File | Written by | Lifetime |
 |---|---|---|
-| `ships-snapshot.json` (`SHIPS_SNAPSHOT_PATH`) | `server/src/routes/ships.ts` after each poll | Survives restarts within a dyno; **wiped on every deploy**. Snapshots older than 7 days are ignored. |
+| `ships-snapshot.json` (`SHIPS_SNAPSHOT_PATH`) | `server/src/routes/ships.ts`, ≤ once per 30 s after an accepted fix | Local-dev fallback only (no `DATABASE_URL`). On Heroku the dyno filesystem is **wiped on every restart and deploy**, so the authoritative copy is the `ships:v1` row in the `snapshots` table. Snapshots older than 7 days are ignored on restore. |
 
-This is the only file the app writes. It's a convenience cache — CruiseMapper is
-re-scraped at startup, so the fleet reappears within ~15s.
+This is the only file the app writes. Ship positions are restored from Postgres
+at boot so a restart neither empties the map nor lets the first scrape after
+boot overwrite a fresher fix (see the acceptance rules in `ships.ts`:
+positions are ordered by fix time and implausible jumps are refused; both are
+visible at `/api/ships/debug` under `fixes`).
 
 ### In-memory only (lost on every restart)
 
 TTL cache (`cache.ts`, 2000-entry cap), the OSINT intel rolling buffer (800 items,
-36h max age — **items are never persisted**), the flight tracker's last-known
-positions, SSE client sets, and the auth failed-login rate-limit map.
+36h max age — **items are never persisted**), SSE client sets, and the auth
+failed-login rate-limit map.
 
 ### Browser storage (per user, per device)
 

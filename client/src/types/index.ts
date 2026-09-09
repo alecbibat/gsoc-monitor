@@ -205,9 +205,13 @@ export interface ShipState {
   destination: string | null;
   etaUtc?: number | null; // parsed AIS/provider ETA, epoch ms UTC
   etaText?: string | null; // provider's raw ETA string when unparseable
-  lastSeenSec: number;
+  lastSeenSec: number; // age of the FIX (when the ship reported), not of our poll
+  source?: ShipFixSource; // which feed produced the position
+  receivedAt?: number; // when the server ingested the fix, epoch ms
   track?: ShipTrackPoint[];
 }
+
+export type ShipFixSource = 'aisstream' | 'cruisemapper' | 'vesselfinder' | 'myshiptracking' | 'snapshot';
 
 export interface ShipsResponse {
   source: 'aisstream' | 'no-key' | 'error';

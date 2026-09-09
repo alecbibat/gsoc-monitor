@@ -3,6 +3,7 @@ import WebSocket from 'ws';
 import fs from 'fs';
 import path from 'path';
 import { config } from '../config';
+import { pool } from '../db';
 
 const router = Router();
 
@@ -55,8 +56,14 @@ interface VesselData {
   etaUtc: number | null;    // parsed ETA, epoch ms UTC
   etaText: string | null;   // provider's raw ETA string (kept when unparseable)
   etaAt: number | null;     // when the ETA was last actually reported by a source
-  updatedAt: number;
+  updatedAt: number;        // FIX time: when the ship reported this position (see applyFix)
+  receivedAt: number;       // when this server ingested the fix
+  source: FixSource;        // which feed the position came from
 }
+
+// Which feed a position came from. 'snapshot' marks a fix restored from a
+// persisted snapshot that was written before sources were recorded.
+export type FixSource = 'aisstream' | 'cruisemapper' | 'vesselfinder' | 'myshiptracking' | 'snapshot';
 
 // Side-cache for static data that may arrive before a position report.
 interface StaticInfo {
@@ -253,15 +260,332 @@ function recordHistory(mmsi: string, lat: number, lon: number, t: number): void 
   while (h.length > MAX_TRACK_POINTS || (h.length > 0 && h[0].t < cutoff)) h.shift();
 }
 
-// --- Position snapshot (last-known persistence) -----------------------------
-// Written to disk after every successful poll so the fleet stays on the map
-// across server restarts and Heroku deploys. The snapshot file lives at
-// SHIPS_SNAPSHOT_PATH (default: <server root>/ships-snapshot.json) — on Heroku
-// this persists within a dyno's lifetime but is wiped on a fresh deploy. That's
-// fine: CruiseMapper scrapes at startup anyway, so ships reappear within ~15 s.
+// --- Fix acceptance ----------------------------------------------------------
+// Every position, whatever its source, goes through applyFix(). Two rules stop
+// a ship from "snapping back" to somewhere it used to be:
+//
+//  1. Ordering by FIX time, not receipt time. `updatedAt` is when the ship
+//     actually reported (aisstream's MetaData.time_utc, a paid provider's
+//     timestamp, CruiseMapper's "reported N minutes ago"), so a source that
+//     re-serves an old fix — a scrape still showing last week's port call, a
+//     delayed AIS message — is older than what we hold and is dropped.
+//  2. A plausibility gate for fixes whose age is unknown or wrong. A cruise
+//     ship cannot cover 1,500 nm in two hours, so a candidate implying more
+//     than MAX_PLAUSIBLE_KT relative to the held fix is rejected and logged
+//     (see /api/ships/debug → fixes.rejections). To stay self-healing when it
+//     is the HELD fix that is wrong, a source that keeps reporting a
+//     self-consistent track far away — HEAL_MIN_REPEATS reports spanning at
+//     least HEAL_MIN_SPAN_MS — wins. A page re-serving the same coordinates
+//     with no time attached never counts as new evidence.
+//
+// Fleet top speeds are ~15–19 kt; 35 kt leaves room for rounding in a
+// source's stated age, GPS scatter and strong currents.
+export const MAX_PLAUSIBLE_KT = 35;
+// A fix time is never trusted to better than this when judging speed — it
+// stops a 1-minute clock difference turning a 2 nm hop into "120 kt".
+export const MIN_GATE_DT_MS = 15 * 60_000;
+export const HEAL_MIN_REPEATS = 3;
+export const HEAL_MIN_SPAN_MS = 20 * 60_000;
+
+export interface HeldFix {
+  latitude: number;
+  longitude: number;
+  updatedAt: number;
+}
+
+export interface CandidateFix {
+  latitude: number;
+  longitude: number;
+  source: FixSource;
+  fixAt: number; // best estimate of when the ship reported this position
+  fixAtKnown: boolean; // false: the source gave no time, fixAt is our receipt time
+  fixPrecisionMs: number; // rounding of fixAt ("2 hours ago" is only good to 1 h)
+}
+
+// A far-away position we have refused so far, and how consistently the same
+// source has kept reporting it.
+export interface PendingOverride {
+  source: FixSource;
+  lat: number;
+  lon: number;
+  fixAt: number;
+  firstAt: number;
+  count: number;
+}
+
+export type FixDecision =
+  | { accept: true; moved: boolean; healed: boolean; impliedKt: number | null; pending: null }
+  | {
+      accept: false;
+      reason: 'older' | 'duplicate' | 'implausible';
+      moved: boolean;
+      distanceNm: number;
+      impliedKt: number | null;
+      pending: PendingOverride | null;
+    };
+
+function impliedKnots(distM: number, dtMs: number): number {
+  return distM / 1852 / (Math.max(dtMs, MIN_GATE_DT_MS) / 3_600_000);
+}
+
+// Pure decision for one candidate against the held fix. `pending` is the
+// override state from the previous rejection (if any); the returned `pending`
+// is the state to keep for the next call (null clears it).
+export function evaluateCandidate(
+  prev: HeldFix | undefined,
+  cand: CandidateFix,
+  pending: PendingOverride | undefined,
+  now: number
+): FixDecision {
+  if (!prev) return { accept: true, moved: true, healed: false, impliedKt: null, pending: null };
+
+  const distM = haversineM(prev.latitude, prev.longitude, cand.latitude, cand.longitude);
+  const moved = distM >= MIN_TRACK_MOVE_M;
+  const distanceNm = distM / 1852;
+  const keep = pending ?? null;
+
+  // Rule 1: an older (or re-served) fix never replaces a newer one. A report
+  // from the same spot only counts as newer once it clears the source's own
+  // time rounding, so "2 hours ago" re-read two hours after "38 minutes ago"
+  // is recognised as the same fix.
+  if (cand.fixAt <= prev.updatedAt + (moved ? 0 : cand.fixPrecisionMs)) {
+    return {
+      accept: false,
+      reason: moved ? 'older' : 'duplicate',
+      moved,
+      distanceNm,
+      impliedKt: null,
+      pending: keep,
+    };
+  }
+
+  if (!moved) {
+    // Same spot, genuinely newer report: refresh the fix time (a moored ship
+    // reporting every few minutes). With no source-stated time there is
+    // nothing new to learn.
+    if (!cand.fixAtKnown) {
+      return { accept: false, reason: 'duplicate', moved, distanceNm, impliedKt: 0, pending: keep };
+    }
+    return { accept: true, moved: false, healed: false, impliedKt: 0, pending: null };
+  }
+
+  // Rule 2: plausibility against the held fix.
+  const impliedKt = impliedKnots(distM, cand.fixAt - prev.updatedAt);
+  if (impliedKt <= MAX_PLAUSIBLE_KT) {
+    return { accept: true, moved: true, healed: false, impliedKt, pending: null };
+  }
+
+  // Implausible. Count self-consistent repeats from the same source. Evidence
+  // only accumulates when the candidate has actually moved since the last
+  // refused one or carries a newer source-stated time — a stuck page serving
+  // the same coordinates with no time attached is not new evidence.
+  let next: PendingOverride;
+  if (pending && pending.source === cand.source) {
+    const sincePendingM = haversineM(pending.lat, pending.lon, cand.latitude, cand.longitude);
+    const consistent =
+      impliedKnots(sincePendingM, cand.fixAt - pending.fixAt) <= MAX_PLAUSIBLE_KT;
+    if (consistent) {
+      const newEvidence =
+        sincePendingM >= MIN_TRACK_MOVE_M ||
+        (cand.fixAtKnown && cand.fixAt > pending.fixAt + cand.fixPrecisionMs);
+      next = {
+        ...pending,
+        lat: cand.latitude,
+        lon: cand.longitude,
+        fixAt: Math.max(pending.fixAt, cand.fixAt),
+        count: pending.count + (newEvidence ? 1 : 0),
+      };
+    } else {
+      next = { source: cand.source, lat: cand.latitude, lon: cand.longitude, fixAt: cand.fixAt, firstAt: now, count: 1 };
+    }
+  } else {
+    next = { source: cand.source, lat: cand.latitude, lon: cand.longitude, fixAt: cand.fixAt, firstAt: now, count: 1 };
+  }
+  if (next.count >= HEAL_MIN_REPEATS && now - next.firstAt >= HEAL_MIN_SPAN_MS) {
+    return { accept: true, moved: true, healed: true, impliedKt, pending: null };
+  }
+  return { accept: false, reason: 'implausible', moved, distanceNm, impliedKt, pending: next };
+}
+
+// What applyFix refused and why — the trail an operator needs when a ship
+// "jumps": which feed served the bad fix, how far it was from the held one,
+// and the speed that would have implied.
+interface Rejection {
+  at: number;
+  mmsi: string;
+  name: string | null;
+  source: FixSource;
+  reason: 'older' | 'implausible';
+  lat: number;
+  lon: number;
+  fixAt: number;
+  fixAtKnown: boolean;
+  distanceNm: number;
+  impliedKt: number | null;
+  held: { lat: number; lon: number; fixAt: number; source: FixSource };
+}
+const REJECTION_LOG_MAX = 40;
+const rejections: Rejection[] = [];
+const lastRejection = new Map<string, Rejection>();
+const pendingOverrides = new Map<string, PendingOverride>();
+const acceptedBySource: Record<FixSource, number> = {
+  aisstream: 0,
+  cruisemapper: 0,
+  vesselfinder: 0,
+  myshiptracking: 0,
+  snapshot: 0,
+};
+let healedCount = 0;
+
+// The single write path for positions. `record.updatedAt` must already be the
+// fix time. Returns whether the fix was accepted into `tracked`.
+function applyFix(record: VesselData, fixAtKnown: boolean, fixPrecisionMs: number): boolean {
+  const now = Date.now();
+  const { mmsi } = record;
+  const prev = tracked.get(mmsi);
+  const decision = evaluateCandidate(
+    prev,
+    {
+      latitude: record.latitude,
+      longitude: record.longitude,
+      source: record.source,
+      fixAt: record.updatedAt,
+      fixAtKnown,
+      fixPrecisionMs,
+    },
+    pendingOverrides.get(mmsi),
+    now
+  );
+
+  if (!decision.accept) {
+    if (decision.pending) pendingOverrides.set(mmsi, decision.pending);
+    else pendingOverrides.delete(mmsi);
+    if (prev && decision.reason !== 'duplicate') {
+      const rej: Rejection = {
+        at: now,
+        mmsi,
+        name: record.name,
+        source: record.source,
+        reason: decision.reason,
+        lat: record.latitude,
+        lon: record.longitude,
+        fixAt: record.updatedAt,
+        fixAtKnown,
+        distanceNm: Math.round(decision.distanceNm * 10) / 10,
+        impliedKt: decision.impliedKt === null ? null : Math.round(decision.impliedKt),
+        held: { lat: prev.latitude, lon: prev.longitude, fixAt: prev.updatedAt, source: prev.source },
+      };
+      rejections.push(rej);
+      if (rejections.length > REJECTION_LOG_MAX) rejections.shift();
+      lastRejection.set(mmsi, rej);
+      if (decision.reason === 'implausible') {
+        console.warn(
+          `[ships] refused ${record.source} fix for ${record.name ?? mmsi}: ` +
+            `${record.latitude.toFixed(3)},${record.longitude.toFixed(3)} is ${rej.distanceNm} nm ` +
+            `from the held ${prev.source} fix (~${rej.impliedKt} kt implied)`
+        );
+      }
+    }
+    return false;
+  }
+
+  pendingOverrides.delete(mmsi);
+  allowedMmsis.add(mmsi);
+  tracked.set(mmsi, record);
+  // Keep the firehose shadow copy in step so the next live position report
+  // merges against this data instead of an older snapshot of the ship.
+  if (vessels.has(mmsi)) vessels.set(mmsi, record);
+  if (decision.moved) recordHistory(mmsi, record.latitude, record.longitude, record.updatedAt);
+  acceptedBySource[record.source]++;
+  if (decision.healed) {
+    healedCount++;
+    console.warn(
+      `[ships] ${record.source} kept reporting ${record.name ?? mmsi} ~${Math.round(
+        (decision.impliedKt ?? 0)
+      )} kt away from the held fix; accepting its track as the new truth`
+    );
+  }
+  markSnapshotDirty();
+  return true;
+}
+
+// --- Fix-time parsing --------------------------------------------------------
+// aisstream MetaData.time_utc: "2022-12-29 18:22:32.318353 +0000 UTC". Returns
+// epoch ms, or null when absent/unparseable/absurd so the caller falls back to
+// receipt time (and marks the fix time as unknown).
+export function parseAisTimeUtc(raw: unknown, now: number): number | null {
+  if (typeof raw !== 'string') return null;
+  const m = raw
+    .trim()
+    .match(
+      /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?\s*(?:Z|(?:([+-])(\d{2}):?(\d{2})))?/
+    );
+  if (!m) return null;
+  const ms = m[7] ? Math.round(Number(`0.${m[7]}`) * 1000) : 0;
+  let t = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], ms);
+  if (m[8]) {
+    const off = (+m[9] * 60 + +m[10]) * 60_000;
+    t += m[8] === '+' ? -off : off;
+  }
+  if (!Number.isFinite(t)) return null;
+  // A few minutes ahead is clock skew; further ahead, or older than the stream
+  // could plausibly replay, is garbage.
+  if (t > now + 5 * 60_000 || t < now - 30 * 24 * 3600_000) return null;
+  return t;
+}
+
+export interface ReportedAge {
+  ageMs: number;
+  precisionMs: number;
+  text: string;
+}
+
+const AGE_UNIT_MS: Record<string, number> = {
+  sec: 1_000,
+  min: 60_000,
+  hour: 3_600_000,
+  hr: 3_600_000,
+  day: 86_400_000,
+  week: 7 * 86_400_000,
+};
+
+// CruiseMapper states how old the fix is in prose next to the position:
+// "The AIS position was reported 38 minutes ago" / "received 2 hours ago" /
+// "an hour ago" / "just now". Only text near those keywords is trusted — the
+// page also carries unrelated "N days ago" strings (reviews, news).
+export function parseReportedAgo(html: string): ReportedAge | null {
+  const m = html.match(
+    /\b(?:reported|received|updated|last\s+(?:seen|report(?:ed)?|update[d]?))\b[^<.]{0,60}?\b(just\s+now|moments\s+ago|(\d{1,3}|an?|one)\s+(sec(?:ond)?|min(?:ute)?|h(?:ou)?r|day|week)s?\s+ago)\b/i
+  );
+  if (!m) return null;
+  const text = m[1];
+  if (/^(just\s+now|moments\s+ago)$/i.test(text)) return { ageMs: 0, precisionMs: 60_000, text };
+  const n = /^\d/.test(m[2]) ? Number(m[2]) : 1;
+  const unitKey = m[3].toLowerCase().replace(/^hou?r$/, 'hour').replace(/^second$/, 'sec').replace(/^minute$/, 'min');
+  const unitMs = AGE_UNIT_MS[unitKey];
+  if (!unitMs || !Number.isFinite(n)) return null;
+  return { ageMs: n * unitMs, precisionMs: unitMs, text };
+}
+
+// --- Last-known persistence --------------------------------------------------
+// The tracked map and trails are written to the Postgres `snapshots` table
+// (same key/value pattern as the flights tracker and the wind grid), plus a
+// local JSON file as the dev fallback when DATABASE_URL is unset. The file
+// alone was the original mechanism, but Heroku wipes the dyno filesystem on
+// every restart and deploy, so the process used to boot with no memory of the
+// fleet: whatever the first scrape served became the truth, even a stale fix,
+// and the trail started from scratch. Persisting accepted fixes also gives
+// applyFix() something to compare a post-restart fix against, so the ordering
+// and plausibility rules keep working across restarts.
 const SNAPSHOT_PATH =
   process.env.SHIPS_SNAPSHOT_PATH ??
   path.join(__dirname, '../../ships-snapshot.json');
+const SNAPSHOT_KEY = 'ships:v1';
+const DB_ENABLED = Boolean(process.env.DATABASE_URL);
+const SAVE_MIN_INTERVAL_MS = 30_000;
+// Positions older than this at restore time are dropped — a week-old fix is
+// more misleading than an empty map until the next poll.
+const SNAPSHOT_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 
 interface Snapshot {
   tracked: VesselData[];
@@ -269,52 +593,143 @@ interface Snapshot {
   savedAt: number;
 }
 
-// How many ships were restored from disk at startup, and how old that snapshot
-// was — surfaced in /api/ships/debug so a restart's recovery is visible.
+// Restore/save bookkeeping, surfaced in /api/ships/debug so a restart's
+// recovery (or a failing database) is visible.
 let snapshotLoadedCount = 0;
 let snapshotLoadedAgeMin: number | null = null;
+let snapshotLoadedFrom: string | null = null;
+let lastSnapshotSaveAt = 0;
+let lastSnapshotSaveError: string | null = null;
+let snapshotDirty = false;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-function saveSnapshot(): void {
+// Coalesce the bursty aisstream updates into one write per 30 s.
+function markSnapshotDirty(): void {
+  snapshotDirty = true;
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    void saveSnapshot();
+  }, SAVE_MIN_INTERVAL_MS);
+  saveTimer.unref?.();
+}
+
+async function saveSnapshot(): Promise<void> {
+  if (!snapshotDirty) return;
+  snapshotDirty = false;
+  const snap: Snapshot = {
+    tracked: [...tracked.values()],
+    history: [...history.entries()].map(([mmsi, pts]) => ({ mmsi, pts })),
+    savedAt: Date.now(),
+  };
+  const json = JSON.stringify(snap);
   try {
-    const snap: Snapshot = {
-      tracked: [...tracked.values()],
-      history: [...history.entries()].map(([mmsi, pts]) => ({ mmsi, pts })),
-      savedAt: Date.now(),
-    };
-    fs.writeFileSync(SNAPSHOT_PATH, JSON.stringify(snap));
+    fs.writeFileSync(SNAPSHOT_PATH, json);
   } catch {
-    // Non-fatal — the app works fine without it.
+    // Read-only or ephemeral filesystem — Postgres is the real store.
+  }
+  if (!DB_ENABLED) {
+    lastSnapshotSaveAt = snap.savedAt;
+    return;
+  }
+  try {
+    await pool.query(
+      `INSERT INTO snapshots (key, data) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
+      [SNAPSHOT_KEY, json]
+    );
+    lastSnapshotSaveAt = snap.savedAt;
+    lastSnapshotSaveError = null;
+  } catch (err) {
+    lastSnapshotSaveError = err instanceof Error ? err.message : String(err);
+    console.warn('[ships] snapshot save failed:', lastSnapshotSaveError);
+    // Re-arm so a transient failure is retried rather than silently losing the
+    // last fix before a quiet spell.
+    markSnapshotDirty();
   }
 }
 
-function loadSnapshot(): void {
-  try {
-    const raw = fs.readFileSync(SNAPSHOT_PATH, 'utf8');
-    const snap = JSON.parse(raw) as Snapshot;
-    const ageMs = Date.now() - (snap.savedAt ?? 0);
-    // Ignore snapshots older than 7 days — stale positions are misleading.
-    if (ageMs > 7 * 24 * 60 * 60_000) return;
-    for (const v of snap.tracked ?? []) {
-      if (v.mmsi && FLEET_MMSIS.includes(v.mmsi)) {
-        // Snapshots written before the ETA fields existed lack them.
-        tracked.set(v.mmsi, {
-          ...v,
-          etaUtc: v.etaUtc ?? null,
-          etaText: v.etaText ?? null,
-          etaAt: v.etaAt ?? null,
-        });
-        allowedMmsis.add(v.mmsi);
-      }
+// Merge a persisted snapshot into the live maps. Never overwrites a position a
+// faster live poll already refreshed; persisted trail points are prepended to
+// whatever the live polls recorded meanwhile.
+function restoreSnapshot(snap: Snapshot | null | undefined, from: string): number {
+  if (!snap || !Array.isArray(snap.tracked)) return 0;
+  const now = Date.now();
+  const ageMs = now - (snap.savedAt ?? 0);
+  if (ageMs > SNAPSHOT_MAX_AGE_MS) return 0;
+  let restored = 0;
+  for (const v of snap.tracked) {
+    if (
+      !v?.mmsi ||
+      !FLEET_MMSIS.includes(v.mmsi) ||
+      typeof v.latitude !== 'number' ||
+      typeof v.longitude !== 'number' ||
+      typeof v.updatedAt !== 'number'
+    ) {
+      continue;
     }
-    for (const { mmsi, pts } of snap.history ?? []) {
-      if (pts.length > 0 && FLEET_MMSIS.includes(mmsi)) history.set(mmsi, pts);
-    }
-    snapshotLoadedCount = [...tracked.keys()].length;
+    const existing = tracked.get(v.mmsi);
+    if (existing && existing.updatedAt >= v.updatedAt) continue;
+    // Snapshots written before the ETA / source fields existed lack them.
+    tracked.set(v.mmsi, {
+      ...v,
+      etaUtc: v.etaUtc ?? null,
+      etaText: v.etaText ?? null,
+      etaAt: v.etaAt ?? null,
+      receivedAt: typeof v.receivedAt === 'number' ? v.receivedAt : v.updatedAt,
+      source: v.source ?? 'snapshot',
+    });
+    allowedMmsis.add(v.mmsi);
+    restored++;
+  }
+  const cutoff = now - MAX_TRACK_AGE_MS;
+  for (const { mmsi, pts } of snap.history ?? []) {
+    if (!FLEET_MMSIS.includes(mmsi) || !Array.isArray(pts)) continue;
+    const kept = pts.filter(
+      (p) =>
+        typeof p?.lat === 'number' && typeof p?.lon === 'number' && typeof p?.t === 'number' && p.t >= cutoff
+    );
+    if (kept.length === 0) continue;
+    const live = history.get(mmsi) ?? [];
+    const oldestLive = live[0]?.t ?? Infinity;
+    const merged = [...kept.filter((p) => p.t < oldestLive), ...live];
+    history.set(mmsi, merged.slice(-MAX_TRACK_POINTS));
+  }
+  if (restored > 0) {
+    snapshotLoadedCount += restored;
     snapshotLoadedAgeMin = Math.round(ageMs / 60_000);
-    if (snapshotLoadedCount > 0)
-      console.log(`[ships] loaded ${snapshotLoadedCount} ships from snapshot (${snapshotLoadedAgeMin} min old)`);
+    snapshotLoadedFrom = from;
+    console.log(`[ships] restored ${restored} ships from ${from} snapshot (${snapshotLoadedAgeMin} min old)`);
+  }
+  return restored;
+}
+
+// File first (instant, covers local dev), then Postgres. The database read
+// retries briefly because the boot-time migration may still be creating the
+// table; live polls that land meanwhile are merged, not clobbered.
+async function loadSnapshot(): Promise<void> {
+  try {
+    restoreSnapshot(JSON.parse(fs.readFileSync(SNAPSHOT_PATH, 'utf8')) as Snapshot, 'file');
   } catch {
-    // No snapshot yet — start fresh.
+    // No file yet — normal on a fresh dyno.
+  }
+  if (!DB_ENABLED) return;
+  const attempts = 5;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const { rows } = await pool.query<{ data: Snapshot }>(
+        'SELECT data FROM snapshots WHERE key = $1',
+        [SNAPSHOT_KEY]
+      );
+      restoreSnapshot(rows[0]?.data, 'postgres');
+      return;
+    } catch (err) {
+      if (attempt === attempts) {
+        console.warn('[ships] snapshot load failed:', err instanceof Error ? err.message : err);
+        return;
+      }
+      await new Promise((res) => setTimeout(res, 2_000 * attempt));
+    }
   }
 }
 
@@ -370,15 +785,17 @@ function handleMessage(raw: string) {
     const known = allowedMmsis.has(mmsi);
     if (!known && vessels.size >= VESSEL_CAP && !vessels.has(mmsi)) return;
 
-    // Freshest of the firehose shadow copy and the tracked map — a paid-provider
-    // poll only updates `tracked`, and its newer destination/ETA must not be
-    // reverted by the next live position report reading the stale shadow.
-    const shadow = vessels.get(mmsi);
-    const kept = tracked.get(mmsi);
-    const existing =
-      shadow && kept ? (shadow.updatedAt >= kept.updatedAt ? shadow : kept) : shadow ?? kept;
+    // For a tracked ship the permanent map is the truth (every accepted fix,
+    // whatever its source, lands there); the firehose shadow only serves ships
+    // we don't track.
+    const existing = tracked.get(mmsi) ?? vessels.get(mmsi);
     const sd = staticCache.get(mmsi);
     const eta = freshestEta(sd, existing, now);
+
+    // The stream stamps each message with when it was received upstream;
+    // that, not our receipt time, orders the fix against other sources.
+    const parsedAt = parseAisTimeUtc(meta.time_utc, now);
+    const fixAt = parsedAt ?? now;
 
     const record: VesselData = {
       mmsi,
@@ -403,14 +820,17 @@ function handleMessage(raw: string) {
           : existing?.navStatus ?? null,
       destination: sd?.destination ?? existing?.destination ?? null,
       ...eta,
-      updatedAt: now,
+      updatedAt: fixAt,
+      receivedAt: now,
+      source: 'aisstream',
     };
 
-    vessels.set(mmsi, record);
-    // Promote into the permanent tracked map once we know it's allowlisted.
     if (isAllowed(mmsi, record.imo)) {
-      tracked.set(mmsi, record);
-      recordHistory(mmsi, lat, lon, now);
+      // Two receivers relaying the same transmission differ by milliseconds;
+      // treat anything inside 2 s at the same spot as the same report.
+      applyFix(record, parsedAt !== null, 2_000);
+    } else {
+      vessels.set(mmsi, record);
     }
   } else if (type === 'ShipStaticData') {
     staticReports++;
@@ -436,7 +856,7 @@ function handleMessage(raw: string) {
     }
 
     // Enrich an existing position entry immediately if we have one.
-    const existing = vessels.get(mmsi) ?? tracked.get(mmsi);
+    const existing = tracked.get(mmsi) ?? vessels.get(mmsi);
     if (existing) {
       const enriched: VesselData = {
         ...existing,
@@ -447,13 +867,17 @@ function handleMessage(raw: string) {
         destination: info.destination || existing.destination,
         ...freshestEta(info, existing, now),
       };
-      vessels.set(mmsi, enriched);
-      // Now that static data may have revealed an allowlisted IMO, promote it
-      // (with its last known position) into the permanent tracked map.
-      if (isAllowed(mmsi, enriched.imo)) {
+      if (tracked.has(mmsi)) {
+        // Identity/voyage fields only — the position and its fix time are
+        // untouched, so this bypasses the acceptance rules by design.
         tracked.set(mmsi, enriched);
-        recordHistory(mmsi, enriched.latitude, enriched.longitude, enriched.updatedAt);
+        markSnapshotDirty();
+      } else if (isAllowed(mmsi, enriched.imo)) {
+        // Static data just revealed an allowlisted IMO under a new MMSI:
+        // promote its last live position into the permanent tracked map.
+        applyFix(enriched, true, 2_000);
       }
+      if (vessels.has(mmsi)) vessels.set(mmsi, enriched);
     }
   }
 }
@@ -541,13 +965,16 @@ interface PaidPosition {
   destination: string | null;
   etaText: string | null; // provider ETA string, parsed downstream
   name: string | null;
-  t: number; // fix time (ms)
+  t: number; // fix time (ms) — receipt time when the provider gave none
+  fixAtKnown: boolean; // whether `t` came from the provider
+  fixPrecisionMs: number; // rounding of `t` (0 for exact timestamps)
 }
 
-let paidProvider: string | null = null;
+let paidProvider: FixSource | null = null;
 let paidLastOk = 0;
 let paidLastError: string | null = null;
-let paidLastCount = 0;
+let paidLastCount = 0; // fixes accepted on the last poll
+let paidLastOffered = 0; // positions the provider returned on the last poll
 
 function pnum(v: unknown): number | null {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
@@ -601,6 +1028,8 @@ async function fetchVesselFinder(key: string): Promise<PaidPosition[]> {
       etaText: pickEtaText(ais, 'ETA_PREDICTED', 'ETA', 'eta'),
       name: (pickField<string>(ais, 'NAME', 'name') ?? null) || null,
       t: Number.isNaN(t) ? Date.now() : t,
+      fixAtKnown: !Number.isNaN(t),
+      fixPrecisionMs: 0,
     };
   });
 }
@@ -641,46 +1070,136 @@ async function fetchText(url: string, headers?: Record<string, string>): Promise
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
-// Pull a last-known position out of one CruiseMapper ship page. The page format
-// isn't contractual, so we try several strategies and accept the first that
-// yields a coordinate pair in range. Returns null (not throw) on a page with no
-// parseable position so one ship's miss doesn't abort the batch.
-function parseCruiseMapper(html: string, ship: FleetShip): PaidPosition | null {
+// What the last scrape of each ship's page produced — kept for
+// /api/ships/debug so a bad coordinate can be traced to the parse strategy
+// and page text that yielded it.
+interface ScrapeResult {
+  imo: number;
+  name: string;
+  at: number;
+  ok: boolean;
+  strategy: string | null; // parse strategy that yielded the coordinates
+  lat: number | null;
+  lon: number | null;
+  ageText: string | null; // the page's own "reported N minutes ago"
+  fixAgeMin: number | null;
+  note: string | null; // why the page was not used, or a caveat
+  excerpt: string | null; // the page text around the coordinates that were used
+}
+const scrapeResults = new Map<number, ScrapeResult>();
+
+export interface ParsedShipPage {
+  pos: PaidPosition | null;
+  strategy: string | null;
+  ageText: string | null;
+  note: string | null;
+  excerpt: string | null;
+}
+
+// Collapse tags and whitespace so a page excerpt reads as text in the debug
+// output.
+function textExcerpt(html: string, at: number, radius = 220): string {
+  return html
+    .slice(Math.max(0, at - radius), at + radius)
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Pull a last-known position out of one CruiseMapper ship page. The page
+// format isn't contractual, so several strategies are tried, most specific
+// first. Never throws: a page with no usable position yields pos: null (with a
+// note) so one ship's miss doesn't abort the batch.
+export function parseCruiseMapper(html: string, ship: FleetShip, now = Date.now()): ParsedShipPage {
+  // 0) Is this even the ship's page? A Cloudflare interstitial, a redirect to
+  //    the homepage or a "vessel not found" page can all arrive as HTTP 200
+  //    with somebody else's coordinates in the map init.
+  const nameRe = new RegExp(ship.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '[\\s-]*'), 'i');
+  if (!nameRe.test(html) && !html.includes(String(ship.imo))) {
+    return {
+      pos: null,
+      strategy: null,
+      ageText: null,
+      note: 'page does not mention the ship (interstitial, redirect or not found?)',
+      excerpt: textExcerpt(html, 0, 300),
+    };
+  }
+
   let lat: number | null = null;
   let lon: number | null = null;
+  let strategy: string | null = null;
+  let matchAt = -1; // where in the page the coordinates were found
+  const hemi = (v: string, h: string | undefined, negative: 'S' | 'W'): number =>
+    Number(v) * (h && h.toUpperCase() === negative ? -1 : 1);
 
-  // 1) Decimal coords assigned to lat/lng-like keys in inline JS or JSON
-  //    (e.g. the Leaflet/Google marker init: "lat":-15.877,"lng":-149.56).
-  const keyed = (names: string[]): number | null => {
-    for (const n of names) {
-      const m = html.match(
-        new RegExp(`["']?${n}["']?\\s*[:=]\\s*["']?(-?\\d{1,3}\\.\\d{3,})`, 'i')
-      );
-      if (m) return Number(m[1]);
-    }
-    return null;
-  };
-  lat = keyed(['nlat', 'latitude', 'shipLat', 'lat']);
-  lon = keyed(['nlng', 'nlon', 'longitude', 'shipLng', 'shipLon', 'lng', 'lon']);
-
-  // 2) data-* attributes on the map container.
-  if (lat === null) {
-    const m = html.match(/data-lat(?:itude)?=["'](-?\d{1,2}\.\d+)["']/i);
-    if (m) lat = Number(m[1]);
-  }
-  if (lon === null) {
-    const m = html.match(/data-l(?:ng|on|ongitude)=["'](-?\d{1,3}\.\d+)["']/i);
-    if (m) lon = Number(m[1]);
+  // 1) The position prose: "current position is at North America West Coast
+  //    (coordinates 59.76 N / 149.05 W) cruising at speed of 8 kn ...". It's
+  //    the human-facing statement of the ship's fix and the same block that
+  //    states the fix age, so it beats anything in the map scripts.
+  const prose = html.match(
+    /position[^<.]{0,160}?coordinates?\s*:?\s*\(?\s*(-?\d{1,2}(?:\.\d+)?)\s*°?\s*([NS])?\s*[/,|]\s*(-?\d{1,3}(?:\.\d+)?)\s*°?\s*([EW])?/i
+  );
+  if (prose && prose.index !== undefined) {
+    lat = hemi(prose[1], prose[2], 'S');
+    lon = hemi(prose[3], prose[4], 'W');
+    strategy = 'prose';
+    matchAt = prose.index;
   }
 
-  // 3) Visible hemisphere format "15.877 S / 149.560 W".
+  // 2) Decimal coords assigned to lat/lng-like keys in inline JS or JSON
+  //    (the marker init: "lat":-15.877,"lng":-149.56). A key must start a
+  //    token so "lat" can't match inside "translate", "platform" or "flat";
+  //    the ship-specific names are tried first because the page also embeds
+  //    markers for the itinerary's ports; and the longitude must sit within
+  //    the same object as the latitude — never spliced from a different one.
   if (lat === null || lon === null) {
-    const m = html.match(
-      /(\d{1,2}(?:\.\d+)?)\s*°?\s*([NS])\s*[/,]?\s*(\d{1,3}(?:\.\d+)?)\s*°?\s*([EW])/i
-    );
-    if (m) {
-      lat = Number(m[1]) * (m[2].toUpperCase() === 'S' ? -1 : 1);
-      lon = Number(m[3]) * (m[4].toUpperCase() === 'W' ? -1 : 1);
+    const PAIRS: Array<[string, string[]]> = [
+      ['nlat', ['nlng', 'nlon']],
+      ['shipLat', ['shipLng', 'shipLon']],
+      ['ship_lat', ['ship_lng', 'ship_lon']],
+      ['latitude', ['longitude']],
+      ['lat', ['lng', 'lon']],
+    ];
+    const keyRe = (n: string) =>
+      new RegExp(`(?<![A-Za-z0-9_$])["']?${n}["']?\\s*[:=]\\s*["']?(-?\\d{1,3}\\.\\d{3,})`, 'i');
+    outer: for (const [latKey, lonKeys] of PAIRS) {
+      const a = html.match(keyRe(latKey));
+      if (!a || a.index === undefined) continue;
+      const window = html.slice(Math.max(0, a.index - 200), a.index + a[0].length + 200);
+      for (const lonKey of lonKeys) {
+        const b = window.match(keyRe(lonKey));
+        if (b) {
+          lat = Number(a[1]);
+          lon = Number(b[1]);
+          strategy = 'keyed';
+          matchAt = a.index;
+          break outer;
+        }
+      }
+    }
+  }
+
+  // 3) data-* attributes on the map container.
+  if (lat === null || lon === null) {
+    const a = html.match(/data-lat(?:itude)?=["'](-?\d{1,2}\.\d+)["']/i);
+    const b = html.match(/data-l(?:ng|on|ongitude)=["'](-?\d{1,3}\.\d+)["']/i);
+    if (a && b && a.index !== undefined) {
+      lat = Number(a[1]);
+      lon = Number(b[1]);
+      strategy = 'data-attr';
+      matchAt = a.index;
+    }
+  }
+
+  // 4) Any visible hemisphere pair "15.877 S / 149.560 W". Upper-case letters
+  //    and decimals only — "deck 2 n, 4 e" is not a position.
+  if (lat === null || lon === null) {
+    const m = html.match(/(\d{1,2}\.\d+)\s*°?\s*([NS])\s*[/,]?\s*(\d{1,3}\.\d+)\s*°?\s*([EW])/);
+    if (m && m.index !== undefined) {
+      lat = hemi(m[1], m[2], 'S');
+      lon = hemi(m[3], m[4], 'W');
+      strategy = 'hemisphere';
+      matchAt = m.index;
     }
   }
 
@@ -693,16 +1212,40 @@ function parseCruiseMapper(html: string, ship: FleetShip): PaidPosition | null {
     Math.abs(lon) > 180 ||
     (lat === 0 && lon === 0)
   ) {
-    return null;
+    return {
+      pos: null,
+      strategy: null,
+      ageText: null,
+      note: 'no coordinates found on the page',
+      excerpt: textExcerpt(html, 0, 300),
+    };
   }
 
-  const num = (re: RegExp): number | null => {
-    const m = html.match(re);
+  // The page says how old the fix is — ideally in the same sentence as the
+  // coordinates, else anywhere near a "reported"/"received" keyword. Without
+  // it the fix is treated as current and left to applyFix's plausibility gate.
+  const near = html.slice(matchAt, matchAt + 800);
+  const age = parseReportedAgo(near) ?? parseReportedAgo(html);
+
+  // Speed, course and destination are read from the position block first;
+  // the page-wide fallbacks pick up spec sheets ("service speed 15 kn") and
+  // weather widgets ("wind 25 kts") only when the block says nothing.
+  const num = (re: RegExp, scope: string = html): number | null => {
+    const m = scope.match(re);
     return m ? Number(m[1]) : null;
   };
-  const speedKt = num(/([\d.]+)\s*(?:kn|knots|kts)\b/i);
-  const courseDeg = num(/course[^0-9-]{0,24}(\d{1,3}(?:\.\d+)?)\s*°/i);
-  const destM = html.match(/(?:en route to|next port|destination)[:\s]+([A-Za-z][A-Za-z .,'()-]{1,38})/i);
+  const speedRe = /(?:speed\s+(?:of|is)?|sailing\s+at|cruising\s+at)\s*:?\s*([\d.]+)\s*(?:kn|knots|kts)\b/i;
+  let speedKt = num(speedRe, near) ?? num(speedRe) ?? num(/([\d.]+)\s*(?:kn|knots|kts)\b/i);
+  if (speedKt !== null && !(speedKt >= 0 && speedKt <= 40)) speedKt = null;
+  const courseRe = /course[^0-9-]{0,24}(\d{1,3}(?:\.\d+)?)\s*°/i;
+  const courseDeg = num(courseRe, near) ?? num(courseRe);
+  const destRe = /(?:en route to|next port|destination)[:\s]+([A-Za-z][A-Za-z .,'()-]{1,38})/i;
+  const destM = near.match(destRe) ?? html.match(destRe);
+  // The prose runs straight on ("en route to Tokyo. The AIS position was…"),
+  // so cut at a sentence end — but not inside "St. Thomas".
+  const destination = destM
+    ? destM[1].replace(/(?<!\b(?:St|Ste|Ft|Mt|Pt))\.\s.*$/, '').trim() || null
+    : null;
   // ETA appears in a few shapes ("ETA: Jul 22, 06:00", "arrival ... 22 Jul, 06:00",
   // or an ISO datetime nearby); grab the first date-like run after the keyword.
   const etaM = html.match(
@@ -710,18 +1253,26 @@ function parseCruiseMapper(html: string, ship: FleetShip): PaidPosition | null {
   );
 
   return {
-    imo: ship.imo,
-    mmsi: ship.mmsi,
-    lat,
-    lon,
-    speedKt,
-    courseDeg,
-    headingDeg: null,
-    navStatus: null,
-    destination: destM ? destM[1].trim() : null,
-    etaText: etaM ? etaM[1].trim() : null,
-    name: ship.name,
-    t: Date.now(),
+    pos: {
+      imo: ship.imo,
+      mmsi: ship.mmsi,
+      lat,
+      lon,
+      speedKt,
+      courseDeg,
+      headingDeg: null,
+      navStatus: null,
+      destination,
+      etaText: etaM ? etaM[1].trim() : null,
+      name: ship.name,
+      t: age ? now - age.ageMs : now,
+      fixAtKnown: age !== null,
+      fixPrecisionMs: age ? age.precisionMs : 0,
+    },
+    strategy,
+    ageText: age?.text ?? null,
+    note: age ? null : 'page gave no fix age; treated as current',
+    excerpt: textExcerpt(html, matchAt),
   };
 }
 
@@ -731,18 +1282,45 @@ async function fetchCruiseMapper(): Promise<PaidPosition[]> {
   let parsed = 0;
   let lastErr = '';
   for (const ship of FLEET) {
+    const at = Date.now();
     try {
       const html = await fetchText(`https://www.cruisemapper.com/?imo=${ship.imo}`, {
         Referer: 'https://www.cruisemapper.com/',
       });
-      const pos = parseCruiseMapper(html, ship);
-      if (pos) {
-        out.push(pos);
+      const r = parseCruiseMapper(html, ship, at);
+      scrapeResults.set(ship.imo, {
+        imo: ship.imo,
+        name: ship.name,
+        at,
+        ok: r.pos !== null,
+        strategy: r.strategy,
+        lat: r.pos?.lat ?? null,
+        lon: r.pos?.lon ?? null,
+        ageText: r.ageText,
+        fixAgeMin: r.pos ? Math.round((at - r.pos.t) / 60_000) : null,
+        note: r.note,
+        excerpt: r.excerpt,
+      });
+      if (r.pos) {
+        out.push(r.pos);
         parsed++;
       }
     } catch (err) {
       lastErr = String(err);
       if (lastErr.includes('403') || lastErr.includes('503')) blocked++;
+      scrapeResults.set(ship.imo, {
+        imo: ship.imo,
+        name: ship.name,
+        at,
+        ok: false,
+        strategy: null,
+        lat: null,
+        lon: null,
+        ageText: null,
+        fixAgeMin: null,
+        note: lastErr,
+        excerpt: null,
+      });
     }
     await sleep(1_200 + Math.random() * 800); // gentle, less bot-like pacing
   }
@@ -781,22 +1359,27 @@ async function fetchMyShipTracking(key: string): Promise<PaidPosition[]> {
       etaText: pickEtaText(v, 'eta_UTC', 'eta_utc', 'eta', 'ETA'),
       name: (pickField<string>(v, 'name', 'vessel_name', 'shipname') ?? null) || null,
       t: Number.isNaN(t) ? Date.now() : t,
+      fixAtKnown: !Number.isNaN(t),
+      fixPrecisionMs: 0,
     };
   });
 }
 
-function applyPaidPosition(r: PaidPosition) {
-  if (r.lat == null || r.lon == null || Math.abs(r.lat) > 90 || Math.abs(r.lon) > 180) return;
+// Turn a provider row into a candidate fix and offer it to applyFix. Returns
+// whether it was accepted.
+function applyPaidPosition(r: PaidPosition, source: FixSource): boolean {
+  if (r.lat == null || r.lon == null || Math.abs(r.lat) > 90 || Math.abs(r.lon) > 180) return false;
   const ship =
     (r.imo != null ? FLEET.find((s) => s.imo === r.imo) : undefined) ??
     (r.mmsi ? FLEET.find((s) => s.mmsi === r.mmsi) : undefined);
   const mmsi = ship?.mmsi ?? r.mmsi ?? (r.imo != null ? `imo-${r.imo}` : null);
-  if (!mmsi) return;
-  const now = Number.isFinite(r.t) ? r.t : Date.now();
+  if (!mmsi) return false;
+  const now = Date.now();
+  const fixAt = Number.isFinite(r.t) ? r.t : now;
   const existing = tracked.get(mmsi);
   const eta: EtaFields = r.etaText
-    ? { etaUtc: parseEtaText(r.etaText), etaText: r.etaText, etaAt: now }
-    : carriedEta(existing, Date.now());
+    ? { etaUtc: parseEtaText(r.etaText), etaText: r.etaText, etaAt: fixAt }
+    : carriedEta(existing, now);
   const record: VesselData = {
     mmsi,
     imo: ship?.imo ?? r.imo ?? existing?.imo ?? null,
@@ -811,42 +1394,41 @@ function applyPaidPosition(r: PaidPosition) {
     navStatus: r.navStatus ?? existing?.navStatus ?? null,
     destination: r.destination ?? existing?.destination ?? null,
     ...eta,
-    updatedAt: now,
+    updatedAt: fixAt,
+    receivedAt: now,
+    source,
   };
-  allowedMmsis.add(mmsi);
-  tracked.set(mmsi, record);
-  // Keep the firehose shadow copy in step so the next live position report
-  // merges against this data instead of an older snapshot of the ship.
-  if (vessels.has(mmsi)) vessels.set(mmsi, record);
-  recordHistory(mmsi, r.lat, r.lon, now);
+  return applyFix(record, r.fixAtKnown, r.fixPrecisionMs);
 }
 
 async function pollPaidPositions() {
   try {
     let rows: PaidPosition[];
+    let provider: FixSource;
     if (config.vesselfinderApiKey) {
-      paidProvider = 'vesselfinder';
+      provider = paidProvider = 'vesselfinder';
       rows = await fetchVesselFinder(config.vesselfinderApiKey);
     } else if (config.myshiptrackingApiKey) {
-      paidProvider = 'myshiptracking';
+      provider = paidProvider = 'myshiptracking';
       rows = await fetchMyShipTracking(config.myshiptrackingApiKey);
     } else if (config.cruisemapperScrape) {
-      paidProvider = 'cruisemapper';
+      provider = paidProvider = 'cruisemapper';
       rows = await fetchCruiseMapper();
     } else {
       return;
     }
+    let offered = 0;
     let applied = 0;
     for (const r of rows) {
       if (r.lat != null && r.lon != null) {
-        applyPaidPosition(r);
-        applied++;
+        offered++;
+        if (applyPaidPosition(r, provider)) applied++;
       }
     }
     paidLastOk = Date.now();
     paidLastError = null;
     paidLastCount = applied;
-    saveSnapshot();
+    paidLastOffered = offered;
   } catch (err) {
     paidLastError = String(err);
     console.error('[ships] paid poll failed:', err);
@@ -860,18 +1442,32 @@ function paidConfigured(): boolean {
 }
 
 export function initShipsStream() {
-  loadSnapshot();
   // Free AIS stream — live updates when a ship is in community-receiver range.
+  // A live report is current by definition, so it needn't wait for the restore.
   if (config.aisstreamApiKey) {
     connectAIS();
     setInterval(evictStale, 5 * 60_000);
   }
-  // By-IMO polling — reliable pins regardless of aisstream coverage. Uses a paid
-  // provider if a key is set, otherwise the free CruiseMapper scrape.
-  if (paidConfigured()) {
-    pollPaidPositions();
+  // Restore what we held before the restart, THEN start the by-IMO polling
+  // (a paid provider if a key is set, otherwise the free CruiseMapper scrape).
+  // Order matters: the first scrape after a restart must be judged against the
+  // last accepted fix, not accepted blindly into an empty map — that blind
+  // acceptance is how a stale page put a mid-ocean ship back in port.
+  // loadSnapshot never throws; the Postgres read is bounded by its retries.
+  void loadSnapshot().finally(() => {
+    if (!paidConfigured()) return;
+    void pollPaidPositions();
     setInterval(pollPaidPositions, PAID_POLL_MS);
-  }
+  });
+  // Heroku sends SIGTERM before a dyno restart and allows ~30 s of grace —
+  // flush a pending save so the restart resumes from the very last fix.
+  process.once('SIGTERM', () => {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    void saveSnapshot();
+  });
 }
 
 router.get('/', (_req, res) => {
@@ -935,6 +1531,7 @@ function trackedByImo() {
   }
   return [...ALLOWED_IMOS].map((imo) => {
     const v = byImo.get(imo);
+    const rej = v ? lastRejection.get(v.mmsi) : undefined;
     return {
       imo,
       matched: !!v,
@@ -943,6 +1540,21 @@ function trackedByImo() {
       lat: v?.latitude ?? null,
       lon: v?.longitude ?? null,
       lastSeenSec: v ? Math.round((now - v.updatedAt) / 1000) : null,
+      source: v?.source ?? null,
+      fixAt: v?.updatedAt ?? null,
+      fixAgeMin: v ? Math.round((now - v.updatedAt) / 60_000) : null,
+      receivedAt: v?.receivedAt ?? null,
+      lastRejection: rej
+        ? {
+            at: rej.at,
+            source: rej.source,
+            reason: rej.reason,
+            lat: rej.lat,
+            lon: rej.lon,
+            distanceNm: rej.distanceNm,
+            impliedKt: rej.impliedKt,
+          }
+        : null,
     };
   });
 }
@@ -980,7 +1592,14 @@ function diagnose(perImo: ReturnType<typeof trackedByImo>): string {
         ? `Working: all ${total} ships on the map`
         : `${matched} of ${total} ships on the map`;
     const via = paidProvider ? ` via ${providerLabel()}` : '';
-    return `${head}${via}.${aisSupp}`;
+    const dayAgo = Date.now() - 24 * 3600_000;
+    const refused = rejections.filter((r) => r.at >= dayAgo && r.reason === 'implausible').length;
+    const stale = rejections.filter((r) => r.at >= dayAgo && r.reason === 'older').length;
+    const refusedNote =
+      refused > 0 || stale > 0
+        ? ` In the last 24 h ${refused} fix(es) were refused as implausible jumps and ${stale} as older than the held fix — see fixes.rejections.`
+        : '';
+    return `${head}${via}.${aisSupp}${refusedNote}`;
   }
 
   // No ships shown — diagnose the by-IMO source first, then aisstream.
@@ -1022,10 +1641,30 @@ router.get('/debug', (_req, res) => {
     paid: {
       configured: paidConfigured(),
       provider: paidProvider,
+      pollMinutes: PAID_POLL_MS / 60_000,
       lastOkAt: paidLastOk || null,
+      lastOffered: paidLastOffered,
       lastCount: paidLastCount,
       lastError: paidLastError,
       scrapeNote: lastScrapeNote,
+      // Per ship: which parse strategy produced the coordinates, the page's
+      // own fix age, and why a page was skipped.
+      scrape: [...scrapeResults.values()],
+    },
+    // The acceptance trail: what each feed contributed, which fixes were
+    // refused (and how far off they were), and any far-away track a source
+    // is currently insisting on.
+    fixes: {
+      rules: {
+        maxPlausibleKt: MAX_PLAUSIBLE_KT,
+        minGateMinutes: MIN_GATE_DT_MS / 60_000,
+        healRepeats: HEAL_MIN_REPEATS,
+        healSpanMinutes: HEAL_MIN_SPAN_MS / 60_000,
+      },
+      acceptedBySource,
+      healed: healedCount,
+      pending: [...pendingOverrides.entries()].map(([mmsi, p]) => ({ mmsi, ...p })),
+      rejections: [...rejections].reverse(),
     },
     allowlist: {
       imoCount: ALLOWED_IMOS.size,
@@ -1034,8 +1673,12 @@ router.get('/debug', (_req, res) => {
     },
     snapshot: {
       path: SNAPSHOT_PATH,
+      database: DB_ENABLED,
       loadedAtStartup: snapshotLoadedCount,
+      loadedFrom: snapshotLoadedFrom,
       ageAtStartupMin: snapshotLoadedAgeMin,
+      lastSavedAt: lastSnapshotSaveAt || null,
+      lastSaveError: lastSnapshotSaveError,
       trackedNow: tracked.size,
     },
     diagnosis: diagnose(perImo),
