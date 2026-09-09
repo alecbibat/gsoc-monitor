@@ -144,6 +144,42 @@ describe('evaluateCandidate — plausibility gate', () => {
   });
 });
 
+describe('evaluateCandidate — an untimed source cannot spend the held fix\'s age', () => {
+  // The reported failure: Star Seeker sits mid-Pacific out of receiver range
+  // for days, so the held fix keeps ageing. A coastal coordinate carrying no
+  // fix time must not become "plausible" simply because enough time passed
+  // for the ship to have theoretically sailed back.
+  it('refuses an ageless Vancouver coordinate however stale the mid-ocean fix is', () => {
+    for (const days of [1, 3, 7, 30]) {
+      const at = T0 + days * 24 * HOUR;
+      const d = rejected(
+        evaluateCandidate(held(MID, T0), cand(VAN, at, { fixAtKnown: false, fixPrecisionMs: 0 }), undefined, at)
+      );
+      expect(d.reason).toBe('implausible');
+    }
+  });
+
+  it('still accepts the same jump when the source says when the ship reported', () => {
+    // A stated recent fix time after three days of silence is real evidence,
+    // and 2,000 nm over three days is an ordinary 28 kt.
+    const at = T0 + 3 * 24 * HOUR;
+    const d = evaluateCandidate(held(MID, T0), cand(VAN, at), undefined, at);
+    expect(d.accept).toBe(true);
+  });
+
+  it('lets an untimed source keep nudging the ship along at cruise speed', () => {
+    // ~60 nm west, the distance a 15 kt ship covers between 2-hourly polls.
+    const at = T0 + 2 * HOUR;
+    const d = evaluateCandidate(
+      held(MID, T0),
+      cand({ latitude: 52.0, longitude: -176.6 }, at, { fixAtKnown: false, fixPrecisionMs: 0 }),
+      undefined,
+      at
+    );
+    expect(d.accept).toBe(true);
+  });
+});
+
 describe('evaluateCandidate — self-healing when the held fix is the wrong one', () => {
   it('accepts a source that keeps reporting a consistent, moving track far away', () => {
     // Held: a stale Vancouver fix. CruiseMapper then reports the ship
@@ -243,6 +279,29 @@ describe('parseReportedAgo', () => {
   it('ignores "ago" strings that are not about the fix', () => {
     expect(parseReportedAgo('Review posted 3 days ago. Position: 12.3 N / 45.6 W')).toBeNull();
     expect(parseReportedAgo('nothing here')).toBeNull();
+  });
+});
+
+describe('parseCruiseMapper — fix age is read from the position block only', () => {
+  const ship = { mmsi: '311001759', imo: 9904819, name: 'Star Seeker' };
+
+  it('does not date a fresh position from an unrelated "updated N days ago" elsewhere', () => {
+    const html = `<h1>Star Seeker</h1>
+<p>position: coordinates 51.9876 N / 170.1234 W</p>
+${'<p>itinerary filler text for the cruise schedule table</p>'.repeat(60)}
+<footer>Ship review last updated 6 days ago.</footer>`;
+    const r = parseCruiseMapper(html, ship, T0);
+    expect(r.pos?.lat).toBeCloseTo(51.9876);
+    // Untimed, not dated six days into the past — which would have got a
+    // genuinely new position refused as older than the held fix.
+    expect(r.pos?.fixAtKnown).toBe(false);
+    expect(r.pos?.t).toBe(T0);
+  });
+
+  it('reads an age that sits just before the coordinates', () => {
+    const html = `<h1>Star Seeker</h1>
+<p>The AIS position was reported 20 minutes ago: current position coordinates 51.9 N / 170.1 W</p>`;
+    expect(parseCruiseMapper(html, ship, T0).pos?.t).toBe(T0 - 20 * MIN);
   });
 });
 

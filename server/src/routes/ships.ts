@@ -284,6 +284,15 @@ export const MAX_PLAUSIBLE_KT = 35;
 // A fix time is never trusted to better than this when judging speed — it
 // stops a 1-minute clock difference turning a 2 nm hop into "120 kt".
 export const MIN_GATE_DT_MS = 15 * 60_000;
+// ...and the other end: how much elapsed time a source that states NO fix
+// time is allowed to claim. Such a source tells us where it thinks the ship
+// is, never when it was there, so it must not inherit the age of the held fix.
+// Without this cap the gate dissolves exactly when it matters most: a ship
+// three days out of receiver range mid-Pacific makes an ageless coastal
+// coordinate 2,000 nm away look like a routine 28 kt run, and the marker jumps
+// back to port. Capped, an untimed source can advance the ship ~70 nm per
+// report; anything larger has to earn it through the healing path below.
+export const UNTIMED_MAX_DT_MS = 2 * 3_600_000;
 export const HEAL_MIN_REPEATS = 3;
 export const HEAL_MIN_SPAN_MS = 20 * 60_000;
 
@@ -369,8 +378,16 @@ export function evaluateCandidate(
     return { accept: true, moved: false, healed: false, impliedKt: 0, pending: null };
   }
 
-  // Rule 2: plausibility against the held fix.
-  const impliedKt = impliedKnots(distM, cand.fixAt - prev.updatedAt);
+  // Rule 2: plausibility against the held fix. A source that states when the
+  // ship reported is judged over the true interval, so a genuine ocean
+  // crossing after a silent week is accepted. A source that states no time is
+  // judged over a capped interval (see UNTIMED_MAX_DT_MS), so it cannot ride
+  // in on how long the held fix has been sitting there.
+  const elapsed = cand.fixAt - prev.updatedAt;
+  const impliedKt = impliedKnots(
+    distM,
+    cand.fixAtKnown ? elapsed : Math.min(elapsed, UNTIMED_MAX_DT_MS)
+  );
   if (impliedKt <= MAX_PLAUSIBLE_KT) {
     return { accept: true, moved: true, healed: false, impliedKt, pending: null };
   }
@@ -1223,11 +1240,14 @@ export function parseCruiseMapper(html: string, ship: FleetShip, now = Date.now(
     };
   }
 
-  // The page says how old the fix is — ideally in the same sentence as the
-  // coordinates, else anywhere near a "reported"/"received" keyword. Without
-  // it the fix is treated as current and left to applyFix's plausibility gate.
-  const near = html.slice(matchAt, matchAt + 800);
-  const age = parseReportedAgo(near) ?? parseReportedAgo(html);
+  // The page says how old the fix is, in the same block as the coordinates
+  // ("...(coordinates 59.76 N / 149.05 W) cruising at speed of 8 kn ... The
+  // AIS position was reported 38 minutes ago"). Only that block is read: a
+  // page-wide search would attach a review's "updated 3 days ago" to a fresh
+  // position and get it refused as older than what we hold. With no age here
+  // the fix is treated as untimed, which the plausibility gate handles.
+  const near = html.slice(Math.max(0, matchAt - 300), matchAt + 1_200);
+  const age = parseReportedAgo(near);
 
   // Speed, course and destination are read from the position block first;
   // the page-wide fallbacks pick up spec sheets ("service speed 15 kn") and
