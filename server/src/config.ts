@@ -1,3 +1,14 @@
+import dotenv from 'dotenv';
+
+// Load .env before anything below reads process.env. This module is the first
+// local import in index.ts, so it evaluates before index.ts's own
+// dotenv.config() call — without this, every eager read here (and DATABASE_URL
+// in db.ts) saw only the real environment, and a .env-only value was silently
+// ignored in local dev. Harmless in production, where Heroku Config Vars are
+// real env vars, and harmless to call twice: dotenv never overrides a value
+// that is already set.
+dotenv.config();
+
 const csv = (raw: string | undefined): string[] =>
   (raw ?? '')
     .split(',')
