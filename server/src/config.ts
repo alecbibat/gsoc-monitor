@@ -1,5 +1,72 @@
+import dotenv from 'dotenv';
+
+// Load .env before anything below reads process.env. This module is the first
+// local import in index.ts, so it evaluates before index.ts's own
+// dotenv.config() call — without this, every eager read here (and DATABASE_URL
+// in db.ts) saw only the real environment, and a .env-only value was silently
+// ignored in local dev. Harmless in production, where Heroku Config Vars are
+// real env vars, and harmless to call twice: dotenv never overrides a value
+// that is already set.
+dotenv.config();
+
+const csv = (raw: string | undefined): string[] =>
+  (raw ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+
+/**
+ * How email+password sign-in behaves alongside SSO. The migration runs through
+ * these in order:
+ *
+ *   all        — phase 1: everyone can use either password or SSO.
+ *   admin-only — phase 3: only admins keep a password (the break-glass account
+ *                for when the IdP is unreachable); everyone else must use SSO.
+ *   off        — passwords disabled outright. Not recommended here: this is an
+ *                emergency-operations tool, and an IdP outage is exactly the
+ *                kind of incident it exists to coordinate.
+ */
+export type PasswordLoginMode = 'all' | 'admin-only' | 'off';
+
+function passwordLoginMode(): PasswordLoginMode {
+  const raw = (process.env.PASSWORD_LOGIN_MODE ?? 'all').trim().toLowerCase();
+  return raw === 'admin-only' || raw === 'off' ? raw : 'all';
+}
+
 export const config = {
   port: Number(process.env.PORT) || 5174,
+
+  // ── Authentication ──────────────────────────────────────────────────────────
+  passwordLoginMode: passwordLoginMode(),
+  // Self-serve signup with the shared code. Turn off once IT provisions
+  // accounts (admin panel) and SSO carries everyone in.
+  signupEnabled: process.env.SIGNUP_ENABLED !== 'false',
+
+  sso: {
+    // SSO turns itself on only when fully configured — a half-set env can't
+    // leave a dead "Sign in with SSO" button on the login screen.
+    get enabled(): boolean {
+      return Boolean(
+        process.env.OIDC_ISSUER && process.env.OIDC_CLIENT_ID && process.env.OIDC_CLIENT_SECRET
+      );
+    },
+    issuer: process.env.OIDC_ISSUER ?? '',
+    clientId: process.env.OIDC_CLIENT_ID ?? '',
+    clientSecret: process.env.OIDC_CLIENT_SECRET ?? '',
+    // Must match the redirect URI registered with the IdP exactly.
+    redirectUri: process.env.OIDC_REDIRECT_URI ?? '',
+    scope: process.env.OIDC_SCOPE ?? 'openid email profile',
+    buttonLabel: process.env.SSO_BUTTON_LABEL ?? 'Sign in with SSO',
+    // Email domains the IdP is authoritative for. Empty = allow any domain the
+    // IdP vouches for; set it in production so a misconfigured multi-tenant
+    // app registration can't admit outside accounts.
+    allowedDomains: csv(process.env.SSO_ALLOWED_DOMAINS),
+    // false (default) = IT pre-creates accounts and SSO links them by email,
+    // which is the agreed model. true = create an account on first SSO login.
+    autoProvision: process.env.SSO_AUTO_PROVISION === 'true',
+    defaultRole: process.env.SSO_DEFAULT_ROLE === 'admin' ? 'admin' : 'member',
+  },
+
   nwsUserAgent: process.env.NWS_USER_AGENT || 'gsoc-monitor (no-contact-set)',
   // aisstream.io API key — free at https://aisstream.io — add as AISSTREAM_API_KEY
   // in Heroku Config Vars. Without it the layer shows a no-key placeholder.

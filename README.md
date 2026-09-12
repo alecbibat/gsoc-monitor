@@ -63,6 +63,53 @@ Heroku's Node buildpack will run `npm install` then `npm run build` (which build
 
 > **Cost note**: Heroku no longer has a free tier. The smallest paid plan is "Eco" (~$5/month for 1 dyno). All data fetching is done server-side/client-side via free public APIs, so there are no additional API costs to start.
 
+## Authentication & SSO
+
+Sign-in has two paths that both end at the same session cookie, so every data
+route is unchanged by SSO.
+
+| | How it works |
+|---|---|
+| **Email + password** | bcrypt (cost 12). Governed by `PASSWORD_LOGIN_MODE`. |
+| **Single sign-on** | OIDC authorization-code flow with PKCE. Enabled once `OIDC_ISSUER`, `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` are all set. |
+
+### Setting up SSO
+
+Ask IT for **OIDC**, not SAML — the callback is an ordinary redirect, which
+avoids the cross-site-POST cookie problems a SAML ACS endpoint runs into.
+
+**Give IT:** the callback URL `https://<your-app>/api/auth/sso/callback`, and
+the claims needed — `sub`, `email`, `email_verified`, `name`.
+**Get back:** issuer URL, client ID, client secret → set as Heroku Config Vars
+(see `.env.example`). Set `SSO_ALLOWED_DOMAINS` too.
+
+Accounts are matched to IdP identities **by email, once**. An admin pre-creates
+the account (Admin panel → Team members → *Add member*, no password); the
+person's first SSO login attaches their IdP subject to that row and every login
+after matches on the subject instead. Because linking updates the existing row,
+the user's id is stable — nothing they authored gets orphaned when their email
+or name later changes.
+
+### Rolling it out
+
+`PASSWORD_LOGIN_MODE` walks the migration through three states:
+
+1. **`all`** (default) — passwords and SSO both work. Existing users are
+   unaffected; anyone who signs in via SSO is silently linked.
+2. **`admin-only`** — only admins can use a password. Everyone else must use
+   SSO. Set `SIGNUP_ENABLED=false` here too.
+3. **`off`** — passwords disabled entirely. **Not recommended for this app:** an
+   IdP outage is exactly the kind of incident the dashboard exists to
+   coordinate, so keep at least one break-glass admin password.
+
+### Share links
+
+Share links require a signed-in account. The generated link password is **not**
+accepted by default — an admin opens a time-boxed window (Admin panel →
+Share-link access) when SSO is unavailable and a situation report still has to
+reach people. It expires on its own (default 12h, max 72h) and every open is
+logged with the viewer's account.
+
 ## Project structure
 
 ```

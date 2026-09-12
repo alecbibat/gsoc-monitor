@@ -1,10 +1,23 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { pool } from '../db';
+import { config } from '../config';
 import { wrap } from '../asyncWrap';
 import { requireAuth, signToken, COOKIE_OPTS, type AuthUser } from '../middleware/auth';
 
 const router = Router();
+
+// What sign-in options this deployment offers. Public by design — the login
+// screen and the share-link gate both render from it, before anyone is
+// authenticated. It exposes only which methods exist, never any credential.
+router.get('/config', (_req: Request, res: Response) => {
+  res.json({
+    sso: config.sso.enabled ? { enabled: true, label: config.sso.buttonLabel } : { enabled: false },
+    passwordLogin: config.passwordLoginMode !== 'off',
+    passwordLoginAdminOnly: config.passwordLoginMode === 'admin-only',
+    signup: config.signupEnabled && config.passwordLoginMode === 'all',
+  });
+});
 
 // bcrypt at cost 12 burns ~1s of main-thread CPU per attempt (bcryptjs is pure
 // JS), so a credential-stuffing loop can peg the dyno. Cheap in-memory brake:
@@ -26,6 +39,14 @@ function recordFailure(ip: string): void {
 }
 
 router.post('/signup', wrap(async (req: Request, res: Response) => {
+  // Self-serve signup closes once IT provisions accounts and SSO carries
+  // everyone in; the admin panel becomes the only way to create one.
+  if (!config.signupEnabled || config.passwordLoginMode !== 'all') {
+    res.status(403).json({
+      error: 'Self-serve signup is disabled. Ask a GSOC administrator to create your account.',
+    });
+    return;
+  }
   const { email, name, password, code } = req.body ?? {};
   if (!email || !name || !password || !code) {
     res.status(400).json({ error: 'All fields are required' }); return;
@@ -70,6 +91,10 @@ router.post('/signup', wrap(async (req: Request, res: Response) => {
 }, 'auth'));
 
 router.post('/login', wrap(async (req: Request, res: Response) => {
+  if (config.passwordLoginMode === 'off') {
+    res.status(403).json({ error: 'Password sign-in is disabled — use single sign-on.', ssoOnly: true });
+    return;
+  }
   const { email, password } = req.body ?? {};
   if (!email || !password) {
     res.status(400).json({ error: 'Email and password are required' }); return;
@@ -81,9 +106,18 @@ router.post('/login', wrap(async (req: Request, res: Response) => {
     'SELECT id, email, name, role, password_hash FROM users WHERE email = $1',
     [email.toLowerCase().trim()]
   );
-  if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+  // password_hash is nullable now: an SSO-only account (or one an admin
+  // pre-created without a password) has none. bcrypt.compare throws on a null
+  // hash, so the short-circuit is load-bearing, not defensive noise.
+  if (!user || !user.password_hash || !(await bcrypt.compare(password, user.password_hash))) {
     recordFailure(req.ip ?? '');
     res.status(401).json({ error: 'Invalid email or password' }); return;
+  }
+  // Phase 3 of the rollout: passwords survive only for the break-glass admin
+  // account, so the GSOC can still get in when the IdP is unreachable.
+  if (config.passwordLoginMode === 'admin-only' && user.role !== 'admin') {
+    res.status(403).json({ error: 'Password sign-in is disabled for this account — use single sign-on.', ssoOnly: true });
+    return;
   }
   failures.delete(req.ip ?? '');
   const { password_hash: _h, ...safeUser } = user as { password_hash: string } & AuthUser;
