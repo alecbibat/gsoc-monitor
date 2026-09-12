@@ -77,6 +77,17 @@ export const config = {
   // (https://api.vesselfinder.com); MyShipTracking is the other supported option.
   vesselfinderApiKey: process.env.VESSELFINDER_API_KEY || '',
   myshiptrackingApiKey: process.env.MYSHIPTRACKING_API_KEY || '',
+  // MarineTraffic (Kpler) AIS API — https://www.marinetraffic.com/en/p/api-services.
+  // The only source wired in here that carries ROAMING AIS (positions relayed
+  // by partner fleets), which is how MarineTraffic sees a ship mid-ocean that
+  // the terrestrial-only feeds and the CruiseMapper scrape cannot. Set
+  // MARINETRAFFIC_API_KEY to make it a position source.
+  marinetrafficApiKey: process.env.MARINETRAFFIC_API_KEY || '',
+  // How far back to ask MarineTraffic for a position, in minutes. A ship
+  // reporting through satellite/roaming AIS may only be heard every few hours,
+  // so the default reaches back a day; the fix-time ordering keeps an old
+  // answer from displacing a newer one.
+  marinetrafficTimespanMin: Math.min(2880, Math.max(5, Number(process.env.MARINETRAFFIC_TIMESPAN_MIN) || 1440)),
   // Free fallback: scrape CruiseMapper's public ship pages by IMO when no paid
   // key is set. CruiseMapper carries satellite-AIS positions (it sees the fleet
   // at sea, unlike free aisstream) but sits behind Cloudflare, so a plain server

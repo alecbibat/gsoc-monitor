@@ -21,6 +21,7 @@ import { useFuelZoneStore } from '../fuelzone/fuelZoneStore';
 import { useFireOutlookStore } from '../layers/fireOutlook/fireOutlookStore';
 import { FireOutlookControls } from '../layers/fireOutlook/FireOutlookControls';
 import { useShipsStatus } from '../layers/ships/shipsStore';
+import { shipDisplayPosition } from '../layers/ships/shipStatus';
 import { useSatellitesStatus } from '../layers/satellites/satellitesStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { useHoverStore } from '../screensaver/hoverStore';
@@ -240,7 +241,12 @@ export function Sidebar() {
         /* no position available */
       }
     }
-    if (ship && viewer) flyToLonLat(viewer, ship.longitude, ship.latitude, 250_000);
+    if (ship && viewer) {
+      // Fly to where the ship is drawn, which is her estimate when the fix is
+      // stale — otherwise the roster would fly to open water she has left.
+      const at = shipDisplayPosition(ship);
+      flyToLonLat(viewer, at.lon, at.lat, 250_000);
+    }
     setSidebarOpen(false);
   }
 

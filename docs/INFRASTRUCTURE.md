@@ -43,7 +43,7 @@ DB-backed routes but does not take the dyno down).
 | `share_access_log` | token, timestamp, **viewer IP address**, user agent | **PII / audit** |
 | `watchlist_sources` | OSINT source definitions (URL, kind, config) — *sources only, never the items* | Low |
 | `lightning_chunks` | Gzipped binary strike history (`BYTEA`), ~290 rows/day, pruned to a 24h window | Low |
-| `snapshots` | Small key/value JSONB, e.g. the ~80 KB wind grid | Low |
+| `snapshots` | Small key/value JSONB: the ~80 KB wind grid (`wind-grid`), the flight tracker's last-known positions and trails (`flights:v1`), and the fleet's last accepted ship fixes and 72h trails (`ships:v1`) | Low |
 | `iap_documents` | **Incident Action Plan PDFs stored as `BYTEA`**, 15 MB cap, one per incident type + a general default | Operational |
 
 PDFs go in Postgres rather than object storage for two stated reasons: the dyno
@@ -68,16 +68,19 @@ Notes worth knowing:
 
 | File | Written by | Lifetime |
 |---|---|---|
-| `ships-snapshot.json` (`SHIPS_SNAPSHOT_PATH`) | `server/src/routes/ships.ts` after each poll | Survives restarts within a dyno; **wiped on every deploy**. Snapshots older than 7 days are ignored. |
+| `ships-snapshot.json` (`SHIPS_SNAPSHOT_PATH`) | `server/src/routes/ships.ts`, ≤ once per 30 s after an accepted fix | Local-dev fallback only (no `DATABASE_URL`). On Heroku the dyno filesystem is **wiped on every restart and deploy**, so the authoritative copy is the `ships:v1` row in the `snapshots` table. Snapshots older than 7 days are ignored on restore. |
 
-This is the only file the app writes. It's a convenience cache — CruiseMapper is
-re-scraped at startup, so the fleet reappears within ~15s.
+This is the only file the app writes. Ship positions are restored from Postgres
+at boot so a restart neither empties the map nor lets the first scrape after
+boot overwrite a fresher fix (see the acceptance rules in `ships.ts`:
+positions are ordered by fix time and implausible jumps are refused; both are
+visible at `/api/ships/debug` under `fixes`).
 
 ### In-memory only (lost on every restart)
 
 TTL cache (`cache.ts`, 2000-entry cap), the OSINT intel rolling buffer (800 items,
-36h max age — **items are never persisted**), the flight tracker's last-known
-positions, SSE client sets, and the auth failed-login rate-limit map.
+36h max age — **items are never persisted**), SSE client sets, and the auth
+failed-login rate-limit map.
 
 ### Browser storage (per user, per device)
 
@@ -114,15 +117,17 @@ data route.
 | **Cloudinary** | hardcoded cloud/preset | All incident photos + map thumbnails | Free tier / paid by usage |
 | **Google Maps Platform** | `VITE_GOOGLE_MAPS_KEY` | Photorealistic 3D tiles (Map Tiles API). Baked into the bundle at build time. | **Billable per usage** |
 | **Cesium ion** | `VITE_CESIUM_ION_TOKEN` | World Terrain + OSM Buildings. Falls back to the rate-limited demo token. | Free tier |
-| **AISStream** | `AISSTREAM_API_KEY` | Live ship AIS over `wss://stream.aisstream.io` | Free |
-| **VesselFinder** | `VESSELFINDER_API_KEY` | Optional paid AIS by IMO | Paid |
-| **MyShipTracking** | `MYSHIPTRACKING_API_KEY` | Optional paid AIS alternative | Paid |
+| **AISStream** | `AISSTREAM_API_KEY` | Live ship AIS over `wss://stream.aisstream.io`. Community **shore** receivers, so coastal only. | Free |
+| **MarineTraffic** | `MARINETRAFFIC_API_KEY` | Positions by MMSI carrying **satellite and roaming** AIS. The only configured source that can see a vessel in open ocean. | Paid |
+| **VesselFinder** | `VESSELFINDER_API_KEY` | Positions by IMO; satellite is a paid add-on. | Paid |
+| **MyShipTracking** | `MYSHIPTRACKING_API_KEY` | Positions by IMO. | Paid |
 | **PurpleAir** | `PURPLEAIR_API_KEY` | Air quality sensors | Paid/registered |
 | **AirNow** | `AIRNOW_API_KEY` | EPA air quality | Free, registration |
 | **NPS Data API** | `NPS_API_KEY` | Park news/alerts. Defaults to `DEMO_KEY` (rate-limited). | Free |
 
 Other env vars: `PORT`, `NODE_ENV`, `NWS_USER_AGENT` (contact string required by NWS
-and Nominatim policy), `SHIPS_SCRAPE_CRUISEMAPPER`, `SHIPS_POLL_MINUTES`,
+and Nominatim policy), `MARINETRAFFIC_TIMESPAN_MIN`,
+`SHIPS_SCRAPE_CRUISEMAPPER`, `SHIPS_POLL_MINUTES`,
 `SHIPS_SNAPSHOT_PATH`, `AIS_MMSI_FILTER`.
 
 > **`VITE_*` vars are build-time.** They are compiled into the public JavaScript

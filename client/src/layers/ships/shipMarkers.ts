@@ -60,6 +60,30 @@ function reticleImage(color: string, favorite: boolean): string {
   );
 }
 
+/**
+ * The hull drawn as an ESTIMATE rather than a report: same silhouette so the
+ * ship is still recognisable, but hollow with a dashed outline. A dead-reckoned
+ * position must never be mistakable for one the vessel actually transmitted, so
+ * the difference has to be obvious at a glance and not only in the panel.
+ */
+function estimateHullImage(color: string): string {
+  return svgUri(
+    64,
+    '<path d="M32 4 L46 20 L46 58 L18 58 L18 20 Z" ' +
+      `fill="${PLATE}" fill-opacity="0.35" stroke="${color}" ` +
+      'stroke-width="2.6" stroke-linejoin="round" stroke-dasharray="6 4"/>'
+  );
+}
+
+/** Small hollow marker left at the last position the ship actually reported. */
+function lastFixImage(color: string): string {
+  return svgUri(
+    32,
+    `<circle cx="16" cy="16" r="6.5" fill="none" stroke="${color}" stroke-width="2.4"/>` +
+      `<circle cx="16" cy="16" r="1.6" fill="${color}"/>`
+  );
+}
+
 function ringImage(color: string): string {
   return svgUri(
     128,
@@ -155,6 +179,15 @@ export const shipReticleUri = (color: string, favorite: boolean): string =>
 
 export const shipPingUri = (color: string): string =>
   cached(`ping|${color}`, () => ringImage(color));
+
+export const shipEstimateHullUri = (color: string): string =>
+  cached(`est-hull|${color}`, () => estimateHullImage(color));
+
+export const shipLastFixUri = (color: string): string =>
+  cached(`last-fix|${color}`, () => lastFixImage(color));
+
+/** Screen size of the small marker left at the last reported position. */
+export const LAST_FIX_PX = 18;
 
 // --- Ping animation ----------------------------------------------------------
 

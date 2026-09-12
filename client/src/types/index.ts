@@ -205,9 +205,47 @@ export interface ShipState {
   destination: string | null;
   etaUtc?: number | null; // parsed AIS/provider ETA, epoch ms UTC
   etaText?: string | null; // provider's raw ETA string when unparseable
-  lastSeenSec: number;
+  lastSeenSec: number; // age of the FIX (when the ship reported), not of our poll
+  source?: ShipFixSource; // which feed produced the position
+  reception?: ShipReception; // how the ship's transmission reached that feed
+  receivedAt?: number; // when the server ingested the fix, epoch ms
   track?: ShipTrackPoint[];
+  /**
+   * Where the ship would be having held her last course and speed. Present
+   * only while the fix is stale enough to be misleading and the projection is
+   * still credible. `latitude`/`longitude` above always remain the last
+   * position she actually reported.
+   */
+  estimated?: ShipEstimate | null;
 }
+
+/** A dead-reckoned position. An estimate, never a report from the vessel. */
+export interface ShipEstimate {
+  lat: number;
+  lon: number;
+  fromFixAt: number; // the fix it was projected from, epoch ms
+  hoursAhead: number;
+  distanceNm: number;
+  uncertaintyNm: number;
+  courseDeg: number;
+  speedKt: number;
+}
+
+export type ShipFixSource =
+  | 'aisstream'
+  | 'cruisemapper'
+  | 'vesselfinder'
+  | 'myshiptracking'
+  | 'marinetraffic'
+  | 'snapshot';
+
+/**
+ * How a position reached the feed that reported it. Terrestrial means a shore
+ * station heard it, so it only exists near the coast; satellite and roaming
+ * (a relay by another vessel in a partner fleet) are what make a ship visible
+ * in open ocean. null means the feed did not say.
+ */
+export type ShipReception = 'terrestrial' | 'satellite' | 'roaming' | null;
 
 export interface ShipsResponse {
   source: 'aisstream' | 'no-key' | 'error';

@@ -10,6 +10,25 @@ import type { ShipState } from '../../types';
 
 export type StatusKind = 'docked' | 'anchored' | 'underway' | 'alert' | 'unknown';
 
+/**
+ * Where to show a vessel: her dead-reckoned estimate when the server produced
+ * one, otherwise the position she last reported.
+ *
+ * Every surface that draws or names a ship's location goes through this, so
+ * the globe marker, the sidebar fly-to, the screensaver tour, the crisis map
+ * and the daily digest cannot disagree about where she is. `estimated` says
+ * which of the two you got, and must be carried into anything the reader
+ * sees — an unlabelled estimate is worse than a labelled stale fix.
+ */
+export function shipDisplayPosition(s: ShipState): {
+  lat: number;
+  lon: number;
+  estimated: boolean;
+} {
+  if (s.estimated) return { lat: s.estimated.lat, lon: s.estimated.lon, estimated: true };
+  return { lat: s.latitude, lon: s.longitude, estimated: false };
+}
+
 // Abnormal AIS statuses must never be dressed up as routine by the speed
 // heuristic — a digest that shows an aground ship as "In port" is worse than
 // no digest.

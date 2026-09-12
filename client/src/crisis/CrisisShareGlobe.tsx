@@ -9,8 +9,9 @@ import type { LocationGroup } from '../layers/locations/locations';
 import { makePinIcon } from '../layers/locations/pinIcon';
 import {
   SHIP_MARKER, shipAlpha, shipHullUri, shipNameLabel, shipReticleUri,
-} from '../layers/ships/shipMarkers';
+  shipEstimateHullUri,} from '../layers/ships/shipMarkers';
 import { createPingPump, pingBillboard } from '../layers/ships/shipPing';
+import { shipDisplayPosition } from '../layers/ships/shipStatus';
 import { isShipGroupId, type IncidentVessel } from './incidentShips';
 import { resetCamera } from '../cesium/flyTo';
 import { addLayerEntities, layerIdFromEntity } from './CrisisMapLayer';
@@ -306,7 +307,10 @@ function ShareShipsLayer({ vessels }: { vessels: IncidentVessel[] }) {
   const sig = vessels
     .map((v) =>
       v.ship
-        ? `${v.roster.mmsi}:${v.ship.latitude}:${v.ship.longitude}:${v.ship.heading ?? ''}:${v.ship.course ?? ''}:${shipAlpha(v.ship.lastSeenSec)}`
+        ? `${v.roster.mmsi}:${v.ship.latitude}:${v.ship.longitude}:${v.ship.heading ?? ''}:${v.ship.course ?? ''}:${shipAlpha(v.ship.lastSeenSec)}:` +
+          (v.ship.estimated
+            ? `${v.ship.estimated.lat.toFixed(4)},${v.ship.estimated.lon.toFixed(4)}`
+            : '')
         : `${v.roster.mmsi}:none`
     )
     .join('|');
@@ -333,7 +337,9 @@ function ShareShipsLayer({ vessels }: { vessels: IncidentVessel[] }) {
       // A vessel with no reported position is listed in the report's Vessels
       // card as unknown — it is never pinned at a guessed spot on the map.
       if (!v.ship) continue;
-      const { latitude: lat, longitude: lon } = v.ship;
+      // Drawn where the operator globe draws her: the dead-reckoned estimate
+      // once the fix is stale, so a share link and the console never disagree.
+      const { lat, lon, estimated } = shipDisplayPosition(v.ship);
       const bearing = v.ship.heading ?? v.ship.course ?? 0;
       // Same staleness fade as the operator globe: a contact that stopped
       // reporting hours ago must not read as a live fix.
@@ -361,7 +367,10 @@ function ShareShipsLayer({ vessels }: { vessels: IncidentVessel[] }) {
       ds.entities.add({
         position: Cesium.Cartesian3.fromDegrees(lon, lat, 2),
         billboard: {
-          image: shipHullUri(v.color, false),
+          // Hollow and dashed when the marker is a dead-reckoning estimate,
+          // matching the operator globe so the two never imply different
+          // confidence in the same position.
+          image: estimated ? shipEstimateHullUri(v.color) : shipHullUri(v.color, false),
           width: SHIP_MARKER.hullPx,
           height: SHIP_MARKER.hullPx,
           rotation: Cesium.Math.toRadians(-bearing),
@@ -369,14 +378,14 @@ function ShareShipsLayer({ vessels }: { vessels: IncidentVessel[] }) {
           color: tint,
           scaleByDistance: SHIP_MARKER.scaleByDistance,
         },
-        label: shipNameLabel(v.roster.name, v.color, alpha),
+        label: shipNameLabel(`${estimated ? '~' : ''}${v.roster.name}`, v.color, alpha),
       });
     }
     // Positioned contacts only: the pump idles when none of them is in view.
     pumpRef.current?.setPositions(
       vessels
         .filter((v) => v.ship !== null)
-        .map((v) => ({ lon: v.ship!.longitude, lat: v.ship!.latitude }))
+        .map((v) => shipDisplayPosition(v.ship!))
     );
     pumpRef.current?.ensure();
     viewer.scene.requestRender();
