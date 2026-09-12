@@ -18,6 +18,8 @@ import { measureLayer } from './layerMeasure';
 import { shareLiveLayerLabel, type ShareLiveLayerId } from './shareLiveLayers';
 import { LAYER_LEGENDS } from '../layers/layerLegends';
 import type { DrawLayer } from './crisisStore';
+import { RadarLayer } from '../layers/radar/RadarLayer';
+import { RadarTimeline } from '../layers/radar/RadarTimeline';
 import { PrecipLayer } from '../layers/precip/PrecipLayer';
 import { HurricaneLayer } from '../layers/hurricanes/HurricaneLayer';
 import { HurricaneTooltip } from '../layers/hurricanes/HurricaneTooltip';
@@ -529,6 +531,7 @@ export function CrisisShareGlobe({
         style={{ background: '#05070a', transform: 'translateZ(0)' }}
       >
           <CesiumGlobe onReady={setViewer}>
+            {live.has('radar') && <RadarLayer />}
             {live.has('precip') && <PrecipLayer />}
             {live.has('hurricanes') && <HurricaneLayer />}
             {live.has('lightning') && <LightningLayer />}
@@ -552,6 +555,11 @@ export function CrisisShareGlobe({
             <ShareShipsLayer vessels={vessels} />
             <ShareLayerInspector layers={drawLayers} picked={picked} onPick={setPicked} />
             <MeasureController />
+            {live.has('radar') && (
+              <div className="pointer-events-none absolute inset-x-0 bottom-5 z-30 flex justify-center px-4">
+                <RadarTimeline />
+              </div>
+            )}
           </CesiumGlobe>
           {live.has('hurricanes') && <HurricaneTooltip />}
 

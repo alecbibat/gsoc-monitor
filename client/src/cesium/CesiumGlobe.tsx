@@ -2,6 +2,7 @@ import * as Cesium from 'cesium';
 import { useEffect, useRef, useState } from 'react';
 import { BASEMAPS } from './basemaps';
 import { useEarthBasemapStore } from './earthBasemap';
+import { setLabelOverlay } from './labelOverlay';
 import { getPanelData } from './entityPanelLink';
 import { useLayersStore } from '../store/layersStore';
 import { usePanelStore } from '../panels/panelStore';
@@ -375,6 +376,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
       layers.raiseToTop(overlayLayer);
     }
     layers.lowerToBottom(baseLayer);
+    setLabelOverlay(viewer, overlayLayer);
 
     // Remove the previous layers only after the new ones are in place so the
     // swap doesn't flash the empty globe.

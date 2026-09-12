@@ -5,6 +5,8 @@ import { CesiumContext } from './cesium/CesiumContext';
 import { CesiumGlobe } from './cesium/CesiumGlobe';
 import { EarthquakeLayer } from './layers/earthquakes/EarthquakeLayer';
 import { AlertsLayer } from './layers/alerts/AlertsLayer';
+import { RadarLayer } from './layers/radar/RadarLayer';
+import { RadarTimeline } from './layers/radar/RadarTimeline';
 import { EarthTimeBar } from './ui/EarthTimeBar';
 import { FlightLayer } from './layers/flights/FlightLayer';
 import { HurricaneLayer } from './layers/hurricanes/HurricaneLayer';
@@ -167,6 +169,7 @@ export default function App() {
         <StarField />
         <GlobeFrame viewer={viewer}>
         <CesiumGlobe onReady={setViewer}>
+          <RadarLayer />
           <EarthquakeLayer />
           <AlertsLayer />
           <HurricaneLayer />
@@ -227,7 +230,12 @@ export default function App() {
           <MapLegends />
           <WindReadout />
         </div>
-        <EarthTimeBar />
+        {/* Bottom-center dock: the Earth date bar and the radar scrubber stack
+            here so both can be up at once without overlapping. */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-5 z-30 flex flex-col items-center gap-2 px-4">
+          <EarthTimeBar />
+          <RadarTimeline />
+        </div>
         <HoverOverlay />
         <PickChooser />
         <NewsTicker />

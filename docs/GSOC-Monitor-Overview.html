@@ -289,7 +289,7 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
   <div class="kicker">01 · The platform</div>
   <h2 class="section-title">A mission-control shell around a living globe</h2>
   <hr class="section-rule">
-  <p class="lede">GSOC Monitor renders a sun-lit, atmosphere-shaded Earth on a procedural starfield and lets an operator stack live data on top of it — from live weather to police scanners. Everything is real-time, everything is clickable, and every layer explains where its data comes from.</p>
+  <p class="lede">GSOC Monitor renders a sun-lit, atmosphere-shaded Earth on a procedural starfield and lets an operator stack live data on top of it — from precipitation radar to police scanners. Everything is real-time, everything is clickable, and every layer explains where its data comes from.</p>
 
   <div class="arch">
     <div class="node"><h5 style="color:var(--aqua)">45 external feeds</h5><p>NOAA · NWS · USGS · NASA FIRMS · NIFC · LANDFIRE · CelesTrak · adsb.fi · AISStream · Blitzortung · GDELT · NPS · Bluesky · PulsePoint · Socrata · 18 utility outage feeds…</p></div>
@@ -330,9 +330,10 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
   <div class="kicker">02 · Weather</div>
   <h2 class="section-title">The full live-weather picture</h2>
   <hr class="section-rule">
-  <p class="lede">An interactive global wind field you can probe with the mouse, every active NWS alert as a polygon, dual-source air quality, smoke plumes, forecast rainfall, and ~12,700 river flood gauges — each backed by a named feed with its own refresh cadence.</p>
+  <p class="lede">A looping precipitation radar with a scrubbable timeline, an interactive global wind field you can probe with the mouse, every active NWS alert as a polygon, dual-source air quality, smoke plumes, forecast rainfall, and ~12,700 river flood gauges — each backed by a named feed with its own refresh cadence.</p>
 
   <div class="cards">
+    <div class="card"><h4>Precipitation radar with a scrubbable loop</h4><p>RainViewer's global composite plays as a two-hour loop of 10-minute frames: a draggable timeline with play/pause, 30/60/120-minute windows and an opacity control. Every frame stays resident so scrubbing is instant, place labels ride on top of the imagery, and a forecast zone appears whenever RainViewer supplies nowcast frames.</p></div>
     <div class="card"><h4>Live global wind particles</h4><p>7,000 particles advect through a bilinearly-interpolated GFS wind grid at ~30 fps, dragging fading trails and colored by speed — trade winds, westerlies, and the jet read as flowing streamlines. Hydrates instantly from a local cache; refreshes every 30 minutes.</p></div>
     <div class="card"><h4>Wind probe, pins &amp; point forecasts</h4><p>Hover anywhere for a live arrow and compass HUD (mph/kt/m/s); right-click drops persistent wind pins; click a pin for a 48-hour hourly wind-and-gust chart with direction arrows plus a 7-day outlook, computed in the location's own timezone.</p></div>
     <div class="card"><h4>Every NWS alert, resolved to real shapes</h4><p>All active National Weather Service alerts refresh every 60 s, colored semantically by hazard family with severity draw-order. Storm-based warnings use their precise polygons; county-based alerts that ship without geometry are resolved to county shapes via FIPS codes. Click for the full official text.</p></div>
@@ -559,6 +560,7 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
       <tr><th>Source</th><th>Provides</th><th></th></tr>
       <tr><td class="name">USGS Earthquakes</td><td>Real-time seismic events</td><td><span class="chip free">free</span></td></tr>
       <tr><td class="name">NWS api.weather.gov</td><td>Active alerts with geometry</td><td><span class="chip free">free</span></td></tr>
+      <tr><td class="name">RainViewer</td><td>Radar composite tiles, 2 h loop</td><td><span class="chip free">free</span></td></tr>
       <tr><td class="name">NOAA NWPS</td><td>~12,700 river gauges + hydrographs</td><td><span class="chip free">free</span></td></tr>
       <tr><td class="name">NOAA WPC</td><td>Forecast precipitation (QPF)</td><td><span class="chip free">free</span></td></tr>
       <tr><td class="name">NOAA HMS</td><td>Satellite smoke plumes</td><td><span class="chip free">free</span></td></tr>

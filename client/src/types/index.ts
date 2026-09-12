@@ -19,6 +19,7 @@ export type LayerId =
   | 'windArrows'
   | 'rivers'
   | 'fireOutlook'
+  | 'radar'
   | 'precip'
   | 'wildfires'
   | 'outages'
@@ -165,6 +166,20 @@ export interface SatellitesResponse {
   group: SatelliteGroup;
   satellites: SatelliteTle[];
   updated: number;
+}
+
+// One RainViewer radar frame: capture time (epoch seconds) and the tile path
+// prefix that, with the manifest host, addresses its tiles.
+export interface RadarFrame {
+  time: number;
+  path: string;
+}
+
+export interface RadarManifest {
+  host: string;
+  generated: number; // epoch seconds the manifest was produced
+  past: RadarFrame[]; // observed frames, oldest → newest (~2 h at 10-min steps)
+  nowcast: RadarFrame[]; // short-range forecast frames, when RainViewer provides them
 }
 
 export interface ShipTrackPoint {
