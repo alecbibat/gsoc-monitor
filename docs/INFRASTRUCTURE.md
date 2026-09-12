@@ -140,7 +140,6 @@ and Nominatim policy), `SHIPS_SCRAPE_CRUISEMAPPER`, `SHIPS_POLL_MINUTES`,
 |---|---|
 | `/api/alerts` | api.weather.gov (NWS) |
 | `/api/earthquakes` | earthquake.usgs.gov |
-| `/api/radar` | api.rainviewer.com |
 | `/api/flights` | opendata.adsb.fi |
 | `/api/geocode` | nominatim.openstreetmap.org |
 | `/api/satellites` | celestrak.org |

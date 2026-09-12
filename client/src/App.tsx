@@ -5,7 +5,6 @@ import { CesiumContext } from './cesium/CesiumContext';
 import { CesiumGlobe } from './cesium/CesiumGlobe';
 import { EarthquakeLayer } from './layers/earthquakes/EarthquakeLayer';
 import { AlertsLayer } from './layers/alerts/AlertsLayer';
-import { RadarLayer } from './layers/radar/RadarLayer';
 import { EarthTimeBar } from './ui/EarthTimeBar';
 import { FlightLayer } from './layers/flights/FlightLayer';
 import { HurricaneLayer } from './layers/hurricanes/HurricaneLayer';
@@ -25,7 +24,6 @@ import { WindArrowsLayer } from './layers/wind/WindArrowsLayer';
 import { WindProbeController } from './layers/wind/WindProbeController';
 import { WindReadout } from './layers/wind/WindReadout';
 import { MapLegends } from './ui/MapLegends';
-import { RadarTimeline } from './layers/radar/RadarTimeline';
 import { ShipLayer } from './layers/ships/ShipLayer';
 import { ShipModelLayer } from './layers/ships/ShipModelLayer';
 import { ShipShockwave } from './screensaver/ShipShockwave';
@@ -169,7 +167,6 @@ export default function App() {
         <StarField />
         <GlobeFrame viewer={viewer}>
         <CesiumGlobe onReady={setViewer}>
-          <RadarLayer />
           <EarthquakeLayer />
           <AlertsLayer />
           <HurricaneLayer />
@@ -230,7 +227,6 @@ export default function App() {
           <MapLegends />
           <WindReadout />
         </div>
-        <RadarTimeline />
         <EarthTimeBar />
         <HoverOverlay />
         <PickChooser />

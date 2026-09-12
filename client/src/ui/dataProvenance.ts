@@ -14,19 +14,6 @@ export interface Provenance {
 // is the order layers appear in the panel.
 export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
   {
-    id: 'radar',
-    info: {
-      name: 'Precipitation Radar',
-      icon: '🌧',
-      source: 'RainViewer',
-      method:
-        'Aggregates national weather-service radar mosaics into map tiles, refreshed roughly every 10 minutes.',
-      trust:
-        'Composites official meteorological radar networks (e.g. NOAA/NWS NEXRAD in the US) — the same feed many consumer weather apps use.',
-      url: 'https://www.rainviewer.com',
-    },
-  },
-  {
     id: 'earthquakes',
     info: {
       name: 'Earthquakes',

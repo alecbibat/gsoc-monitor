@@ -42,7 +42,6 @@ export const useLayersStore = create<LayersState>()(
   persist(
     (set, get) => ({
       active: {
-        radar: false,
         earthquakes: true,
         alerts: true,
         flights: false,

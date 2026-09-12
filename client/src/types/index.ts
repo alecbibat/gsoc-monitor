@@ -1,5 +1,4 @@
 export type LayerId =
-  | 'radar'
   | 'earthquakes'
   | 'alerts'
   | 'flights'
@@ -166,22 +165,6 @@ export interface SatellitesResponse {
   group: SatelliteGroup;
   satellites: SatelliteTle[];
   updated: number;
-}
-
-export interface RadarFrame {
-  time: number;
-  path: string;
-}
-
-export interface RadarManifest {
-  host: string;
-  radar: {
-    past: RadarFrame[];
-    nowcast: RadarFrame[];
-  };
-  satellite: {
-    infrared: RadarFrame[];
-  };
 }
 
 export interface ShipTrackPoint {

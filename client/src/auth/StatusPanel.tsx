@@ -13,7 +13,7 @@ const SYSTEMS: [string, boolean][] = [
   ['Earthquake Monitor',  true],
   ['Flight Tracking',     true],
   ['Maritime Tracking',   true],
-  ['Weather Radar',       true],
+  ['Weather Alerts',      true],
   ['Satellite Tracking',  true],
   ['Lightning Detection', true],
   ['Hurricane Tracking',  true],

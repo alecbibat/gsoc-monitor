@@ -36,7 +36,6 @@ import { LayerToggle } from './LayerToggle';
 import { Section } from './Section';
 import { BasemapSwitcher } from './BasemapSwitcher';
 import { ScreensaverControls } from './ScreensaverControls';
-import { RadarControls } from '../layers/radar/RadarControls';
 import { PrecipControls } from '../layers/precip/PrecipControls';
 import { usePrecipStore, QPF_PERIOD_LABEL } from '../layers/precip/precipStore';
 import { LightningControls } from '../layers/lightning/LightningControls';
@@ -421,13 +420,6 @@ export function Sidebar() {
         </Section>
 
         <Section title="Weather">
-          <LayerToggle
-            label="Precipitation Radar"
-            active={active.radar}
-            onToggle={() => toggleLayer('radar')}
-          >
-            <RadarControls />
-          </LayerToggle>
           <LayerToggle
             label="Precipitation Forecast (WPC)"
             active={(active as Record<string, boolean>).precip ?? false}

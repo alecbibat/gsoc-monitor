@@ -5,7 +5,6 @@ Global Situational & Operational Conditions Monitor — a real-time 3D globe das
 ## Phase 1 features
 
 - **3D globe** — CesiumJS with starfield, real sun lighting (day/night terminator), dark/light/satellite/topo basemaps plus an Earth map type: NASA's daily MODIS true-color mosaic with an AM/PM (Terra/Aqua) toggle and a date picker back to Feb 2000.
-- **Precipitation radar** — RainViewer animated tiles with adjustable 30/60/120-min playback window and opacity control.
 - **Earthquakes** — USGS live feed, magnitude-scaled colored points, click for details panel.
 - **NWS Weather Alerts** — every active alert, including zone/county-based ones (winter, heat, flood, red-flag) resolved to polygons server-side; severity-coded overlays with full alert text in click panels.
 - **Live flights** — adsb.fi ADS-B (free, no key), plane icons rotated to heading, favorites list, auto-refresh when camera moves.
@@ -39,7 +38,6 @@ npm run dev:client
 | NWS (api.weather.gov) | No key needed | Set `NWS_USER_AGENT` to identify your app per NWS policy: `"my-app (me@email.com)"`. Used for both alerts and zone-geometry lookups. |
 | USGS Earthquakes | No key needed | Fully public. |
 | CelesTrak (satellites) | No key needed | Public TLE data; the server caches each group for 2h per CelesTrak's guidance. |
-| RainViewer | No key needed | Fully public tile CDN. |
 | NASA GIBS (Earth basemap) | No key needed | Public WMTS tiles of the daily MODIS Terra/Aqua true-color mosaic, fetched straight from the browser (no server involvement). |
 | Nominatim (geocoding) | No key needed | Uses OSM data; `NWS_USER_AGENT` string is also used here as User-Agent per their policy. |
 
@@ -119,12 +117,12 @@ gsoc-monitor/
 ├── client/                   # React + Vite + CesiumJS frontend
 │   └── src/
 │       ├── cesium/           # Globe, basemaps, camera helpers
-│       ├── layers/           # earthquakes/, alerts/, radar/, flights/
+│       ├── layers/           # earthquakes/, alerts/, flights/
 │       ├── panels/           # Dockable window framework
 │       ├── store/            # Zustand stores (layers, settings)
 │       └── ui/               # Sidebar, SearchBar, TopBar, etc.
 └── server/                   # Express proxy/cache API
-    └── src/routes/           # earthquakes, alerts, radar, flights, geocode
+    └── src/routes/           # earthquakes, alerts, flights, geocode
 ```
 
 ## Adding more layers

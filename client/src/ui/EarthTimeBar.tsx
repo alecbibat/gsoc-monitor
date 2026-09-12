@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useLayersStore } from '../store/layersStore';
-import { useRadarStore, buildTimeline } from '../layers/radar/radarStore';
 import {
   useEarthBasemapStore,
   todayUtc,
@@ -23,12 +22,9 @@ function fmtDate(date: string): string {
 
 // Floating navigator for the Earth map type (zoom.earth's date bar): step
 // through the daily archive, toggle the AM (Terra) / PM (Aqua) pass, jump back
-// to today. Mounts only while the Earth basemap is selected; steps one card
-// height up when the radar timeline occupies the bottom-center slot.
+// to today. Mounts only while the Earth basemap is selected.
 export function EarthTimeBar() {
   const basemap = useLayersStore((s) => s.basemap);
-  const radarActive = useLayersStore((s) => s.active.radar);
-  const radarHasTimeline = useRadarStore((s) => buildTimeline(s).length >= 2);
   const date = useEarthBasemapStore((s) => s.date);
   const pass = useEarthBasemapStore((s) => s.pass);
   const setDate = useEarthBasemapStore((s) => s.setDate);
@@ -61,11 +57,7 @@ export function EarthTimeBar() {
     'grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white/5 text-[13px] text-white/70 transition hover:bg-white/15 disabled:cursor-default disabled:opacity-30 disabled:hover:bg-white/5';
 
   return (
-    <div
-      className={`pointer-events-none absolute inset-x-0 z-30 flex justify-center px-4 ${
-        radarActive && radarHasTimeline ? 'bottom-[5.75rem]' : 'bottom-5'
-      }`}
-    >
+    <div className="pointer-events-none absolute inset-x-0 bottom-5 z-30 flex justify-center px-4">
       <div className="pointer-events-auto flex items-center gap-2 rounded-2xl border border-white/10 bg-ink-900/85 px-3 py-2 shadow-panel backdrop-blur-md">
         <span className="hidden text-[10px] font-semibold uppercase tracking-wider text-white/30 sm:block">
           🌍 Earth

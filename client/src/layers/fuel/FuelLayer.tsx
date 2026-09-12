@@ -66,7 +66,7 @@ export function FuelLayer() {
       // Tiles are live exportImage renders fetched directly from LANDFIRE
       // (open CORS, no key). Transient per-tile failures are retried by Cesium
       // and shouldn't latch a sticky error, so we don't wire errorEvent to the
-      // sidebar — same as the radar/traffic tile overlays.
+      // sidebar — same as the other tile overlays.
       const layer = viewer.imageryLayers.addImageryProvider(makeFuelProvider());
       layer.alpha = FUEL_ALPHA;
       imgLayerRef.current = layer;
