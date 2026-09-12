@@ -1,7 +1,9 @@
 import { Router, Request, Response } from 'express';
-import { createHash, randomInt, randomUUID, timingSafeEqual } from 'crypto';
+import { createHash, randomInt, randomUUID } from 'crypto';
 import { pool } from '../db';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, readAuthUser } from '../middleware/auth';
+import { decideShareAccess, type ShareGateResult } from '../shareAccess';
+import { getShareFallback } from '../shareFallbackStore';
 import { wrap } from '../asyncWrap';
 import { normalizeIncidentTypeId } from '../incidentTaxonomy';
 import { applyChecklistToggle, cleanActor, invalidToggleReason, type ChecklistItemState } from '../checklist';
@@ -13,15 +15,19 @@ const router = Router();
 // SSE client connections are transient (per-process); share state lives in DB.
 const sseClients = new Map<string, Set<Response>>();
 
-// ── Viewer password gate ──────────────────────────────────────────────────────
+// ── Viewer gate ───────────────────────────────────────────────────────────────
 //
-// Every new share link gets a generated password. Viewers send its SHA-256 hex
-// as the ?k= wire key on the two public read paths (a query param because
-// EventSource cannot send headers). The DB stores sha256(wire key) — a hash OF
-// the credential, never the credential itself — so a database read (backup,
-// dump, injection elsewhere) yields nothing directly replayable into ?k=.
-// Legacy links with no password_hash stay open so existing shared URLs keep
-// working.
+// Share links used to be readable by anyone holding the URL (plus the generated
+// password, on newer links). They now require a signed-in account — SSO or
+// email+password — so every view of an incident snapshot is attributable.
+//
+// The link password remains as a break-glass path, DISABLED by default. An
+// admin opens a time-boxed window (settings.share_password_fallback) when the
+// IdP is down or SSO is otherwise unavailable, which is exactly the outage
+// during which a GSOC still needs to push a situation report out. The wire
+// format is unchanged: viewers send sha256(password) as ?k= (a query param
+// because EventSource cannot set headers), and the DB stores sha256 of THAT,
+// so a database dump yields nothing replayable.
 
 const PW_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no O/0/I/1 — visually unambiguous
 function generatePassword(len = 10): string {
@@ -30,20 +36,47 @@ function generatePassword(len = 10): string {
 
 const sha256Hex = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
 
-const hashEquals = (aHex: string, bHex: string): boolean => {
-  const a = Buffer.from(aHex.toLowerCase(), 'utf8');
-  const b = Buffer.from(bHex.toLowerCase(), 'utf8');
-  return a.length === b.length && timingSafeEqual(a, b);
-};
+async function gateShare(req: Request, passwordHash: string | null): Promise<ShareGateResult> {
+  const user = readAuthUser(req);
+  const { active } = await getShareFallback();
+  return decideShareAccess({
+    user: user ? { id: user.id, email: user.email, name: user.name } : null,
+    passwordHash,
+    wireKey: typeof req.query.k === 'string' ? req.query.k : null,
+    fallbackActive: active,
+  });
+}
 
-function viewKeyOk(passwordHash: string | null, req: Request): boolean {
-  if (!passwordHash) return true;
-  const key = req.query.k;
-  if (typeof key !== 'string') return false;
-  // Current scheme: stored value is sha256(wire key). Also accept the wire key
-  // matching the stored value directly — rows written by the brief first
-  // deployment stored the wire key itself, and those links are already shared.
-  return hashEquals(sha256Hex(key.toLowerCase()), passwordHash) || hashEquals(key, passwordHash);
+/**
+ * Answer a refused viewer. `passwordRequired` is retained alongside the newer
+ * fields so a share tab left open across this deploy still renders its password
+ * prompt instead of a blank error.
+ */
+function denyShare(res: Response, gate: Extract<ShareGateResult, { ok: false }>): void {
+  res.status(401).json({
+    error: gate.passwordAccepted ? 'Password required' : 'Sign in required',
+    loginRequired: true,
+    passwordRequired: gate.passwordAccepted,
+    passwordAccepted: gate.passwordAccepted,
+    badPassword: gate.badPassword,
+  });
+}
+
+/** Record who opened the link — a security control and the AAR's reach metric. */
+function logShareAccess(token: string, req: Request, gate: Extract<ShareGateResult, { ok: true }>): void {
+  const viewer = gate.via === 'session' ? gate.viewer : null;
+  pool.query(
+    `INSERT INTO share_access_log (token, ip, user_agent, user_id, user_email, via)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      token,
+      req.ip ?? null,
+      (req.headers['user-agent'] ?? '').slice(0, 300) || null,
+      viewer?.id ?? null,
+      viewer?.email ?? null,
+      gate.via,
+    ]
+  ).catch((e) => console.warn('[crisis] access log insert failed:', e?.message ?? e));
 }
 
 // Self-heal for a dyno serving new code before the boot migration has managed
@@ -63,12 +96,13 @@ async function withPasswordColumn<T>(run: () => Promise<T>): Promise<T> {
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 //
-// Read paths (GET snapshot + GET events) are intentionally public so anyone with
-// a share link can view the incident without an account. Every WRITE path —
-// creating, updating, or revoking a link — requires auth: the share token alone
-// must never be a write credential, or any viewer could overwrite the public
-// situation report. Editors always call these from an authenticated session, so
-// the same-origin auth cookie is sent automatically.
+// Read paths (GET snapshot + GET events) require a signed-in account, with the
+// link password as an admin-enabled break-glass (see the viewer gate above).
+// Every WRITE path — creating, updating, or revoking a link — additionally
+// requires requireAuth: the share token alone must never be a write credential,
+// or any viewer could overwrite the public situation report. Editors always
+// call these from an authenticated session, so the same-origin auth cookie is
+// sent automatically.
 
 // A link serves viewers only while active AND unexpired (W4). expires_at NULL
 // covers the moment between deploy and the boot migration's backfill — treated
@@ -180,27 +214,43 @@ router.get('/share/:token', wrap(async (req: Request, res: Response) => {
     [req.params.token]
   ));
   if (!row) { res.status(404).json({ error: 'Not found' }); return; }
-  if (!viewKeyOk(row.password_hash, req)) {
-    res.status(401).json({ error: 'Password required', passwordRequired: true }); return;
-  }
+  const gate = await gateShare(req, row.password_hash);
+  if (!gate.ok) { denyShare(res, gate); return; }
   if (!row.live) { res.status(410).json(gonePayload(row)); return; }
-  // Access log: who opened the picture, and when. Powers the editor-side
-  // "opened N times" readout and the AAR's stakeholder-reach metric.
-  pool.query(
-    'INSERT INTO share_access_log (token, ip, user_agent) VALUES ($1, $2, $3)',
-    [req.params.token, req.ip ?? null, (req.headers['user-agent'] ?? '').slice(0, 300) || null]
-  ).catch((e) => console.warn('[crisis] access log insert failed:', e?.message ?? e));
+  logShareAccess(req.params.token, req, gate);
   res.json(row.snapshot);
 }, 'crisis'));
 
-// GET /api/crisis/share/:token/access — editor-side access stats
+// GET /api/crisis/share/:token/access — editor-side access stats. Now that
+// viewers sign in, "who read the situation report" is answerable by name, not
+// just by a count of distinct IPs.
 router.get('/share/:token/access', requireAuth, wrap(async (req: Request, res: Response) => {
   const { rows: [row] } = await pool.query(
-    `SELECT COUNT(*)::int AS count, COUNT(DISTINCT ip)::int AS viewers, MAX(at) AS last_at
+    `SELECT COUNT(*)::int AS count,
+            COUNT(DISTINCT ip)::int AS viewers,
+            COUNT(DISTINCT user_id)::int AS accounts,
+            COUNT(*) FILTER (WHERE via = 'link-password')::int AS anonymous,
+            MAX(at) AS last_at
      FROM share_access_log WHERE token = $1`,
     [req.params.token]
   );
-  res.json({ count: row.count, viewers: row.viewers, lastAt: row.last_at });
+  const { rows: named } = await pool.query(
+    `SELECT user_email AS email, MAX(at) AS last_at, COUNT(*)::int AS opens
+     FROM share_access_log
+     WHERE token = $1 AND user_email IS NOT NULL
+     GROUP BY user_email
+     ORDER BY MAX(at) DESC
+     LIMIT 50`,
+    [req.params.token]
+  );
+  res.json({
+    count: row.count,
+    viewers: row.viewers,
+    accounts: row.accounts,
+    anonymous: row.anonymous,
+    lastAt: row.last_at,
+    named,
+  });
 }, 'crisis'));
 
 // POST /api/crisis/share/:token/renew — extend a live link by another TTL window
@@ -301,9 +351,8 @@ router.post('/share/:token/checklist/:itemId', wrap(async (req: Request, res: Re
     [token]
   ));
   if (!row) { res.status(404).json({ error: 'Not found' }); return; }
-  if (!viewKeyOk(row.password_hash, req)) {
-    res.status(401).json({ error: 'Password required', passwordRequired: true }); return;
-  }
+  const gate = await gateShare(req, row.password_hash);
+  if (!gate.ok) { denyShare(res, gate); return; }
   if (!row.live) { res.status(410).json(gonePayload(row)); return; }
   if (!row.incident_id) {
     // Pre-W4 links were published without an incident id — there is no parent
@@ -312,7 +361,10 @@ router.post('/share/:token/checklist/:itemId', wrap(async (req: Request, res: Re
   }
 
   const body = req.body as { checked: boolean; by?: unknown };
-  const by = cleanActor(body.by) ?? 'Share viewer';
+  // A signed-in viewer's account name outranks the self-typed one the share
+  // page used to rely on: the toggle lands in the incident's audit trail, and
+  // an attested identity is worth more there than a text box.
+  const by = (gate.via === 'session' ? gate.viewer.name : null) ?? cleanActor(body.by) ?? 'Share viewer';
   const result = await applyChecklistToggle(row.incident_id, itemId, body.checked, by);
   if (!result.ok) { res.status(result.status).json({ error: result.error }); return; }
   if (result.changed) {
@@ -336,9 +388,8 @@ router.get('/share/:token/iap', wrap(async (req: Request, res: Response) => {
     [req.params.token]
   ));
   if (!row) { res.status(404).json({ error: 'Not found' }); return; }
-  if (!viewKeyOk(row.password_hash, req)) {
-    res.status(401).json({ error: 'Password required', passwordRequired: true }); return;
-  }
+  const gate = await gateShare(req, row.password_hash);
+  if (!gate.ok) { denyShare(res, gate); return; }
   if (!row.live) { res.status(410).json(gonePayload(row)); return; }
   const rawType = (row.snapshot as { incidentType?: unknown })?.incidentType;
   const doc = await findIapForType(normalizeIncidentTypeId(typeof rawType === 'string' ? rawType : null));
@@ -355,7 +406,10 @@ router.get('/share/:token/events', wrap(async (req: Request, res: Response) => {
     [token]
   ));
   if (!row) { res.status(404).end(); return; }
-  if (!viewKeyOk(row.password_hash, req)) { res.status(401).end(); return; }
+  // EventSource sends the session cookie automatically on same-origin requests,
+  // so a signed-in viewer's stream authenticates the same way the snapshot did.
+  const gate = await gateShare(req, row.password_hash);
+  if (!gate.ok) { res.status(401).end(); return; }
 
   res.setHeader('Content-Type', 'text/event-stream');
   // no-transform: stops compression middleware and intermediaries from

@@ -1,4 +1,8 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import {
+  consumeSsoError, fetchAuthConfig, login, startSso,
+  FALLBACK_AUTH_CONFIG, type AuthConfig,
+} from '../auth/authApi';
 import type { CrisisPublicState, IcsRole, PersonnelAssignment } from './crisisStore';
 import type { ShareLiveLayerId } from './shareLiveLayers';
 import { LOCATION_GROUPS, type LocationGroup } from '../layers/locations/locations';
@@ -252,6 +256,118 @@ function PasswordGate({ onSubmit, error, checking }: {
   );
 }
 
+// ── Sign-in gate ──────────────────────────────────────────────────────────────
+//
+// Share links require an account. This is what a stakeholder sees when they
+// open one without a session: SSO if configured, and an inline password form so
+// they never leave the link they were sent (signing in elsewhere and navigating
+// back is exactly the step people abandon).
+
+function ShareSignInGate({ token, onSignedIn }: { token: string; onSignedIn: () => void }) {
+  const [authConfig, setAuthConfig] = useState<AuthConfig>(FALLBACK_AUTH_CONFIG);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(() => consumeSsoError());
+  const [submitting, setSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
+  useEffect(() => { void fetchAuthConfig().then(setAuthConfig); }, []);
+
+  const ssoEnabled = authConfig.sso.enabled;
+  const passwordIsSecondary = ssoEnabled && authConfig.passwordLoginAdminOnly;
+  const showForm = authConfig.passwordLogin && (!passwordIsSecondary || showPassword);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await login(email, password);
+      onSignedIn();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not sign in — please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const inputCls =
+    'w-full rounded border border-white/15 bg-white/8 px-3 py-2.5 text-[13px] text-white/90 placeholder-white/25 outline-none transition focus:border-accent/50';
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-6 py-10">
+      <div className="w-full max-w-sm space-y-4 rounded-xl border border-white/15 bg-ink-900 px-6 py-7 text-center shadow-2xl">
+        <div className="mx-auto grid h-12 w-12 place-items-center rounded-full border border-accent/30 bg-accent/10 text-[20px]">
+          🔐
+        </div>
+        <div>
+          <h1 className="text-[16px] font-semibold text-white/90">Protected Situation Report</h1>
+          <p className="mt-1.5 text-[12px] leading-relaxed text-white/50">
+            Sign in to view this incident report.
+          </p>
+        </div>
+
+        {error && (
+          <p className="rounded border border-amber-400/25 bg-amber-400/8 px-3 py-2 text-left text-[11px] leading-relaxed text-amber-200/85">
+            {error}
+          </p>
+        )}
+
+        {ssoEnabled && (
+          // returnTo brings them back to this exact link after the round trip.
+          <button
+            onClick={() => startSso(`/?share=${encodeURIComponent(token)}`)}
+            className="w-full rounded-lg border border-accent/30 bg-accent/15 py-2.5 text-[12px] font-semibold text-accent transition hover:border-accent/50 hover:bg-accent/25"
+          >
+            {authConfig.sso.label ?? 'Sign in with SSO'}
+          </button>
+        )}
+
+        {ssoEnabled && authConfig.passwordLogin && (
+          <div className="flex items-center gap-3">
+            <div className="h-px flex-1 bg-white/8" />
+            <span className="text-[9px] uppercase tracking-[0.2em] text-white/25">or</span>
+            <div className="h-px flex-1 bg-white/8" />
+          </div>
+        )}
+
+        {passwordIsSecondary && !showPassword && (
+          <button
+            onClick={() => setShowPassword(true)}
+            className="w-full text-[11px] text-white/35 transition hover:text-white/60"
+          >
+            Sign in with a password
+          </button>
+        )}
+
+        {showForm && (
+          <form onSubmit={submit} className="space-y-2.5 text-left">
+            <input
+              type="email" placeholder="Email" value={email} required autoComplete="username"
+              onChange={(e) => setEmail(e.target.value)} className={inputCls}
+            />
+            <input
+              type="password" placeholder="Password" value={password} required autoComplete="current-password"
+              onChange={(e) => setPassword(e.target.value)} className={inputCls}
+            />
+            <button
+              type="submit" disabled={submitting}
+              className="w-full rounded bg-accent/20 py-2.5 text-[13px] font-medium text-accent transition hover:bg-accent/30 disabled:opacity-40"
+            >
+              {submitting ? 'Signing in…' : 'Sign in'}
+            </button>
+          </form>
+        )}
+
+        <p className="text-[10px] leading-relaxed text-white/25">
+          No account? Contact the GSOC — they can add you, or reissue this report with a
+          temporary access password.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ── Last-updated indicator ───────────────────────────────────────────────────
 // The 30-second stakeholder question includes "is this current?" — a static
 // timestamp can't answer that. Relative time, re-ticked every 30 s, amber once
@@ -295,7 +411,11 @@ export function CrisisShareView({ token }: { token: string }) {
   const [viewKey, setViewKey] = useState<string | null>(
     () => sessionStorage.getItem(keyStorageId(token)),
   );
-  const [locked, setLocked] = useState(false);
+  // How the server refused us, if it did: 'signin' when only an account will
+  // do, 'password' while an admin has the break-glass window open.
+  const [lockedBy, setLockedBy] = useState<null | 'signin' | 'password'>(null);
+  // Bumped after a successful inline sign-in to re-run the snapshot fetch.
+  const [reloadNonce, setReloadNonce] = useState(0);
   const [gateError, setGateError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   // Set once the snapshot fetch succeeds — gates the SSE stream so it never
@@ -379,24 +499,29 @@ export function CrisisShareView({ token }: { token: string }) {
       .then(async (r) => {
         if (cancelled) return;
         if (r.status === 401) {
-          // Wrong (or missing) key. Only flag "incorrect password" when the
-          // viewer actually typed one this session — a stale stored key or the
-          // first keyless probe just shows the gate.
-          setLocked(true);
-          setGateError(viewKey !== null && checking ? WRONG_PW_MSG : null);
+          const body = (await r.json().catch(() => ({}))) as {
+            passwordAccepted?: boolean; passwordRequired?: boolean; badPassword?: boolean;
+          };
+          // passwordRequired is the pre-gate field name, still sent, so a share
+          // tab that outlived this deploy keeps working.
+          const passwordOk = body.passwordAccepted ?? body.passwordRequired ?? false;
+          setLockedBy(passwordOk ? 'password' : 'signin');
+          // Only say "incorrect password" when one was actually tried — a stale
+          // stored key or the first keyless probe just shows the gate.
+          setGateError(passwordOk && body.badPassword && viewKey !== null ? WRONG_PW_MSG : null);
           setChecking(false);
           return;
         }
         if (r.status === 410) {
           const g = (await r.json()) as GonePayload;
-          if (!cancelled) { setGone(g); setLocked(false); setChecking(false); }
+          if (!cancelled) { setGone(g); setLockedBy(null); setChecking(false); }
           return;
         }
         if (!r.ok) throw new Error('Share link not found');
         const d = (await r.json()) as CrisisPublicState;
         if (cancelled) return;
         setData(d);
-        setLocked(false);
+        setLockedBy(null);
         setGateError(null);
         setChecking(false);
         setUnlocked(true);
@@ -405,7 +530,7 @@ export function CrisisShareView({ token }: { token: string }) {
       .catch((e) => { if (!cancelled) { setError((e as Error).message); setChecking(false); } });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, viewKey]);
+  }, [token, viewKey, reloadNonce]);
 
   useEffect(() => {
     if (!unlocked) return;
@@ -522,7 +647,11 @@ export function CrisisShareView({ token }: { token: string }) {
     );
   }
 
-  if (locked) {
+  if (lockedBy === 'signin') {
+    return <ShareSignInGate token={token} onSignedIn={() => setReloadNonce((n) => n + 1)} />;
+  }
+
+  if (lockedBy === 'password') {
     return <PasswordGate onSubmit={handlePassword} error={gateError} checking={checking} />;
   }
 

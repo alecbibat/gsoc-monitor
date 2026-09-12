@@ -9,6 +9,26 @@ interface User {
   name: string;
   role: string;
   created_at: string;
+  has_password?: boolean;
+  sso_linked?: boolean;
+  sso_linked_at?: string | null;
+}
+
+interface FallbackState {
+  active: boolean;
+  expiresAt: string | null;
+  enabledByName: string | null;
+}
+
+/**
+ * How an account can actually sign in. "Pending" is the state that matters
+ * during migration: pre-created, waiting for its owner's first SSO login to
+ * link it — it is not a broken row.
+ */
+function accessBadge(u: User): { label: string; cls: string } {
+  if (u.sso_linked) return { label: 'SSO', cls: 'bg-accent/15 text-accent/80' };
+  if (u.has_password) return { label: 'Password', cls: 'bg-white/10 text-white/45' };
+  return { label: 'Pending', cls: 'bg-amber-400/15 text-amber-300/80' };
 }
 
 interface IapDoc {
@@ -155,6 +175,187 @@ function IapLibrary() {
   );
 }
 
+// ── Share-link break-glass ────────────────────────────────────────────────────
+//
+// Share links require a signed-in account. This opens a time-boxed window in
+// which the link password works again — for an IdP outage, which is exactly the
+// kind of incident this app exists to coordinate. It closes itself.
+
+function ShareFallbackPanel() {
+  const [state, setState] = useState<FallbackState | null>(null);
+  const [hours, setHours] = useState(12);
+  const [busy, setBusy] = useState(false);
+
+  const load = () =>
+    fetch('/api/admin/share-fallback', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((s) => setState(s as FallbackState))
+      .catch(console.error);
+
+  useEffect(() => { void load(); }, []);
+
+  const set = async (on: boolean) => {
+    setBusy(true);
+    try {
+      const res = await fetch('/api/admin/share-fallback', {
+        method: on ? 'POST' : 'DELETE',
+        headers: on ? { 'Content-Type': 'application/json' } : undefined,
+        credentials: 'include',
+        body: on ? JSON.stringify({ hours }) : undefined,
+      });
+      if (res.ok) setState((await res.json()) as FallbackState);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const active = state?.active ?? false;
+
+  return (
+    <div>
+      <h3 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-white/35">
+        Share-link access
+      </h3>
+      <div
+        className={`rounded-lg border px-3 py-2.5 ${
+          active ? 'border-amber-400/35 bg-amber-400/8' : 'border-white/8 bg-white/4'
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          <span className={`h-2 w-2 shrink-0 rounded-full ${active ? 'animate-pulse bg-amber-400' : 'bg-green-500'}`} />
+          <p className="flex-1 text-[12px] font-medium text-white/80">
+            {active ? 'Link passwords accepted' : 'Sign-in required'}
+          </p>
+          <button
+            onClick={() => set(!active)}
+            disabled={busy}
+            className={`shrink-0 rounded border px-2.5 py-1 text-[10px] transition disabled:opacity-40 ${
+              active
+                ? 'border-white/15 text-white/60 hover:border-white/30 hover:text-white'
+                : 'border-amber-400/30 text-amber-300/80 hover:border-amber-400/60 hover:text-amber-200'
+            }`}
+          >
+            {busy ? '…' : active ? 'Turn off now' : 'Enable break-glass'}
+          </button>
+        </div>
+
+        {active && state?.expiresAt && (
+          <p className="mt-1.5 text-[10px] text-amber-200/70">
+            Open until {new Date(state.expiresAt).toLocaleString()}
+            {state.enabledByName ? ` · enabled by ${state.enabledByName}` : ''}
+          </p>
+        )}
+
+        {!active && (
+          <div className="mt-2 flex items-center gap-2">
+            <label className="text-[10px] text-white/35">Window</label>
+            <select
+              value={hours}
+              onChange={(e) => setHours(Number(e.target.value))}
+              className="rounded border border-white/10 bg-ink-900 px-2 py-1 text-[10px] text-white/70 outline-none"
+            >
+              {[1, 4, 8, 12, 24, 48, 72].map((h) => (
+                <option key={h} value={h}>{h} hour{h === 1 ? '' : 's'}</option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+      <p className="mt-1.5 text-[9px] leading-relaxed text-white/25">
+        Normally every share-link viewer must sign in. Enable this only if single sign-on is
+        unavailable and a report still has to reach people — it lets anyone holding a link and its
+        password read that incident. It switches itself off when the window ends.
+      </p>
+    </div>
+  );
+}
+
+// ── Provisioning ──────────────────────────────────────────────────────────────
+
+function InviteUser({ onCreated }: { onCreated: (u: User) => void }) {
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
+  const [role, setRole] = useState('member');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/admin/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, name, role, password: password || undefined }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+      onCreated(body as User);
+      setEmail(''); setName(''); setPassword(''); setRole('member'); setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not create the account.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const inputCls =
+    'w-full rounded border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] text-white/85 placeholder-white/25 outline-none focus:border-accent/40';
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="rounded border border-white/12 px-2.5 py-1 text-[10px] text-white/50 transition hover:border-accent/40 hover:text-accent/80"
+      >
+        + Add member
+      </button>
+    );
+  }
+
+  return (
+    <form onSubmit={submit} className="mt-2 space-y-2 rounded-lg border border-white/10 bg-white/3 p-3">
+      <div className="grid grid-cols-2 gap-2">
+        <input required type="email" placeholder="work@company.com" value={email}
+          onChange={(e) => setEmail(e.target.value)} className={inputCls} />
+        <input required type="text" placeholder="Full name" value={name}
+          onChange={(e) => setName(e.target.value)} className={inputCls} />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <select value={role} onChange={(e) => setRole(e.target.value)} className={inputCls}>
+          <option value="member">Member</option>
+          <option value="admin">Admin</option>
+        </select>
+        <input type="password" placeholder="Password (optional)" value={password}
+          autoComplete="new-password"
+          onChange={(e) => setPassword(e.target.value)} className={inputCls} />
+      </div>
+      <p className="text-[9px] leading-relaxed text-white/25">
+        Leave the password empty for a single sign-on account — the first SSO login from this email
+        address links it automatically. Set one only for a break-glass admin who must be able to
+        sign in while the identity provider is down.
+      </p>
+      {error && <p className="text-[10px] text-red-400/85">{error}</p>}
+      <div className="flex gap-2">
+        <button type="submit" disabled={busy}
+          className="rounded bg-accent/20 px-3 py-1.5 text-[11px] font-medium text-accent transition hover:bg-accent/30 disabled:opacity-40">
+          {busy ? 'Creating…' : 'Create account'}
+        </button>
+        <button type="button" onClick={() => { setOpen(false); setError(null); }}
+          className="rounded border border-white/10 px-3 py-1.5 text-[11px] text-white/45 transition hover:text-white/70">
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
 export function AdminPanel({ onClose }: { onClose: () => void }) {
   const me = useAuthStore((s) => s.user);
   const [users, setUsers] = useState<User[]>([]);
@@ -238,14 +439,20 @@ export function AdminPanel({ onClose }: { onClose: () => void }) {
             </p>
           </div>
 
+          {/* Share-link access mode */}
+          <ShareFallbackPanel />
+
           {/* IAP documents */}
           <IapLibrary />
 
           {/* Users */}
           <div>
-            <h3 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-white/35">
-              Team members ({users.length})
-            </h3>
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-[10px] font-bold uppercase tracking-wider text-white/35">
+                Team members ({users.length})
+              </h3>
+              <InviteUser onCreated={(u) => setUsers((prev) => [...prev, u])} />
+            </div>
             <div className="divide-y divide-white/6 rounded-lg border border-white/8">
               {users.map((u) => (
                 <div key={u.id} className="flex items-center gap-3 px-3 py-2.5">
@@ -258,6 +465,16 @@ export function AdminPanel({ onClose }: { onClose: () => void }) {
                       {u.role === 'admin' && (
                         <span className="rounded bg-accent/15 px-1 text-[8px] font-bold uppercase tracking-wider text-accent/70">admin</span>
                       )}
+                      <span
+                        className={`rounded px-1 text-[8px] font-bold uppercase tracking-wider ${accessBadge(u).cls}`}
+                        title={
+                          u.sso_linked ? 'Signs in with single sign-on'
+                          : u.has_password ? 'Signs in with a password'
+                          : 'Created, but not linked yet — links on this person\u2019s first SSO login'
+                        }
+                      >
+                        {accessBadge(u).label}
+                      </span>
                     </div>
                     <p className="text-[10px] text-white/35">{u.email}</p>
                   </div>
