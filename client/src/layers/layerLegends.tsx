@@ -5,6 +5,7 @@ import { PrecipLegend } from './precip/PrecipLegend';
 import { LightningLegend } from './lightning/LightningLegend';
 import { FireOutlookLegend } from './fireOutlook/FireOutlookLegend';
 import { FuelLegend } from './fuel/FuelLegend';
+import { TimeZonesLegend } from './timezones/TimeZonesLegend';
 
 // Layers whose map symbology needs a color key. Legends live on the map, not in
 // the layer menu: the operator app floats them bottom-right (MapLegends) and
@@ -16,4 +17,5 @@ export const LAYER_LEGENDS: Array<{ id: LayerId; title: string; Legend: Componen
   { id: 'lightning', title: 'Lightning', Legend: LightningLegend },
   { id: 'fireOutlook', title: '7-Day Fire Potential', Legend: FireOutlookLegend },
   { id: 'fuel', title: 'Fuel Models (LANDFIRE)', Legend: FuelLegend },
+  { id: 'timezones', title: 'Time Zones', Legend: TimeZonesLegend },
 ];
