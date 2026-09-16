@@ -20,9 +20,9 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
       icon: '🌧',
       source: 'RainViewer',
       method:
-        'Aggregates national weather-service radar mosaics into map tiles, refreshed roughly every 10 minutes.',
+        'Composites national weather-service radar mosaics into map tiles — a new frame every 10 minutes, with about two hours of history to loop through.',
       trust:
-        'Composites official meteorological radar networks (e.g. NOAA/NWS NEXRAD in the US) — the same feed many consumer weather apps use.',
+        'Built from official meteorological radar networks (NOAA/NWS NEXRAD in the US) — the same feed many consumer weather apps use.',
       url: 'https://www.rainviewer.com',
     },
   },

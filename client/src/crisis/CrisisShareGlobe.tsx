@@ -555,7 +555,11 @@ export function CrisisShareGlobe({
             <ShareShipsLayer vessels={vessels} />
             <ShareLayerInspector layers={drawLayers} picked={picked} onPick={setPicked} />
             <MeasureController />
-            {live.has('radar') && <RadarTimeline />}
+            {live.has('radar') && (
+              <div className="pointer-events-none absolute inset-x-0 bottom-5 z-30 flex justify-center px-4">
+                <RadarTimeline />
+              </div>
+            )}
           </CesiumGlobe>
           {live.has('hurricanes') && <HurricaneTooltip />}
 

@@ -37,6 +37,7 @@ import { Section } from './Section';
 import { BasemapSwitcher } from './BasemapSwitcher';
 import { ScreensaverControls } from './ScreensaverControls';
 import { RadarControls } from '../layers/radar/RadarControls';
+import { useRadarStore, radarStatusText } from '../layers/radar/radarStore';
 import { PrecipControls } from '../layers/precip/PrecipControls';
 import { usePrecipStore, QPF_PERIOD_LABEL } from '../layers/precip/precipStore';
 import { LightningControls } from '../layers/lightning/LightningControls';
@@ -157,6 +158,9 @@ export function Sidebar() {
       toggleForecast: s.toggleForecast,
       error: s.error,
     }))
+  );
+  const radarStatus = useRadarStore(
+    useShallow((s) => ({ loading: s.loading, error: s.error, past: s.past, nowcast: s.nowcast }))
   );
   const precipPeriod = usePrecipStore((s) => s.period);
   const fireOutlookError = useFireOutlookStore((s) => s.error);
@@ -425,6 +429,7 @@ export function Sidebar() {
             label="Precipitation Radar"
             active={active.radar}
             onToggle={() => toggleLayer('radar')}
+            statusText={radarStatusText(radarStatus)}
           >
             <RadarControls />
           </LayerToggle>

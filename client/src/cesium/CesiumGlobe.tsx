@@ -2,7 +2,7 @@ import * as Cesium from 'cesium';
 import { useEffect, useRef, useState } from 'react';
 import { BASEMAPS } from './basemaps';
 import { useEarthBasemapStore } from './earthBasemap';
-import { setLabelOverlay } from './imageryOrder';
+import { setLabelOverlay } from './labelOverlay';
 import { getPanelData } from './entityPanelLink';
 import { useLayersStore } from '../store/layersStore';
 import { usePanelStore } from '../panels/panelStore';
@@ -344,7 +344,6 @@ export function CesiumGlobe({ children, onReady }: Props) {
       // than trying to remove imagery layers that belonged to the dead viewer.
       baseLayerRef.current = null;
       overlayLayerRef.current = null;
-      setLabelOverlay(null);
       try { v.destroy(); } catch { /* context may already be gone */ }
       setViewer(null);
     };
@@ -361,7 +360,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
     // Add the new base imagery at the bottom of the stack and its label
     // overlay at the very top, so the final order is base → data layers
     // (weather etc.) → place labels. Labels above weather keeps city names
-    // legible under a radar or cloud overlay.
+    // legible under weather imagery.
     const baseLayer = layers.addImageryProvider(def.build());
     applyAdjust(baseLayer, def.adjust);
 
@@ -377,7 +376,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
       layers.raiseToTop(overlayLayer);
     }
     layers.lowerToBottom(baseLayer);
-    setLabelOverlay(overlayLayer);
+    setLabelOverlay(viewer, overlayLayer);
 
     // Remove the previous layers only after the new ones are in place so the
     // swap doesn't flash the empty globe.

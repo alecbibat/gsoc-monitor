@@ -183,7 +183,7 @@ export interface Incident {
   actionLog: ActionLogEntry[];
   drawLayers: DrawLayer[];
   // Live data layers prescribed for this incident's public share-link map
-  // (globe feeds like radar/hurricanes/wildfires — not the hand-drawn layers).
+  // (globe feeds like hurricanes/wildfires — not the hand-drawn layers).
   // Optional because incidents persisted before this feature lack the key.
   liveLayers?: ShareLiveLayerId[];
   // Primary property group (from LOCATION_GROUPS) — set in Incident

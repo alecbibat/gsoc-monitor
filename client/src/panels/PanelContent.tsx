@@ -25,7 +25,6 @@ const ACCENT_BY_KIND: Record<string, string> = {
   earthquakes: 'border-accent-warn/40',
   alerts: 'border-accent-danger/40',
   flights: 'border-accent/40',
-  radar: 'border-accent/40',
   hurricanes: 'border-accent-warn/40',
   fires: 'border-accent-warn/40',
   wildfires: 'border-red-500/40',
