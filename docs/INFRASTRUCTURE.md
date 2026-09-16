@@ -175,7 +175,9 @@ server.arcgisonline.com (dark/light/satellite basemaps) · tile.openstreetmap.or
 opentopomap.org · gibs.earthdata.nasa.gov (NASA MODIS daily true-color) ·
 mapservices.weather.noaa.gov · nhc.noaa.gov · services3/9.arcgis.com ·
 fsapps.nwcg.gov · api.bigdatacloud.net · tile.googleapis.com · ion.cesium.com ·
-api.cloudinary.com · cdn.jsdelivr.net.
+api.cloudinary.com. (Time-zone boundaries are a static file built into the client
+bundle — see `scripts/build-timezones.mjs` — so that layer makes no third-party
+request.)
 
 Because these are fetched by the browser, **every client's IP is exposed directly to
 those providers**, and they are unaffected by any server-side caching or rate limiting.

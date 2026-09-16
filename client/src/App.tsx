@@ -26,6 +26,7 @@ import { WindArrowsLayer } from './layers/wind/WindArrowsLayer';
 import { WindProbeController } from './layers/wind/WindProbeController';
 import { WindReadout } from './layers/wind/WindReadout';
 import { MapLegends } from './ui/MapLegends';
+import { TimeZonesCredit } from './layers/timezones/TimeZonesCredit';
 import { ShipLayer } from './layers/ships/ShipLayer';
 import { ShipModelLayer } from './layers/ships/ShipModelLayer';
 import { ShipShockwave } from './screensaver/ShipShockwave';
@@ -229,6 +230,7 @@ export default function App() {
         <div className="pointer-events-none absolute bottom-24 right-4 z-30 flex max-h-[calc(100%-7rem)] w-[230px] flex-col gap-2">
           <MapLegends />
           <WindReadout />
+          <TimeZonesCredit />
         </div>
         {/* Bottom-center dock: the Earth date bar and the radar scrubber stack
             here so both can be up at once without overlapping. */}

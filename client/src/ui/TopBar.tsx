@@ -45,12 +45,26 @@ function HamburgerButton() {
   );
 }
 
-function LiveClock() {
+// One tick just after every wall-clock second boundary, so this clock, the
+// screensaver card and the time-zone layer's map clocks all roll over
+// together instead of each at its own phase within the second.
+function useNowEverySecond(): Date {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(id);
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      const d = new Date();
+      setNow(d);
+      timer = setTimeout(tick, 1000 - (d.getTime() % 1000) + 5);
+    };
+    timer = setTimeout(tick, 1000 - (Date.now() % 1000) + 5);
+    return () => clearTimeout(timer);
   }, []);
+  return now;
+}
+
+function LiveClock() {
+  const now = useNowEverySecond();
 
   const time = now.toLocaleTimeString([], {
     hour: '2-digit',
@@ -103,11 +117,7 @@ function LiveClock() {
 // Wall-display clock card for the pins screensaver — the one piece of chrome
 // worth keeping big while the tour runs: local time large, UTC + date under it.
 function ScreensaverClockCard() {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(id);
-  }, []);
+  const now = useNowEverySecond();
 
   const time = now.toLocaleTimeString([], {
     hour: '2-digit',

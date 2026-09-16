@@ -16,6 +16,11 @@
     "build": "npm run build -w client && npm run build -w server",
     "start": "node server/dist/index.js",
     "lint": "npm run lint -w client && npm run lint -w server",
-    "test": "npm run test -w client && npm run test -w server"
+    "test": "npm run test -w client && npm run test -w server",
+    "build:timezones": "node scripts/build-timezones.mjs"
+  },
+  "devDependencies": {
+    "fflate": "^0.8.3",
+    "mapshaper": "^0.7.61"
   }
 }

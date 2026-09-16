@@ -1,0 +1,14 @@
+{
+  "source": "https://github.com/evansiroky/timezone-boundary-builder",
+  "asset": "timezones-with-oceans-now.geojson.zip",
+  "release": "2026d",
+  "assetLastModified": "Wed, 16 Sep 2026 05:05:47 GMT",
+  "builtAt": "2026-09-16T16:21:16.288Z",
+  "simplifyIntervalDegrees": 0.009,
+  "quantization": 1000000,
+  "zones": 66,
+  "pieces": 187,
+  "arcs": 1091,
+  "license": "ODbL 1.0",
+  "attribution": "© OpenStreetMap contributors, via timezone-boundary-builder"
+}
