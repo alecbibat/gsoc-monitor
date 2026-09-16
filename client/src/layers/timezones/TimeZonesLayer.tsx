@@ -1,35 +1,32 @@
 import * as Cesium from 'cesium';
 import { useEffect } from 'react';
+import { feature as topoFeature } from 'topojson-client';
+import type { GeometryCollection, Topology } from 'topojson-specification';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { useScreensaverStore } from '../../screensaver/screensaverStore';
 import { useHoverStore } from '../../screensaver/hoverStore';
 import { useTimeZonesStatus } from './timezonesStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
-import {
-  captionFor,
-  formatOffsetLabel,
-  nominalOffsetFromProps,
-  readZone,
-  representativeZone,
-  resolveZoneClock,
-  shortPlaceName,
-  zoneCityName,
-  type ZoneClock,
-  type ZoneReading,
-} from './zoneClock';
+import { captionFor, readZone, resolveZoneClock, type ZoneClock, type ZoneReading } from './zoneClock';
 import { buildZoneShape, placeLabel, type ZoneShape } from './zoneLabelPlacement';
 
-// Natural Earth 10m timezone polygons via jsDelivr CDN — no API key required.
-// Source: https://github.com/nvkelso/natural-earth-vector
-const DATA_URL =
-  'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_10m_time_zones.geojson';
+// Real time-zone polygons — one per set of places whose clocks agree from
+// today onward, oceans included — from the timezone-boundary-builder project
+// (OpenStreetMap data, ODbL). scripts/build-timezones.mjs downloads a release,
+// simplifies it to ~1 km and writes this TopoJSON; timezones.meta.json
+// records which release. Served with the app, so no third-party CDN.
+const DATA_URL = '/data/timezones.topo.json';
 
-// The NE10m data contains ~49 Arctic coordinates nudged just past the pole
-// (latitude 90.0001+). Cesium's rhumb-line tessellation computes isometric
-// latitude log(tan(π/4 + φ/2)), which diverges to ∞/NaN at |lat| ≥ 90° and
-// crashes polygon geometry creation ("Invalid array length"). Clamp every
-// coordinate just inside the valid range to keep the math finite.
+interface ZoneProps {
+  tzid: string;
+}
+type ZoneTopology = Topology<{ zones: GeometryCollection<ZoneProps> }>;
+
+// Cesium's rhumb-line tessellation computes isometric latitude
+// log(tan(π/4 + φ/2)), which diverges to ∞/NaN at |lat| = 90° and crashes
+// polygon geometry creation ("Invalid array length"). The Antarctic zones
+// run to the pole, so clamp every coordinate just inside the valid range.
 const MAX_ABS_LAT = 89.99;
 function clampLon(v: number): number {
   return v < -180 ? -180 : v > 180 ? 180 : v;
@@ -56,7 +53,9 @@ function sanitizeGeometry(geom: GeoJSON.Geometry | null): void {
 }
 
 // Maps UTC offset (−12 … +14) to a hue on the color wheel: blue in the west,
-// cycling through cyan → green → yellow → orange → red in the east.
+// cycling through cyan → green → yellow → orange → red in the east. Keyed to
+// the offset in force right now, so a zone on summer time takes the hue of
+// the offset it is actually keeping (and changes hue when DST ends).
 function zoneColor(utcHours: number, alpha: number): Cesium.Color {
   const t = Math.max(0, Math.min(1, (utcHours + 12) / 26)); // 0=UTC-12, 1=UTC+14
   const hDeg = (1 - t) * 240; // 240° (blue) → 0° (red), no wrap-around
@@ -72,26 +71,28 @@ function zoneColor(utcHours: number, alpha: number): Cesium.Color {
   else                 { r = 0; g = x; b = c; }
   return new Cesium.Color(r + m, g + m, b + m, alpha);
 }
+const UNKNOWN_FILL = new Cesium.Color(0.4, 0.4, 0.4, 0.10);
+const UNKNOWN_OUTLINE = Cesium.Color.WHITE.withAlpha(0.18);
 
 // ── Live clock labels ────────────────────────────────────────────────────────
 //
 // Every zone polygon carries a clock label that ticks once a second: a
-// monospace HH:MM:SS with a small caption underneath naming whose clock it
-// is ("New York · UTC-4", or "Kiritimati · UTC+14 · +1d" when that zone is
-// already on a different day from the viewer). The bands are Natural Earth's
-// nominal offset bands, not tz-database zones, so the clock is attributed to
-// the band's representative place rather than claimed for every spot in it.
+// monospace HH:MM:SS with a small caption underneath giving the offset and
+// daylight-saving name in force ("UTC-4 · EDT", or "UTC+14 · +1d" when that
+// zone is already on a different day from the viewer). Every point of a
+// polygon shares those, so the caption is exact for the whole shape.
 // Labels are Cesium primitives (a LabelCollection, not entities): a text
 // change rebinds that label's glyph billboards and the collection rewrites
 // its vertex buffers once per tick (~1k billboards, a millisecond or two),
 // then one scene frame is requested — the same 1 fps the satellite layer
 // costs while it is on. Labels on the far side of the globe are skipped.
 //
-// The bands are tall — America/Denver's runs from Antarctica to the North
-// Pole — so instead of one fixed anchor the label slides along its band to
-// stay near the camera (see zoneLabelPlacement.ts). Labels are re-anchored
-// only when the camera settles, so during a drag or a screensaver fly-to
-// they behave like map features rather than hopping HUD chrome.
+// Zones are big — America/New_York's polygon runs from the Gulf coast to the
+// Arctic, Africa/Abidjan's takes in the whole UTC ocean strip — so instead of
+// one fixed anchor the label slides along its shape to stay near the camera
+// (see zoneLabelPlacement.ts). Labels are re-anchored only when the camera
+// settles, so during a drag or a screensaver fly-to they behave like map
+// features rather than hopping HUD chrome.
 
 // index.html loads JetBrains Mono at 400/500/600 only, so ask for the weight
 // that exists rather than let a 700 request silently match down to it.
@@ -99,30 +100,29 @@ const TIME_FONT = '600 15px "JetBrains Mono", ui-monospace, Menlo, monospace';
 const CAPTION_FONT = '600 10px Inter, system-ui, sans-serif';
 // Opaque fills (brightness in RGB, alpha 1) keep the glyph cores in Cesium's
 // opaque pass with a depth write; a translucent fill would be sorted against
-// the 22%-alpha band polygons by bounding-sphere distance and could tint or
+// the 22%-alpha zone polygons by bounding-sphere distance and could tint or
 // pop as the labels slide.
 const TIME_FILL = new Cesium.Color(0.96, 0.96, 0.96, 1);
 const CAPTION_FILL = new Cesium.Color(0.78, 0.78, 0.78, 1);
 const OUTLINE = Cesium.Color.BLACK.withAlpha(0.85);
 // Barely shrink with distance: the zoomed-out globe is the wall-display view.
 const LABEL_SCALE = new Cesium.NearFarScalar(2.0e6, 1.0, 2.5e7, 0.9);
-// A feature only gets a label while it spans roughly 60px or more on screen
+// A zone only gets a label while it spans roughly 60px or more on screen
 // (span × 20 ≈ the camera height at which that happens for a 1400px canvas),
-// so the Uzbek enclaves and Lord Howe Island don't stack a clock on top of
-// their neighbours' at continental zoom. Never below 250 km so a small
-// feature is still labelled when you are looking straight at it.
+// so Lord Howe Island and Norfolk Island don't stack a clock on top of their
+// neighbours' at continental zoom. Never below 250 km so a small zone is
+// still labelled when you are looking straight at it.
 const MIN_LABEL_FAR_M = 250_000;
 const LABEL_FAR_PER_SPAN = 20;
 // The label row sits a little above the view centre so a zoomed-in clock
-// doesn't cover the very spot you are looking at, and a neighbouring band's
+// doesn't cover the very spot you are looking at, and a neighbouring zone's
 // label may slide to within 12% of the visible width of its near edge.
 const LAT_BIAS_FRACTION = 0.22;
 const MAX_LAT_BIAS_DEG = 5;
 const LON_MARGIN_FRACTION = 0.12;
-// A band the camera can't reach — the Arctic Ocean slivers and Antarctic
-// wedges when you are looking at the mid-latitudes — keeps its clock hidden
-// until the view centre comes within this many degrees of its latitude range,
-// so a row of polar clocks doesn't crowd the top and bottom of the globe.
+// A zone the camera can't reach — an Antarctic-only shape when you are
+// looking at the mid-latitudes — keeps its clock hidden until the view centre
+// comes within this many degrees of its latitude range.
 const HIDE_BEYOND_LAT_GAP_DEG = 20;
 // Screensaver / hover close-ups drop every basemap label (CesiumGlobe's
 // PINS_FADE band) so the cinematic shots carry no text; the clocks follow the
@@ -141,8 +141,6 @@ const FONT_WAIT_MS = 1500;
 interface LabelRecord {
   shape: ZoneShape;
   clock: ZoneClock;
-  /** Whose clock the caption says this is; null for a bare offset band. */
-  place: string | null;
   time: Cesium.Label;
   caption: Cesium.Label;
   lon: number;
@@ -150,6 +148,15 @@ interface LabelRecord {
   position: Cesium.Cartesian3;
   /** Geodetic surface normal at `position`, for the horizon test. */
   normal: Cesium.Cartesian3;
+}
+
+// Per-zone state that changes only at a DST transition (or an offset reform
+// the browser's tz database already knows about): the fill hue, the entity
+// name and the panel title all follow the offset in force.
+interface ZoneState {
+  clock: ZoneClock;
+  entities: Cesium.Entity[];
+  offsetMin: number;
 }
 
 async function waitForFonts(): Promise<void> {
@@ -167,10 +174,37 @@ async function waitForFonts(): Promise<void> {
 
 function featureIndexOf(entity: Cesium.Entity): number | null {
   // GeoJsonDataSource keeps feature.id as the entity id (a MultiPolygon's
-  // extra parts get "_2", "_3" … suffixes), which is how a label finds all
-  // the entities of its feature.
+  // extra parts get "_2", "_3" … suffixes), which is how a zone finds all
+  // of its entities.
   const m = /^tz-(\d+)/.exec(entity.id);
   return m ? parseInt(m[1], 10) : null;
+}
+
+function stylePolygon(entity: Cesium.Entity, fill: Cesium.Color, outline: Cesium.Color): void {
+  if (!entity.polygon) return;
+  entity.polygon.material = new Cesium.ColorMaterialProperty(fill) as unknown as Cesium.MaterialProperty;
+  entity.polygon.outlineColor = new Cesium.ConstantProperty(outline);
+  entity.polygon.outline = new Cesium.ConstantProperty(true);
+  entity.polygon.outlineWidth = new Cesium.ConstantProperty(1);
+  entity.polygon.height = new Cesium.ConstantProperty(0);
+}
+
+// Everything about a zone that depends on the offset in force.
+function applyZoneStyle(state: ZoneState, reading: ZoneReading): void {
+  const hours = reading.offsetMin / 60;
+  const title = reading.abbr ? `${reading.offsetLabel} · ${reading.abbr}` : reading.offsetLabel;
+  for (const entity of state.entities) {
+    stylePolygon(entity, zoneColor(hours, 0.22), zoneColor(hours, 0.55));
+    entity.name = title;
+    attachPanelData(entity, {
+      id: `timezone-${state.clock.key}`,
+      kind: 'timezones',
+      title,
+      subtitle: state.clock.iana,
+      payload: { tzid: state.clock.iana },
+    });
+  }
+  state.offsetMin = reading.offsetMin;
 }
 
 export function TimeZonesLayer() {
@@ -194,6 +228,7 @@ export function TimeZonesLayer() {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const disposers: Array<() => void> = [];
     const records: LabelRecord[] = [];
+    const zones = new Map<string, ZoneState>();
 
     setStatus({ loading: true, error: null });
 
@@ -211,24 +246,32 @@ export function TimeZonesLayer() {
       return dot > -HORIZON_SLACK * Cesium.Cartesian3.magnitude(scratchToCamera);
     };
 
-    // Refresh label text. The regular tick skips labels on the far side of
-    // the globe (they catch up the moment they come round, because a camera
-    // settle always runs the full pass).
+    // Read every zone once (66 Intl calls, well under a millisecond), restyle
+    // any whose offset just changed, then refresh label text — on the regular
+    // tick only for labels the camera can see (the rest catch up the moment
+    // they come round, because a camera settle always runs the full pass).
     const updateTexts = (everything: boolean) => {
       const now = Date.now();
       readings.clear();
+      let restyled = false;
+      for (const state of zones.values()) {
+        const r = readZone(state.clock, now);
+        readings.set(state.clock.key, r);
+        if (r.offsetMin !== state.offsetMin) {
+          applyZoneStyle(state, r);
+          restyled = true;
+        }
+      }
       for (const rec of records) {
         if (!everything && !facesCamera(rec)) continue;
-        let r = readings.get(rec.clock.key);
-        if (!r) {
-          r = readZone(rec.clock, now);
-          readings.set(rec.clock.key, r);
-        }
+        const r = readings.get(rec.clock.key);
+        if (!r) continue;
         // Label.text is a no-op when unchanged, so the caption costs nothing
         // outside the once-a-day/DST-transition moments it actually changes.
         rec.time.text = r.hhmmss;
-        rec.caption.text = captionFor(r, rec.place);
+        rec.caption.text = captionFor(r);
       }
+      return restyled;
     };
 
     // Whole-collection visibility: off during screensaver / hover close-ups,
@@ -319,15 +362,18 @@ export function TimeZonesLayer() {
     // ── Load ───────────────────────────────────────────────────────────────
     (async () => {
       try {
-        // Fetch + sanitize ourselves so we can clamp the out-of-range Arctic
-        // coordinates before Cesium's tessellator ever sees them, and so the
-        // raw rings are on hand for label placement.
         const resp = await fetch(DATA_URL, { signal: abort.signal });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const gj = (await resp.json()) as GeoJSON.FeatureCollection;
-        gj.features.forEach((feature, i) => {
-          sanitizeGeometry(feature.geometry);
-          feature.id = `tz-${i}`;
+        const topo = (await resp.json()) as ZoneTopology;
+        // topojson-client rebuilds each zone's rings from the shared arcs, so
+        // neighbouring zones can never gap or overlap along a border.
+        const gj = topoFeature(topo, topo.objects.zones) as GeoJSON.FeatureCollection<
+          GeoJSON.Polygon | GeoJSON.MultiPolygon,
+          ZoneProps
+        >;
+        gj.features.forEach((f, i) => {
+          sanitizeGeometry(f.geometry);
+          f.id = `tz-${i}`;
         });
         if (!mounted) return;
 
@@ -343,7 +389,7 @@ export function TimeZonesLayer() {
         if (!mounted) return;
         ds = loaded;
 
-        // Group the entities Cesium made (one per polygon part) by feature.
+        // Group the entities Cesium made (one per polygon part) by zone.
         const entitiesByFeature = new Map<number, Cesium.Entity[]>();
         for (const entity of ds.entities.values) {
           if (!entity.polygon) continue;
@@ -356,60 +402,31 @@ export function TimeZonesLayer() {
 
         labels = new Cesium.LabelCollection();
         const now = Date.now();
-        const offsetsSeen = new Set<number>();
+        let unknown = 0;
 
-        gj.features.forEach((feature, i) => {
+        gj.features.forEach((f, i) => {
           const entities = entitiesByFeature.get(i);
           if (!entities?.length) return;
-          const props = (feature.properties ?? {}) as Record<string, unknown>;
-          const nominal = nominalOffsetFromProps(props);
-
-          if (nominal === null) {
-            for (const entity of entities) {
-              stylePolygon(entity, new Cesium.Color(0.4, 0.4, 0.4, 0.10), Cesium.Color.WHITE.withAlpha(0.18));
-            }
+          const clock = resolveZoneClock(f.properties.tzid);
+          if (!clock) {
+            // A zone this browser's tz database doesn't know: draw it, but
+            // without a clock we would only be guessing at.
+            unknown++;
+            for (const entity of entities) stylePolygon(entity, UNKNOWN_FILL, UNKNOWN_OUTLINE);
             return;
           }
 
-          const ianaRaw = props['tz_name1st'];
-          const places = typeof props['places'] === 'string' ? props['places'] : null;
-          const dstPlaces = typeof props['dst_places'] === 'string' ? props['dst_places'] : null;
-          const iana = representativeZone(nominal, typeof ianaRaw === 'string' ? ianaRaw : null, places);
-          const clock = resolveZoneClock(nominal, iana);
+          const state: ZoneState = { clock, entities, offsetMin: NaN };
           const reading = readZone(clock, now);
-          const nominalLabel = formatOffsetLabel(clock.fixedOffsetMin);
-          const place = clock.iana ? zoneCityName(clock.iana) : shortPlaceName(places);
-          offsetsSeen.add(clock.fixedOffsetMin);
+          applyZoneStyle(state, reading);
+          zones.set(clock.key, state);
 
-          // Colour stays keyed to the band's nominal offset — its stable
-          // identity — so neighbouring bands don't merge for the half of the
-          // year one of them is on summer time; only the text goes live.
-          for (const entity of entities) {
-            stylePolygon(entity, zoneColor(nominal, 0.22), zoneColor(nominal, 0.55));
-            entity.name = nominalLabel;
-            attachPanelData(entity, {
-              id: `timezone-${clock.key}`,
-              kind: 'timezones',
-              title: `${nominalLabel} band`,
-              subtitle: place ?? places ?? undefined,
-              payload: {
-                offset: nominal,
-                label: nominalLabel,
-                tzName: clock.iana ?? nominalLabel,
-                iana: clock.iana,
-                place,
-                places,
-                dstPlaces,
-              },
-            });
-          }
-
-          const shape = buildZoneShape(feature.geometry);
+          const shape = buildZoneShape(f.geometry);
           if (!shape || !labels) return;
           const far = Math.max(MIN_LABEL_FAR_M, shape.spanMeters * LABEL_FAR_PER_SPAN);
           const anchor = shape.polygons[0].interior;
           const position = Cesium.Cartesian3.fromDegrees(anchor.lon, anchor.lat, 0, ellipsoid);
-          // Clicking the clock opens the same panel as clicking the band.
+          // Clicking the clock opens the same panel as clicking the zone.
           const pickId = entities[0];
           const time = labels.add({
             id: pickId,
@@ -429,7 +446,7 @@ export function TimeZonesLayer() {
           const caption = labels.add({
             id: pickId,
             position,
-            text: captionFor(reading, place),
+            text: captionFor(reading),
             font: CAPTION_FONT,
             fillColor: CAPTION_FILL,
             outlineColor: OUTLINE,
@@ -444,7 +461,6 @@ export function TimeZonesLayer() {
           records.push({
             shape,
             clock,
-            place,
             time,
             caption,
             lon: anchor.lon,
@@ -465,7 +481,12 @@ export function TimeZonesLayer() {
         disposers.push(() => document.removeEventListener('visibilitychange', onVisible));
         tick();
 
-        setStatus({ loading: false, ready: true, count: offsetsSeen.size, error: null });
+        setStatus({
+          loading: false,
+          ready: true,
+          count: zones.size,
+          error: unknown ? `${unknown} zone${unknown === 1 ? '' : 's'} unknown to this browser` : null,
+        });
         scene.requestRender();
       } catch (err: unknown) {
         if (!mounted || abort.signal.aborted) return;
@@ -480,6 +501,7 @@ export function TimeZonesLayer() {
       if (timer) clearTimeout(timer);
       for (const off of disposers) off();
       records.length = 0;
+      zones.clear();
       // After a WebGL context loss CesiumGlobe destroys the viewer before the
       // layers unmount; a destroyed viewer's collections throw on touch.
       if (!viewer.isDestroyed()) {
@@ -495,13 +517,4 @@ export function TimeZonesLayer() {
   }, [viewer, active]);
 
   return null;
-}
-
-function stylePolygon(entity: Cesium.Entity, fill: Cesium.Color, outline: Cesium.Color): void {
-  if (!entity.polygon) return;
-  entity.polygon.material = new Cesium.ColorMaterialProperty(fill) as unknown as Cesium.MaterialProperty;
-  entity.polygon.outlineColor = new Cesium.ConstantProperty(outline);
-  entity.polygon.outline = new Cesium.ConstantProperty(true);
-  entity.polygon.outlineWidth = new Cesium.ConstantProperty(1);
-  entity.polygon.height = new Cesium.ConstantProperty(0);
 }

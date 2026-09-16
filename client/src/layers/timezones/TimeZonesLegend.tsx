@@ -1,3 +1,5 @@
+import meta from './timezones.meta.json';
+
 // What the clock labels mean. Store-free/static so it renders both as a
 // floating map card (MapLegends) and under the share-link globe.
 export function TimeZonesLegend() {
@@ -8,15 +10,16 @@ export function TimeZonesLegend() {
         <span className="text-white/30">live, to the second</span>
       </div>
       <div>
-        <span className="text-white/70">New York · UTC-4</span>{' '}
-        <span className="text-white/30">whose clock, and its offset now</span>
+        <span className="text-white/70">UTC-4 · EDT</span>{' '}
+        <span className="text-white/30">offset and daylight-saving name in force now</span>
       </div>
       <div>
         <span className="text-white/70">+1d / -1d</span>{' '}
         <span className="text-white/30">a day ahead of / behind your date</span>
       </div>
       <div className="text-white/30">
-        Bands are Natural Earth's nominal UTC-offset zones; the clock follows the named place.
+        One shape per set of places whose clocks agree from today on. Boundaries ©
+        OpenStreetMap contributors (ODbL), via timezone-boundary-builder {meta.release}.
       </div>
     </div>
   );

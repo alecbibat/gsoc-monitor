@@ -309,8 +309,8 @@ export function Sidebar() {
               (timeZonesStatus.loading
                 ? 'Loading zone boundaries…'
                 : timeZonesStatus.ready
-                  ? `${timeZonesStatus.count} UTC offsets · live to the second · click a zone for details`
-                  : 'Live clock on every UTC offset band · free')
+                  ? `${timeZonesStatus.count} zones · live to the second · click a zone for details`
+                  : 'Live clock on every time zone · free')
             }
           />
           <LayerToggle

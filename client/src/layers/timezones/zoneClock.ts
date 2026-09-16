@@ -2,22 +2,16 @@
 // panel and the unit tests so all three agree. Pure TypeScript: no Cesium, no
 // React, no module-level Date.now() so the tests can pin the instant.
 //
-// Natural Earth's time-zone polygons are offset *bands* (one polygon per UTC
-// offset per region), each tagged with a representative IANA zone name
-// (`tz_name1st`) for the most notable place inside it. Where that name is a
-// real tz database entry we follow it, which gives daylight-saving-aware time
-// and survives the dataset's stale offsets (it still has Moscow at +4, a
-// decade after Russia moved to +3). Where it is missing or malformed (the
-// Arctic Ocean slivers, most Antarctic wedges, "Antarctica/" with nothing
-// after the slash) we fall back to the band's fixed nominal offset.
+// Every zone polygon carries a tz database name (America/New_York,
+// Etc/GMT+12 …), and the browser's own copy of the tz database — reached
+// through Intl.DateTimeFormat — supplies the rules, so daylight-saving
+// changes and offset reforms need no data update on our side.
 
 export interface ZoneClock {
-  /** Stable identity: the IANA name, or `fixed:<minutes>` for offset-only zones. */
+  /** Stable identity: the tz database name. */
   key: string;
-  /** IANA zone the clock follows (DST-aware), or null when only an offset is known. */
-  iana: string | null;
-  /** Nominal band offset in minutes east of UTC; the whole story for fixed clocks. */
-  fixedOffsetMin: number;
+  /** The zone the clock follows. */
+  iana: string;
 }
 
 export interface ZoneReading {
@@ -39,12 +33,13 @@ export interface ZoneReading {
 
 const MIN_PER_HOUR = 60;
 const MS_PER_MIN = 60_000;
+const MS_PER_DAY = 86_400_000;
 
 // ── IANA validity ────────────────────────────────────────────────────────────
 
 const validityCache = new Map<string, boolean>();
 
-/** True when `Intl` accepts the name as a time zone (so `Antarctica/` → false). */
+/** True when this browser's `Intl` knows the zone. */
 export function isValidTimeZone(name: string | null | undefined): name is string {
   if (!name) return false;
   const cached = validityCache.get(name);
@@ -60,143 +55,12 @@ export function isValidTimeZone(name: string | null | undefined): name is string
   return ok;
 }
 
-// ── Nominal offset from the Natural Earth properties ─────────────────────────
-
-/** "UTC+05:45" / "UTC-03:30" / "UTC±00:00" → hours east of UTC. */
-export function parseUtcFormat(raw: unknown): number | null {
-  if (typeof raw !== 'string') return null;
-  const m = raw.trim().match(/^UTC\s*([+\-±−])\s*(\d{1,2})(?::(\d{2}))?$/i);
-  if (!m) return null;
-  const sign = m[1] === '-' || m[1] === '−' ? -1 : 1;
-  const hours = parseInt(m[2], 10) + (m[3] ? parseInt(m[3], 10) / MIN_PER_HOUR : 0);
-  return sign * hours;
-}
-
-/** "+1" / "-3.5" / "0" / 5.75 → hours east of UTC. */
-export function parseSignedHours(raw: unknown): number | null {
-  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
-  if (typeof raw !== 'string') return null;
-  const m = raw.trim().match(/^([+\-−]?)(\d{1,2}(?:[.,]\d+)?)$/);
-  if (!m) return null;
-  const v = parseFloat(m[2].replace(',', '.'));
-  return m[1] === '-' || m[1] === '−' ? -v : v;
-}
-
 /**
- * Nominal band offset in hours from a Natural Earth feature's properties.
- *
- * `zone` is the canonical numeric field, but the dataset has at least one
- * feature (Neumayer Station) where `zone` says +6 while `name` and
- * `utc_format` both say +1 — so when the two textual fields agree with each
- * other and disagree with `zone`, they win.
+ * A clock for the zone, or null when this browser's tz database doesn't
+ * have it (a zone created after the browser shipped, or a malformed name).
  */
-export function nominalOffsetFromProps(props: Record<string, unknown>): number | null {
-  const zone = parseSignedHours(props['zone'] ?? props['Zone'] ?? props['ZONE']);
-  const name = parseSignedHours(props['name'] ?? props['NAME']);
-  const fmt =
-    parseUtcFormat(props['utc_format'] ?? props['UTC_FORMAT']) ??
-    parseUtcFormat(props['time_zone'] ?? props['TIME_ZONE']);
-
-  const votes = [zone, name, fmt].filter((v): v is number => v !== null);
-  if (votes.length === 0) return null;
-  if (zone === null) return votes[0];
-  if (name !== null && fmt !== null && name === fmt && zone !== name) return name;
-  return zone;
-}
-
-// ── Representative zone fixes ────────────────────────────────────────────────
-//
-// Natural Earth's `tz_name1st` is the zone of the most notable place in the
-// band as of ~2012. Where a place has since left the band, following it would
-// put the wrong clock on everything that stayed. Keep this list tiny and
-// evidence-based: each entry names the band (nominal offset + the field that
-// identifies it) and the zone that still matches what the band covers.
-interface RepresentativeFix {
-  nominalHours: number;
-  /** Match on the band's tz_name1st … */
-  iana?: string;
-  /** … or, for bands without one, on its `places` text. */
-  places?: string;
-  use: string;
-  why: string;
-}
-const REPRESENTATIVE_FIXES: RepresentativeFix[] = [
-  {
-    nominalHours: 7,
-    iana: 'Asia/Omsk',
-    use: 'Asia/Novosibirsk',
-    why: 'Omsk moved to UTC+6 in 2016; the band is Novosibirsk Oblast and western Mongolia, both still UTC+7.',
-  },
-  {
-    nominalHours: 11,
-    places: 'Russia (Primorsky Krai)',
-    use: 'Asia/Vladivostok',
-    why: 'The band has no zone name; Primorsky Krai has been UTC+10 (Vladivostok) since 2014, not the nominal +11.',
-  },
-];
-
-/**
- * The IANA zone a band's clock should follow, after the fixes above; null
- * when the band has no usable zone and must run on its fixed offset.
- */
-export function representativeZone(
-  nominalHours: number,
-  ianaName: string | null | undefined,
-  places: string | null | undefined
-): string | null {
-  for (const fix of REPRESENTATIVE_FIXES) {
-    if (fix.nominalHours !== nominalHours) continue;
-    if (fix.iana !== undefined && fix.iana === ianaName) return fix.use;
-    if (fix.places !== undefined && fix.places === places?.trim()) return fix.use;
-  }
-  return isValidTimeZone(ianaName) ? ianaName : null;
-}
-
-// ── Naming the clock ─────────────────────────────────────────────────────────
-
-// Segments whose underscore-to-space spelling still reads wrong.
-const CITY_SPELLINGS: Record<string, string> = {
-  DumontDUrville: "Dumont d'Urville",
-  St_Johns: "St. John's",
-  Sao_Paulo: 'São Paulo',
-};
-
-/** "America/New_York" → "New York"; "Antarctica/South_Pole" → "South Pole". */
-export function zoneCityName(iana: string): string {
-  const seg = iana.slice(iana.lastIndexOf('/') + 1);
-  return CITY_SPELLINGS[seg] ?? seg.replace(/_/g, ' ');
-}
-
-const MAX_PLACE_LABEL = 20;
-// Ocean and ice bands: naming them adds width, not information.
-const GENERIC_PLACES = new Set(['Arctic Ocean', 'Southern Ocean', 'Pacific Ocean', 'Antarctica', 'Siberia']);
-
-/**
- * A short place name for a band that has no zone of its own, from Natural
- * Earth's `places` text: "United States (Aleutian Islands)" → "Aleutian
- * Islands", "Tajikistan" → "Tajikistan". Lists of several places, and long
- * names, give null (the caption then shows the offset alone).
- */
-export function shortPlaceName(places: string | null | undefined): string | null {
-  if (!places) return null;
-  const s = places.trim();
-  if (!s || s.includes(',')) return null;
-  const paren = /\(([^)]+)\)/.exec(s);
-  const name = (paren ? paren[1] : s).trim();
-  if (!name || name.length > MAX_PLACE_LABEL || GENERIC_PLACES.has(name)) return null;
-  return name;
-}
-
-// ── Clock resolution ─────────────────────────────────────────────────────────
-
-export function resolveZoneClock(nominalOffsetHours: number, ianaName?: string | null): ZoneClock {
-  const fixedOffsetMin = Math.round(nominalOffsetHours * MIN_PER_HOUR);
-  const iana = isValidTimeZone(ianaName) ? ianaName : null;
-  return {
-    key: iana ?? `fixed:${fixedOffsetMin}`,
-    iana,
-    fixedOffsetMin,
-  };
+export function resolveZoneClock(ianaName: string | null | undefined): ZoneClock | null {
+  return isValidTimeZone(ianaName) ? { key: ianaName, iana: ianaName } : null;
 }
 
 // ── Formatting ───────────────────────────────────────────────────────────────
@@ -210,7 +74,9 @@ export function formatOffsetLabel(offsetMin: number): string {
 }
 
 // One parts formatter per zone (constructing Intl.DateTimeFormat costs ~50µs
-// and the labels read every zone every second).
+// and the labels read every zone every second). Pinned to en-US: the parts
+// are parsed back into numbers, which a locale with non-Latin digits or a
+// non-Gregorian calendar would break.
 const partsFormatters = new Map<string, Intl.DateTimeFormat>();
 function partsFormatter(timeZone: string): Intl.DateTimeFormat {
   let f = partsFormatters.get(timeZone);
@@ -261,7 +127,7 @@ function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
 
-/** Effective offset (minutes east of UTC) of an IANA zone at an instant. */
+/** Effective offset (minutes east of UTC) of a zone at an instant. */
 export function offsetMinutesAt(timeZone: string, nowMs: number): number {
   const wholeSecond = Math.floor(nowMs / 1000) * 1000;
   const w = wallClockIn(timeZone, new Date(wholeSecond));
@@ -324,8 +190,6 @@ export function zoneAbbreviation(timeZone: string, nowMs: number, offsetMin: num
   return abbr;
 }
 
-const MS_PER_DAY = 86_400_000;
-
 // Whole days between the zone's calendar date and the viewer's own local date
 // at the same instant: +1 when it is already tomorrow there.
 function dayOffsetFrom(w: WallClock, nowMs: number): number {
@@ -337,31 +201,18 @@ function dayOffsetFrom(w: WallClock, nowMs: number): number {
 
 /** The zone's wall-clock reading at `nowMs` (epoch milliseconds). */
 export function readZone(clock: ZoneClock, nowMs: number): ZoneReading {
-  if (clock.iana) {
-    const w = wallClockIn(clock.iana, new Date(nowMs));
-    const wholeSecond = Math.floor(nowMs / 1000) * 1000;
-    const asUtc = Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, w.second);
-    const offsetMin = Math.round((asUtc - wholeSecond) / MS_PER_MIN);
-    return {
-      hhmmss: `${pad2(w.hour)}:${pad2(w.minute)}:${pad2(w.second)}`,
-      weekday: w.weekday,
-      dayOffset: dayOffsetFrom(w, nowMs),
-      offsetMin,
-      offsetLabel: formatOffsetLabel(offsetMin),
-      abbr: zoneAbbreviation(clock.iana, nowMs, offsetMin),
-      isDst: offsetMin > standardOffsetMin(clock.iana, w.year),
-    };
-  }
-
-  const w = wallClockIn('UTC', new Date(nowMs + clock.fixedOffsetMin * MS_PER_MIN));
+  const w = wallClockIn(clock.iana, new Date(nowMs));
+  const wholeSecond = Math.floor(nowMs / 1000) * 1000;
+  const asUtc = Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, w.second);
+  const offsetMin = Math.round((asUtc - wholeSecond) / MS_PER_MIN);
   return {
     hhmmss: `${pad2(w.hour)}:${pad2(w.minute)}:${pad2(w.second)}`,
     weekday: w.weekday,
     dayOffset: dayOffsetFrom(w, nowMs),
-    offsetMin: clock.fixedOffsetMin,
-    offsetLabel: formatOffsetLabel(clock.fixedOffsetMin),
-    abbr: null,
-    isDst: false,
+    offsetMin,
+    offsetLabel: formatOffsetLabel(offsetMin),
+    abbr: zoneAbbreviation(clock.iana, nowMs, offsetMin),
+    isDst: offsetMin > standardOffsetMin(clock.iana, w.year),
   };
 }
 
@@ -405,24 +256,21 @@ function dateFormatter(timeZone: string): Intl.DateTimeFormat {
 
 /** "Wednesday, September 16, 2026" in the zone. */
 export function formatZoneDate(clock: ZoneClock, nowMs: number): string {
-  if (clock.iana) return dateFormatter(clock.iana).format(new Date(nowMs));
-  return dateFormatter('UTC').format(new Date(nowMs + clock.fixedOffsetMin * MS_PER_MIN));
+  return dateFormatter(clock.iana).format(new Date(nowMs));
 }
 
 // ── Map caption ──────────────────────────────────────────────────────────────
 
 /**
- * Caption under the time: whose clock it is and its offset — "New York ·
- * UTC-4", or just "UTC-11" for a band with no named place — with a fixed-width
- * day marker when that zone's date differs from the viewer's own ("Kiritimati
- * · UTC+14 · +1d") so a glance shows the date line has been crossed. The DST
- * abbreviation deliberately stays off the map: it belongs to the
- * representative place, not to every spot in the band.
+ * Caption under the time: the offset in force and, where English has one,
+ * the daylight-saving name — "UTC-4 · EDT" — with a fixed-width day marker
+ * when that zone's date differs from the viewer's own ("UTC+14 · +1d") so a
+ * glance shows the date line has been crossed. Every point of a zone polygon
+ * shares these, so the caption is exact for the whole shape.
  */
-export function captionFor(reading: ZoneReading, place: string | null = null): string {
-  const parts: string[] = [];
-  if (place) parts.push(place);
-  parts.push(reading.offsetLabel);
+export function captionFor(reading: ZoneReading): string {
+  const parts: string[] = [reading.offsetLabel];
+  if (reading.abbr) parts.push(reading.abbr);
   if (reading.dayOffset > 0) parts.push(`+${reading.dayOffset}d`);
   else if (reading.dayOffset < 0) parts.push(`${reading.dayOffset}d`);
   return parts.join(' · ');
