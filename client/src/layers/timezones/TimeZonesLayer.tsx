@@ -90,9 +90,13 @@ const UNKNOWN_OUTLINE = Cesium.Color.WHITE.withAlpha(0.18);
 // Zones are big — America/New_York's polygon runs from the Gulf coast to the
 // Arctic, Africa/Abidjan's takes in the whole UTC ocean strip — so instead of
 // one fixed anchor the label slides along its shape to stay near the camera
-// (see zoneLabelPlacement.ts). Labels are re-anchored only when the camera
-// settles, so during a drag or a screensaver fly-to they behave like map
-// features rather than hopping HUD chrome.
+// (see zoneLabelPlacement.ts). Labels are re-anchored when the camera
+// settles and, while it keeps moving (a drag, a screensaver rotation), once a
+// second on the tick — never per frame, so they behave like map features
+// rather than hopping HUD chrome. After anchoring, labels are projected to
+// the screen: those off-canvas or behind the horizon are hidden, and where
+// two would overprint, the one on the narrower stretch of zone (typically a
+// sliver of ocean strip beside a coast) yields.
 
 // index.html loads JetBrains Mono at 400/500/600 only, so ask for the weight
 // that exists rather than let a 700 request silently match down to it.
@@ -120,14 +124,18 @@ const LABEL_FAR_PER_SPAN = 20;
 const LAT_BIAS_FRACTION = 0.22;
 const MAX_LAT_BIAS_DEG = 5;
 const LON_MARGIN_FRACTION = 0.12;
-// A zone the camera can't reach — an Antarctic-only shape when you are
-// looking at the mid-latitudes — keeps its clock hidden until the view centre
-// comes within this many degrees of its latitude range.
-const HIDE_BEYOND_LAT_GAP_DEG = 20;
-// Screensaver / hover close-ups drop every basemap label (CesiumGlobe's
-// PINS_FADE band) so the cinematic shots carry no text; the clocks follow the
-// same rule below this camera height while one of those modes is running.
-const CLOSEUP_HIDE_HEIGHT_M = 1_500_000;
+// Screen-space footprint of a clock (time line plus caption, with outlines)
+// used for collision tests, and how many of those a stretch of zone should
+// span before it is worth labelling in preference to a wider one.
+const LABEL_BOX_W_PX = 104;
+const LABEL_BOX_H_PX = 34;
+const MIN_STRETCH_LABEL_WIDTHS = 2;
+// Basemap place labels fade out as the camera descends (CesiumGlobe's fade
+// bands: far above the ground during the pins screensaver and hover orbit
+// so cinematic close-ups carry no text, only at street level otherwise); the
+// clocks follow the same rule while a screensaver or hover mode is running.
+const CLOSEUP_HIDE_PINS_M = 1_500_000;
+const CLOSEUP_HIDE_NORMAL_M = 80_000;
 // The rendered globe is a coarse mesh, so a label a few degrees past the
 // ideal ellipsoid's horizon can still peek out at the limb; keep ticking
 // those rather than leave a stale clock on screen.
@@ -148,15 +156,21 @@ interface LabelRecord {
   position: Cesium.Cartesian3;
   /** Geodetic surface normal at `position`, for the horizon test. */
   normal: Cesium.Cartesian3;
+  /** East–west extent (degrees) of the stretch the label sits on. */
+  width: number;
 }
 
 // Per-zone state that changes only at a DST transition (or an offset reform
 // the browser's tz database already knows about): the fill hue, the entity
-// name and the panel title all follow the offset in force.
+// name and the panel title all follow the offset in force. The colours are
+// mutated in place behind CallbackProperties so a change updates the batch's
+// per-instance colour attributes instead of re-tessellating every polygon.
 interface ZoneState {
   clock: ZoneClock;
   entities: Cesium.Entity[];
   offsetMin: number;
+  fill: Cesium.Color;
+  outline: Cesium.Color;
 }
 
 async function waitForFonts(): Promise<void> {
@@ -180,10 +194,10 @@ function featureIndexOf(entity: Cesium.Entity): number | null {
   return m ? parseInt(m[1], 10) : null;
 }
 
-function stylePolygon(entity: Cesium.Entity, fill: Cesium.Color, outline: Cesium.Color): void {
+function stylePolygon(entity: Cesium.Entity, fill: Cesium.Property, outline: Cesium.Property): void {
   if (!entity.polygon) return;
   entity.polygon.material = new Cesium.ColorMaterialProperty(fill) as unknown as Cesium.MaterialProperty;
-  entity.polygon.outlineColor = new Cesium.ConstantProperty(outline);
+  entity.polygon.outlineColor = outline;
   entity.polygon.outline = new Cesium.ConstantProperty(true);
   entity.polygon.outlineWidth = new Cesium.ConstantProperty(1);
   entity.polygon.height = new Cesium.ConstantProperty(0);
@@ -193,8 +207,9 @@ function stylePolygon(entity: Cesium.Entity, fill: Cesium.Color, outline: Cesium
 function applyZoneStyle(state: ZoneState, reading: ZoneReading): void {
   const hours = reading.offsetMin / 60;
   const title = reading.abbr ? `${reading.offsetLabel} · ${reading.abbr}` : reading.offsetLabel;
+  Cesium.Color.clone(zoneColor(hours, 0.22), state.fill);
+  Cesium.Color.clone(zoneColor(hours, 0.55), state.outline);
   for (const entity of state.entities) {
-    stylePolygon(entity, zoneColor(hours, 0.22), zoneColor(hours, 0.55));
     entity.name = title;
     attachPanelData(entity, {
       id: `timezone-${state.clock.key}`,
@@ -205,6 +220,29 @@ function applyZoneStyle(state: ZoneState, reading: ZoneReading): void {
     });
   }
   state.offsetMin = reading.offsetMin;
+}
+
+// One feature per zone: the build script cuts zones on a grid (Cesium 1.142
+// tessellates any part ≥ 90° tall or ≥ 120° wide twice), so the file holds
+// several pieces per tzid. Regroup them so each zone has one clock, one panel
+// and one placement shape; Cesium still gets one entity per part.
+function mergeByZone(
+  pieces: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon, ZoneProps>[]
+): GeoJSON.Feature<GeoJSON.MultiPolygon, ZoneProps>[] {
+  const byZone = new Map<string, GeoJSON.Feature<GeoJSON.MultiPolygon, ZoneProps>>();
+  for (const piece of pieces) {
+    const parts = piece.geometry.type === 'Polygon' ? [piece.geometry.coordinates] : piece.geometry.coordinates;
+    const existing = byZone.get(piece.properties.tzid);
+    if (existing) existing.geometry.coordinates.push(...parts);
+    else {
+      byZone.set(piece.properties.tzid, {
+        type: 'Feature',
+        properties: { tzid: piece.properties.tzid },
+        geometry: { type: 'MultiPolygon', coordinates: [...parts] },
+      });
+    }
+  }
+  return [...byZone.values()];
 }
 
 export function TimeZonesLayer() {
@@ -275,13 +313,15 @@ export function TimeZonesLayer() {
     };
 
     // Whole-collection visibility: off during screensaver / hover close-ups,
-    // matching the basemap labels.
+    // matching the basemap labels' fade rule for the running mode.
     const syncVisibility = () => {
       if (!labels) return;
       const ss = useScreensaverStore.getState();
       const hv = useHoverStore.getState();
-      const closeUp = (ss.active || hv.active) &&
-        (camera.positionCartographic?.height ?? Infinity) < CLOSEUP_HIDE_HEIGHT_M;
+      const limit = hv.active || (ss.active && ss.mode === 'pins')
+        ? CLOSEUP_HIDE_PINS_M
+        : ss.active ? CLOSEUP_HIDE_NORMAL_M : 0;
+      const closeUp = limit > 0 && (camera.positionCartographic?.height ?? Infinity) < limit;
       const show = !closeUp;
       if (labels.show !== show) {
         labels.show = show;
@@ -289,13 +329,24 @@ export function TimeZonesLayer() {
       }
     };
 
+    // Camera pose at the last placement, so the tick can tell a still camera
+    // (just refresh the digits) from one mid-rotation (re-anchor as well).
+    const placedPos = new Cesium.Cartesian3(NaN, NaN, NaN);
+    const placedDir = new Cesium.Cartesian3();
+    const placedUp = new Cesium.Cartesian3();
+    const cameraMovedSincePlacement = () =>
+      !Cesium.Cartesian3.equalsEpsilon(camera.positionWC, placedPos, 0, 1) ||
+      !Cesium.Cartesian3.equalsEpsilon(camera.directionWC, placedDir, 1e-7) ||
+      !Cesium.Cartesian3.equalsEpsilon(camera.upWC, placedUp, 1e-7);
+
     // Self-rescheduling so every tick lands just after the wall-clock second
     // boundary (a plain setInterval drifts and lands mid-second).
     const tick = () => {
       timer = setTimeout(tick, 1000 - (Date.now() % 1000) + 5);
       if (document.hidden || records.length === 0) return;
       syncVisibility();
-      updateTexts(false);
+      if (cameraMovedSincePlacement()) place();
+      else updateTexts(false);
       scene.requestRender();
     };
     const onVisible = () => {
@@ -322,10 +373,20 @@ export function TimeZonesLayer() {
       return { lon: Cesium.Math.toDegrees(carto.longitude), lat: Cesium.Math.toDegrees(carto.latitude) };
     };
 
+    const scratchWindow = new Cesium.Cartesian2();
+    const placedBoxes: Array<{ x: number; y: number }> = [];
+
     const place = () => {
       if (records.length === 0) return;
       const c = viewCenter();
       if (!c) return;
+      Cesium.Cartesian3.clone(camera.positionWC, placedPos);
+      Cesium.Cartesian3.clone(camera.directionWC, placedDir);
+      Cesium.Cartesian3.clone(camera.upWC, placedUp);
+
+      const canvas = scene.canvas;
+      const canvasW = Math.max(1, canvas.clientWidth);
+      const canvasH = Math.max(1, canvas.clientHeight);
       const rect = camera.computeViewRectangle(ellipsoid, scratchRect);
       // Rectangle.MAX_VALUE comes back when the globe doesn't fill the view;
       // treat that as the whole hemisphere.
@@ -334,17 +395,13 @@ export function TimeZonesLayer() {
 
       const targetLat = c.lat + Math.min(MAX_LAT_BIAS_DEG, heightDeg * LAT_BIAS_FRACTION);
       const lonMargin = widthDeg * LON_MARGIN_FRACTION;
+      const minIntervalDeg = (widthDeg / canvasW) * LABEL_BOX_W_PX * MIN_STRETCH_LABEL_WIDTHS;
+
+      // 1. Anchor every label on its zone.
       let changed = false;
       for (const rec of records) {
-        const latGap = Math.max(rec.shape.minLat - c.lat, c.lat - rec.shape.maxLat, 0);
-        const visible = latGap <= HIDE_BEYOND_LAT_GAP_DEG;
-        if (rec.time.show !== visible) {
-          rec.time.show = visible;
-          rec.caption.show = visible;
-          changed = true;
-        }
-        if (!visible) continue;
-        const p = placeLabel(rec.shape, c.lon, targetLat, { lonMargin });
+        const p = placeLabel(rec.shape, c.lon, targetLat, { lonMargin, minIntervalDeg });
+        rec.width = p.width;
         if (p.lon === rec.lon && p.lat === rec.lat) continue;
         rec.lon = p.lon;
         rec.lat = p.lat;
@@ -354,6 +411,40 @@ export function TimeZonesLayer() {
         rec.caption.position = rec.position;
         changed = true;
       }
+
+      // 2. Show what is on screen and not on top of another clock. Wider
+      // stretches are placed first, so where a sliver of ocean strip meets a
+      // coast the land zone's clock wins.
+      const order = records.map((_, i) => i).sort((a, b) => records[b].width - records[a].width);
+      placedBoxes.length = 0;
+      for (const i of order) {
+        const rec = records[i];
+        let show = false;
+        Cesium.Cartesian3.subtract(camera.positionWC, rec.position, scratchToCamera);
+        if (Cesium.Cartesian3.dot(rec.normal, scratchToCamera) > 0) {
+          const win = Cesium.SceneTransforms.worldToWindowCoordinates(scene, rec.position, scratchWindow);
+          if (
+            win &&
+            win.x > -LABEL_BOX_W_PX && win.x < canvasW + LABEL_BOX_W_PX &&
+            win.y > -LABEL_BOX_H_PX && win.y < canvasH + LABEL_BOX_H_PX
+          ) {
+            show = true;
+            for (const b of placedBoxes) {
+              if (Math.abs(b.x - win.x) < LABEL_BOX_W_PX && Math.abs(b.y - win.y) < LABEL_BOX_H_PX) {
+                show = false;
+                break;
+              }
+            }
+            if (show) placedBoxes.push({ x: win.x, y: win.y });
+          }
+        }
+        if (rec.time.show !== show) {
+          rec.time.show = show;
+          rec.caption.show = show;
+          changed = true;
+        }
+      }
+
       syncVisibility();
       updateTexts(true);
       if (changed) scene.requestRender();
@@ -365,12 +456,16 @@ export function TimeZonesLayer() {
         const resp = await fetch(DATA_URL, { signal: abort.signal });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const topo = (await resp.json()) as ZoneTopology;
-        // topojson-client rebuilds each zone's rings from the shared arcs, so
+        // topojson-client rebuilds each piece's rings from the shared arcs, so
         // neighbouring zones can never gap or overlap along a border.
-        const gj = topoFeature(topo, topo.objects.zones) as GeoJSON.FeatureCollection<
+        const pieces = topoFeature(topo, topo.objects.zones) as GeoJSON.FeatureCollection<
           GeoJSON.Polygon | GeoJSON.MultiPolygon,
           ZoneProps
         >;
+        const gj: GeoJSON.FeatureCollection<GeoJSON.MultiPolygon, ZoneProps> = {
+          type: 'FeatureCollection',
+          features: mergeByZone(pieces.features),
+        };
         gj.features.forEach((f, i) => {
           sanitizeGeometry(f.geometry);
           f.id = `tz-${i}`;
@@ -412,11 +507,22 @@ export function TimeZonesLayer() {
             // A zone this browser's tz database doesn't know: draw it, but
             // without a clock we would only be guessing at.
             unknown++;
-            for (const entity of entities) stylePolygon(entity, UNKNOWN_FILL, UNKNOWN_OUTLINE);
+            for (const entity of entities) {
+              stylePolygon(entity, new Cesium.ConstantProperty(UNKNOWN_FILL), new Cesium.ConstantProperty(UNKNOWN_OUTLINE));
+            }
             return;
           }
 
-          const state: ZoneState = { clock, entities, offsetMin: NaN };
+          const state: ZoneState = {
+            clock,
+            entities,
+            offsetMin: NaN,
+            fill: new Cesium.Color(),
+            outline: new Cesium.Color(),
+          };
+          const fillProp = new Cesium.CallbackProperty(() => state.fill, false);
+          const outlineProp = new Cesium.CallbackProperty(() => state.outline, false);
+          for (const entity of entities) stylePolygon(entity, fillProp, outlineProp);
           const reading = readZone(clock, now);
           applyZoneStyle(state, reading);
           zones.set(clock.key, state);
@@ -467,6 +573,7 @@ export function TimeZonesLayer() {
             lat: anchor.lat,
             position,
             normal: ellipsoid.geodeticSurfaceNormal(position, new Cesium.Cartesian3()),
+            width: anchor.width,
           });
         });
 

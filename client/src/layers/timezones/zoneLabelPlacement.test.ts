@@ -22,14 +22,14 @@ describe('buildZoneShape', () => {
     const s = shape({ type: 'Polygon', coordinates: [square(0, 0, 10, 10)] });
     expect(s.polygons).toHaveLength(1);
     expect([s.minLon, s.minLat, s.maxLon, s.maxLat]).toEqual([0, 0, 10, 10]);
-    expect(s.polygons[0].interior).toEqual({ lon: 5, lat: 5 });
+    expect(s.polygons[0].interior).toMatchObject({ lon: 5, lat: 5, width: 10 });
     expect(s.spanMeters).toBeCloseTo(10 * 111_320, -3);
   });
 
   it('keeps the interior point out of a hole', () => {
     const s = shape({ type: 'Polygon', coordinates: [square(0, 0, 10, 10), square(3, 3, 7, 7)] });
     // Middle parallel (lat 5) is cut by the hole into [0,3] and [7,10]: widest wins.
-    expect(s.polygons[0].interior).toEqual({ lon: 1.5, lat: 5 });
+    expect(s.polygons[0].interior).toMatchObject({ lon: 1.5, lat: 5, width: 3 });
   });
 
   it('returns null for point/line geometry and empty input', () => {
@@ -77,22 +77,22 @@ describe('placeLabel', () => {
   const band = shape({ type: 'Polygon', coordinates: [square(-10, -60, 10, 60)] });
 
   it('sits at the camera latitude inside a tall band', () => {
-    expect(placeLabel(band, 0, 38)).toEqual({ lon: 0, lat: 38 });
-    expect(placeLabel(band, 0, -20)).toEqual({ lon: 0, lat: -20 });
+    expect(placeLabel(band, 0, 38)).toMatchObject({ lon: 0, lat: 38 });
+    expect(placeLabel(band, 0, -20)).toMatchObject({ lon: 0, lat: -20 });
   });
 
   it('drops to the band middle when the camera is beyond its latitude range', () => {
-    expect(placeLabel(band, 0, 80)).toEqual({ lon: 0, lat: 0 });
-    expect(placeLabel(band, 0, -75)).toEqual({ lon: 0, lat: 0 });
+    expect(placeLabel(band, 0, 80)).toMatchObject({ lon: 0, lat: 0 });
+    expect(placeLabel(band, 0, -75)).toMatchObject({ lon: 0, lat: 0 });
   });
 
   it('stays a little inside the band edges rather than on them', () => {
-    expect(placeLabel(band, 0, 59.9)).toEqual({ lon: 0, lat: 0 });
-    expect(placeLabel(band, 0, 59.7)).toEqual({ lon: 0, lat: 59.7 });
+    expect(placeLabel(band, 0, 59.9)).toMatchObject({ lon: 0, lat: 0 });
+    expect(placeLabel(band, 0, 59.7)).toMatchObject({ lon: 0, lat: 59.7 });
   });
 
   it('is unaffected by the camera longitude when the band is the only choice', () => {
-    expect(placeLabel(band, 120, 10)).toEqual({ lon: 0, lat: 10 });
+    expect(placeLabel(band, 120, 10)).toMatchObject({ lon: 0, lat: 10 });
   });
 
   it('prefers the stretch under the camera, then the nearest one', () => {
@@ -100,10 +100,10 @@ describe('placeLabel', () => {
       type: 'Polygon',
       coordinates: [square(0, 0, 10, 10), square(4, 2, 6, 8)],
     });
-    expect(placeLabel(holed, 2, 5)).toEqual({ lon: 2, lat: 5 });
-    expect(placeLabel(holed, 9, 5)).toEqual({ lon: 8, lat: 5 });
+    expect(placeLabel(holed, 2, 5)).toMatchObject({ lon: 2, lat: 5 });
+    expect(placeLabel(holed, 9, 5)).toMatchObject({ lon: 8, lat: 5 });
     // Camera over the hole: [0,4] is 0.5° away, [6,10] is 1.5° away.
-    expect(placeLabel(holed, 4.5, 5)).toEqual({ lon: 2, lat: 5 });
+    expect(placeLabel(holed, 4.5, 5)).toMatchObject({ lon: 2, lat: 5 });
   });
 
   it('picks the part across the antimeridian when that is closer', () => {
@@ -111,8 +111,8 @@ describe('placeLabel', () => {
       type: 'MultiPolygon',
       coordinates: [[square(150, -50, 160, 50)], [square(-180, -50, -172, 50)]],
     });
-    expect(placeLabel(split, 178, 0)).toEqual({ lon: -176, lat: 0 });
-    expect(placeLabel(split, 165, 0)).toEqual({ lon: 155, lat: 0 });
+    expect(placeLabel(split, 178, 0)).toMatchObject({ lon: -176, lat: 0 });
+    expect(placeLabel(split, 165, 0)).toMatchObject({ lon: 155, lat: 0 });
   });
 
   it('falls back to the nearest interior point when no part crosses that parallel', () => {
@@ -121,8 +121,8 @@ describe('placeLabel', () => {
       coordinates: [[square(0, 0, 10, 10)], [square(0, 40, 10, 50)]],
     });
     // Camera at lat 20 is inside the overall range but between the parts.
-    expect(placeLabel(parts, 5, 20)).toEqual({ lon: 5, lat: 5 });
-    expect(placeLabel(parts, 5, 32)).toEqual({ lon: 5, lat: 45 });
+    expect(placeLabel(parts, 5, 20)).toMatchObject({ lon: 5, lat: 5 });
+    expect(placeLabel(parts, 5, 32)).toMatchObject({ lon: 5, lat: 45 });
   });
 
   it('ignores hairline crossings when a real stretch exists', () => {
@@ -131,7 +131,7 @@ describe('placeLabel', () => {
       type: 'MultiPolygon',
       coordinates: [[square(20, 0, 20.001, 10)], [square(0, 0, 10, 10)]],
     });
-    expect(placeLabel(s, 19, 5)).toEqual({ lon: 5, lat: 5 });
+    expect(placeLabel(s, 19, 5)).toMatchObject({ lon: 5, lat: 5 });
   });
 });
 
@@ -139,19 +139,45 @@ describe('placeLabel with a longitude margin', () => {
   const band = shape({ type: 'Polygon', coordinates: [square(-10, -60, 10, 60)] });
 
   it('slides toward the camera but stays the margin inside the edge', () => {
-    expect(placeLabel(band, 4, 20, { lonMargin: 2 })).toEqual({ lon: 4, lat: 20 });
-    expect(placeLabel(band, 30, 20, { lonMargin: 2 })).toEqual({ lon: 8, lat: 20 });
-    expect(placeLabel(band, -30, 20, { lonMargin: 2 })).toEqual({ lon: -8, lat: 20 });
+    expect(placeLabel(band, 4, 20, { lonMargin: 2 })).toMatchObject({ lon: 4, lat: 20 });
+    expect(placeLabel(band, 30, 20, { lonMargin: 2 })).toMatchObject({ lon: 8, lat: 20 });
+    expect(placeLabel(band, -30, 20, { lonMargin: 2 })).toMatchObject({ lon: -8, lat: 20 });
   });
 
   it('never leaves the middle of a stretch narrower than twice the margin', () => {
-    expect(placeLabel(band, 30, 20, { lonMargin: 50 })).toEqual({ lon: 0, lat: 20 });
+    expect(placeLabel(band, 30, 20, { lonMargin: 50 })).toMatchObject({ lon: 0, lat: 20 });
   });
 
   it('clamps to the near edge across the antimeridian', () => {
     const east = shape({ type: 'Polygon', coordinates: [square(-180, -50, -172, 50)] });
-    expect(placeLabel(east, 178, 0, { lonMargin: 1 })).toEqual({ lon: -179, lat: 0 });
+    expect(placeLabel(east, 178, 0, { lonMargin: 1 })).toMatchObject({ lon: -179, lat: 0 });
     const west = shape({ type: 'Polygon', coordinates: [square(172, -50, 180, 50)] });
-    expect(placeLabel(west, -178, 0, { lonMargin: 1 })).toEqual({ lon: 179, lat: 0 });
+    expect(placeLabel(west, -178, 0, { lonMargin: 1 })).toMatchObject({ lon: 179, lat: 0 });
+  });
+});
+
+describe('placeLabel with a minimum stretch width', () => {
+  it('prefers a stretch wide enough for a label over a nearer sliver', () => {
+    // A 0.4°-wide ocean sliver at lon 10–10.4 and the zone's main body at 20–40.
+    const s = shape({
+      type: 'MultiPolygon',
+      coordinates: [[square(10, 0, 10.4, 10)], [square(20, 0, 40, 10)]],
+    });
+    const sliver = placeLabel(s, 10.2, 5);
+    expect(sliver).toMatchObject({ lon: 10.2, lat: 5 });
+    expect(sliver.width).toBeCloseTo(0.4, 6);
+    expect(placeLabel(s, 10.2, 5, { minIntervalDeg: 3 })).toMatchObject({ lon: 30, lat: 5, width: 20 });
+  });
+
+  it('falls back to the sliver when nothing wider crosses the parallel, reporting its width', () => {
+    const s = shape({ type: 'Polygon', coordinates: [square(10, 0, 10.4, 10)] });
+    const only = placeLabel(s, 10.2, 5, { minIntervalDeg: 3 });
+    expect(only).toMatchObject({ lon: 10.2, lat: 5 });
+    expect(only.width).toBeCloseTo(0.4, 6);
+  });
+
+  it('reports the interior stretch width when no part crosses the parallel', () => {
+    const s = shape({ type: 'Polygon', coordinates: [square(0, 40, 10, 50)] });
+    expect(placeLabel(s, 5, 0)).toEqual({ lon: 5, lat: 45, width: 10 });
   });
 });

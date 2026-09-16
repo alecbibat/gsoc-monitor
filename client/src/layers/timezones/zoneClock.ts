@@ -135,19 +135,43 @@ export function offsetMinutesAt(timeZone: string, nowMs: number): number {
   return Math.round((asUtc - wholeSecond) / MS_PER_MIN);
 }
 
-// Standard (non-DST) offset per zone and calendar year: the smaller of the
-// offsets in force on 1 January and 1 July. DST only ever adds, so whichever
-// half-year is lower is standard time in either hemisphere.
+// Standard (non-DST) offset per zone and calendar year: the lowest offset
+// that is in force for at least three of the year's mid-month samples. DST
+// only ever adds, so the low offset is standard time in either hemisphere;
+// the three-sample floor keeps a brief dip — Morocco's month at UTC+0 during
+// Ramadan — from being mistaken for the whole year's standard time.
 const standardOffsetCache = new Map<string, number>();
+const MIN_STANDARD_SAMPLES = 3;
 function standardOffsetMin(timeZone: string, year: number): number {
   const key = `${timeZone}|${year}`;
   const cached = standardOffsetCache.get(key);
   if (cached !== undefined) return cached;
-  const jan = offsetMinutesAt(timeZone, Date.UTC(year, 0, 1, 12));
-  const jul = offsetMinutesAt(timeZone, Date.UTC(year, 6, 1, 12));
-  const std = Math.min(jan, jul);
-  standardOffsetCache.set(key, std);
-  return std;
+  const counts = new Map<number, number>();
+  for (let month = 0; month < 12; month++) {
+    const off = offsetMinutesAt(timeZone, Date.UTC(year, month, 15, 12));
+    counts.set(off, (counts.get(off) ?? 0) + 1);
+  }
+  let std = Infinity;
+  let fallback = Infinity;
+  for (const [off, n] of counts) {
+    if (off < fallback) fallback = off;
+    if (n >= MIN_STANDARD_SAMPLES && off < std) std = off;
+  }
+  const result = std === Infinity ? fallback : std;
+  standardOffsetCache.set(key, result);
+  return result;
+}
+
+// ICU's long name settles the question outright where it has one ("Eastern
+// Daylight Time", "Central European Summer Time", "Japan Standard Time");
+// only zones it names numerically fall back to the offset heuristic.
+function isDaylightTime(timeZone: string, nowMs: number, offsetMin: number, year: number): boolean {
+  const long = zoneLongName(timeZone, nowMs, offsetMin);
+  if (long) {
+    if (/Daylight|Summer/i.test(long)) return true;
+    if (/Standard/i.test(long)) return false;
+  }
+  return offsetMin > standardOffsetMin(timeZone, year);
 }
 
 // English-speaking locales carry short names for different metazones: en-US
@@ -212,7 +236,7 @@ export function readZone(clock: ZoneClock, nowMs: number): ZoneReading {
     offsetMin,
     offsetLabel: formatOffsetLabel(offsetMin),
     abbr: zoneAbbreviation(clock.iana, nowMs, offsetMin),
-    isDst: offsetMin > standardOffsetMin(clock.iana, w.year),
+    isDst: isDaylightTime(clock.iana, nowMs, offsetMin, w.year),
   };
 }
 
@@ -231,7 +255,9 @@ export function zoneLongName(timeZone: string, nowMs: number, offsetMin: number)
     longNameFormatters.set(timeZone, f);
   }
   const v = f.formatToParts(new Date(nowMs)).find((p) => p.type === 'timeZoneName')?.value ?? '';
-  const name = /^[A-Za-z][A-Za-z .'-]+$/.test(v) ? v : null;
+  // Keep any real name ("St. Pierre & Miquelon Daylight Time"); drop the
+  // numeric "GMT+05:45" style ICU uses when it has none.
+  const name = v && !/^(GMT|UTC)([+\-\u2212]\d.*)?$/.test(v) ? v : null;
   longNameCache.set(key, name);
   return name;
 }

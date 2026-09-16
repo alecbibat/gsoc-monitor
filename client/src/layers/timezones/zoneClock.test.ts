@@ -113,6 +113,20 @@ describe('readZone', () => {
     expect(readZone(clock('Asia/Tokyo'), SUMMER).isDst).toBe(false);
   });
 
+  it('does not mistake Morocco\'s Ramadan dip for standard time', () => {
+    // Ramadan covers 1 January in 2030, so a Jan/Jul minimum would call the
+    // ordinary UTC+1 "daylight time" for the rest of that year.
+    const casablanca = clock('Africa/Casablanca');
+    expect(readZone(casablanca, Date.UTC(2030, 2, 1, 12)).isDst).toBe(false);
+    expect(readZone(casablanca, Date.UTC(2029, 2, 1, 12)).isDst).toBe(false);
+  });
+
+  it('flags southern-hemisphere summer time', () => {
+    expect(readZone(clock('Australia/Sydney'), WINTER).isDst).toBe(true);
+    expect(readZone(clock('Australia/Sydney'), SUMMER).isDst).toBe(false);
+    expect(readZone(clock('America/Santiago'), WINTER).isDst).toBe(true);
+  });
+
   it('crosses the date line correctly', () => {
     const r = readZone(clock('Pacific/Kiritimati'), SUMMER);
     expect(r.hhmmss).toBe('03:40:05');
@@ -184,8 +198,13 @@ describe('zoneLongName', () => {
     expect(zoneLongName('Asia/Kathmandu', SUMMER, 345)).toBe('Nepal Time');
   });
 
+  it('keeps names with punctuation', () => {
+    expect(zoneLongName('America/Miquelon', SUMMER, -120)).toBe('St. Pierre & Miquelon Daylight Time');
+  });
+
   it('returns null rather than a numeric name', () => {
     expect(zoneLongName('Etc/GMT-14', SUMMER, 840)).toBeNull();
+    expect(zoneLongName('Etc/GMT+12', SUMMER, -720)).toBeNull();
   });
 });
 

@@ -11,7 +11,7 @@ export function TimeZonesLegend() {
       </div>
       <div>
         <span className="text-white/70">UTC-4 · EDT</span>{' '}
-        <span className="text-white/30">offset and daylight-saving name in force now</span>
+        <span className="text-white/30">offset and zone abbreviation now (EDT in summer, EST in winter)</span>
       </div>
       <div>
         <span className="text-white/70">+1d / -1d</span>{' '}

@@ -275,7 +275,7 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
       method:
         'Zone polygons derived from OpenStreetMap boundaries by the timezone-boundary-builder project, simplified at build time (scripts/build-timezones.mjs) and served with the app; each clock is computed in the browser from its tz-database rules, so daylight-saving changes need no data update.',
       trust:
-        'The same OpenStreetMap-derived zone boundaries most open-source geocoders use, released under the ODbL with attribution to OpenStreetMap contributors; the release in use is recorded in timezones.meta.json.',
+        'The OpenStreetMap-derived boundaries behind the common open-source time-zone lookup libraries (geo-tz, timezonefinder, tzf), released under the ODbL with attribution to OpenStreetMap contributors; the release in use is recorded in timezones.meta.json.',
       url: 'https://github.com/evansiroky/timezone-boundary-builder',
     },
   },

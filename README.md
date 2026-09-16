@@ -140,12 +140,17 @@ npm run build:timezones                     # latest release
 npm run build:timezones -- --release 2026d  # a specific release
 ```
 
-The script downloads the "with oceans, now" variant, simplifies it to ~1 km with
-mapshaper (shared borders stay shared), writes the TopoJSON plus
+The script downloads the "with oceans, now" variant (one polygon per set of
+places whose clocks agree from today on), simplifies it to ~1 km with mapshaper
+(topologically, so shared borders stay shared), resolves the release's
+deliberate overlaps in favour of the smaller zone, cuts every zone on a 45°×90°
+grid (Cesium 1.142 tessellates larger parts twice), verifies the result (every
+zone present, no oversized part, a 0.5° world grid fully covered with no point
+in two zones), and writes the TopoJSON plus
 `client/src/layers/timezones/timezones.meta.json` (release, date, attribution —
-shown in the UI), and takes a few minutes and ~6 GB of RAM. Re-run it after a tz
-database release that moves a border; clocks and daylight-saving rules come from
-each browser's own tz database and need no rebuild.
+shown in the UI). It takes a minute or two and ~6 GB of RAM. Re-run it after a
+tz database release that moves a border; clocks and daylight-saving rules come
+from each browser's own tz database and need no rebuild.
 
 ## Adding more layers
 

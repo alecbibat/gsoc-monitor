@@ -13,6 +13,11 @@ export interface LonLat {
   lat: number;
 }
 
+export interface LabelAnchor extends LonLat {
+  /** Width in degrees of the east–west stretch the anchor sits on. */
+  width: number;
+}
+
 interface Ring {
   lon: Float64Array;
   lat: Float64Array;
@@ -26,7 +31,7 @@ export interface PolygonShape {
   minLat: number;
   maxLat: number;
   /** A point definitely inside this polygon, for when no scanline hits it. */
-  interior: LonLat;
+  interior: LabelAnchor;
 }
 
 export interface ZoneShape {
@@ -91,12 +96,12 @@ export function scanlineIntervals(polygon: PolygonShape, lat: number): Interval[
   return out;
 }
 
-function widestMidpoint(polygon: PolygonShape, lat: number): LonLat | null {
+function widestMidpoint(polygon: PolygonShape, lat: number): LabelAnchor | null {
   let best: Interval | null = null;
   for (const iv of scanlineIntervals(polygon, lat)) {
     if (!best || iv[1] - iv[0] > best[1] - best[0]) best = iv;
   }
-  return best ? { lon: (best[0] + best[1]) / 2, lat } : null;
+  return best ? { lon: (best[0] + best[1]) / 2, lat, width: best[1] - best[0] } : null;
 }
 
 function polygonFromRings(ringCoords: number[][][]): PolygonShape | null {
@@ -107,11 +112,12 @@ function polygonFromRings(ringCoords: number[][][]): PolygonShape | null {
   const maxLat = outer.maxLat;
   // Interior fallback: the widest stretch across the middle of the polygon,
   // or a bit above/below it for shapes pinched at the waist.
+  const probe: PolygonShape = { rings, minLat, maxLat, interior: { lon: 0, lat: 0, width: 0 } };
   const interior =
-    widestMidpoint({ rings, minLat, maxLat, interior: { lon: 0, lat: 0 } }, (minLat + maxLat) / 2) ??
-    widestMidpoint({ rings, minLat, maxLat, interior: { lon: 0, lat: 0 } }, minLat + (maxLat - minLat) * 0.25) ??
-    widestMidpoint({ rings, minLat, maxLat, interior: { lon: 0, lat: 0 } }, minLat + (maxLat - minLat) * 0.75) ??
-    { lon: outer.lon[0], lat: outer.lat[0] };
+    widestMidpoint(probe, (minLat + maxLat) / 2) ??
+    widestMidpoint(probe, minLat + (maxLat - minLat) * 0.25) ??
+    widestMidpoint(probe, minLat + (maxLat - minLat) * 0.75) ??
+    { lon: outer.lon[0], lat: outer.lat[0], width: 0 };
   return { rings, minLat, maxLat, interior };
 }
 
@@ -168,17 +174,26 @@ function distanceToInterval(lon: number, iv: Interval): number {
  * camera's own when the feature spans it (kept a little inside the edges),
  * otherwise the feature's middle — so an Arctic sliver labels near the pole,
  * not along its southern edge, when the camera is over the mid-latitudes.
- * Longitude is the middle of the nearest stretch of the band on that
- * parallel, or (with `lonMargin`) the point of it nearest the camera.
+ * Longitude is the middle of the nearest stretch of the zone on that
+ * parallel, or (with `lonMargin`) the point of it nearest the camera. The
+ * returned `width` is that stretch's east–west extent, so the caller can
+ * judge whether a label fits on it.
  */
 export interface PlaceOptions {
   /**
    * How far inside the chosen stretch (degrees of longitude) the label may
    * approach the camera's longitude. Omit for "always the middle of the
-   * stretch"; pass a fraction of the visible width so a neighbouring band's
+   * stretch"; pass a fraction of the visible width so a neighbouring zone's
    * label slides to just inside its near edge when you zoom in on a border.
    */
   lonMargin?: number;
+  /**
+   * Stretches narrower than this (degrees) are used only when nothing wider
+   * crosses the parallel — the label would overhang a sliver of ocean strip
+   * onto the neighbouring zone's clock. Pass a couple of label widths at the
+   * current zoom.
+   */
+  minIntervalDeg?: number;
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -201,30 +216,38 @@ export function placeLabel(
   viewLon: number,
   viewLat: number,
   opts?: PlaceOptions
-): LonLat {
+): LabelAnchor {
   const inset = Math.min(0.25, (shape.maxLat - shape.minLat) * 0.1);
   const lat =
     viewLat >= shape.minLat + inset && viewLat <= shape.maxLat - inset
       ? viewLat
       : (shape.minLat + shape.maxLat) / 2;
 
+  // Three tiers, nearest-to-camera within each: stretches wide enough for a
+  // label, then any real stretch, then hairline crossings.
+  const minWidth = Math.max(MIN_INTERVAL_DEG, opts?.minIntervalDeg ?? 0);
   let best: Interval | null = null;
   let bestD = Infinity;
-  let bestAny: Interval | null = null;
-  let bestAnyD = Infinity;
+  let narrow: Interval | null = null;
+  let narrowD = Infinity;
+  let hairline: Interval | null = null;
+  let hairlineD = Infinity;
   for (const polygon of shape.polygons) {
     if (lat < polygon.minLat || lat > polygon.maxLat) continue;
     for (const iv of scanlineIntervals(polygon, lat)) {
       const d = distanceToInterval(viewLon, iv);
-      if (iv[1] - iv[0] >= MIN_INTERVAL_DEG) {
+      const w = iv[1] - iv[0];
+      if (w >= minWidth) {
         if (d < bestD) { bestD = d; best = iv; }
-      } else if (d < bestAnyD) {
-        bestAnyD = d; bestAny = iv;
+      } else if (w >= MIN_INTERVAL_DEG) {
+        if (d < narrowD) { narrowD = d; narrow = iv; }
+      } else if (d < hairlineD) {
+        hairlineD = d; hairline = iv;
       }
     }
   }
-  const chosen = best ?? bestAny;
-  if (chosen) return { lon: lonWithin(viewLon, chosen, opts?.lonMargin), lat };
+  const chosen = best ?? narrow ?? hairline;
+  if (chosen) return { lon: lonWithin(viewLon, chosen, opts?.lonMargin), lat, width: chosen[1] - chosen[0] };
 
   // Nothing on that parallel (a MultiPolygon whose parts sit at other
   // latitudes): fall back to the interior point nearest the camera.
