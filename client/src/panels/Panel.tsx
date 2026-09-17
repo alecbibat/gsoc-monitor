@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Rnd } from 'react-rnd';
 import { usePanelStore, type PanelData, type DockZone, ZONES, ZONE_LABELS, dockPos } from './panelStore';
+import { LockButton } from './LockButton';
 
 interface PanelProps {
   panel: PanelData;
@@ -67,6 +68,7 @@ export function Panel({ panel, children, accentClass = 'border-accent/40' }: Pan
   const updateRect = usePanelStore((s) => s.updateRect);
   const dock = usePanelStore((s) => s.dock);
   const undock = usePanelStore((s) => s.undock);
+  const toggleLock = usePanelStore((s) => s.toggleLock);
 
   const [isDragging, setIsDragging] = useState(false);
   const [hoverZone, setHoverZone] = useState<DockZone | null>(null);
@@ -162,6 +164,7 @@ export function Panel({ panel, children, accentClass = 'border-accent/40' }: Pan
                   <PinIcon />
                 </button>
               )}
+              <LockButton locked={panel.locked} onToggle={() => toggleLock(panel.id)} />
               <button
                 onClick={() => close(panel.id)}
                 className="rounded p-1 text-white/50 hover:bg-white/10 hover:text-white"

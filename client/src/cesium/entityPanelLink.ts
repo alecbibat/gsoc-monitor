@@ -1,5 +1,5 @@
 import type * as Cesium from 'cesium';
-import type { PanelData } from '../panels/panelStore';
+import type { PanelOpenData } from '../panels/panelStore';
 
 /**
  * Cesium only allows one handler per ScreenSpaceEventType, so layers can't each
@@ -8,8 +8,6 @@ import type { PanelData } from '../panels/panelStore';
  * entity it creates, and a single global click handler (in CesiumGlobe) reads
  * it back off whatever entity got picked.
  */
-type PanelOpenData = Omit<PanelData, 'x' | 'y' | 'width' | 'height' | 'z' | 'dockedTo'>;
-
 interface EntityWithPanelLink extends Cesium.Entity {
   gsocPanel?: PanelOpenData;
 }
