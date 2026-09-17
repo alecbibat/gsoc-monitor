@@ -1,10 +1,18 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { usePanelStore, type PanelOpenData } from './panelStore';
 
-// The store is a module singleton — reset between tests.
+// The store is a module singleton — reset between tests. Placement reads the
+// viewport, so stub one: without it every cascade slot collapses to x=600 and
+// the browser branch of the math never runs.
 beforeEach(() => {
+  vi.stubGlobal('window', { innerWidth: 1280, innerHeight: 800 });
   usePanelStore.setState({ panels: [], topZ: 10 });
 });
+afterEach(() => vi.unstubAllGlobals());
+
+// Cascade slot n for the stubbed 1280×800 viewport: width 360, margin 24,
+// 64px top chrome, 32px step down-left per slot.
+const slot = (n: number) => [1280 - 360 - 24 - n * 32, 24 + 64 + n * 32];
 
 const quake = (n: number, extra: Partial<PanelOpenData> = {}): PanelOpenData => ({
   id: `quake-${n}`,
@@ -24,6 +32,7 @@ const widget: PanelOpenData = {
 
 const ids = () => usePanelStore.getState().panels.map((p) => p.id);
 const byId = (id: string) => usePanelStore.getState().panels.find((p) => p.id === id)!;
+const posOf = (id: string) => [byId(id).x, byId(id).y];
 
 describe('one popup at a time', () => {
   it('opens transient panels unlocked', () => {
@@ -40,15 +49,11 @@ describe('one popup at a time', () => {
 
   it('closes every unlocked panel, whatever its kind', () => {
     const s = usePanelStore.getState();
+    s.open(widget); // opens locked, so it coexists with the next popup
     s.open(quake(1));
-    s.open({ id: 'flight-1', kind: 'flights', title: 'UAL1', payload: {} });
-    // Nothing to sweep yet but the one flight; add a third to prove the rule
-    // isn't "close the previous one" but "close all unlocked".
-    s.setLocked('flight-1', true);
+    s.toggleLock(widget.id); // now two unlocked panels of different kinds
     s.open(quake(2));
-    s.setLocked('flight-1', false);
-    s.open(quake(3));
-    expect(ids()).toEqual(['quake-3']);
+    expect(ids()).toEqual(['quake-2']);
   });
 
   it('keeps locked panels open across new clicks', () => {
@@ -60,6 +65,18 @@ describe('one popup at a time', () => {
     expect(ids()).toEqual(['quake-1', 'quake-3']);
     expect(byId('quake-1').locked).toBe(true);
     expect(byId('quake-3').locked).toBe(false);
+  });
+
+  it('keeps surviving locked panels in their original order after a sweep', () => {
+    // The mobile deck pages and dots follow array order, so a sweep must not
+    // reshuffle the survivors.
+    const s = usePanelStore.getState();
+    s.open(quake(1));
+    s.toggleLock('quake-1');
+    s.open(quake(2)); // unlocked, sits between the two locked ones
+    s.open(widget);
+    s.open(quake(3));
+    expect(ids()).toEqual(['quake-1', widget.id, 'quake-3']);
   });
 
   it('brings the new panel to the front', () => {
@@ -89,7 +106,7 @@ describe('re-opening an already open panel', () => {
     const s = usePanelStore.getState();
     s.open(quake(1));
     s.toggleLock('quake-1');
-    s.open(quake(1)); // caller passes no `locked` — stays locked
+    s.open(quake(1, { locked: false })); // caller says unlock — the user's lock still wins
     expect(byId('quake-1').locked).toBe(true);
 
     s.open(widget);
@@ -115,7 +132,7 @@ describe('re-opening an already open panel', () => {
   });
 });
 
-describe('panels opened locked (widgets)', () => {
+describe('panels opened locked (widgets, pop-outs, fuel zones)', () => {
   it('open locked and close nothing', () => {
     const s = usePanelStore.getState();
     s.open(quake(1));
@@ -173,29 +190,50 @@ describe('placement', () => {
   it('puts a lone popup in the first cascade slot every time', () => {
     const s = usePanelStore.getState();
     s.open(quake(1));
-    const first = byId('quake-1');
+    expect(posOf('quake-1')).toEqual(slot(0));
     s.open(quake(2));
-    const second = byId('quake-2');
-    expect([second.x, second.y]).toEqual([first.x, first.y]);
+    expect(posOf('quake-2')).toEqual(slot(0));
   });
 
-  it('offsets a new popup so it does not land exactly on a locked one', () => {
+  it('cascades a new popup one step away from a locked one', () => {
     const s = usePanelStore.getState();
     s.open(quake(1));
     s.toggleLock('quake-1');
     s.open(quake(2));
-    const a = byId('quake-1');
-    const b = byId('quake-2');
-    expect([b.x, b.y]).not.toEqual([a.x, a.y]);
+    expect(posOf('quake-1')).toEqual(slot(0));
+    expect(posOf('quake-2')).toEqual(slot(1));
+  });
+
+  it('treats a slot as taken when a locked panel is docked a few pixels off it', () => {
+    // Docked top-right is (W-380, 100): 4px right and 12px below slot 0 — an
+    // exact-match check would put the new popup right on top of it.
+    const s = usePanelStore.getState();
+    s.open(quake(1));
+    s.toggleLock('quake-1');
+    s.dock('quake-1', 'tr');
+    expect(posOf('quake-1')).toEqual([1280 - 360 - 20, 80 + 20]);
+    s.open(quake(2));
+    expect(posOf('quake-2')).toEqual(slot(1));
   });
 
   it('reuses a cascade slot once the locked panel has been dragged out of it', () => {
     const s = usePanelStore.getState();
     s.open(quake(1));
     s.toggleLock('quake-1');
-    const slot0 = [byId('quake-1').x, byId('quake-1').y];
     s.updateRect('quake-1', { x: 5, y: 5 });
     s.open(quake(2));
-    expect([byId('quake-2').x, byId('quake-2').y]).toEqual(slot0);
+    expect(posOf('quake-2')).toEqual(slot(0));
+  });
+
+  it('wraps to the first slot once all four cascade slots hold locked panels', () => {
+    const s = usePanelStore.getState();
+    for (let n = 1; n <= 4; n++) {
+      s.open(quake(n));
+      s.toggleLock(`quake-${n}`);
+    }
+    expect([1, 2, 3, 4].map((n) => posOf(`quake-${n}`))).toEqual([0, 1, 2, 3].map(slot));
+    s.open(quake(5));
+    expect(ids()).toHaveLength(5);
+    expect(posOf('quake-5')).toEqual(slot(0));
   });
 });

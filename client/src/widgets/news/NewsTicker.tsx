@@ -114,6 +114,9 @@ export function NewsTicker() {
               title: isPark ? 'Park News' : 'Breaking News',
               subtitle: isPark ? 'NPS · live feed' : 'RSS · live feed',
               payload: {},
+              // Same panel the sidebar launcher opens — a tool, not a map popup,
+              // so it survives clicks on the globe (see WidgetLauncher).
+              locked: true,
             })
           }
           className={`flex h-full shrink-0 items-center gap-1.5 border-r border-white/10 px-3 text-[10px] font-bold uppercase tracking-widest transition ${

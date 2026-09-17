@@ -39,9 +39,13 @@ export function ProximityWidget() {
   };
 
   const popOut = (p: PropertyHazards) => {
+    // Popping a property out is a deliberate "keep this in its own window"
+    // action, so it opens locked: map clicks and further pop-outs don't
+    // sweep it (the header padlock unlocks it if wanted).
     openPanel({
       id: `property-${p.key}`,
       kind: 'property-watch',
+      locked: true,
       title: p.location.name,
       subtitle: p.group.name,
       payload: {

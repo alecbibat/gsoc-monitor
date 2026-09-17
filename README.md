@@ -12,7 +12,7 @@ Global Situational & Operational Conditions Monitor — a real-time 3D globe das
 - **Satellites** — CelesTrak TLE + satellite.js SGP4 propagation; real-time orbits for Space Stations / Brightest / GPS / Weather / Starlink groups, click any satellite to trace its orbit ring and read live position, altitude, speed, and orbital elements.
 - **Time zones** — real zone polygons (timezone-boundary-builder / OpenStreetMap, ODbL) with a live clock on every zone, to the second, daylight-saving aware; boundaries are rebuilt from a release with `npm run build:timezones`.
 - **Search** — geocode (Nominatim), raw lat/lon input, auto-fly to results.
-- **Dockable panels** — any entity click opens a draggable/resizable detail window. Only one is open at a time: the next click replaces it, unless you lock a window (the padlock next to its close button), in which case it stays put and several can be kept open together.
+- **Dockable panels** — any entity click opens a draggable/resizable detail window. Only one is open at a time: the next click replaces it, unless you lock a window (the padlock next to its close button), in which case it stays put and several can be kept open together. Windows you open on purpose rather than by clicking the map (the sidebar widgets, Property Watch pop-outs, fuel-zone results) start locked.
 
 ## Quick start (local dev)
 

@@ -81,8 +81,10 @@ const KIND_HEIGHTS: Partial<Record<PanelKind, number>> = {
 };
 
 // Cascade slots step down-left from the top-right corner. Take the first
-// slot no surviving panel is still sitting in, so a fresh popup never lands
-// exactly on top of a locked one; fall back to counting when all are taken.
+// slot no surviving panel is sitting in, so a fresh popup never lands on top
+// of a locked one; fall back to counting when all are taken. "Sitting in"
+// means within one cascade step — a panel docked top-right or nudged by hand
+// is a few pixels off the exact slot but still covers it.
 function cascadeSlot(n: number): { x: number; y: number } {
   const margin = 24;
   const x =
@@ -96,7 +98,10 @@ function cascadeSlot(n: number): { x: number; y: number } {
 function cascadePos(kept: PanelData[]): { x: number; y: number } {
   for (let n = 0; n < 4; n++) {
     const slot = cascadeSlot(n);
-    if (!kept.some((p) => p.x === slot.x && p.y === slot.y)) return slot;
+    const taken = kept.some(
+      (p) => Math.abs(p.x - slot.x) < CASCADE_OFFSET && Math.abs(p.y - slot.y) < CASCADE_OFFSET
+    );
+    if (!taken) return slot;
   }
   return cascadeSlot(kept.length);
 }

@@ -106,7 +106,7 @@ export function MobilePanelDeck() {
               Close all
             </button>
           )}
-          <LockButton locked={active.locked} onToggle={() => toggleLock(active.id)} size={15} />
+          <LockButton locked={active.locked} onToggle={() => toggleLock(active.id)} size={16} />
           <button
             onClick={() => close(active.id)}
             className="rounded p-1 text-white/50 hover:bg-white/10 hover:text-white"
