@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { usePanelStore } from './panelStore';
 import { PanelErrorBoundary } from './PanelErrorBoundary';
 import { PanelContent, panelAccent } from './PanelContent';
+import { LockButton } from './LockButton';
 
 // Mobile replacement for the floating/dockable panels. Open panels become a
 // full-width bottom-sheet card; when more than one is open they're laid out as
@@ -11,6 +12,7 @@ export function MobilePanelDeck() {
   const panels = usePanelStore((s) => s.panels);
   const close = usePanelStore((s) => s.close);
   const closeAll = usePanelStore((s) => s.closeAll);
+  const toggleLock = usePanelStore((s) => s.toggleLock);
 
   const scrollerRef = useRef<HTMLDivElement>(null);
   const prevIdsRef = useRef<string[]>([]);
@@ -104,6 +106,7 @@ export function MobilePanelDeck() {
               Close all
             </button>
           )}
+          <LockButton locked={active.locked} onToggle={() => toggleLock(active.id)} size={16} />
           <button
             onClick={() => close(active.id)}
             className="rounded p-1 text-white/50 hover:bg-white/10 hover:text-white"

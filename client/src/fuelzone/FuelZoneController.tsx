@@ -164,12 +164,16 @@ export function FuelZoneController() {
       const seq = store().seq + 1;
       store().bumpSeq();
       const panelId = `fuel-zone-${seq}`;
+      // The zone was drawn on purpose and its outline lives only as long as
+      // the panel, so open it locked: inspecting a fire inside the zone must
+      // not sweep the breakdown (and the outline) away.
       usePanelStore.getState().open({
         id: panelId,
         kind: 'fuel-zone',
         title: 'Fuel breakdown',
         subtitle,
         payload: result as unknown as Record<string, unknown>,
+        locked: true,
       });
       // Persist the committed outline so it stays visible while the panel is
       // open; it's removed when the panel closes (see the subscriber above).

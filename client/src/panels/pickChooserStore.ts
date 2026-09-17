@@ -1,8 +1,8 @@
 import { create } from 'zustand';
-import type { PanelData } from './panelStore';
+import type { PanelOpenData } from './panelStore';
 
 // The shape every layer stamps onto its entities (see entityPanelLink).
-export type PanelOpenData = Omit<PanelData, 'x' | 'y' | 'width' | 'height' | 'z' | 'dockedTo'>;
+export type { PanelOpenData };
 
 interface PickChooserState {
   open: boolean;

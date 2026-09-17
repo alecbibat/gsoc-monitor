@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Rnd } from 'react-rnd';
 import { usePanelStore, type PanelData, type DockZone, ZONES, ZONE_LABELS, dockPos } from './panelStore';
+import { LockButton } from './LockButton';
 
 interface PanelProps {
   panel: PanelData;
@@ -67,10 +68,15 @@ export function Panel({ panel, children, accentClass = 'border-accent/40' }: Pan
   const updateRect = usePanelStore((s) => s.updateRect);
   const dock = usePanelStore((s) => s.dock);
   const undock = usePanelStore((s) => s.undock);
+  const toggleLock = usePanelStore((s) => s.toggleLock);
 
   const [isDragging, setIsDragging] = useState(false);
   const [hoverZone, setHoverZone] = useState<DockZone | null>(null);
   const hoverZoneRef = useRef<DockZone | null>(null);
+  // react-draggable reports a drag start/stop for a plain mousedown+mouseup on
+  // the header even when the pointer never moved; only touch dock state when
+  // the panel was actually dragged.
+  const movedRef = useRef(false);
 
   // Re-pin docked panels when the window is resized.
   useEffect(() => {
@@ -95,12 +101,17 @@ export function Panel({ panel, children, accentClass = 'border-accent/40' }: Pan
         minHeight={160}
         bounds="window"
         dragHandleClassName="panel-drag-handle"
+        // The header's buttons (pin / lock / close) opt out of the drag handle,
+        // so clicking one doesn't flash the dock targets or run onDragStop.
+        cancel=".panel-drag-cancel"
         style={{ zIndex: panel.z }}
         onDragStart={() => {
           bringToFront(panel.id);
           setIsDragging(true);
+          movedRef.current = false;
         }}
         onDrag={(_, d) => {
+          movedRef.current = true;
           const cx = d.x + panel.width / 2;
           const cy = d.y + panel.height / 2;
           let best: DockZone | null = null;
@@ -123,6 +134,7 @@ export function Panel({ panel, children, accentClass = 'border-accent/40' }: Pan
           const snapped = hoverZoneRef.current;
           hoverZoneRef.current = null;
           setHoverZone(null);
+          if (!movedRef.current) return;
           if (snapped) {
             dock(panel.id, snapped);
           } else {
@@ -152,7 +164,7 @@ export function Panel({ panel, children, accentClass = 'border-accent/40' }: Pan
                 <div className="truncate text-[11px] text-white/50">{panel.subtitle}</div>
               )}
             </div>
-            <div className="ml-2 flex shrink-0 items-center gap-1">
+            <div className="panel-drag-cancel ml-2 flex shrink-0 items-center gap-1">
               {panel.dockedTo && (
                 <button
                   onClick={() => undock(panel.id)}
@@ -162,6 +174,7 @@ export function Panel({ panel, children, accentClass = 'border-accent/40' }: Pan
                   <PinIcon />
                 </button>
               )}
+              <LockButton locked={panel.locked} onToggle={() => toggleLock(panel.id)} />
               <button
                 onClick={() => close(panel.id)}
                 className="rounded p-1 text-white/50 hover:bg-white/10 hover:text-white"
