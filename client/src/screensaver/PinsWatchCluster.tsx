@@ -14,7 +14,7 @@ const LEDGER_ROTATE_MS = 6_000;
 const INTERRUPT_DEBOUNCE_MS = 10_000;
 
 // Property Watch instrument cluster inside the pins screensaver's clock card:
-// a fixed 13-segment severity meter (one segment per group, west→east, lit in
+// a fixed-width severity meter (one segment per group, west→east, lit in
 // the group's worst-hazard color) plus one ledger line that names a group at a
 // time, rotating worst-first. The footprint is constant no matter how many
 // groups are affected — busy days grow into color and rotation, never pixels.
@@ -82,7 +82,7 @@ export function PinsWatchCluster() {
         Property Watch
       </div>
 
-      {/* Severity meter — 13 fixed segments, west→east. Unlit = clear. */}
+      {/* Severity meter — one fixed segment per group, west→east. Unlit = clear. */}
       <div className="mt-1 flex w-full gap-[2px]">
         {WATCH_GROUP_ORDER.map((g) => {
           const s = byId.get(g.id);

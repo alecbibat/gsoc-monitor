@@ -110,7 +110,7 @@ export function groupCentroid(group: LocationGroup): { lat: number; lon: number 
   return { lat: lat / group.locations.length, lon: lon / group.locations.length };
 }
 
-// Canonical west→east ordering for the 13-segment severity meter, so a
+// Canonical west→east ordering for the per-group severity meter, so a
 // segment's position always means the same group and operators can learn it.
 export const WATCH_GROUP_ORDER: LocationGroup[] = [...LOCATION_GROUPS].sort(
   (a, b) => groupCentroid(a).lon - groupCentroid(b).lon
