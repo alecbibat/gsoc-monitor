@@ -101,6 +101,18 @@ export const LOCATION_GROUPS: LocationGroup[] = [
     ],
   },
   {
+    id: 'custer',
+    name: 'Custer State Park',
+    color: '#eab308',
+    icon: '🦬',
+    locations: [
+      { name: 'Sylvan Lake Lodge', lat: 43.84485, lon: -103.56666 },
+      { name: 'Blue Bell Lodge', lat: 43.71780, lon: -103.48240 },
+      { name: 'Legion Lake Lodge', lat: 43.76178, lon: -103.46321 },
+      { name: 'State Game Lodge', lat: 43.76394, lon: -103.38089 },
+    ],
+  },
+  {
     id: 'windstar',
     name: 'Windstar Cruises',
     color: '#0ea5e9',
