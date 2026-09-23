@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { fetchDirections } from './directionsClient';
+import { clearDirectionsCache, fetchDirections, fetchDriveRoute } from './directionsClient';
 
 // Exercises the radius/tier sweep against a stubbed Overpass. OSRM always
 // fails here, so every leg falls back to a straight line and `distanceM` stays
@@ -41,7 +41,11 @@ function stubOverpass(byClause: Array<[string, StubElement[]]>) {
   return calls;
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  // Every test shares ORIGIN, so remembered Overpass answers would leak across.
+  clearDirectionsCache();
+});
 
 describe('fetchDirections — hospital tiering', () => {
   it('prefers a distant general hospital over a nearby psychiatric one', async () => {
@@ -158,5 +162,96 @@ describe('fetchDirections — emergency services', () => {
     expect(fireStations).toHaveLength(1);
     expect(fireStations[0].name).toBe('Gardiner VFD');
     expect(fireStations[0].serviceLabel).toBe('Fire station · volunteer');
+  });
+});
+
+describe('fetchDirections — re-opens and superseded panels', () => {
+  const HOSPITAL: Array<[string, StubElement[]]> = [
+    ['"amenity"="hospital"', [{ lat: north(5), lon: ORIGIN.lon, tags: { amenity: 'hospital', emergency: 'yes', name: 'Bozeman Health' } }]],
+  ];
+
+  it('reuses successful Overpass answers when the same pin is opened again', async () => {
+    const calls = stubOverpass(HOSPITAL);
+
+    const first = await fetchDirections(ORIGIN.lat, ORIGIN.lon);
+    const made = calls.length;
+    const again = await fetchDirections(ORIGIN.lat, ORIGIN.lon);
+
+    expect(made).toBeGreaterThan(0);
+    expect(calls).toHaveLength(made);
+    expect(again).toEqual(first);
+  });
+
+  it('never remembers a failed call, so the next open retries it', async () => {
+    vi.stubGlobal('fetch', async () => ({ ok: false, status: 429, json: async () => ({}) }) as unknown as Response);
+    expect((await fetchDirections(ORIGIN.lat, ORIGIN.lon)).hospitals).toHaveLength(0);
+
+    stubOverpass(HOSPITAL);
+    const { hospitals } = await fetchDirections(ORIGIN.lat, ORIGIN.lon);
+
+    expect(hospitals[0].name).toBe('Bozeman Health');
+  });
+
+  it('never remembers an Overpass runtime-error answer', async () => {
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url.includes('project-osrm')) return { ok: false, status: 503, json: async () => ({}) } as unknown as Response;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ elements: [], remark: 'runtime error: Query timed out in "query" at line 1 after 21 seconds.' }),
+      } as unknown as Response;
+    });
+    expect((await fetchDirections(ORIGIN.lat, ORIGIN.lon)).hospitals).toHaveLength(0);
+
+    stubOverpass(HOSPITAL);
+    const { hospitals } = await fetchDirections(ORIGIN.lat, ORIGIN.lon);
+
+    expect(hospitals[0].name).toBe('Bozeman Health');
+  });
+
+  it('stops issuing requests once the caller aborts', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+      calls.push(url);
+      // Hangs until aborted, like a slow Overpass instance.
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      });
+    });
+    const ac = new AbortController();
+
+    const pending = fetchDirections(ORIGIN.lat, ORIGIN.lon, undefined, ac.signal);
+    const inFlight = calls.length; // each category's first radius
+    ac.abort();
+    const res = await pending;
+
+    expect(inFlight).toBeGreaterThan(0);
+    expect(calls).toHaveLength(inFlight); // no wider radius, tier or OSRM call
+    expect([...res.hospitals, ...res.hotels, ...res.police, ...res.fireStations]).toHaveLength(0);
+  });
+});
+
+describe('fetchDriveRoute', () => {
+  it('skips the unused overview geometry but still reports the road route', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => {
+      urls.push(url);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          code: 'Ok',
+          routes: [{ distance: 1234, duration: 99, legs: [{ steps: [{ distance: 1234, name: 'Main St', maneuver: { type: 'depart' } }] }] }],
+        }),
+      } as unknown as Response;
+    });
+
+    const r = await fetchDriveRoute(ORIGIN.lat, ORIGIN.lon, north(1), ORIGIN.lon);
+
+    expect(urls[0]).toContain('overview=false');
+    expect(r.routed).toBe(true);
+    expect(r.distanceM).toBe(1234);
+    expect(r.durationS).toBe(99);
+    expect(r.steps).toEqual([{ instruction: 'Head out on Main St', distanceM: 1234 }]);
   });
 });

@@ -358,6 +358,10 @@ export function FlightLayer() {
       cancelled = true;
       stopPolling();
       pump.dispose();
+      // The next run gets a fresh pump (empty positions) and possibly a fresh
+      // data source (viewer rebuild), so its first poll must redraw rather
+      // than take the unchanged-sig skip branch.
+      lastSigRef.current = '';
     };
     // A group/favorite toggle restarts the effect, whose first poll refetches
     // /registrations — deliberate: the route answers from memory (~1 RTT), and

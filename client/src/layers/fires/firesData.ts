@@ -218,8 +218,13 @@ export interface EnvelopeResult {
 }
 
 // Fetch + parse one ArcGIS envelope. Returns features (possibly empty) on
-// success, or null with an error string on a hard failure.
-export async function fetchEnvelope(layerId: number, envelope: string): Promise<EnvelopeResult> {
+// success, or null with an error string on a hard failure. `signal` lets a
+// caller cut short a query for a view that has since been superseded.
+export async function fetchEnvelope(
+  layerId: number,
+  envelope: string,
+  signal?: AbortSignal
+): Promise<EnvelopeResult> {
   // Only the attributes parseHotspot reads — outFields=* roughly doubles the
   // payload for no benefit.
   const OUT_FIELDS = 'frp,bright_ti4,confidence,satellite,daynight,acq_date,acq_time';
@@ -235,7 +240,7 @@ export async function fetchEnvelope(layerId: number, envelope: string): Promise<
   let error: string | null = null;
   for (const url of candidates) {
     try {
-      const r = await fetch(url);
+      const r = await fetch(url, { signal });
       if (!r.ok) {
         error = `HTTP ${r.status}`;
         continue;
@@ -244,6 +249,7 @@ export async function fetchEnvelope(layerId: number, envelope: string): Promise<
       return { features: j.features ?? [], error: null };
     } catch (err) {
       error = err instanceof Error ? err.message : 'unreachable';
+      if (signal?.aborted) break; // superseded — don't fall back to the unordered query
     }
   }
   return { features: null, error: error ?? 'unreachable' };

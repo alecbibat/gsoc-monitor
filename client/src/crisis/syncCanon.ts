@@ -20,6 +20,16 @@ export function stableStringify(v: unknown): string | undefined {
   return `{${parts.join(',')}}`;
 }
 
+// Canon strings memoized by object identity. Store incidents and log entries
+// are immutable (every store action spreads new objects) and server-parsed
+// objects are never mutated, so an object's canonical form cannot change once
+// computed. The watcher re-canonicalizes the whole workspace on every store
+// change (every keystroke); without this that is O(all incidents + all log
+// entries) per change. WeakMap entries die with their objects.
+// INVARIANT: never mutate an incident or log entry in place.
+const incidentCanonCache = new WeakMap<object, string>();
+const entryCanonCache = new WeakMap<object, string>();
+
 /**
  * Canonical form of an incident's BLOB for sync comparisons: normalized
  * taxonomy values, stable key order, and the action log excluded.
@@ -48,13 +58,24 @@ export function serverCanon(incident: {
   incidentType: string; incidentStatus: string; archivedAt?: string | null;
   actionLog?: unknown; checklists?: unknown;
 }): string {
+  const hit = incidentCanonCache.get(incident);
+  if (hit !== undefined) return hit;
   const { actionLog: _log, checklists: _chk, ...rest } = normalizeIncidentFields(incident);
-  return stableStringify(rest)!;
+  const canon = stableStringify(rest)!;
+  incidentCanonCache.set(incident, canon);
+  return canon;
 }
 
 /** Canonical form of one log entry, for per-entry change detection. */
 export function entryCanon(entry: unknown): string {
-  return stableStringify(entry) ?? 'null';
+  const cacheable = entry !== null && typeof entry === 'object' && !Array.isArray(entry);
+  if (cacheable) {
+    const hit = entryCanonCache.get(entry as object);
+    if (hit !== undefined) return hit;
+  }
+  const canon = stableStringify(entry) ?? 'null';
+  if (cacheable) entryCanonCache.set(entry as object, canon);
+  return canon;
 }
 
 interface LogEntryLike { id: string }

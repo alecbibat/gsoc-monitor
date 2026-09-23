@@ -245,7 +245,19 @@ function ResetCameraButton() {
   );
 }
 
-function FullscreenButton() {
+// The Add-to-Home-Screen hint shown when full screen isn't available. Shared so
+// the mobile tools menu can render it outside its dropdown (see MobileToolsMenu).
+function IosFullscreenHint({ className }: { className: string }) {
+  return (
+    <div className={`pointer-events-none absolute top-full z-50 mt-2 w-56 rounded-lg border border-white/10 bg-ink-900/95 p-2.5 text-[11px] leading-snug text-white/70 shadow-panel backdrop-blur-md ${className}`}>
+      iPhone Safari blocks full screen. Tap{' '}
+      <span className="font-semibold text-white/90">Share</span> →{' '}
+      <span className="font-semibold text-white/90">Add to Home Screen</span> to run GSOC Monitor full screen.
+    </div>
+  );
+}
+
+function FullscreenButton({ onUnsupported }: { onUnsupported?: () => void } = {}) {
   const [isFs, setIsFs] = useState(() => Boolean(fullscreenElement()));
   // iPhone Safari has no element-fullscreen API; show a one-tap hint pointing to
   // Add-to-Home-Screen instead of a dead button. (Hidden if already standalone.)
@@ -273,6 +285,12 @@ function FullscreenButton() {
 
   const toggle = () => {
     if (!supported) {
+      // A caller that unmounts this button on click (the mobile tools menu)
+      // shows the hint itself, since local state would be thrown away.
+      if (onUnsupported) {
+        onUnsupported();
+        return;
+      }
       // iPhone Safari fallback: flash the install hint.
       setShowHint(true);
       if (hintTimer.current) window.clearTimeout(hintTimer.current);
@@ -308,13 +326,7 @@ function FullscreenButton() {
         </svg>
       </button>
 
-      {showHint && (
-        <div className="pointer-events-none absolute right-0 top-full z-50 mt-2 w-56 rounded-lg border border-white/10 bg-ink-900/95 p-2.5 text-[11px] leading-snug text-white/70 shadow-panel backdrop-blur-md">
-          iPhone Safari blocks full screen. Tap{' '}
-          <span className="font-semibold text-white/90">Share</span> →{' '}
-          <span className="font-semibold text-white/90">Add to Home Screen</span> to run GSOC Monitor full screen.
-        </div>
-      )}
+      {showHint && <IosFullscreenHint className="right-0" />}
     </div>
   );
 }
@@ -453,10 +465,31 @@ function CrisisButton() {
 // screenshot and measure. Desktop keeps them as individual buttons.
 function MobileToolsMenu() {
   const [open, setOpen] = useState(false);
+  // The dropdown (and the FullscreenButton in it) unmounts in the same click
+  // that asks for the iPhone hint, so the menu owns the hint's state instead.
+  const [fsHint, setFsHint] = useState(false);
+  const fsHintTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (fsHintTimer.current) window.clearTimeout(fsHintTimer.current);
+    },
+    []
+  );
+  const showFsHint = () => {
+    setFsHint(true);
+    if (fsHintTimer.current) window.clearTimeout(fsHintTimer.current);
+    fsHintTimer.current = window.setTimeout(() => setFsHint(false), 4200);
+  };
   return (
     <div className="relative md:hidden">
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          // Opening the menu dismisses the hint: both anchor at the same spot,
+          // so it would cover the dropdown's first buttons.
+          if (fsHintTimer.current) window.clearTimeout(fsHintTimer.current);
+          setFsHint(false);
+          setOpen((o) => !o);
+        }}
         className={`pointer-events-auto flex items-center justify-center rounded-lg border p-2.5 shadow-panel backdrop-blur-sm transition ${
           open
             ? 'border-accent/40 bg-accent/10 text-accent'
@@ -480,12 +513,13 @@ function MobileToolsMenu() {
             onClickCapture={() => setOpen(false)}
           >
             <ResetCameraButton />
-            <FullscreenButton />
+            <FullscreenButton onUnsupported={showFsHint} />
             <ScreenshotButton />
             <MeasureButton />
           </div>
         </>
       )}
+      {fsHint && <IosFullscreenHint className="left-0" />}
     </div>
   );
 }

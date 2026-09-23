@@ -84,14 +84,14 @@ function QuickAddForm({
         placeholder="Role title"
         value={title}
         onChange={(e) => setTitle(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); if (e.key === 'Escape') onDone(); }}
+        onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); if (e.key === 'Escape') { e.stopPropagation(); onDone(); } }}
       />
       <input
         className="w-full rounded border border-white/8 bg-white/8 px-2 py-1 text-[10px] text-white/50 outline-none placeholder-white/20 focus:border-white/20"
         placeholder="Abbrev (opt.)"
         value={abbrev}
         onChange={(e) => setAbbrev(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); if (e.key === 'Escape') onDone(); }}
+        onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); if (e.key === 'Escape') { e.stopPropagation(); onDone(); } }}
       />
       <div className="flex flex-wrap gap-1">
         {PRESET_COLORS.map((c) => (

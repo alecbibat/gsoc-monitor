@@ -118,6 +118,7 @@ function postEntry(incidentId: string, entry: ActionLogEntry) {
         deleteEntry(incidentId, entry.id);
         return;
       }
+      resyncEntry(incidentId, entry.id);
       quietIfIdle();
     })
     .catch((err) => {
@@ -129,6 +130,20 @@ function postEntry(incidentId: string, entry: ActionLogEntry) {
       setSync('error');
       console.warn('[log-sync] append failed:', err);
     });
+}
+
+/**
+ * Once an entry's own append/PATCH settles, push any edit typed while it was in
+ * flight (syncLogsFromStore skips in-flight entries). Scheduling synchronously
+ * here also puts the entry in keepLocalEntryIds() before the server's SSE echo
+ * is processed, so the echo can't revert the newer local text.
+ */
+function resyncEntry(incidentId: string, entryId: string) {
+  const known = baselines.get(incidentId)?.get(entryId);
+  if (known === undefined) return;
+  const entry = useCrisisStore.getState().incidents
+    .find((i) => i.id === incidentId)?.actionLog?.find((e) => e.id === entryId);
+  if (entry && entryCanon(entry) !== known) schedulePatch(incidentId, entryId);
 }
 
 function patchBody(entry: ActionLogEntry) {
@@ -157,6 +172,7 @@ function firePatch(incidentId: string, entryId: string, keepalive = false) {
       patchInflight.delete(entryId);
       if (res.ok) {
         baselines.get(incidentId)?.set(entryId, sentCanon);
+        resyncEntry(incidentId, entryId);
         quietIfIdle();
         return;
       }

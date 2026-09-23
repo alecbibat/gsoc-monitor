@@ -3,6 +3,7 @@ import { api } from '../../api/client';
 import { usePanelStore } from '../../panels/panelStore';
 import { useScreensaverStore } from '../../screensaver/screensaverStore';
 import { useNewsStore } from './newsStore';
+import { startVisiblePolling } from '../../lib/poll';
 
 // A horizontally-scrolling headline ticker pinned to the bottom of the screen.
 // Shown while the Breaking News panel is closed, and kept alive during the pins
@@ -59,9 +60,8 @@ export function NewsTicker() {
         if (!cancelled) setError(String(e));
       }
     };
-    fetchNews();
-    const id = setInterval(fetchNews, REFRESH_MS);
-    return () => { cancelled = true; clearInterval(id); };
+    const stop = startVisiblePolling(() => void fetchNews(), REFRESH_MS);
+    return () => { cancelled = true; stop(); };
   }, [active, newsMode, customSources, setData, setError]);
 
   // Park news fetch (active when ticker is visible and mode is park).
@@ -76,9 +76,8 @@ export function NewsTicker() {
         if (!cancelled) setParkError(String(e));
       }
     };
-    fetchPark();
-    const id = setInterval(fetchPark, PARK_REFRESH_MS);
-    return () => { cancelled = true; clearInterval(id); };
+    const stop = startVisiblePolling(() => void fetchPark(), PARK_REFRESH_MS);
+    return () => { cancelled = true; stop(); };
   }, [active, newsMode, setParkData, setParkError]);
 
   if (!active) return null;

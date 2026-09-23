@@ -132,7 +132,8 @@ const attempt = async <T>(p: Promise<T>): Promise<FeedOutcome<T>> => {
 
 export async function assembleWildfireReport(
   target: RiskTarget,
-  onFeed?: OnFeedResult
+  onFeed?: OnFeedResult,
+  signal?: AbortSignal
 ): Promise<WildfireReportData> {
   const inConus =
     target.lon >= LANDFIRE_CONUS_RECT.west && target.lon <= LANDFIRE_CONUS_RECT.east &&
@@ -169,8 +170,10 @@ export async function assembleWildfireReport(
     track('alerts', fetchActiveAlerts()),
     track('counties', loadCounties()),
     track('outlook', api.fireOutlook()),
+    // 30 s bound: LANDFIRE is a direct browser fetch, and a stalled upstream
+    // must become an "unavailable" section, not an endless loading screen.
     inConus
-      ? track('fuel', analyzeFuelZone({ lon: target.lon, lat: target.lat }, 3 * MILES_TO_M),
+      ? track('fuel', analyzeFuelZone({ lon: target.lon, lat: target.lat }, 3 * MILES_TO_M, 30_000),
           // Mirrors the section: the empty sentinel (totalPixels 0) is a
           // coverage hole the report calls unavailable, not a lock.
           (v) => v.risk !== null || v.totalPixels > 0)
@@ -185,6 +188,10 @@ export async function assembleWildfireReport(
     track('lightning', api.lightningHistory(1440, { lat: target.lat, lon: target.lon, radiusMi: 130 })),
     track('qpf', fetchWpcSiteQpf(target.lat, target.lon)),
   ]);
+
+  // Report closed/retargeted while feeds were in flight: skip the snapshot
+  // stage (hundreds of tile requests + PNG encodes) whose result is discarded.
+  if (signal?.aborted) throw new DOMException('Report closed', 'AbortError');
 
   const sections: SectionResult[] = [];
   const gaps: string[] = [
@@ -347,7 +354,14 @@ export async function assembleWildfireReport(
       // days[0] is day 1 of the ISSUANCE, not necessarily today — resolve
       // "today" through the dates array the server provides for exactly this.
       const dates = outlookRes.value.dates ?? [];
-      const todayIso = new Date().toISOString().slice(0, 10);
+      // The outlook's dates are US local calendar days; a UTC "today" rolls
+      // over in the US evening and would select tomorrow's slot. Resolve today
+      // in the PROPERTY's local time: the forecast's UTC offset (already
+      // settled — all feeds were awaited together), else a longitude estimate
+      // (same approximation the server's met.no fallback uses).
+      const off = windRes.value?.utcOffsetSeconds;
+      const offSec = typeof off === 'number' && Number.isFinite(off) ? off : Math.round(target.lon / 15) * 3600;
+      const todayIso = new Date(Date.now() + offSec * 1000).toISOString().slice(0, 10);
       const todayIdx = Math.max(0, dates.indexOf(todayIso));
       const today = psa?.days[todayIdx] ?? null;
       const style = outlookStyle(today?.dryness ?? null, today?.type ?? null);
@@ -584,6 +598,7 @@ export async function assembleWildfireReport(
     fitRadiusM: MAX_RING_MI * MILES_TO_M,
     width: MAP_W,
     height: 420,
+    signal,
     attribution: '© Esri © OSM · hotspots NASA FIRMS · incidents NIFC',
     draw: (ctx, proj) => {
       for (const ring of RISK_RINGS) {
@@ -628,6 +643,7 @@ export async function assembleWildfireReport(
         fitRadiusM: 60 * MILES_TO_M,
         width: MAP_W,
         height: 340,
+        signal,
         attribution: '© Esri © OSM · alerts NWS',
         draw: (ctx, proj) => {
           for (const s of alertShapes) {
@@ -648,6 +664,7 @@ export async function assembleWildfireReport(
         fitRadiusM: 3.4 * MILES_TO_M,
         width: MAP_W,
         height: 340,
+        signal,
         overlayAlpha: 0.72,
         overlayUrl: (proj) =>
           `${LANDFIRE_FBFM40_IMAGESERVER}/exportImage` +
@@ -671,6 +688,7 @@ export async function assembleWildfireReport(
     fitRadiusM: 220 * MILES_TO_M,
     width: MAP_W,
     height: 380,
+    signal,
     overlayAlpha: 0.68,
     overlayUrl: (proj) =>
       `${WPC_QPF_MAPSERVER}/export` +
@@ -706,6 +724,7 @@ export async function assembleWildfireReport(
           fitRadiusM: 250 * MILES_TO_M,
           width: MAP_W,
           height: 380,
+          signal,
           attribution: '© Esri © OSM · outlook NWCG Predictive Services',
           draw: (ctx, proj) => {
             for (const p of outlookValue.psas) {
@@ -746,6 +765,7 @@ export async function assembleWildfireReport(
     fitRadiusM: 140 * MILES_TO_M,
     width: MAP_W,
     height: 400,
+    signal,
     base: {
       url: (z, x, y) =>
         'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Aqua_CorrectedReflectance_TrueColor' +
@@ -791,6 +811,7 @@ export async function assembleWildfireReport(
         fitRadiusM: 110 * MILES_TO_M,
         width: MAP_W,
         height: 400,
+        signal,
         attribution: '© Esri © OSM · strikes Blitzortung.org',
         draw: (ctx, proj) => {
           const nowS = Date.now() / 1000;

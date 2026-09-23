@@ -1,8 +1,6 @@
-import { useMemo } from 'react';
+import { lazy, Suspense } from 'react';
 import { useLayersStore } from '../../store/layersStore';
-import { useFlightsStatus } from './flightsStore';
-import { nearestMajorCity } from '../ships/majorCities';
-import type { FlightEvent, FlightGroupId } from '../../types';
+import type { FlightGroupId } from '../../types';
 
 const GROUP_LABELS: Array<{ id: FlightGroupId; label: string }> = [
   { id: 'company', label: 'Company' },
@@ -10,26 +8,14 @@ const GROUP_LABELS: Array<{ id: FlightGroupId; label: string }> = [
   { id: 'fire-tankers', label: 'Fire Tankers' },
 ];
 
-const EVENTS_SHOWN = 4;
-
-// Each line runs a nearest-city scan over a few thousand rows, and events are
-// immutable once emitted — cache the rendered text by event id (the events
-// array itself is replaced wholesale every poll).
-const lineCache = new Map<string, string>();
-
-function eventLine(e: FlightEvent): string {
-  let line = lineCache.get(e.id);
-  if (line === undefined) {
-    const verb = e.kind === 'takeoff' ? '↑ departed' : '↓ landed';
-    const near = nearestMajorCity(e.lat, e.lon);
-    const place = near ? ` near ${near.city.name}, ${near.city.region}` : '';
-    const time = new Date(e.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    line = `${e.reg} ${verb}${place} · ${time}`;
-    if (lineCache.size > 400) lineCache.clear();
-    lineCache.set(e.id, line);
-  }
-  return line;
-}
+// City table (~42 KB gzip) stays out of the entry chunk; see FlightActivity.
+export const loadFlightActivity = () => import('./FlightActivity');
+// A stale tab across a deploy gets a 404 for the old chunk hash. Render
+// nothing rather than let the rejection unmount the whole app (the main app
+// has no error boundary).
+const FlightActivity = lazy(() =>
+  loadFlightActivity().catch(() => ({ default: () => null }))
+);
 
 /**
  * Sub-controls under the Flights toggle: one checkbox per tracked roster, and
@@ -39,16 +25,6 @@ function eventLine(e: FlightEvent): string {
 export function FlightGroupControls() {
   const groups = useLayersStore((s) => s.flightGroups);
   const toggleGroup = useLayersStore((s) => s.toggleFlightGroup);
-  const events = useFlightsStatus((s) => s.events);
-
-  const lines = useMemo(
-    () =>
-      events
-        .filter((e) => groups[e.group ?? 'company'] !== false)
-        .slice(0, EVENTS_SHOWN)
-        .map((e) => ({ id: e.id, line: eventLine(e) })),
-    [events, groups]
-  );
 
   return (
     <div className="space-y-1 pt-1">
@@ -63,16 +39,9 @@ export function FlightGroupControls() {
           {label}
         </label>
       ))}
-      {lines.length > 0 && (
-        <div className="pt-1">
-          <div className="text-[10px] uppercase tracking-wide text-white/30">Flight activity</div>
-          {lines.map(({ id, line }) => (
-            <div key={id} className="truncate text-[11px] text-white/50" title={line}>
-              {line}
-            </div>
-          ))}
-        </div>
-      )}
+      <Suspense fallback={null}>
+        <FlightActivity groups={groups} />
+      </Suspense>
     </div>
   );
 }

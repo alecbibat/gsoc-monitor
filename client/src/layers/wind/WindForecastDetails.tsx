@@ -213,6 +213,11 @@ export function WindForecastDetails({ payload }: { payload: Payload }) {
   const [fc, setFc] = useState<WindForecast | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Bumps each time the forecast point's local hour rolls over, so the "now"
+  // headline, the chart start and the "next Nh" peak window keep sliding with
+  // the clock while the panel stays open. Only re-slices data already loaded;
+  // it never refetches.
+  const [hourTick, setHourTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -227,7 +232,19 @@ export function WindForecastDetails({ payload }: { payload: Payload }) {
     };
   }, [lat, lon, reloadKey]);
 
-  const win = useMemo(() => (fc ? buildWindow(fc) : null), [fc]);
+  const utcOffsetSeconds = fc?.utcOffsetSeconds;
+  useEffect(() => {
+    if (utcOffsetSeconds == null) return;
+    const HOUR_MS = 3_600_000;
+    // Same clock buildWindow uses for nowPrefix: the point's local time,
+    // including half-hour and quarter-hour offsets.
+    const shifted = Date.now() + utcOffsetSeconds * 1000;
+    const delay = HOUR_MS - (((shifted % HOUR_MS) + HOUR_MS) % HOUR_MS) + 1_000;
+    const t = window.setTimeout(() => setHourTick((n) => n + 1), delay);
+    return () => window.clearTimeout(t);
+  }, [utcOffsetSeconds, hourTick]);
+
+  const win = useMemo(() => (fc ? buildWindow(fc) : null), [fc, hourTick]);
 
   if (err) {
     return (

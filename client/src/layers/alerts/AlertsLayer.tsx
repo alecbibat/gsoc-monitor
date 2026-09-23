@@ -20,6 +20,7 @@ import {
 // effect can toggle between resting and lit-up styling without re-deriving it.
 interface AlertEntity extends Cesium.Entity {
   gsocAlertColor?: Cesium.Color;
+  gsocLit?: boolean; // lit state currently applied to this polygon's styling
 }
 
 // Resting vs. highlighted fill opacity. Highlighted fills are translucent on
@@ -28,14 +29,18 @@ interface AlertEntity extends Cesium.Entity {
 const FILL_REST = 0.28;
 const FILL_LIT = 0.5;
 
-// Re-style every alert polygon: alerts whose info panel is open get a brighter
+// Re-style the alert polygons: alerts whose info panel is open get a brighter
 // fill and a white-tinged outline; the rest return to resting styling.
 function applyAlertHighlights(ds: Cesium.CustomDataSource, openIds: Set<string>) {
   for (const entity of ds.entities.values) {
     const link = getPanelData(entity);
-    const base = (entity as AlertEntity).gsocAlertColor;
+    const alertEntity = entity as AlertEntity;
+    const base = alertEntity.gsocAlertColor;
     if (!link || link.kind !== 'alerts' || !base || !entity.polygon) continue;
     const lit = openIds.has(link.id);
+    // Unchanged: leave the properties alone. Any property assignment makes
+    // Cesium rebuild this entity's ground-primitive batch.
+    if (alertEntity.gsocLit === lit) continue;
     entity.polygon.material = new Cesium.ColorMaterialProperty(
       base.withAlpha(lit ? FILL_LIT : FILL_REST)
     );
@@ -45,6 +50,7 @@ function applyAlertHighlights(ds: Cesium.CustomDataSource, openIds: Set<string>)
         : base.withAlpha(0.9)
     );
     entity.polygon.outlineWidth = new Cesium.ConstantProperty(lit ? 3 : 2);
+    alertEntity.gsocLit = lit;
   }
 }
 
@@ -84,6 +90,9 @@ export function AlertsLayer() {
     return () => {
       viewer.dataSources.remove(ds, true);
       dsRef.current = null;
+      // The next viewer gets a fresh, empty data source: its first load must
+      // redraw rather than match the old signature and skip.
+      lastSigRef.current = '';
     };
   }, [viewer]);
 
@@ -134,7 +143,10 @@ export function AlertsLayer() {
       if (cancelled) return;
 
       try {
-        const sig = alerts.map((a) => a.properties.id ?? a.id ?? '').join('|');
+        // County availability participates: after a failed county download,
+        // the first poll with counties back must draw the county-based alerts.
+        const sig =
+          (counties ? 'c|' : 'n|') + alerts.map((a) => a.properties.id ?? a.id ?? '').join('|');
         if (sig === lastSigRef.current) {
           useAlertsStatus.getState().setStatus({ error: null });
           return;
@@ -144,6 +156,13 @@ export function AlertsLayer() {
         // Draw higher-severity polygons last so they sit on top.
         const sorted = [...alerts].sort(
           (a, b) => severityRank(a.properties.severity) - severityRank(b.properties.severity)
+        );
+
+        // Create each polygon already styled for its lit state (alerts whose
+        // panel is open stay lit through the periodic refresh), so nothing has
+        // to be restyled — and its batch rebuilt — right after it is drawn.
+        const openIds = new Set(
+          usePanelStore.getState().panels.filter((p) => p.kind === 'alerts').map((p) => p.id)
         );
 
         ds.entities.removeAll();
@@ -156,6 +175,7 @@ export function AlertsLayer() {
             alertColorHex(p.event ?? '', p.severity ?? 'Unknown')
           );
           const id = p.id ?? alert.id ?? `${drawn}`;
+          const lit = openIds.has(`alert-${id}`);
 
           rings.forEach((ring, idx) => {
             const positions = Cesium.Cartesian3.fromDegreesArray(ring.flat());
@@ -163,13 +183,16 @@ export function AlertsLayer() {
               id: `alert-${id}-${idx}`,
               polygon: {
                 hierarchy: new Cesium.PolygonHierarchy(positions),
-                material: color.withAlpha(FILL_REST),
+                material: color.withAlpha(lit ? FILL_LIT : FILL_REST),
                 outline: true,
-                outlineColor: color.withAlpha(0.9),
-                outlineWidth: 2,
+                outlineColor: lit
+                  ? Cesium.Color.lerp(color, Cesium.Color.WHITE, 0.55, new Cesium.Color()).withAlpha(1)
+                  : color.withAlpha(0.9),
+                outlineWidth: lit ? 3 : 2,
               },
             });
             (entity as AlertEntity).gsocAlertColor = color;
+            (entity as AlertEntity).gsocLit = lit;
             attachPanelData(entity, {
               id: `alert-${id}`,
               kind: 'alerts',
@@ -192,13 +215,6 @@ export function AlertsLayer() {
           });
           drawn++;
         }
-
-        // Re-apply highlights to the freshly drawn entities so any alert whose
-        // panel is currently open stays lit through the periodic refresh.
-        const openIds = new Set(
-          usePanelStore.getState().panels.filter((p) => p.kind === 'alerts').map((p) => p.id)
-        );
-        applyAlertHighlights(ds, openIds);
 
         useAlertsStatus.getState().setStatus({ count: drawn, error: null });
         viewer.scene.requestRender();

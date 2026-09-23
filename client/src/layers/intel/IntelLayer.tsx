@@ -5,7 +5,7 @@ import { useLayersStore } from '../../store/layersStore';
 import { attachPanelData } from '../../cesium/entityPanelLink';
 import { api } from '../../api/client';
 import { startVisiblePolling } from '../../lib/poll';
-import { useIntelStore, CATEGORY_META } from './intelStore';
+import { useIntelStore, categoryMeta } from './intelStore';
 import type { IntelItem } from '../../types';
 
 const REFRESH_MS = 90_000;
@@ -29,7 +29,7 @@ const ICONS: Record<string, string> = {};
 function iconFor(item: IntelItem): string {
   const urgent = item.severity === 'urgent';
   const key = `${item.category}:${urgent}`;
-  if (!ICONS[key]) ICONS[key] = pinIcon(CATEGORY_META[item.category].color, urgent);
+  if (!ICONS[key]) ICONS[key] = pinIcon(categoryMeta(item.category).color, urgent);
   return ICONS[key];
 }
 
@@ -109,7 +109,7 @@ export function IntelLayer() {
         id: `intel-${item.id}`,
         kind: 'intel',
         title: item.title,
-        subtitle: `${CATEGORY_META[item.category].label} · ${item.source}`,
+        subtitle: `${categoryMeta(item.category).label} · ${item.source}`,
         payload: { ...item } as unknown as Record<string, unknown>,
       });
     }

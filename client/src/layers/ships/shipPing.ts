@@ -27,8 +27,10 @@ export function pingBillboard(
     width: SHIP_MARKER.ping.sizePx,
     height: SHIP_MARKER.ping.sizePx,
     scale: new Cesium.CallbackProperty(() => pingScale(ring), false),
+    // Write into Cesium's scratch `result` (the billboard setter clones it)
+    // rather than allocating a Color per ring, per clock tick.
     color: new Cesium.CallbackProperty(
-      () => Cesium.Color.WHITE.withAlpha(pingAlpha(ring, alpha)),
+      (_time, result) => Cesium.Color.WHITE.withAlpha(pingAlpha(ring, alpha), result),
       false
     ),
     scaleByDistance: SHIP_MARKER.scaleByDistance,
@@ -41,7 +43,7 @@ export interface PingPump {
   setPositions: (positions: Array<{ lon: number; lat: number }>) => void;
   /** Start (or restart) the frame loop if it should be running. */
   ensure: () => void;
-  /** Stop the loop and drop the camera listener. */
+  /** Stop the loop and drop the camera listeners. */
   dispose: () => void;
 }
 
@@ -89,10 +91,15 @@ export function createPingPump(viewer: Cesium.Viewer): PingPump {
     if (raf == null && anyInView()) raf = requestAnimationFrame(frame);
   };
 
-  const offCamera = viewer.camera.changed.addEventListener(() => {
+  // camera.changed only fires once the view has moved by percentageChanged (50%)
+  // since its last firing, so the rectangle it captures can be up to half a view
+  // stale after a pan. moveEnd fires once when the camera settles; refresh there too.
+  const refreshView = () => {
     viewRect = viewer.camera.computeViewRectangle() ?? null;
     ensure();
-  });
+  };
+  const offCamera = viewer.camera.changed.addEventListener(refreshView);
+  const offMoveEnd = viewer.camera.moveEnd.addEventListener(refreshView);
 
   return {
     setPositions: (next) => { positions = next; },
@@ -100,6 +107,7 @@ export function createPingPump(viewer: Cesium.Viewer): PingPump {
     dispose: () => {
       disposed = true;
       offCamera();
+      offMoveEnd();
       if (raf != null) cancelAnimationFrame(raf);
       raf = null;
     },

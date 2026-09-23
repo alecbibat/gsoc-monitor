@@ -75,6 +75,9 @@ export function EarthquakeLayer() {
     return () => {
       viewer.dataSources.remove(ds, true);
       dsRef.current = null;
+      // The next viewer gets a fresh, empty data source: its first load must
+      // redraw rather than match the old signature and skip.
+      lastSigRef.current = '';
     };
   }, [viewer]);
 
@@ -98,7 +101,9 @@ export function EarthquakeLayer() {
         const features = data.features as unknown as EarthquakeFeature[];
         useEarthquakesStatus.getState().setStatus({ count: features.length, error: null });
         // Skip the teardown/redraw when the feature set is unchanged.
-        const sig = features.map((f) => f.id).join('|');
+        // Include USGS's revision stamp so in-place revisions (magnitude,
+        // status, felt, tsunami, relocation) under the same id trigger a redraw.
+        const sig = features.map((f) => `${f.id}@${f.properties.updated}`).join('|');
         if (sig === lastSigRef.current) return;
         lastSigRef.current = sig;
         ds.entities.removeAll();

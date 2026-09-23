@@ -80,6 +80,26 @@ const KIND_HEIGHTS: Partial<Record<PanelKind, number>> = {
   rivers: 620,
 };
 
+// Panel z-order only ever climbs (every open / raise takes topZ + 1). Before it
+// reaches the overlay band (PickChooser / InfoPanelPopover z-[1000], crisis
+// popup 1500, crisis workspace 2000, risk report 3000 ...), compact the panels
+// above the base back down, keeping their relative order. The base sits above
+// every HUD element in the root stacking context (max z-60), and a panel still
+// below it (opened early, never raised) keeps its z, so panels stay above or
+// below exactly the same things they were before compacting.
+const Z_COMPACT_BASE = 100;
+const Z_CEILING = 900;
+
+function compactZ(panels: PanelData[], topZ: number): { panels: PanelData[]; topZ: number } {
+  if (topZ + 1 < Z_CEILING) return { panels, topZ };
+  const high = panels.filter((p) => p.z > Z_COMPACT_BASE).sort((a, b) => a.z - b.z);
+  const rank = new Map(high.map((p, i) => [p.id, Z_COMPACT_BASE + i + 1] as const));
+  return {
+    panels: panels.map((p) => (rank.has(p.id) ? { ...p, z: rank.get(p.id)! } : p)),
+    topZ: Z_COMPACT_BASE + high.length,
+  };
+}
+
 // Cascade slots step down-left from the top-right corner. Take the first
 // slot no surviving panel is sitting in, so a fresh popup never lands on top
 // of a locked one; fall back to counting when all are taken. "Sitting in"
@@ -110,7 +130,8 @@ export const usePanelStore = create<PanelsState>((set, get) => ({
   panels: [],
   topZ: 10,
   open: (panel) => {
-    const { panels, topZ } = get();
+    const state = get();
+    const { panels, topZ } = compactZ(state.panels, state.topZ);
     const existing = panels.find((p) => p.id === panel.id);
     const nextZ = topZ + 1;
     if (existing) {
@@ -149,9 +170,10 @@ export const usePanelStore = create<PanelsState>((set, get) => ({
   bringToFront: (id) => {
     // Every mousedown inside a panel lands here — skip the array rebuild (and
     // the re-render of every open panel) when the target is already frontmost.
-    const { panels, topZ } = get();
-    const target = panels.find((p) => p.id === id);
-    if (!target || target.z === topZ) return;
+    const state = get();
+    const target = state.panels.find((p) => p.id === id);
+    if (!target || target.z === state.topZ) return;
+    const { panels, topZ } = compactZ(state.panels, state.topZ);
     const nextZ = topZ + 1;
     set({
       panels: panels.map((p) => (p.id === id ? { ...p, z: nextZ } : p)),

@@ -475,10 +475,11 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
   // browser (Overpass + OSRM) so server-side network restrictions don't apply.
   useEffect(() => {
     let cancelled = false;
+    const ac = new AbortController();
     setLoading(true);
     setError(null);
     setData(null);
-    fetchDirections(payload.lat, payload.lon, payload.name)
+    fetchDirections(payload.lat, payload.lon, payload.name, ac.signal)
       .then((d) => {
         if (!cancelled) {
           setData(d);
@@ -493,17 +494,20 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
           setLoading(false);
         }
       });
-    return () => { cancelled = true; };
+    // Abort stops the superseded sweep's remaining Overpass/OSRM requests; the
+    // flag still guards state, since an aborted sweep resolves with partial legs.
+    return () => { cancelled = true; ac.abort(); };
   }, [payload.lat, payload.lon, payload.name, reloadKey]);
 
   // Compute nearest 3 pins client-side, then fetch drive routes for each.
   useEffect(() => {
     let cancelled = false;
+    const ac = new AbortController();
     setPinsLoading(true);
     const near = computeNearestPins(payload.lat, payload.lon, payload.name, 3);
     Promise.all(
       near.map((pin) =>
-        fetchDriveRoute(payload.lat, payload.lon, pin.lat, pin.lon)
+        fetchDriveRoute(payload.lat, payload.lon, pin.lat, pin.lon, ac.signal)
           .then((route) => ({ ...pin, route }))
           .catch(() => ({ ...pin, route: null }))
       )
@@ -513,7 +517,7 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
         setPinsLoading(false);
       }
     });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; ac.abort(); };
   }, [payload.lat, payload.lon, payload.name]);
 
   // Draw emergency + hotel/hospital routes on the globe.
@@ -523,6 +527,7 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
     viewer.dataSources.add(ds);
 
     const pts: Cesium.Cartesian3[] = [Cesium.Cartesian3.fromDegrees(payload.lon, payload.lat)];
+    const markerPts: Cesium.Cartesian3[] = [];
 
     ds.entities.add({
       // Surface anchor + default depth test — the globe occludes these route
@@ -566,8 +571,10 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
         });
       }
 
+      const markerPos = Cesium.Cartesian3.fromDegrees(leg.lon, leg.lat, 0);
+      markerPts.push(markerPos);
       ds.entities.add({
-        position: Cesium.Cartesian3.fromDegrees(leg.lon, leg.lat, 0),
+        position: markerPos,
         point: {
           pixelSize: new Cesium.CallbackProperty(
             () => 7 + 2.5 * (0.5 + 0.5 * Math.sin(Date.now() / 240)),
@@ -603,8 +610,40 @@ export function LocationDetails({ payload }: { payload: LocationPayload }) {
 
     let raf = 0;
     if (selHospital || selPolice || selFireStation || selHotel) {
+      // Everything that animates (pulse polylines + pulsing leg markers) lies in
+      // this sphere. When all of it is off-frustum or behind the planet the frames
+      // would be identical, so skip the full-scene render. The camera move that
+      // brings it back triggers a render itself, and the loop resumes full rate.
+      const animSphere = Cesium.BoundingSphere.fromPoints(pts.concat(markerPts));
+      const padded = Cesium.BoundingSphere.clone(animSphere);
+      const c = animSphere.center;
+      const canCull = Number.isFinite(animSphere.radius) && Number.isFinite(c.x + c.y + c.z);
+      // Slightly inside the ellipsoid so the horizon test stays conservative
+      // (world terrain can dip below the ellipsoid).
+      const occluderR = viewer.scene.globe.ellipsoid.minimumRadius - 12_000;
+      const occluder = new Cesium.Occluder(
+        new Cesium.BoundingSphere(Cesium.Cartesian3.ZERO, occluderR),
+        viewer.camera.positionWC,
+      );
+      // Screen-space margin as an angle (0.05 rad is 40+ CSS px on any real
+      // canvas; markers are about 7 px radius). Scaling by the far-side distance
+      // makes it an upper bound for every point in the sphere.
+      const PAD_RAD = 0.05;
+      const routesMaybeVisible = (): boolean => {
+        if (!canCull) return true;
+        const cam = viewer.camera;
+        const pos = cam.positionWC;
+        padded.radius = animSphere.radius + PAD_RAD * (Cesium.Cartesian3.distance(pos, c) + animSphere.radius);
+        const cv = cam.frustum.computeCullingVolume(pos, cam.directionWC, cam.upWC);
+        if (cv.computeVisibility(padded) === Cesium.Intersect.OUTSIDE) return false;
+        // Occluder treats a camera inside its sphere as "everything hidden"; that
+        // can't happen in normal navigation, but keep animating if it does.
+        if (Cesium.Cartesian3.magnitudeSquared(pos) <= occluderR * occluderR) return true;
+        occluder.cameraPosition = pos;
+        return occluder.isBoundingSphereVisible(padded);
+      };
       const tick = () => {
-        viewer.scene.requestRender();
+        if (routesMaybeVisible()) viewer.scene.requestRender();
         raf = requestAnimationFrame(tick);
       };
       raf = requestAnimationFrame(tick);

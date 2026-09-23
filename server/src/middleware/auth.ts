@@ -14,6 +14,15 @@ export interface AuthUser {
   role: string;
 }
 
+/** A verified JWT is a session only if it carries the claims signToken writes. */
+function asAuthUser(decoded: unknown): AuthUser | null {
+  if (!decoded || typeof decoded !== 'object') return null;
+  const d = decoded as Record<string, unknown>;
+  if (typeof d.id !== 'string' || typeof d.email !== 'string' ||
+      typeof d.name !== 'string' || typeof d.role !== 'string') return null;
+  return d as unknown as AuthUser;
+}
+
 // Augment Express Request with the decoded user, set by requireAuth.
 declare global {
   namespace Express {
@@ -42,7 +51,7 @@ export function readAuthUser(req: Request): AuthUser | null {
   try {
     const token: string | undefined = req.cookies?.gsoc_auth;
     if (!token) return null;
-    return jwt.verify(token, jwtSecret()) as AuthUser;
+    return asAuthUser(jwt.verify(token, jwtSecret()));
   } catch {
     return null;
   }
@@ -52,7 +61,9 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   const token: string | undefined = req.cookies?.gsoc_auth;
   if (!token) { res.status(401).json({ error: 'Not authenticated' }); return; }
   try {
-    req.user = jwt.verify(token, jwtSecret()) as AuthUser;
+    const user = asAuthUser(jwt.verify(token, jwtSecret()));
+    if (!user) { res.status(401).json({ error: 'Session expired — please sign in again' }); return; }
+    req.user = user;
     next();
   } catch {
     res.status(401).json({ error: 'Session expired — please sign in again' });

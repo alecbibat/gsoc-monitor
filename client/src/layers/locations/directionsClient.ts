@@ -84,25 +84,93 @@ interface OverpassElement {
   tags?: OsmTags;
 }
 
+// Successful Overpass/OSRM answers, reused when the same pin's panel is
+// re-opened or remounted (e.g. after the screensaver) instead of re-running the
+// whole sweep against rate-limited public instances. Failures are never kept,
+// so the next open retries them exactly as before, and the sweep logic re-runs
+// unchanged on top of these answers. In-flight calls aren't shared: the only
+// caller that could join one is the same panel remounting, and its
+// predecessor's calls were just aborted.
+const MEMO_TTL_MS = 30 * 60_000;
+const MEMO_MAX = 60;
+
+type MemoEntry<T> = { at: number; v: T };
+
+async function memo<T>(
+  store: Map<string, MemoEntry<T>>,
+  key: string,
+  run: () => Promise<T>,
+  ok: (v: T) => boolean = () => true
+): Promise<T> {
+  const hit = store.get(key);
+  if (hit) {
+    store.delete(key);
+    if (Date.now() - hit.at < MEMO_TTL_MS) {
+      store.set(key, hit); // LRU bump
+      return hit.v;
+    }
+  }
+  const v = await run();
+  if (ok(v)) {
+    store.delete(key);
+    store.set(key, { at: Date.now(), v });
+    if (store.size > MEMO_MAX) store.delete(store.keys().next().value as string);
+  }
+  return v;
+}
+
+type RouteResult = { distanceM: number; durationS: number; geometry: Array<[number, number]>; steps: Array<{ instruction: string; distanceM: number }> };
+
+const overpassMemo = new Map<string, MemoEntry<OverpassElement[]>>();
+const osrmMemo = new Map<string, MemoEntry<RouteResult | null>>();
+
+/** Test hook: forget every remembered Overpass/OSRM answer. */
+export function clearDirectionsCache(): void {
+  overpassMemo.clear();
+  osrmMemo.clear();
+}
+
+/** Per-request timeout, also cancelled when the caller's signal aborts. */
+function requestSignal(timeoutMs: number, outer?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  if (!outer) return timeout;
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any([outer, timeout]);
+  // Engines with AbortSignal.timeout but not AbortSignal.any (Safari < 17.4, Chrome < 116).
+  const c = new AbortController();
+  const abort = () => c.abort();
+  if (outer.aborted) c.abort();
+  else outer.addEventListener('abort', abort, { once: true });
+  timeout.addEventListener('abort', abort, { once: true });
+  return c.signal;
+}
+
 async function overpassFetch(
   clauses: string[],
   radius: number,
   lat: number,
   lon: number,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<OverpassElement[]> {
   const around = `(around:${radius},${lat},${lon});`;
   const union = clauses.map((c) => `${c}${around}`).join('');
   const q = `[out:json][timeout:20];(${union});out center 200;`;
-  const r = await fetch(OVERPASS, {
-    method: 'POST',
-    body: `data=${encodeURIComponent(q)}`,
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!r.ok) throw new Error(`Overpass HTTP ${r.status}`);
-  const data = (await r.json()) as { elements?: OverpassElement[] };
-  return data.elements ?? [];
+  let failed = false;
+  return memo(overpassMemo, q, async () => {
+    const r = await fetch(OVERPASS, {
+      method: 'POST',
+      body: `data=${encodeURIComponent(q)}`,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      signal: requestSignal(timeoutMs, signal),
+    });
+    if (!r.ok) throw new Error(`Overpass HTTP ${r.status}`);
+    const data = (await r.json()) as { elements?: OverpassElement[]; remark?: string };
+    // Overpass reports its own timeouts and out-of-memory aborts as HTTP 200
+    // with a "runtime error" remark and empty or partial elements. Use them
+    // as before, but don't remember them, so a re-open retries the ring.
+    failed = /runtime error/i.test(data.remark ?? '');
+    return data.elements ?? [];
+  }, () => !failed);
 }
 
 /** Widen the radius for one query tier until it has `limit` candidates good
@@ -114,17 +182,19 @@ async function sweepTier(
   qt: QueryTier,
   limit: number,
   selfName: string | undefined,
-  deadline: number
+  deadline: number,
+  signal?: AbortSignal
 ): Promise<Poi[]> {
   let bestSoFar: Poi[] = [];
 
   for (const radius of RADII[kind]) {
+    if (signal?.aborted) break;
     const remaining = deadline - Date.now();
     if (remaining < 3_000) break; // not enough time left for a meaningful attempt
 
     let elements: OverpassElement[];
     try {
-      elements = await overpassFetch(qt.clauses, radius, lat, lon, Math.min(14_000, remaining));
+      elements = await overpassFetch(qt.clauses, radius, lat, lon, Math.min(14_000, remaining), signal);
     } catch {
       continue; // try a wider radius
     }
@@ -186,17 +256,19 @@ async function nearestPois(
   lon: number,
   kind: LegKind,
   limit: number,
-  selfName?: string
+  selfName?: string,
+  signal?: AbortSignal
 ): Promise<Poi[]> {
   const deadline = Date.now() + SWEEP_BUDGET_MS;
   let best: Poi[] = [];
 
   for (const qt of overpassTiers(kind)) {
-    const found = await sweepTier(lat, lon, kind, qt, limit, selfName, deadline);
+    const found = await sweepTier(lat, lon, kind, qt, limit, selfName, deadline, signal);
     if (found.length && (best.length === 0 || found[0].tier < best[0].tier)) best = found;
     // Got what this tier was looking for — a wider net can only do worse.
     if (best.some((p) => p.tier <= qt.satisfies)) break;
     if (Date.now() >= deadline) break;
+    if (signal?.aborted) break;
   }
   return best.slice(0, limit);
 }
@@ -226,40 +298,51 @@ async function driveRoute(
   fromLat: number,
   fromLon: number,
   toLat: number,
-  toLon: number
-): Promise<{ distanceM: number; durationS: number; geometry: Array<[number, number]>; steps: Array<{ instruction: string; distanceM: number }> } | null> {
+  toLon: number,
+  signal?: AbortSignal,
+  /** false = caller never reads the path; skip the overview polyline and keep
+   *  per-step geometry as compact encoded strings (not parsed). */
+  withGeometry = true
+): Promise<RouteResult | null> {
   const url =
     `${OSRM}/route/v1/driving/${fromLon},${fromLat};${toLon},${toLat}` +
-    `?overview=full&geometries=geojson&steps=true`;
-  try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(15_000) });
-    if (!r.ok) return null;
-    const data = (await r.json()) as {
-      code?: string;
-      routes?: Array<{
-        distance: number;
-        duration: number;
-        geometry: { coordinates: Array<[number, number]> };
-        legs?: Array<{ steps?: Array<{ distance: number; name?: string; maneuver?: { type?: string; modifier?: string } }> }>;
-      }>;
-    };
-    const route = data.routes?.[0];
-    if (data.code !== 'Ok' || !route) return null;
-    const steps = (route.legs?.[0]?.steps ?? [])
-      .map((s) => ({ instruction: formatStep(s), distanceM: s.distance }))
-      .filter((s) => s.instruction.length > 0);
-    return {
-      distanceM: route.distance,
-      durationS: route.duration,
-      geometry: route.geometry.coordinates,
-      steps,
-    };
-  } catch {
-    return null;
-  }
+    (withGeometry
+      ? `?overview=full&geometries=geojson&steps=true`
+      : `?overview=false&geometries=polyline&steps=true`);
+  // A failure (null) is never remembered, so the next open retries it.
+  return memo(osrmMemo, url, async () => {
+    try {
+      const r = await fetch(url, { signal: requestSignal(15_000, signal) });
+      if (!r.ok) return null;
+      const data = (await r.json()) as {
+        code?: string;
+        routes?: Array<{
+          distance: number;
+          duration: number;
+          geometry: { coordinates: Array<[number, number]> };
+          legs?: Array<{ steps?: Array<{ distance: number; name?: string; maneuver?: { type?: string; modifier?: string } }> }>;
+        }>;
+      };
+      const route = data.routes?.[0];
+      if (data.code !== 'Ok' || !route) return null;
+      const steps = (route.legs?.[0]?.steps ?? [])
+        .map((s) => ({ instruction: formatStep(s), distanceM: s.distance }))
+        .filter((s) => s.instruction.length > 0);
+      return {
+        distanceM: route.distance,
+        durationS: route.duration,
+        geometry: withGeometry
+          ? route.geometry.coordinates
+          : [[fromLon, fromLat], [toLon, toLat]],
+        steps,
+      };
+    } catch {
+      return null;
+    }
+  }, (v) => v !== null);
 }
 
-async function routeLeg(lat: number, lon: number, poi: Poi, kind: LegKind): Promise<DirectionsLeg> {
+async function routeLeg(lat: number, lon: number, poi: Poi, kind: LegKind, signal?: AbortSignal): Promise<DirectionsLeg> {
   const base = {
     name: poi.name,
     category: kind,
@@ -268,7 +351,7 @@ async function routeLeg(lat: number, lon: number, poi: Poi, kind: LegKind): Prom
     tier: poi.tier,
     serviceLabel: poi.serviceLabel,
   };
-  const r = await driveRoute(lat, lon, poi.lat, poi.lon);
+  const r = await driveRoute(lat, lon, poi.lat, poi.lon, signal);
   if (r) {
     return {
       ...base,
@@ -294,11 +377,12 @@ async function buildLegs(
   lon: number,
   kind: LegKind,
   limit: number,
-  selfName?: string
+  selfName?: string,
+  signal?: AbortSignal
 ): Promise<DirectionsLeg[]> {
-  const pois = await nearestPois(lat, lon, kind, limit, selfName);
-  if (pois.length === 0) return [];
-  const legs = await Promise.all(pois.map((poi) => routeLeg(lat, lon, poi, kind)));
+  const pois = await nearestPois(lat, lon, kind, limit, selfName, signal);
+  if (pois.length === 0 || signal?.aborted) return [];
+  const legs = await Promise.all(pois.map((poi) => routeLeg(lat, lon, poi, kind, signal)));
 
   // Order so option A is the best answer: tier outranks everything, since a
   // routed clinic is still not a hospital. Then routed legs by drive time,
@@ -316,13 +400,15 @@ export async function fetchDirections(
   lat: number,
   lon: number,
   /** The pin's own name, so a hotel pin isn't offered directions to itself. */
-  selfName?: string
+  selfName?: string,
+  /** Aborted when the panel goes away, so a superseded sweep stops issuing requests. */
+  signal?: AbortSignal
 ): Promise<DirectionsResponse> {
   const [hospitals, hotels, police, fireStations] = await Promise.all([
-    buildLegs(lat, lon, 'hospital', OPTIONS_PER_KIND).catch(() => [] as DirectionsLeg[]),
-    buildLegs(lat, lon, 'hotel',    OPTIONS_PER_KIND, selfName).catch(() => [] as DirectionsLeg[]),
-    buildLegs(lat, lon, 'police',   OPTIONS_PER_KIND).catch(() => [] as DirectionsLeg[]),
-    buildLegs(lat, lon, 'fire_station', 1).catch(() => [] as DirectionsLeg[]),
+    buildLegs(lat, lon, 'hospital', OPTIONS_PER_KIND, undefined, signal).catch(() => [] as DirectionsLeg[]),
+    buildLegs(lat, lon, 'hotel',    OPTIONS_PER_KIND, selfName, signal).catch(() => [] as DirectionsLeg[]),
+    buildLegs(lat, lon, 'police',   OPTIONS_PER_KIND, undefined, signal).catch(() => [] as DirectionsLeg[]),
+    buildLegs(lat, lon, 'fire_station', 1, undefined, signal).catch(() => [] as DirectionsLeg[]),
   ]);
   return { origin: { lat, lon }, hospitals, hotels, police, fireStations };
 }
@@ -331,7 +417,8 @@ export async function fetchDriveRoute(
   fromLat: number,
   fromLon: number,
   toLat: number,
-  toLon: number
+  toLon: number,
+  signal?: AbortSignal
 ): Promise<DriveResult> {
   const fallback: DriveResult = {
     distanceM: 0,
@@ -340,7 +427,7 @@ export async function fetchDriveRoute(
     steps: [],
     routed: false,
   };
-  const r = await driveRoute(fromLat, fromLon, toLat, toLon);
+  const r = await driveRoute(fromLat, fromLon, toLat, toLon, signal, false);
   if (!r) return fallback;
   return { ...r, routed: true };
 }

@@ -130,11 +130,22 @@ export function WindArrowsLayer() {
     const matFor = (spd: number): Cesium.Material => {
       const key = Math.min(60, Math.round(spd));
       if (!matLut[key]) {
-        matLut[key] = Cesium.Material.fromType('PolylineGlow', {
+        const m = Cesium.Material.fromType('PolylineGlow', {
           color: colorFor(key),
           glowPower: 0.22,
           taperPower: 1.0,
         });
+        // These materials are shared by many polylines and reused across
+        // rebuilds; the layer owns them, not the polylines. Polyline._destroy()
+        // (run by PolylineCollection.removeAll()/destroy()) calls
+        // material.destroy(), which would destroyObject() the shared instance
+        // after the first line: the debug build then throws on the next line,
+        // and the release build silently turns isTranslucent() into a no-op,
+        // pushing every later streamline into the opaque pass. PolylineGlow
+        // holds no textures or sub-materials (no GPU resources), so a no-op
+        // destroy leaks nothing; the LUT is dropped with this effect closure.
+        m.destroy = () => undefined;
+        matLut[key] = m;
       }
       return matLut[key];
     };

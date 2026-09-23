@@ -9,6 +9,7 @@ import { usePanelStore } from '../../panels/panelStore';
 import { attachPanelData, getPanelData } from '../../cesium/entityPanelLink';
 import { api } from '../../api/client';
 import { useSatellitesStatus } from './satellitesStore';
+import { loadSatlib } from './satlib';
 import type { SatelliteGroup } from '../../types';
 
 // Per-group styling — colour tints the satellite glyph and orbit ring; size is
@@ -37,7 +38,6 @@ const TRAIL_MAX = 500;
 const TRAIL_POINTS = 18; // historical points retained per tail
 const TRAIL_SAMPLE_MS = 4_000; // cadence at which a new tail point is dropped
 const TRAIL_COLOR = Cesium.Color.WHITE.withAlpha(0.9);
-const SCRATCH_JD = new Cesium.JulianDate();
 
 const hex = (s: string) => Cesium.Color.fromCssColorString(s);
 
@@ -78,17 +78,27 @@ function satIcon(color: string): string {
 }
 
 // Open the satellite's detail panel and frame it against the curve of Earth.
-function focusSatellite(viewer: Cesium.Viewer, entity: Cesium.Entity) {
-  const data = getPanelData(entity);
+function focusSatellite(viewer: Cesium.Viewer, rec: SatRecord) {
+  const data = getPanelData(rec.entity);
   if (data) usePanelStore.getState().open(data);
-  viewer
-    .flyTo(entity, {
+  flyToSatellite(viewer, rec);
+}
+
+function flyToSatellite(viewer: Cesium.Viewer, rec: SatRecord) {
+  // A hidden glyph (failed propagation) has nothing to frame, as with flyTo before.
+  if (rec.bb.show) {
+    // Merge the same spheres viewer.flyTo(entity) merged when these were entity
+    // graphics — glyph and label points plus the tail — so the framing is unchanged.
+    const head = rec.bb.position;
+    const spheres = [new Cesium.BoundingSphere(head, 0)];
+    if (rec.label) spheres.push(new Cesium.BoundingSphere(head, 0));
+    const line = rec.trailLine;
+    if (line && line.show) spheres.push(Cesium.BoundingSphere.fromPoints(line.positions));
+    viewer.camera.flyToBoundingSphere(Cesium.BoundingSphere.fromBoundingSpheres(spheres), {
       duration: 1.8,
       offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-35), 5_000_000),
-    })
-    .catch(() => {
-      /* flight superseded by another camera move — ignore */
     });
+  }
   viewer.scene.requestRender();
 }
 
@@ -97,8 +107,12 @@ interface SatRecord {
   satnum: string;
   intlDesig: string;
   satrec: SatRec;
+  // Graphics-free: carries the panel data and is the pick id of the glyph,
+  // label and tail primitives, so CesiumGlobe's drillPick resolves it as before.
   entity: Cesium.Entity;
-  pos: Cesium.ConstantPositionProperty;
+  bb: Cesium.Billboard;
+  label: Cesium.Label | undefined;
+  trailLine: Cesium.Polyline | null;
   trail: { body: Cesium.Cartesian3[] };
 }
 
@@ -108,6 +122,8 @@ export function SatelliteLayer() {
   const group = useLayersStore((s) => s.satelliteGroup);
   const focusNonce = useSatellitesStatus((s) => s.focusNonce);
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
+  const billboardsRef = useRef<Cesium.BillboardCollection | null>(null);
+  const labelsRef = useRef<Cesium.LabelCollection | null>(null);
   const byIdRef = useRef<Map<string, SatRecord>>(new Map());
   const pendingFocusRef = useRef(false);
 
@@ -116,7 +132,24 @@ export function SatelliteLayer() {
     const ds = new Cesium.CustomDataSource('satellites');
     dsRef.current = ds;
     viewer.dataSources.add(ds);
+    // Glyphs/labels are raw primitives: they only move in tick(), whereas entity
+    // visualizers re-read every satellite's properties on every animation frame.
+    // Labels first, the same update (draw) order the entity cluster used.
+    const labels: Cesium.LabelCollection = viewer.scene.primitives.add(
+      new Cesium.LabelCollection({ scene: viewer.scene })
+    );
+    const billboards: Cesium.BillboardCollection = viewer.scene.primitives.add(
+      new Cesium.BillboardCollection({ scene: viewer.scene })
+    );
+    billboardsRef.current = billboards;
+    labelsRef.current = labels;
     return () => {
+      if (!viewer.isDestroyed()) {
+        viewer.scene.primitives.remove(labels); // also destroys them
+        viewer.scene.primitives.remove(billboards);
+      }
+      billboardsRef.current = null;
+      labelsRef.current = null;
       viewer.dataSources.remove(ds, true);
       dsRef.current = null;
     };
@@ -127,21 +160,30 @@ export function SatelliteLayer() {
   useEffect(() => {
     if (!focusNonce || !viewer) return;
     const rec = byIdRef.current.get(ISS_SATNUM);
-    if (rec) focusSatellite(viewer, rec.entity);
+    if (rec) focusSatellite(viewer, rec);
     else pendingFocusRef.current = true;
   }, [focusNonce, viewer]);
 
   useEffect(() => {
     const ds = dsRef.current;
-    if (!viewer || !ds) return;
+    const billboards = billboardsRef.current;
+    const labels = labelsRef.current;
+    if (!viewer || !ds || !billboards || !labels) return;
 
     if (!active) {
       ds.entities.removeAll();
+      billboards.removeAll();
+      labels.removeAll();
       byIdRef.current.clear();
       useSatellitesStatus.getState().setStatus({ loading: false, count: 0, total: 0, error: null });
       viewer.scene.requestRender();
       return;
     }
+
+    // Comet tails as plain primitives: updated only when tick() moves them,
+    // instead of per animation frame through the entity dynamic-polyline path.
+    const trailLines = new Cesium.PolylineCollection();
+    viewer.scene.primitives.add(trailLines);
 
     let cancelled = false;
     // Set by load() before anything that propagates runs (tick/computeOrbit
@@ -159,12 +201,14 @@ export function SatelliteLayer() {
 
     // --- Selected-satellite orbit ring ---------------------------------------
     let orbitEntity: Cesium.Entity | null = null;
+    let orbitPositions: Cesium.Cartesian3[] = [];
     let orbitSatnum: string | null = null;
     let orbitAt = 0;
 
     const clearOrbit = () => {
       if (orbitEntity) ds.entities.remove(orbitEntity);
       orbitEntity = null;
+      orbitPositions = [];
       orbitSatnum = null;
     };
 
@@ -191,15 +235,20 @@ export function SatelliteLayer() {
     };
 
     const drawOrbit = (rec: SatRecord) => {
-      if (orbitEntity) ds.entities.remove(orbitEntity);
-      orbitEntity = ds.entities.add({
-        polyline: {
-          positions: computeOrbit(rec.satrec),
-          width: 2,
-          arcType: Cesium.ArcType.NONE,
-          material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.2, color: ringColor }),
-        },
-      });
+      orbitPositions = computeOrbit(rec.satrec);
+      if (!orbitEntity) {
+        // Dynamic (CallbackProperty) positions put the ring on Cesium's synchronous
+        // PolylineCollection path, so each refresh swaps it in place on the next frame.
+        // A static polyline would be torn down and rebuilt asynchronously, blinking out.
+        orbitEntity = ds.entities.add({
+          polyline: {
+            positions: new Cesium.CallbackProperty(() => orbitPositions, false),
+            width: 2,
+            arcType: Cesium.ArcType.NONE,
+            material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.2, color: ringColor }),
+          },
+        });
+      }
       orbitSatnum = rec.satnum;
       orbitAt = performance.now();
     };
@@ -213,6 +262,15 @@ export function SatelliteLayer() {
     };
 
     let timer: ReturnType<typeof setInterval> | null = null;
+    // ISS flight requested while the tab was hidden, flown after the catch-up tick.
+    let flightOnVisible: SatRecord | null = null;
+
+    // Glyph, name and tail vanish together when a satellite can't be placed.
+    const hide = (s: SatRecord) => {
+      s.bb.show = false;
+      if (s.label) s.label.show = false;
+      if (s.trailLine) s.trailLine.show = false;
+    };
 
     const tick = () => {
       if (document.hidden) return; // no point propagating for a hidden tab
@@ -225,23 +283,37 @@ export function SatelliteLayer() {
       for (const s of sats) {
         const pv = sat.propagate(s.satrec, now);
         if (typeof pv.position === 'boolean') {
-          s.entity.show = false;
+          hide(s);
           continue;
         }
         const geo = sat.eciToGeodetic(pv.position as EciVec3<number>, g);
         const lon = sat.degreesLong(geo.longitude);
         const lat = sat.degreesLat(geo.latitude);
         if (!Number.isFinite(lon) || !Number.isFinite(lat)) {
-          s.entity.show = false;
+          hide(s);
           continue;
         }
-        s.entity.show = true;
         const cart = Cesium.Cartesian3.fromDegrees(lon, lat, geo.height * 1000);
-        s.pos.setValue(cart);
+        s.bb.show = true;
+        s.bb.position = cart;
+        if (s.label) {
+          s.label.show = true;
+          s.label.position = cart;
+        }
         if (doTrail) {
           // Oldest-first so the live head sits at the bright (st.s = 1) end of
           // the glow and the tail fades to transparent at the start.
           s.trail.body = [...s.trail.body, cart.clone()].slice(-TRAIL_POINTS);
+        }
+        if (s.trailLine) {
+          // Same rule the dynamic updater applied: tail + live head, hidden below 2 points.
+          const pts = [...s.trail.body, cart];
+          if (pts.length >= 2) {
+            s.trailLine.show = true;
+            s.trailLine.positions = pts;
+          } else {
+            s.trailLine.show = false;
+          }
         }
       }
 
@@ -261,11 +333,14 @@ export function SatelliteLayer() {
       try {
         // Propagator chunk fetches alongside the TLEs (cached after the first
         // toggle, so this is only a cost once).
-        const [satlib, data] = await Promise.all([import('satellite.js'), api.satellites(group)]);
+        const [satlib, data] = await Promise.all([loadSatlib(), api.satellites(group)]);
         if (cancelled) return;
         sat = satlib;
 
         ds.entities.removeAll();
+        billboards.removeAll();
+        labels.removeAll();
+        trailLines.removeAll();
         sats.length = 0;
         byId.clear();
         orbitEntity = null;
@@ -277,6 +352,8 @@ export function SatelliteLayer() {
         trailsEnabled = visible.length <= TRAIL_MAX;
 
         for (const tle of visible) {
+          // A duplicate NORAD id would draw twice (the entity add used to throw).
+          if (byId.has(tle.satnum)) continue;
           let satrec: SatRec;
           try {
             satrec = sat.twoline2satrec(tle.line1, tle.line2);
@@ -285,51 +362,52 @@ export function SatelliteLayer() {
           }
           const isIss = tle.satnum === ISS_SATNUM;
           const size = isIss ? ISS_STYLE.size : style.size;
-          const pos = new Cesium.ConstantPositionProperty(Cesium.Cartesian3.fromDegrees(0, 0, 0));
           const trail = { body: [] as Cesium.Cartesian3[] };
 
-          const entity = ds.entities.add({
-            id: `sat-${tle.satnum}`,
-            position: pos,
-            show: false, // revealed once the first propagation places it
-            billboard: {
-              image: isIss ? issIcon : icon,
-              width: size,
-              height: size,
-              // Default depth test so satellites on the far side of the planet
-              // are correctly hidden behind the globe.
-            },
-            label:
-              showLabels || isIss
-                ? {
-                    text: tle.name,
-                    font: '600 11px Inter, system-ui, sans-serif',
-                    fillColor: hex('#dbe7f2'),
-                    outlineColor: hex('#04121c'),
-                    outlineWidth: 3,
-                    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-                    pixelOffset: new Cesium.Cartesian2(0, -16),
-                    verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                    scaleByDistance: new Cesium.NearFarScalar(1.5e6, 1.0, 2.0e7, 0.55),
-                  }
-                : undefined,
-            polyline: trailsEnabled
-              ? {
-                  // Fading historical tail + the live head (current position).
-                  positions: new Cesium.CallbackProperty(() => {
-                    const live = pos.getValue(SCRATCH_JD);
-                    return live ? [...trail.body, live] : trail.body;
-                  }, false),
-                  width: isIss ? 6 : 4,
-                  arcType: Cesium.ArcType.NONE,
-                  material: new Cesium.PolylineGlowMaterialProperty({
-                    glowPower: 0.16,
-                    taperPower: 0.3,
-                    color: TRAIL_COLOR,
-                  }),
-                }
-              : undefined,
+          const entity = new Cesium.Entity({ id: `sat-${tle.satnum}` });
+          // Hidden until the first propagation places it. Default depth test so
+          // satellites on the far side of the planet are correctly hidden
+          // behind the globe.
+          const bb = billboards.add({
+            id: entity,
+            show: false,
+            position: Cesium.Cartesian3.ZERO, // placed by tick()
+            image: isIss ? issIcon : icon,
+            width: size,
+            height: size,
           });
+          const label =
+            showLabels || isIss
+              ? labels.add({
+                  id: entity,
+                  show: false,
+                  position: Cesium.Cartesian3.ZERO,
+                  text: tle.name,
+                  font: '600 11px Inter, system-ui, sans-serif',
+                  fillColor: hex('#dbe7f2'),
+                  outlineColor: hex('#04121c'),
+                  outlineWidth: 3,
+                  style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                  pixelOffset: new Cesium.Cartesian2(0, -16),
+                  horizontalOrigin: Cesium.HorizontalOrigin.CENTER, // entity default; the Label primitive defaults to LEFT
+                  verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                  scaleByDistance: new Cesium.NearFarScalar(1.5e6, 1.0, 2.0e7, 0.55),
+                })
+              : undefined;
+          // Fading historical tail + the live head (current position).
+          const trailLine = trailsEnabled
+            ? trailLines.add({
+                id: entity, // drillPick -> getPanelData(entity), same as the entity polyline did
+                show: false,
+                width: isIss ? 6 : 4,
+                // One Material per line: Polyline._destroy destroys its material.
+                material: Cesium.Material.fromType('PolylineGlow', {
+                  glowPower: 0.16,
+                  taperPower: 0.3,
+                  color: TRAIL_COLOR.clone(),
+                }),
+              })
+            : null;
 
           attachPanelData(entity, {
             id: `sat-${tle.satnum}`,
@@ -351,7 +429,9 @@ export function SatelliteLayer() {
             intlDesig: tle.intlDesig,
             satrec,
             entity,
-            pos,
+            bb,
+            label,
+            trailLine,
             trail,
           };
           sats.push(rec);
@@ -371,7 +451,12 @@ export function SatelliteLayer() {
         if (pendingFocusRef.current) {
           pendingFocusRef.current = false;
           const iss = byId.get(ISS_SATNUM);
-          if (iss) focusSatellite(viewer, iss.entity);
+          if (iss) {
+            focusSatellite(viewer, iss);
+            // tick() skipped the hidden tab, so nothing is placed to frame yet:
+            // fly on return instead, as flyTo's zoom target waited for a frame.
+            if (document.hidden) flightOnVisible = iss;
+          }
         }
 
         timer = setInterval(tick, tickMsFor(sats.length));
@@ -388,7 +473,12 @@ export function SatelliteLayer() {
     // Catch up the moment the tab becomes visible again (ticks are skipped
     // while hidden; the interval itself keeps running).
     const onVisible = () => {
-      if (!document.hidden && sats.length) tick();
+      if (document.hidden || !sats.length) return;
+      tick();
+      if (flightOnVisible) {
+        flyToSatellite(viewer, flightOnVisible);
+        flightOnVisible = null;
+      }
     };
     document.addEventListener('visibilitychange', onVisible);
 
@@ -399,6 +489,14 @@ export function SatelliteLayer() {
       if (timer) clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisible);
       ds.entities.removeAll();
+      // Captured locals, not the refs: effect 1's cleanup (viewer swap or
+      // unmount) runs first, nulls the refs and destroys these collections.
+      if (!billboards.isDestroyed()) billboards.removeAll();
+      if (!labels.isDestroyed()) labels.removeAll();
+      // A destroyed viewer (WebGL context-loss rebuild) already destroyed its primitives.
+      if (!viewer.isDestroyed() && !trailLines.isDestroyed()) {
+        viewer.scene.primitives.remove(trailLines); // destroys the lines and their materials
+      }
       byIdRef.current.clear();
     };
   }, [viewer, active, group]);

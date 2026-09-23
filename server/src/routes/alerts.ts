@@ -17,7 +17,7 @@ const NWS_ALERTS_URL = 'https://api.weather.gov/alerts/active';
 
 router.get('/active', async (_req, res) => {
   try {
-    const data = await cache.getOrFetch(
+    const body = await cache.getOrFetch<Buffer>(
       'alerts:active',
       60_000,
       async () => {
@@ -28,11 +28,14 @@ router.get('/active', async (_req, res) => {
           signal: AbortSignal.timeout(20_000),
         });
         if (!upstream.ok) throw new Error(`NWS alerts error: ${upstream.status}`);
-        return upstream.json();
+        // Parse to validate (junk upstream bodies still throw -> staleOnError),
+        // then serialize once per refresh instead of once per request — the
+        // feed is served to every client polling the fallback path.
+        return Buffer.from(JSON.stringify(await upstream.json()));
       },
       { staleOnError: true }
     );
-    res.json(data);
+    res.type('application/json').send(body);
   } catch (err) {
     res.status(502).json({ error: 'Failed to fetch NWS alerts', detail: String(err) });
   }

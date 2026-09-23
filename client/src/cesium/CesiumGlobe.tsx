@@ -14,6 +14,7 @@ import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { QUALITY_SETTINGS } from '../perf/perfStore';
 import { getGpuInfo, describeGpu } from '../perf/gpuInfo';
 import { HOME_VIEW } from './flyTo';
+import { startVisiblePolling } from '../lib/poll';
 
 interface Props {
   children?: React.ReactNode;
@@ -90,6 +91,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
   const baseLayerRef = useRef<Cesium.ImageryLayer | null>(null);
   const overlayLayerRef = useRef<Cesium.ImageryLayer | null>(null);
+  const overlaySrcRef = useRef<object | null>(null); // identity of the BASEMAPS overlay source behind overlayLayerRef
   const basemap = useLayersStore((s) => s.basemap);
   // The Earth map type bakes its date + AM/PM pass into the provider URL, so
   // stepping either one must rebuild the base imagery. Collapsed to '' for the
@@ -108,6 +110,14 @@ export function CesiumGlobe({ children, onReady }: Props) {
   const [contextLost, setContextLost] = useState(false);
   const recoverAttemptsRef = useRef(0);
   const recoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True while onContextLost has scheduled an in-place rebuild that has not yet
+  // produced a new viewer. The watchdog's isContextLost() check defers to that
+  // path (backed by the 7 s contextLost reload) instead of racing it.
+  const rebuildPendingRef = useRef(false);
+  // Viewers torn down by a context-loss rebuild. They are destroyed only after
+  // every CesiumContext consumer has released its DataSources/primitives on
+  // them. Consumers read App's context, which updates one commit after ours.
+  const retiredRef = useRef<Cesium.Viewer[]>([]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -149,9 +159,19 @@ export function CesiumGlobe({ children, onReady }: Props) {
       setContextLost(true);
       return;
     }
+    rebuildPendingRef.current = false;
 
     v.scene.requestRenderMode = true;
     v.scene.maximumRenderTimeChange = 1;
+    // The widget clock never animates (shouldAnimate defaults to false), so the
+    // scene time — and with it the sun direction behind enableLighting — would
+    // stay frozen at viewer creation. Step it to wall-clock time once a minute
+    // and ask for one on-demand frame, so the day/night terminator follows the
+    // real sun on always-on displays without leaving requestRenderMode.
+    const stopSunClock = startVisiblePolling(() => {
+      v.clock.currentTime = Cesium.JulianDate.now();
+      v.scene.requestRender();
+    }, 60_000);
 
     v.scene.globe.enableLighting = true;
     v.scene.globe.baseColor = Cesium.Color.fromCssColorString('#05070a');
@@ -303,6 +323,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
       setContextLost(true);
       if (recoverAttemptsRef.current < 4) {
         recoverAttemptsRef.current += 1;
+        rebuildPendingRef.current = true;
         if (recoverTimerRef.current) clearTimeout(recoverTimerRef.current);
         // Small beat so the GPU can settle before we ask it for a fresh context.
         recoverTimerRef.current = setTimeout(() => setRecreateKey((k) => k + 1), 600);
@@ -334,6 +355,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
 
     return () => {
       clearTimeout(decay);
+      stopSunClock();
       if (recoverTimerRef.current) clearTimeout(recoverTimerRef.current);
       v.canvas.removeEventListener('wheel', onWheel);
       untrack();
@@ -344,10 +366,40 @@ export function CesiumGlobe({ children, onReady }: Props) {
       // than trying to remove imagery layers that belonged to the dead viewer.
       baseLayerRef.current = null;
       overlayLayerRef.current = null;
-      try { v.destroy(); } catch { /* context may already be gone */ }
+      overlaySrcRef.current = null;
+      // Don't destroy yet. Layers still hold this viewer through App's context and
+      // release their resources on it in the next commit. A destroyed viewer throws
+      // on touch, and that would unmount the whole React root. Take it out of
+      // layout now so the replacement lays out in its place, as before. The effects
+      // below destroy it once the consumers have let go.
+      const el = v.cesiumWidget.container.parentElement;
+      if (el) el.style.display = 'none';
+      retiredRef.current.push(v);
       setViewer(null);
     };
   }, [onReady, recreateKey]);
+
+  // Destroy retired viewers in the commit that publishes the replacement (or
+  // null). React runs all passive cleanups in a commit before any passive
+  // setup, so every consumer has already released the old viewer.
+  useEffect(() => {
+    for (const old of retiredRef.current.splice(0)) {
+      try { old.destroy(); } catch { /* context may already be gone */ }
+    }
+  }, [viewer]);
+
+  // On unmount, deletion cleanups run parent-first, so children still touch the
+  // viewer after our cleanups. Destroy on the next task instead.
+  useEffect(() => {
+    const retired = retiredRef.current;
+    return () => {
+      setTimeout(() => {
+        for (const old of retired.splice(0)) {
+          try { old.destroy(); } catch { /* context may already be gone */ }
+        }
+      }, 0);
+    };
+  }, []);
 
   useEffect(() => {
     if (!viewer) return;
@@ -364,15 +416,22 @@ export function CesiumGlobe({ children, onReady }: Props) {
     const baseLayer = layers.addImageryProvider(def.build());
     applyAdjust(baseLayer, def.adjust);
 
+    // Satellite and Earth share the same static Esri label source; a date/pass
+    // step or a satellite<->earth swap only changes the base, so keep the live
+    // label layer (and its loaded tiles) instead of rebuilding it.
+    const reusedOverlay =
+      def.overlay && prevOverlay && overlaySrcRef.current === def.overlay ? prevOverlay : null;
     let overlayLayer: Cesium.ImageryLayer | null = null;
     if (def.overlay) {
-      overlayLayer = layers.addImageryProvider(def.overlay.build());
-      applyAdjust(overlayLayer, def.overlay.adjust);
+      overlayLayer = reusedOverlay ?? layers.addImageryProvider(def.overlay.build());
+      if (!reusedOverlay) applyAdjust(overlayLayer, def.overlay.adjust);
       // Match the new overlay to the current zoom so swapping basemaps while
       // zoomed in doesn't briefly flash labels back on.
       const h = viewer.camera.positionCartographic?.height ?? Number.POSITIVE_INFINITY;
       overlayLayer.alpha = labelAlphaAt(h, currentLabelBand());
       overlayLayer.show = overlayLayer.alpha > 0.001;
+      // Raise even when reused: Precip/Fuel add at the top of the stack and may
+      // sit above the labels; a rebuilt overlay always went back over them.
       layers.raiseToTop(overlayLayer);
     }
     layers.lowerToBottom(baseLayer);
@@ -380,11 +439,12 @@ export function CesiumGlobe({ children, onReady }: Props) {
 
     // Remove the previous layers only after the new ones are in place so the
     // swap doesn't flash the empty globe.
-    if (prevOverlay) layers.remove(prevOverlay, true);
+    if (prevOverlay && prevOverlay !== reusedOverlay) layers.remove(prevOverlay, true);
     if (prevBase) layers.remove(prevBase, true);
 
     baseLayerRef.current = baseLayer;
     overlayLayerRef.current = overlayLayer;
+    overlaySrcRef.current = def.overlay ?? null;
     viewer.scene.requestRender();
   }, [viewer, basemap, earthKey]);
 
@@ -505,10 +565,15 @@ export function CesiumGlobe({ children, onReady }: Props) {
       }
     };
     const id = window.setInterval(() => {
+      // A retired/destroyed viewer has nothing to watch; its replacement installs
+      // its own watchdog on the next commit.
+      if (viewer.isDestroyed() || retiredRef.current.includes(viewer)) return;
       // (1) Authoritative: a lost context never repaints on its own. Reload
       // regardless of screensaver/visibility.
       if (contextIsLost()) {
-        reload('WebGL context reported lost');
+        // A handled loss already has an in-place rebuild scheduled (plus the 7 s
+        // contextLost reload backstop); only step in if the event was missed.
+        if (!rebuildPendingRef.current) reload('WebGL context reported lost');
         return;
       }
       // (2) Frame-stall during *continuous* rendering only. On weak GPUs the

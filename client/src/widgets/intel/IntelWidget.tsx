@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/client';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { flyToLonLat } from '../../cesium/flyTo';
-import { useIntelStore, CATEGORY_META } from '../../layers/intel/intelStore';
+import { useIntelStore, CATEGORY_META, categoryMeta } from '../../layers/intel/intelStore';
 import { startVisiblePolling } from '../../lib/poll';
 import type { IntelCategory, IntelItem, WatchlistSource } from '../../types';
 
@@ -112,6 +112,7 @@ export function IntelWidget() {
   const [place, setPlace] = useState('');
   const [addError, setAddError] = useState('');
   const [busy, setBusy] = useState(false);
+  const addingRef = useRef(false); // synchronous re-entry guard (Enter key bypasses the disabled button)
 
   // Feed poll (also runs when the map layer is off, so the widget is usable alone).
   useEffect(() => {
@@ -143,6 +144,7 @@ export function IntelWidget() {
   const preset = KIND_PRESETS[presetIdx];
 
   async function handleAdd() {
+    if (addingRef.current) return;
     setAddError('');
     const trimmedLabel = label.trim();
     if (!trimmedLabel) { setAddError('Give the source a name'); return; }
@@ -159,6 +161,7 @@ export function IntelWidget() {
     // Optional location pin for feed sources — server geocodes it to a region
     // so the source's stories can appear on the map, not just in the feed.
     if (preset.pinnable && place.trim()) config.place = place.trim();
+    addingRef.current = true;
     setBusy(true);
     try {
       await api.addWatchSource({ kind: preset.kind, label: trimmedLabel, url, config });
@@ -169,6 +172,7 @@ export function IntelWidget() {
     } catch (e) {
       setAddError(e instanceof Error ? e.message : 'Failed to add source');
     } finally {
+      addingRef.current = false;
       setBusy(false);
     }
   }
@@ -268,7 +272,7 @@ export function IntelWidget() {
           </div>
         )}
         {visible.slice(0, 150).map((item) => {
-          const m = CATEGORY_META[item.category];
+          const m = categoryMeta(item.category);
           return (
             <button
               key={item.id}

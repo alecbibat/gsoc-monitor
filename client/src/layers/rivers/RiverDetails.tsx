@@ -157,7 +157,14 @@ function StageChart({
   const toPath = (pts: RiverSeriesPoint[]) =>
     pts.map((p, i) => `${i ? 'L' : 'M'} ${X(p.t).toFixed(1)} ${Y(p.v).toFixed(1)}`).join(' ');
   const nowX = forecast.length ? X(forecast[0].t) : null;
-  const fcPath = forecast.length ? [observed[observed.length - 1], ...forecast] : [];
+  // Joined to the last observation when there is one. A gauge whose observed
+  // window is empty draws the forecast on its own rather than joining it to
+  // `undefined`, which threw during render and blanked the whole panel.
+  const fcPath = forecast.length
+    ? observed.length
+      ? [observed[observed.length - 1], ...forecast]
+      : forecast
+    : [];
 
   const h = hover != null ? all[hover] : null;
   const hx = h ? X(h.t) : 0;

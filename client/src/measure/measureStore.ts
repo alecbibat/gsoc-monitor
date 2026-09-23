@@ -23,6 +23,16 @@ interface MeasureState {
   exit: () => void;
 }
 
+// Whether the current shape may be frozen: a path needs 2 vertices, a polygon 3;
+// a circle closes itself on its second click, so it is never finished by hand.
+// Mirrors the overlay's Finish button so Enter and double-click obey the same rule.
+export function canFinish(s: { mode: MeasureMode; points: LngLat[]; finished: boolean }): boolean {
+  if (s.finished) return false;
+  if (s.mode === 'distance') return s.points.length >= 2;
+  if (s.mode === 'area') return s.points.length >= 3;
+  return false;
+}
+
 export const useMeasureStore = create<MeasureState>((set) => ({
   active: false,
   mode: 'distance',

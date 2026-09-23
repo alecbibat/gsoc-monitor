@@ -25,6 +25,12 @@ const serverState = new Map<string, string>();
 // close can still flush it.
 const pending = new Map<string, { timer: ReturnType<typeof setTimeout>; incident: Incident }>();
 
+// Blob writes outstanding per id (POST/PUT), and the ids touched by a local
+// write or an SSE event while a reconnect resync is in flight. A resync must
+// never apply a GET snapshot that may predate either one.
+const blobInflight = new Map<string, number>();
+let resyncTouched: Set<string> | null = null;
+
 const setSync = (s: 'idle' | 'saving' | 'saved' | 'error') =>
   useCrisisStore.getState().setSyncState(s);
 
@@ -39,6 +45,8 @@ function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
   // Creates keep them — the insert seeds the server with the client's
   // initial state.
   const body = isCreate ? incident : { ...incident, actionLog: undefined, checklists: undefined };
+  resyncTouched?.add(incident.id);
+  blobInflight.set(incident.id, (blobInflight.get(incident.id) ?? 0) + 1);
   return fetch(url, {
     method,
     headers: { 'Content-Type': 'application/json' },
@@ -69,6 +77,10 @@ function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
       serverState.delete(incident.id);
       setSync('error');
       console.warn('[incident-sync] push failed:', e);
+    })
+    .finally(() => {
+      const n = (blobInflight.get(incident.id) ?? 1) - 1;
+      if (n > 0) blobInflight.set(incident.id, n); else blobInflight.delete(incident.id);
     });
 }
 
@@ -87,17 +99,38 @@ function scheduleSync(incident: Incident) {
 // sendBeacon (a background POST that still carries the auth cookie); the POST
 // route upserts, so it stands in for the pending PUT.
 function flushPending() {
-  for (const { timer, incident } of pending.values()) {
+  for (const [id, { timer, incident }] of [...pending]) {
     clearTimeout(timer);
+    pending.delete(id); // before pushIncident, so its "saved" check sees an empty queue
+    let ok = false;
     try {
       const blob = new Blob([JSON.stringify(incident)], { type: 'application/json' });
-      const ok = navigator.sendBeacon('/api/incidents', blob);
-      if (ok) serverState.set(incident.id, serverCanon(incident));
+      ok = navigator.sendBeacon('/api/incidents', blob);
     } catch {
-      /* best effort — nothing more we can do as the page unloads */
+      /* fall through to the regular PUT */
+    }
+    if (ok) {
+      resyncTouched?.add(id);
+      serverState.set(id, serverCanon(incident));
+    } else {
+      // Beacon refused (e.g. body over the 64 KiB keepalive quota). The page is
+      // usually still alive (tab hidden, not unloading), so send the normal PUT
+      // rather than dropping the edit. On a real unload this is best effort.
+      void pushIncident(incident, 'PUT');
     }
   }
-  pending.clear();
+}
+
+// Pending auto-publish per incident id. Deliberately NOT cancelled when the
+// operator navigates away: the last edit before "back to list" must still
+// reach the share links.
+const publishTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function activeShareTokens(inc: Incident): string[] {
+  const tokens = (inc.shareLinks ?? []).filter((l) => l.active).map((l) => l.token);
+  // Legacy fallback: if shareToken set but shareLinks not yet populated
+  if (tokens.length === 0 && inc.shareToken) tokens.push(inc.shareToken);
+  return tokens;
 }
 
 // Auto-push the active incident to all active share links on every change.
@@ -106,21 +139,27 @@ function flushPending() {
 // updating even with the overlay closed.
 function useAutoPublish() {
   const inc = useActiveIncident();
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!inc) return;
-    const activeTokens = (inc.shareLinks ?? [])
-      .filter((l) => l.active)
-      .map((l) => l.token);
-    // Legacy fallback: if shareToken set but shareLinks not yet populated
-    if (activeTokens.length === 0 && inc.shareToken) activeTokens.push(inc.shareToken);
-    if (activeTokens.length === 0) return;
+    const id = inc.id;
+    // Re-arm per incident: cancel this incident's pending publish first, even
+    // when no link is active any more (revoking the last link cancels it).
+    const prev = publishTimers.get(id);
+    if (prev !== undefined) { clearTimeout(prev); publishTimers.delete(id); }
+    if (activeShareTokens(inc).length === 0) return;
 
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      const body = JSON.stringify(extractPublicState(inc));
-      for (const token of activeTokens) {
+    publishTimers.set(id, setTimeout(() => {
+      publishTimers.delete(id);
+      // Latest state: identical to `inc` while the incident stays open (any
+      // change re-runs this effect); after navigation it still skips a deleted
+      // incident and respects links deactivated in the meantime.
+      const latest = useCrisisStore.getState().incidents.find((i) => i.id === id);
+      if (!latest) return;
+      const tokens = activeShareTokens(latest);
+      if (tokens.length === 0) return;
+      const body = JSON.stringify(extractPublicState(latest));
+      for (const token of tokens) {
         fetch(`/api/crisis/share/${token}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -131,15 +170,24 @@ function useAutoPublish() {
           })
           .catch(console.error);
       }
-    }, 1_500);
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+    }, 1_500));
+    // No per-run cleanup: navigation must not cancel another incident's publish.
   }, [inc]);
+
+  // Real unmount (e.g. sign-out) still drops pending publishes, as before.
+  useEffect(() => () => {
+    for (const t of publishTimers.values()) clearTimeout(t);
+    publishTimers.clear();
+  }, []);
 }
 
 export function IncidentSync() {
   const user = useAuthStore((s) => s.user);
   const setIncidents = useCrisisStore((s) => s.setIncidents);
   const loaded = useRef(false);
+  // Ids deleted (by a peer via SSE, or locally) while the initial GET is in
+  // flight; null when no load is pending. The snapshot may predate the delete.
+  const deletedDuringLoad = useRef<Set<string> | null>(null);
 
   useAutoPublish();
 
@@ -147,19 +195,35 @@ export function IncidentSync() {
   useEffect(() => {
     if (!user || loaded.current) return;
     loaded.current = true;
+    deletedDuringLoad.current = new Set();
     fetch('/api/incidents', { credentials: 'include' })
       .then((r) => {
         if (!r.ok) throw new Error(`${r.status}`);
         return r.json() as Promise<Incident[]>;
       })
       .then((incidents) => {
+        const deleted = deletedDuringLoad.current ?? new Set<string>();
+        // Anything already in the store was created locally or applied from SSE
+        // while this GET was in flight. It is at least as new as the snapshot and
+        // already baselined by that path, so keep it: replacing it would revert a
+        // peer's edit, or drop a just-created incident (which the watcher would
+        // then DELETE on the server).
+        const local = useCrisisStore.getState().incidents;
+        const byId = new Map(local.map((i) => [i.id, i]));
+        const merged: Incident[] = [];
         for (const inc of incidents) {
+          const mine = byId.get(inc.id);
+          if (mine) { merged.push(mine); byId.delete(inc.id); continue; }
+          if (deleted.has(inc.id)) continue;
           serverState.set(inc.id, serverCanon(inc));
           logSync.seedBaseline(inc);
+          merged.push(inc);
         }
-        setIncidents(incidents);
+        for (const inc of byId.values()) merged.push(inc); // local-only, in store order
+        setIncidents(merged);
       })
-      .catch((e) => console.error('[incident-sync] initial load failed:', e));
+      .catch((e) => console.error('[incident-sync] initial load failed:', e))
+      .finally(() => { deletedDuringLoad.current = null; });
   }, [user, setIncidents]);
 
   // Watch the store and push local changes back to the server.
@@ -191,10 +255,12 @@ export function IncidentSync() {
 
       for (const id of [...serverState.keys()]) {
         if (!nextIds.has(id)) {
+          resyncTouched?.add(id);
           serverState.delete(id);
           logSync.dropIncident(id);
           const p = pending.get(id);
           if (p) { clearTimeout(p.timer); pending.delete(id); }
+          deletedDuringLoad.current?.add(id);
           fetch(`/api/incidents/${id}`, { method: 'DELETE', credentials: 'include' })
             .catch(console.error);
         }
@@ -207,12 +273,14 @@ export function IncidentSync() {
   // Live sync: apply other responders' changes as they happen.
   useEffect(() => {
     if (!user) return;
-    const es = new EventSource('/api/incidents/events', { withCredentials: true });
+    let es: EventSource | null = null;
+    let disposed = false;
+    let opens = 0;
+    let retryMs = 5_000;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let resyncCtrl: AbortController | null = null;
 
-    es.addEventListener('upsert', (e) => {
-      let inc: Incident;
-      try { inc = JSON.parse((e as MessageEvent).data); } catch { return; }
-      if (!inc?.id) return;
+    const applyUpsert = (inc: Incident) => {
       // Don't stomp a blob edit we're still saving locally — our write wins,
       // and its echo (which carries the server's merged log) converges us.
       if (pending.has(inc.id)) return;
@@ -239,27 +307,130 @@ export function IncidentSync() {
 
       const canon = serverCanon(inc);
       const blobSame = serverState.get(inc.id) === canon;
-      const logSame = local !== undefined && entryCanon(mergedLog) === entryCanon(local.actionLog);
+      const localLog = local?.actionLog;
+      // Element-wise compare = identical to comparing the whole-array canon strings
+      // (canon strings are valid JSON values), but reuses the per-entry cache.
+      const logSame =
+        local !== undefined &&
+        Array.isArray(localLog) &&
+        mergedLog.length === localLog.length &&
+        mergedLog.every((e, i) => entryCanon(e) === entryCanon(localLog[i]));
       if (blobSame && logSame && chkSame) return; // our own echo / no change
 
       serverState.set(inc.id, canon);
       logSync.applyRemoteLog(inc.id, remoteLog, keep);
       useCrisisStore.getState().applyRemoteUpsert({ ...inc, actionLog: mergedLog, checklists: mergedChk });
-    });
+    };
 
-    es.addEventListener('delete', (e) => {
-      let id: string | undefined;
-      try { id = JSON.parse((e as MessageEvent).data).id; } catch { return; }
+    const applyDelete = (id: string) => {
       if (!id || pending.has(id)) return;
+      deletedDuringLoad.current?.add(id);
       serverState.delete(id);
       logSync.dropIncident(id);
       useCrisisStore.getState().applyRemoteDelete(id);
-    });
+    };
 
-    // EventSource reconnects automatically on transient errors.
-    es.onerror = () => { /* handled by the browser's built-in retry */ };
+    // Events broadcast while the stream was down are gone (no replay), so
+    // every reconnect re-reads the list and folds it in through the same
+    // merge rules. Skips any incident whose snapshot could predate what we
+    // already have: touched by an SSE event or local write during the GET,
+    // or with a blob write in flight when it started.
+    const resync = () => {
+      resyncCtrl?.abort();
+      const ctrl = new AbortController();
+      resyncCtrl = ctrl;
+      const touched = new Set<string>();
+      resyncTouched = touched;
+      const busyAtStart = new Set(blobInflight.keys());
+      const skip = (id: string) =>
+        touched.has(id) || busyAtStart.has(id) || pending.has(id) || blobInflight.has(id);
+      fetch('/api/incidents', { credentials: 'include', signal: ctrl.signal })
+        .then((r) => {
+          if (!r.ok) throw new Error(String(r.status));
+          return r.json() as Promise<Incident[]>;
+        })
+        .then((incidents) => {
+          if (ctrl.signal.aborted || disposed || !Array.isArray(incidents)) return;
+          // A local incident with no baseline holds an edit whose push failed
+          // (rolled back); the watcher re-pushes it on the next change, so the
+          // snapshot must not revert it.
+          const unconfirmed = new Set(
+            useCrisisStore.getState().incidents.filter((i) => !serverState.has(i.id)).map((i) => i.id)
+          );
+          // Same for log work: an append or edit that failed offline is rolled
+          // back and only retried on the next store change, so the merge below
+          // would drop it. Re-queue it now (as the watcher would) so it is in
+          // keepLocalEntryIds() and survives the merge; appends are prepended,
+          // where the server will put them too. The incident is still applied
+          // rather than skipped: a retried append the server already has is a
+          // no-op with no echo, which would leave the stale blob in place.
+          logSync.syncLogsFromStore(useCrisisStore.getState().incidents);
+          const seen = new Set<string>();
+          for (const inc of incidents) {
+            if (!inc?.id) continue;
+            seen.add(inc.id);
+            if (!skip(inc.id) && !unconfirmed.has(inc.id)) applyUpsert(inc);
+          }
+          for (const id of [...serverState.keys()]) {
+            if (!seen.has(id) && !skip(id)) applyDelete(id);
+          }
+        })
+        .catch((e) => { if (!ctrl.signal.aborted) console.warn('[incident-sync] resync failed:', e); })
+        .finally(() => {
+          if (resyncTouched === touched) resyncTouched = null;
+          if (resyncCtrl === ctrl) resyncCtrl = null;
+        });
+    };
 
-    return () => es.close();
+    const open = () => {
+      if (disposed) return;
+      const initial = opens++ === 0;
+      let seenConnect = false;
+      const src = new EventSource('/api/incidents/events', { withCredentials: true });
+      es = src;
+      src.addEventListener('connected', () => {
+        retryMs = 5_000;
+        // The initial load covers the very first connection; every later one
+        // (browser auto-reconnect, or a reopened stream) may have missed events.
+        if (initial && !seenConnect) { seenConnect = true; return; }
+        seenConnect = true;
+        resync();
+      });
+
+      src.addEventListener('upsert', (e) => {
+        let inc: Incident;
+        try { inc = JSON.parse((e as MessageEvent).data); } catch { return; }
+        if (!inc?.id) return;
+        resyncTouched?.add(inc.id);
+        applyUpsert(inc);
+      });
+
+      src.addEventListener('delete', (e) => {
+        let id: string | undefined;
+        try { id = JSON.parse((e as MessageEvent).data).id; } catch { return; }
+        if (!id) return;
+        resyncTouched?.add(id);
+        applyDelete(id);
+      });
+
+      // Transient drops auto-reconnect (readyState CONNECTING). A non-200
+      // reconnect (401, router 503) CLOSES the stream for good — reopen it
+      // with backoff; the new stream's 'connected' triggers a resync.
+      src.onerror = () => {
+        if (src.readyState !== EventSource.CLOSED || disposed) return;
+        clearTimeout(retryTimer);
+        retryTimer = setTimeout(open, retryMs);
+        retryMs = Math.min(retryMs * 2, 60_000);
+      };
+    };
+
+    open();
+    return () => {
+      disposed = true;
+      clearTimeout(retryTimer);
+      resyncCtrl?.abort();
+      es?.close();
+    };
   }, [user]);
 
   // Flush unsaved edits before the tab goes away.

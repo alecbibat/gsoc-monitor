@@ -364,23 +364,36 @@ export function AdminPanel({ onClose }: { onClose: () => void }) {
   const [refreshing, setRefreshing] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // Status-checked, independent loads: a JSON error body (401 on a lapsed
+  // session, 503 while Postgres is down) must not reach setUsers — `users.map`
+  // would throw during render, and nothing above this portal catches it.
   useEffect(() => {
-    Promise.all([
-      fetch('/api/admin/users', { credentials: 'include' }).then((r) => r.json()),
-      fetch('/api/admin/signup-code', { credentials: 'include' }).then((r) => r.json()),
-    ]).then(([usrs, { code }]) => {
-      setUsers(usrs as User[]);
-      setSignupCode(code as string);
-    }).catch(console.error);
+    const getJson = (url: string) =>
+      fetch(url, { credentials: 'include' })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${url} ${r.status}`))));
+    getJson('/api/admin/users')
+      .then((usrs) => { if (Array.isArray(usrs)) setUsers(usrs as User[]); })
+      .catch(console.error);
+    getJson('/api/admin/signup-code')
+      .then((body) => {
+        const code = (body as { code?: unknown } | null)?.code;
+        setSignupCode(typeof code === 'string' ? code : null);
+      })
+      .catch(console.error);
   }, []);
 
   const handleRefreshCode = async () => {
     setRefreshing(true);
     try {
-      const { code } = await fetch('/api/admin/signup-code/refresh', {
+      const res = await fetch('/api/admin/signup-code/refresh', {
         method: 'POST', credentials: 'include',
-      }).then((r) => r.json()) as { code: string };
-      setSignupCode(code);
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { code } = (await res.json()) as { code?: unknown };
+      // Keep showing the old (still valid) code unless the server really rotated it.
+      if (typeof code === 'string') setSignupCode(code);
+    } catch (e) {
+      console.error('[admin] signup code refresh failed', e);
     } finally {
       setRefreshing(false);
     }
@@ -389,8 +402,12 @@ export function AdminPanel({ onClose }: { onClose: () => void }) {
   const handleDelete = async (id: string) => {
     setDeletingId(id);
     try {
-      await fetch(`/api/admin/users/${id}`, { method: 'DELETE', credentials: 'include' });
+      const res = await fetch(`/api/admin/users/${id}`, { method: 'DELETE', credentials: 'include' });
+      // 404 = already gone (e.g. removed by another admin): dropping the row is still correct.
+      if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`);
       setUsers((prev) => prev.filter((u) => u.id !== id));
+    } catch (e) {
+      console.error('[admin] delete user failed', e);
     } finally {
       setDeletingId(null);
     }
@@ -457,7 +474,7 @@ export function AdminPanel({ onClose }: { onClose: () => void }) {
               {users.map((u) => (
                 <div key={u.id} className="flex items-center gap-3 px-3 py-2.5">
                   <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[10px] font-bold text-accent/80">
-                    {u.name[0].toUpperCase()}
+                    {u.name.charAt(0).toUpperCase()}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">

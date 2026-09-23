@@ -323,6 +323,7 @@ const VESSEL_CAP = 50_000;
 
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let awaitingPong = false;
 
 // --- Diagnostics (surfaced via GET /api/ships/debug) -----------------------
 // Enough signal to tell apart the failure modes: no key, can't connect/auth,
@@ -478,7 +479,11 @@ function connectAIS() {
     connectAttempts++;
     consecutiveFailures++;
     lastConnectAt = Date.now();
-    ws = new WebSocket('wss://stream.aisstream.io/v0/stream');
+    ws = new WebSocket('wss://stream.aisstream.io/v0/stream', { handshakeTimeout: 15_000 });
+    awaitingPong = false;
+    ws.on('pong', () => {
+      awaitingPong = false;
+    });
 
     ws.on('open', () => {
       // Whole-world box is mandatory. By default we narrow to the fleet MMSIs
@@ -494,6 +499,7 @@ function connectAIS() {
     });
 
     ws.on('message', (data: WebSocket.RawData) => {
+      awaitingPong = false; // any inbound frame proves the connection is alive
       totalMessages++;
       lastMessageAt = Date.now();
       consecutiveFailures = 0;
@@ -797,6 +803,24 @@ function applyPaidPosition(r: PaidPosition) {
   const eta: EtaFields = r.etaText
     ? { etaUtc: parseEtaText(r.etaText), etaText: r.etaText, etaAt: now }
     : carriedEta(existing, Date.now());
+  // The provider's fix is older than what we already hold (e.g. a live
+  // aisstream report arrived after the provider's last fix). Most recent report
+  // wins: keep the newer position/kinematics/updatedAt and don't append an
+  // out-of-order breadcrumb. Identity and voyage fields merge exactly as before.
+  if (existing && existing.updatedAt > now) {
+    const merged: VesselData = {
+      ...existing,
+      imo: ship?.imo ?? r.imo ?? existing.imo ?? null,
+      name: ship?.name ?? r.name ?? existing.name ?? null,
+      shipType: existing.shipType ?? 60,
+      destination: r.destination ?? existing.destination ?? null,
+      ...eta,
+    };
+    allowedMmsis.add(mmsi);
+    tracked.set(mmsi, merged);
+    if (vessels.has(mmsi)) vessels.set(mmsi, merged);
+    return;
+  }
   const record: VesselData = {
     mmsi,
     imo: ship?.imo ?? r.imo ?? existing?.imo ?? null,
@@ -865,6 +889,22 @@ export function initShipsStream() {
   if (config.aisstreamApiKey) {
     connectAIS();
     setInterval(evictStale, 5 * 60_000);
+    // Half-open-socket heartbeat: with the MMSI filter the stream can be silent for
+    // hours, so silence can't prove the connection is dead — a missed pong can.
+    setInterval(() => {
+      const s = ws;
+      if (!s || s.readyState !== WebSocket.OPEN) {
+        awaitingPong = false;
+        return;
+      }
+      if (awaitingPong) {
+        console.warn('AIS stream: no pong within 60s — forcing reconnect');
+        s.terminate(); // emits 'close' → existing reconnectTimer/backoff path
+        return;
+      }
+      awaitingPong = true;
+      s.ping();
+    }, 60_000).unref();
   }
   // By-IMO polling — reliable pins regardless of aisstream coverage. Uses a paid
   // provider if a key is set, otherwise the free CruiseMapper scrape.

@@ -30,7 +30,7 @@ const CARD_W = 264;
 
 // Popup shown when a single click lands on several overlapping features (e.g.
 // stacked NWS alerts). Lists each so the user picks which one to dock.
-export function PickChooser() {
+export function PickChooser({ bounds }: { bounds?: { width: number; height: number } }) {
   const open = usePickChooserStore((s) => s.open);
   const x = usePickChooserStore((s) => s.x);
   const y = usePickChooserStore((s) => s.y);
@@ -48,8 +48,10 @@ export function PickChooser() {
 
   if (!open) return null;
 
-  const W = typeof window !== 'undefined' ? window.innerWidth : 1200;
-  const H = typeof window !== 'undefined' ? window.innerHeight : 800;
+  // Clamp to the containing box when one is given (the docked crisis map
+  // window); otherwise to the viewport as before.
+  const W = bounds?.width ?? (typeof window !== 'undefined' ? window.innerWidth : 1200);
+  const H = bounds?.height ?? (typeof window !== 'undefined' ? window.innerHeight : 800);
   const cardH = 40 + Math.min(items.length, 6) * ITEM_H;
   const left = Math.max(12, Math.min(x + 8, W - CARD_W - 12));
   const top = Math.max(12, Math.min(y + 8, H - cardH - 12));

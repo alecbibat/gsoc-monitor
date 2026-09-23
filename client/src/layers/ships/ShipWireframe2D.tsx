@@ -124,6 +124,8 @@ export function ShipWireframe2D({ variant, color, masts = 4, width = 310, height
         raf = requestAnimationFrame(render);
       };
       render();
+    }).catch((err: unknown) => {
+      console.warn('[ships] wireframe chunk failed to load:', err);
     });
 
     return () => {

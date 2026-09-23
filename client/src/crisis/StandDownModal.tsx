@@ -32,9 +32,15 @@ export function StandDownModal({ incident, onClose }: { incident: Incident; onCl
   const [steps, setSteps] = useState<StepState[] | null>(null);
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape' && !busy) onClose(); };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    // Swallow Esc even while busy so CrisisOverlay's window listener can't
+    // unmount this modal mid-sequence; only dismiss when idle.
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      if (!busy) onClose();
+    };
+    document.addEventListener('keydown', handler, true);
+    return () => document.removeEventListener('keydown', handler, true);
   }, [busy, onClose]);
 
   const run = async () => {

@@ -9,6 +9,7 @@ import {
   formatArea,
   formatDistance,
   formatNauticalMiles,
+  polygonAreaM2,
   radiusM,
   totalDistanceM,
 } from './measureMath';
@@ -29,6 +30,33 @@ describe('distance', () => {
     ]);
     const single = radiusM({ lon: 0, lat: 0 }, { lon: 0, lat: 1 });
     expect(legs).toBeCloseTo(single * 2, -1);
+  });
+
+  it('returns a finite distance for near-antipodal points', () => {
+    // Cesium's Vincenty solver never converges here (it hangs in production).
+    const d = radiusM({ lon: 0, lat: 0 }, { lon: 179.5, lat: 0.3 });
+    expect(d).toBeGreaterThan(19_900_000);
+    expect(d).toBeLessThan(20_050_000);
+  });
+});
+
+describe('area', () => {
+  it('takes the short way across the antimeridian', () => {
+    const across = polygonAreaM2([
+      { lon: 179, lat: -17 },
+      { lon: -179, lat: -17 },
+      { lon: -179, lat: -19 },
+      { lon: 179, lat: -19 },
+    ]);
+    const shifted = polygonAreaM2([
+      { lon: 1, lat: -17 },
+      { lon: 3, lat: -17 },
+      { lon: 3, lat: -19 },
+      { lon: 1, lat: -19 },
+    ]);
+    expect(shifted).toBeGreaterThan(4.6e10);
+    expect(shifted).toBeLessThan(4.8e10);
+    expect(Math.abs(across - shifted) / shifted).toBeLessThan(0.001);
   });
 });
 

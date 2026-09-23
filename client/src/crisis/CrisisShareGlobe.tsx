@@ -13,7 +13,7 @@ import {
 import { createPingPump, pingBillboard } from '../layers/ships/shipPing';
 import { isShipGroupId, type IncidentVessel } from './incidentShips';
 import { resetCamera } from '../cesium/flyTo';
-import { addLayerEntities, layerIdFromEntity } from './CrisisMapLayer';
+import { addLayerEntities, drawSignature, layerIdFromEntity } from './CrisisMapLayer';
 import { measureLayer } from './layerMeasure';
 import { shareLiveLayerLabel, type ShareLiveLayerId } from './shareLiveLayers';
 import { LAYER_LEGENDS } from '../layers/layerLegends';
@@ -68,14 +68,6 @@ function applyShareLayerFlags(enabled: ShareLiveLayerId[]) {
     firesNearMiles: 0,
     newsNearMiles: 0,
   }));
-}
-
-// A signature of the drawn geometry only, so live snapshot updates that don't
-// touch the drawings (log entries, status changes) never redraw the entities.
-function drawSignature(layers: DrawLayer[]): string {
-  return layers
-    .map((l) => `${l.id}:${l.geometry}:${l.directional ? 'dir' : ''}:${l.color}:${l.name}:${l.visible}:${l.positions.map((p) => `${p.lat},${p.lon}`).join('|')}`)
-    .join(';');
 }
 
 // Frame the combined extent of the visible drawn layers; falls back to the
@@ -301,6 +293,11 @@ function ShareShipsLayer({ vessels }: { vessels: IncidentVessel[] }) {
   const viewer = useCesiumViewer();
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
   const pumpRef = useRef<ReturnType<typeof createPingPump> | null>(null);
+  // Last positioned contacts, and whether the map frame is on screen. The share
+  // globe sits below the report text: while it is scrolled out of view the pump
+  // gets no positions, so it idles instead of rendering unseen frames.
+  const positionsRef = useRef<Array<{ lon: number; lat: number }>>([]);
+  const onScreenRef = useRef(true);
   // Positions participate: unlike fixed property pins, a contact must move
   // when the feed reports a new fix.
   const sig = vessels
@@ -316,9 +313,26 @@ function ShareShipsLayer({ vessels }: { vessels: IncidentVessel[] }) {
     const ds = new Cesium.CustomDataSource('crisis-share-vessels');
     dsRef.current = ds;
     viewer.dataSources.add(ds);
-    pumpRef.current = createPingPump(viewer);
+    const pump = createPingPump(viewer);
+    pumpRef.current = pump;
+    let io: IntersectionObserver | null = null;
+    if (typeof IntersectionObserver !== 'undefined') {
+      io = new IntersectionObserver(
+        (entries) => {
+          const visible = entries[entries.length - 1]?.isIntersecting ?? true;
+          onScreenRef.current = visible;
+          pump.setPositions(visible ? positionsRef.current : []);
+          if (visible) pump.ensure(); // no-op when no contact is in the camera view
+        },
+        // Start pumping slightly before the frame enters the viewport, so the
+        // first visible frame already shows the rings at their current phase.
+        { rootMargin: '200px 0px' }
+      );
+      io.observe(viewer.container);
+    }
     return () => {
-      pumpRef.current?.dispose();
+      io?.disconnect();
+      pump.dispose();
       pumpRef.current = null;
       viewer.dataSources.remove(ds, true);
       dsRef.current = null;
@@ -373,11 +387,11 @@ function ShareShipsLayer({ vessels }: { vessels: IncidentVessel[] }) {
       });
     }
     // Positioned contacts only: the pump idles when none of them is in view.
-    pumpRef.current?.setPositions(
-      vessels
-        .filter((v) => v.ship !== null)
-        .map((v) => ({ lon: v.ship!.longitude, lat: v.ship!.latitude }))
-    );
+    const positions = vessels
+      .filter((v) => v.ship !== null)
+      .map((v) => ({ lon: v.ship!.longitude, lat: v.ship!.latitude }));
+    positionsRef.current = positions;
+    pumpRef.current?.setPositions(onScreenRef.current ? positions : []);
     pumpRef.current?.ensure();
     viewer.scene.requestRender();
     // eslint-disable-next-line react-hooks/exhaustive-deps

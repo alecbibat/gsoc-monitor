@@ -1,5 +1,7 @@
 import { Router } from 'express';
+import crypto from 'crypto';
 import { cache } from '../cache';
+import { readAuthUser } from '../middleware/auth';
 
 const router = Router();
 
@@ -156,13 +158,72 @@ function geolocate(text: string): { name: string; lat: number; lon: number } | n
   return null;
 }
 
-async function fetchFeed(url: string, source: string): Promise<NewsItem[]> {
+// Custom (?extra=) feed URLs are caller-chosen. Allows any public http(s) host
+// (IP literals and IDN TLDs included, so no working feed is dropped); rejects
+// other schemes, embedded credentials and obvious local/private targets.
+function isAllowedFeedUrl(raw: unknown): raw is string {
+  if (typeof raw !== 'string') return false;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  if (u.username || u.password) return false;
+  const h = u.hostname.toLowerCase();
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return false;
+  if (h.startsWith('[')) return false; // IPv6 literal
+  const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (m) {
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    if (
+      a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127)
+    ) return false;
+  }
+  return true;
+}
+
+// r.text() with a byte cap, so one oversized custom feed can't balloon the
+// dyno's memory. TextDecoder decodes UTF-8 and strips a BOM, same as r.text().
+async function readCapped(r: Response, maxBytes: number): Promise<string> {
+  const declared = Number(r.headers.get('content-length'));
+  if (declared > maxBytes) {
+    await r.body?.cancel();
+    throw new Error(`feed too large (${declared} B)`);
+  }
+  if (!r.body) return '';
+  const reader = r.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error('feed too large');
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
+// maxBytes is passed only for custom feeds: it caps the body and re-checks the
+// final URL after redirects. The built-in FEEDS keep the plain r.text() path.
+async function fetchFeed(url: string, source: string, maxBytes?: number): Promise<NewsItem[]> {
   const r = await fetch(url, {
     signal: AbortSignal.timeout(8_000),
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; gsoc-monitor/1.0)' },
   });
   if (!r.ok) throw new Error(`${source} HTTP ${r.status}`);
-  const xml = await r.text();
+  if (maxBytes !== undefined && r.url && !isAllowedFeedUrl(r.url)) {
+    await r.body?.cancel();
+    throw new Error(`${source} redirected to a disallowed host`);
+  }
+  const xml = maxBytes !== undefined ? await readCapped(r, maxBytes) : await r.text();
 
   const items: NewsItem[] = [];
   const blocks = xml.match(/<item[\s\S]*?<\/item>/gi) ?? [];
@@ -175,7 +236,9 @@ async function fetchFeed(url: string, source: string): Promise<NewsItem[]> {
     const when = pub ? Date.parse(pub) : NaN;
     const place = geolocate(`${title} ${desc}`);
     items.push({
-      id: Buffer.from(link).toString('base64').slice(0, 20),
+      // Hash the whole link: a truncated base64 prefix only covers the first
+      // 15 bytes, so every story from one outlet shared a single id.
+      id: crypto.createHash('sha1').update(link).digest('hex').slice(0, 20),
       title,
       url: link,
       source,
@@ -214,62 +277,95 @@ async function fetchAllFeeds(extraFeeds: Array<{ url: string; source: string }> 
 const CACHE_KEY = 'news:rss';
 const SUCCESS_TTL = 5 * 60_000;
 const FAILURE_COOLDOWN = 60_000;
+const MAX_EXTRA_FEEDS = 50; // Heroku's 8 KB request line can't carry many more anyway
+const MAX_EXTRA_FEED_BYTES = 5 * 1024 * 1024; // real RSS is tens–hundreds of KB
 
 let lastGood: NewsResult | null = null;
 let cooldownUntil = 0;
 
+// Base feed set: cache → cooldown stale → fresh fetch (stale on failure).
+// Shared by both paths so custom-source requests refresh the base feeds on
+// the same 5-min cadence instead of serving lastGood forever; getOrFetch
+// also lets simultaneous misses share one fan-out to the feeds.
+async function getBase(): Promise<NewsResult & { stale?: boolean }> {
+  const cached = cache.get<NewsResult>(CACHE_KEY);
+  if (cached) return cached;
+  if (Date.now() < cooldownUntil && lastGood) return { ...lastGood, stale: true };
+  try {
+    const result = await cache.getOrFetch<NewsResult>(CACHE_KEY, SUCCESS_TTL, async () => ({
+      items: await fetchAllFeeds(),
+      updated: Date.now(),
+    }));
+    lastGood = result;
+    return result;
+  } catch (err) {
+    console.error('[news] fetch failed:', err);
+    cooldownUntil = Date.now() + FAILURE_COOLDOWN;
+    if (lastGood) return { ...lastGood, stale: true };
+    throw err;
+  }
+}
+
 router.get('/', async (req, res) => {
   // Parse user-supplied extra RSS feeds from ?extra=<url-encoded-json>.
-  let extraFeeds: Array<{ url: string; source: string }> = [];
-  if (req.query.extra) {
+  // Custom feeds make the server fetch caller-chosen URLs. Only the signed-in
+  // dashboard sends them (NewsWidget/NewsTicker live behind AuthGate), so
+  // anonymous callers get the standard feed set.
+  const extraFeeds: Array<{ url: string; source: string }> = [];
+  if (typeof req.query.extra === 'string' && readAuthUser(req)) {
     try {
-      const parsed = JSON.parse(req.query.extra as string) as Array<{ url: string; label: string }>;
-      extraFeeds = parsed.map((e) => ({ url: e.url, source: e.label || new URL(e.url).hostname }));
+      const parsed: unknown = JSON.parse(req.query.extra);
+      if (Array.isArray(parsed)) {
+        const seenUrls = new Set<string>();
+        for (const e of parsed as Array<{ url?: unknown; label?: unknown }>) {
+          if (extraFeeds.length >= MAX_EXTRA_FEEDS) break;
+          if (!e || !isAllowedFeedUrl(e.url) || seenUrls.has(e.url)) continue;
+          seenUrls.add(e.url);
+          const label = typeof e.label === 'string' ? e.label : '';
+          extraFeeds.push({ url: e.url, source: label || new URL(e.url).hostname });
+        }
+      }
     } catch {
       // ignore malformed extra param
     }
   }
 
-  // If extra feeds supplied, fetch base from cache then merge extras fresh.
+  // If extra feeds supplied, fetch the base set and the extras in parallel,
+  // then merge. A failed base set (no lastGood yet) continues with empty base.
   if (extraFeeds.length > 0) {
-    let baseItems: NewsItem[] = [];
-    const cached = cache.get<NewsResult>(CACHE_KEY);
-    if (cached) {
-      baseItems = cached.items;
-    } else if (lastGood) {
-      baseItems = lastGood.items;
-    } else {
-      try {
-        baseItems = await fetchAllFeeds();
-        const result: NewsResult = { items: baseItems, updated: Date.now() };
-        cache.set(CACHE_KEY, result, SUCCESS_TTL);
-        lastGood = result;
-      } catch {
-        // continue with empty base
-      }
-    }
-
     // Extra feeds get the same 5-min cache as the base set (keyed per URL) —
     // otherwise every poll re-fetches each origin, pinning latency to the
     // slowest feed and risking blocks from the feed hosts.
-    const extraResults = await Promise.allSettled(
-      extraFeeds.map((f) =>
-        cache.getOrFetch(`news:extra:${f.url}`, SUCCESS_TTL, () => fetchFeed(f.url, f.source), {
-          staleOnError: true,
-        })
-      )
-    );
+    const [base, extraResults] = await Promise.all([
+      getBase().catch(() => null),
+      Promise.allSettled(
+        extraFeeds.map((f) =>
+          cache.getOrFetch(
+            `news:extra:${f.url}`,
+            SUCCESS_TTL,
+            () => fetchFeed(f.url, f.source, MAX_EXTRA_FEED_BYTES),
+            { staleOnError: true }
+          )
+        )
+      ),
+    ]);
+    const baseItems: NewsItem[] = base?.items ?? [];
     const baseUrls = new Set(baseItems.map((i) => i.url));
     const extraItems: NewsItem[] = [];
-    for (const r of extraResults) {
+    extraResults.forEach((r, i) => {
       if (r.status !== 'fulfilled') {
         console.error('[news] extra feed failed:', r.reason);
-        continue;
+        return;
       }
+      // The per-URL cache is shared across viewers, and its items carry the
+      // label of whoever fetched first. Re-stamp this requester's label (on a
+      // copy — the cached objects are shared).
+      const source = extraFeeds[i].source;
       for (const item of r.value) {
-        if (!baseUrls.has(item.url)) extraItems.push(item);
+        if (baseUrls.has(item.url)) continue;
+        extraItems.push(item.source === source ? item : { ...item, source });
       }
-    }
+    });
 
     const merged = [...extraItems, ...baseItems]
       .sort((a, b) => b.publishedAt - a.publishedAt)
@@ -278,30 +374,11 @@ router.get('/', async (req, res) => {
     return;
   }
 
-  // Standard path: cache → cooldown stale → fresh fetch.
-  const cached = cache.get<NewsResult>(CACHE_KEY);
-  if (cached) {
-    res.json(cached);
-    return;
-  }
-  if (Date.now() < cooldownUntil && lastGood) {
-    res.json({ ...lastGood, stale: true });
-    return;
-  }
-
+  // Standard path. getBase only throws when there is no lastGood to serve.
   try {
-    const result: NewsResult = { items: await fetchAllFeeds(), updated: Date.now() };
-    cache.set(CACHE_KEY, result, SUCCESS_TTL);
-    lastGood = result;
-    res.json(result);
+    res.json(await getBase());
   } catch (err) {
-    console.error('[news] fetch failed:', err);
-    cooldownUntil = Date.now() + FAILURE_COOLDOWN;
-    if (lastGood) {
-      res.json({ ...lastGood, stale: true });
-    } else {
-      res.status(502).json({ error: String(err), items: [], updated: Date.now() });
-    }
+    res.status(502).json({ error: String(err), items: [], updated: Date.now() });
   }
 });
 

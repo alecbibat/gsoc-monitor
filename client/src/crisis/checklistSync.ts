@@ -1,5 +1,5 @@
 import { useCrisisStore, type Incident } from './crisisStore';
-import type { ChecklistStateMap } from './checklistTemplate';
+import { foldChecklistResponse, type ChecklistStateMap } from './checklistTemplate';
 
 // ── Checklist toggle sync (editor side) ──────────────────────────────────────
 //
@@ -74,8 +74,9 @@ export function toggleChecklistItem(incident: Incident, itemId: string, checked:
       const { checklists } = (await res.json()) as { checklists: ChecklistStateMap };
       markInflight(incident.id, itemId, -1);
       // Adopt the server map, but keep any OTHER items (or a newer toggle of
-      // this one) that are still in flight.
-      const merged = mergeChecklists(checklists, currentChecklists(incident.id), inflightChecklistIds(incident.id));
+      // this one) that are still in flight, and any item a later SSE upsert
+      // already moved past this response (newest server stamp wins).
+      const merged = foldChecklistResponse(checklists, currentChecklists(incident.id), inflightChecklistIds(incident.id), itemId);
       useCrisisStore.getState().applyChecklistState(incident.id, merged);
     })
     .catch((err) => {

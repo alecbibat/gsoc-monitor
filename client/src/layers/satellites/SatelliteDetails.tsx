@@ -1,13 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  twoline2satrec,
-  propagate,
-  gstime,
-  eciToGeodetic,
-  degreesLong,
-  degreesLat,
-  type EciVec3,
-} from 'satellite.js';
+import type { EciVec3 } from 'satellite.js';
+import { getSatlib, loadSatlib, type SatLib } from './satlib';
 
 interface Props {
   payload: {
@@ -30,12 +23,35 @@ interface Live {
   speedKmS: number;
 }
 
+// satellite.js comes from the satlib cache rather than a static import, so the
+// shared panel chunk doesn't pull it in for every panel kind. The body is a
+// separate component so its hooks never run conditionally.
 export function SatelliteDetails({ payload }: Props) {
+  const [sat, setSat] = useState<SatLib | null>(getSatlib);
+  useEffect(() => {
+    if (sat) return;
+    // Defensive only. In practice the layer has already loaded the library.
+    let alive = true;
+    loadSatlib().then(
+      (m) => {
+        if (alive) setSat(m);
+      },
+      () => {}
+    );
+    return () => {
+      alive = false;
+    };
+  }, [sat]);
+  if (!sat) return null;
+  return <SatelliteDetailsBody payload={payload} sat={sat} />;
+}
+
+function SatelliteDetailsBody({ payload, sat }: Props & { sat: SatLib }) {
   // The satrec is derived once from the TLE; SGP4 propagation is cheap so the
   // panel re-derives a live position every second to feel as alive as the map.
   const satrec = useMemo(
-    () => twoline2satrec(payload.line1, payload.line2),
-    [payload.line1, payload.line2]
+    () => sat.twoline2satrec(payload.line1, payload.line2),
+    [sat, payload.line1, payload.line2]
   );
 
   const orbital = useMemo(() => {
@@ -59,16 +75,16 @@ export function SatelliteDetails({ payload }: Props) {
   useEffect(() => {
     const update = () => {
       const now = new Date();
-      const pv = propagate(satrec, now);
+      const pv = sat.propagate(satrec, now);
       if (typeof pv.position === 'boolean' || typeof pv.velocity === 'boolean') {
         setLive(null);
         return;
       }
-      const geo = eciToGeodetic(pv.position as EciVec3<number>, gstime(now));
+      const geo = sat.eciToGeodetic(pv.position as EciVec3<number>, sat.gstime(now));
       const v = pv.velocity as EciVec3<number>;
       setLive({
-        lat: degreesLat(geo.latitude),
-        lon: degreesLong(geo.longitude),
+        lat: sat.degreesLat(geo.latitude),
+        lon: sat.degreesLong(geo.longitude),
         altKm: geo.height,
         speedKmS: Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z),
       });
@@ -76,7 +92,7 @@ export function SatelliteDetails({ payload }: Props) {
     update();
     const id = setInterval(update, 1000);
     return () => clearInterval(id);
-  }, [satrec]);
+  }, [sat, satrec]);
 
   const latStr = live ? `${Math.abs(live.lat).toFixed(2)}° ${live.lat >= 0 ? 'N' : 'S'}` : '—';
   const lonStr = live ? `${Math.abs(live.lon).toFixed(2)}° ${live.lon >= 0 ? 'E' : 'W'}` : '—';

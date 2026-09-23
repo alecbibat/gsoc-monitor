@@ -8,15 +8,35 @@ function toRad(deg: number): number {
   return (deg * Math.PI) / 180;
 }
 
+// Cesium's EllipsoidGeodesic (Vincenty inverse) never converges for nearly
+// antipodal endpoints. Its iteration loop has no cap, and the guard against
+// that input is a debug-only check that the production Cesium build strips,
+// so the call spins forever on the main thread (in dev it throws instead).
+// Measured non-convergence reaches ~0.0117 rad (~75 km) from the antipode, and
+// Cesium's own debug limit is 0.0125 rad. A segment inside this band is split
+// a quarter-circumference along its great circle, where both halves solve normally.
+const NEAR_ANTIPODAL_RAD = 0.013;
+const scratchA = new Cesium.Cartesian3();
+const scratchB = new Cesium.Cartesian3();
+
+function segmentDistanceM(a: LngLat, b: LngLat): number {
+  const pa = Cesium.Cartesian3.fromDegrees(a.lon, a.lat, 0, undefined, scratchA);
+  const pb = Cesium.Cartesian3.fromDegrees(b.lon, b.lat, 0, undefined, scratchB);
+  if (Math.PI - Cesium.Cartesian3.angleBetween(pa, pb) < NEAR_ANTIPODAL_RAD) {
+    const mid = destination(a.lat, a.lon, initialBearing(a, b), (Math.PI / 2) * EARTH_RADIUS_M);
+    return segmentDistanceM(a, mid) + segmentDistanceM(mid, b);
+  }
+  return new Cesium.EllipsoidGeodesic(
+    Cesium.Cartographic.fromDegrees(a.lon, a.lat),
+    Cesium.Cartographic.fromDegrees(b.lon, b.lat)
+  ).surfaceDistance;
+}
+
 // Geodesic length of a polyline along the ellipsoid surface, in metres.
 export function totalDistanceM(pts: LngLat[]): number {
   let sum = 0;
   for (let i = 1; i < pts.length; i++) {
-    const g = new Cesium.EllipsoidGeodesic(
-      Cesium.Cartographic.fromDegrees(pts[i - 1].lon, pts[i - 1].lat),
-      Cesium.Cartographic.fromDegrees(pts[i].lon, pts[i].lat)
-    );
-    sum += g.surfaceDistance;
+    sum += segmentDistanceM(pts[i - 1], pts[i]);
   }
   return sum;
 }
@@ -29,8 +49,10 @@ export function polygonAreaM2(pts: LngLat[]): number {
   for (let i = 0; i < pts.length; i++) {
     const p1 = pts[i];
     const p2 = pts[(i + 1) % pts.length];
-    total +=
-      toRad(p2.lon - p1.lon) * (2 + Math.sin(toRad(p1.lat)) + Math.sin(toRad(p2.lat)));
+    // Take the short way round, as the GEODESIC outline is drawn: an edge
+    // from 179° to -179° spans +2°, not -358°.
+    const dLon = ((p2.lon - p1.lon + 540) % 360) - 180;
+    total += toRad(dLon) * (2 + Math.sin(toRad(p1.lat)) + Math.sin(toRad(p2.lat)));
   }
   return Math.abs((total * EARTH_RADIUS_M * EARTH_RADIUS_M) / 2);
 }

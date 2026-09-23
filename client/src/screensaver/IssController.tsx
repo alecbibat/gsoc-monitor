@@ -7,6 +7,7 @@ import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useScreensaverStore } from './screensaverStore';
 import { useLayersStore } from '../store/layersStore';
 import { api } from '../api/client';
+import { loadSatlib } from '../layers/satellites/satlib';
 
 const ISS_SATNUM = '25544';
 
@@ -84,7 +85,7 @@ export function IssController() {
       raf = requestAnimationFrame(tick);
     };
 
-    Promise.all([import('satellite.js'), api.satellites('stations')])
+    Promise.all([loadSatlib(), api.satellites('stations')])
       .then(([satlib, res]) => {
         if (cancelled) return;
         const iss = res.satellites.find((s) => s.satnum === ISS_SATNUM) ?? res.satellites[0];

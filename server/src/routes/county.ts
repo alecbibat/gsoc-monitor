@@ -24,7 +24,13 @@ router.get('/:fips', async (req, res) => {
       url.searchParams.set('f', 'geojson');
       const r = await fetch(url.toString(), { signal: AbortSignal.timeout(10_000) });
       if (!r.ok) throw new Error(`Esri county service: ${r.status}`);
-      return r.json();
+      const j = (await r.json()) as { error?: { message?: string } };
+      // ArcGIS reports query failures as HTTP 200 + {error:{...}}; throw so the
+      // error body is neither cached for 24h nor sent with a browser cache header.
+      if (j && typeof j === 'object' && 'error' in j && j.error) {
+        throw new Error(`Esri county service: ${j.error.message ?? 'ArcGIS error'}`);
+      }
+      return j;
     });
     res.set('Cache-Control', 'public, max-age=86400');
     res.json(data);

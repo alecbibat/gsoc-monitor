@@ -70,8 +70,10 @@ export function PinsContextBox() {
     }
   }
 
+  // Always mounted, but only ever visible in pins mode — other modes (ISS
+  // re-publishes its POI every second) must not geocode or load tiles unseen.
   useEffect(() => {
-    if (!poi) {
+    if (!poi || !isPins) {
       setGeoLabel(null);
       return;
     }
@@ -82,7 +84,7 @@ export function PinsContextBox() {
       if (!ctrl.signal.aborted) setGeoLabel(label);
     });
     return () => ctrl.abort();
-  }, [poi?.lat, poi?.lon, poi?.category]);
+  }, [isPins, poi?.lat, poi?.lon, poi?.category]);
 
   return (
     <div
@@ -90,7 +92,7 @@ export function PinsContextBox() {
         visible ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
       }`}
     >
-      {poi && (
+      {isPins && poi && (
         <ContextMiniMap lat={poi.lat} lon={poi.lon}>
           <div className="truncate text-[10px] font-medium text-white/80">{poi.title}</div>
           {isShip ? (

@@ -50,6 +50,7 @@ interface Strike {
   lon: number;
   t: number; // local receive time (ms)
   stage: number; // index into X_STAGES; only repainted when this changes
+  bb: Cesium.Billboard; // pooled crosshair billboard
 }
 
 const hex = (s: string) => Cesium.Color.fromCssColorString(s);
@@ -173,6 +174,22 @@ export function LightningLayer() {
       return;
     }
 
+    // Settled crosshairs live in a raw BillboardCollection, not entities: entity
+    // billboards are re-synced by BillboardVisualizer on every clock tick (every
+    // rAF, even when requestRenderMode skips the draw) — ~1.5–2 ms/frame for
+    // 2,500 strikes. A primitive collection is only touched when a frame renders.
+    const bbs = new Cesium.BillboardCollection({ scene: viewer.scene });
+    viewer.scene.primitives.add(bbs);
+    // Retired billboards are hidden and reused (as EntityCluster does) rather than
+    // removed: add/remove rebuild the whole vertex array; show/position/color only
+    // rewrite that one billboard.
+    const freeBbs: Cesium.Billboard[] = [];
+    const scratchPos = new Cesium.Cartesian3(); // Billboard setters/ctor clone it
+    const retire = (s: Strike) => {
+      s.bb.show = false;
+      freeBbs.push(s.bb);
+    };
+
     let cancelled = false;
     let socket: WebSocket | null = null;
     let relayIndex = 0;
@@ -286,11 +303,34 @@ export function LightningLayer() {
     // strikes that are actually in view — off-screen strikes still get their
     // crosshair billboard.
     let viewRect: Cesium.Rectangle | null = viewer.camera.computeViewRectangle() ?? null;
-    const offCamera = viewer.camera.changed.addEventListener(() => {
+    const refreshViewRect = () => {
       viewRect = viewer.camera.computeViewRectangle() ?? null;
-    });
+    };
+    const offCamera = viewer.camera.changed.addEventListener(refreshViewRect);
+    // changed has a 50% threshold; also refresh once the camera settles.
+    const offMoveEnd = viewer.camera.moveEnd.addEventListener(refreshViewRect);
     const scratchCarto = new Cesium.Cartographic();
+    // computeViewRectangle() returns Rectangle.MAX_VALUE whenever 3+ viewport
+    // corners miss the globe (the whole-globe overview), so on its own it lets
+    // every far-side strike through. Horizon-test the bolt's top first: if even
+    // the 120 km top is below the horizon, the whole bolt and its ground flash
+    // are hidden behind the globe. A sphere of the ellipsoid's minimum radius
+    // sits entirely inside the globe, so it never hides a point the globe shows.
+    const HORIZON_R = Cesium.Ellipsoid.WGS84.minimumRadius;
+    const horizon = new Cesium.Occluder(
+      new Cesium.BoundingSphere(Cesium.Cartesian3.ZERO, HORIZON_R),
+      viewer.camera.positionWC
+    );
+    const scratchTop = new Cesium.Cartesian3();
     const inView = (lon: number, lat: number): boolean => {
+      const camPos = viewer.camera.positionWC;
+      // Occluder treats a camera inside the sphere as "everything hidden"; that
+      // can't happen in normal navigation, but fall through to the old check if it does.
+      if (Cesium.Cartesian3.magnitudeSquared(camPos) > HORIZON_R * HORIZON_R) {
+        horizon.cameraPosition = camPos; // live position; camera.changed is too coarse
+        Cesium.Cartesian3.fromDegrees(lon, lat, BOLT_TOP_M, Cesium.Ellipsoid.WGS84, scratchTop);
+        if (!horizon.isPointVisible(scratchTop)) return false;
+      }
       if (!viewRect) return true; // can't tell — keep the old behavior
       Cesium.Cartographic.fromDegrees(lon, lat, 0, scratchCarto);
       return Cesium.Rectangle.contains(viewRect, scratchCarto);
@@ -347,35 +387,41 @@ export function LightningLayer() {
 
         const id = seq++;
         const now = Date.now();
-        strikes.set(id, { lat: strike.lat, lon: strike.lon, t: now, stage: 0 });
-        recent.push(now);
-
-        ds.entities.add({
-          id: `bolt-${id}`,
-          // Fresh strike sits at the stage-0 altitude lift so it draws over older
-          // ones at the same spot (see X_STAGES).
-          position: Cesium.Cartesian3.fromDegrees(strike.lon, strike.lat, X_STAGES[0].altM),
-          billboard: {
+        // Fresh strike sits at the stage-0 altitude lift so it draws over older
+        // ones at the same spot (see X_STAGES).
+        const pos = Cesium.Cartesian3.fromDegrees(
+          strike.lon, strike.lat, X_STAGES[0].altM, undefined, scratchPos
+        );
+        let bb = freeBbs.pop();
+        if (bb) {
+          bb.position = pos;
+          bb.color = X_STAGES[0].color; // fresh: white
+          bb.show = true;
+        } else {
+          // Default depth test (disableDepthTestDistance = 0) so strikes on the
+          // far side of the planet are correctly hidden behind the globe.
+          bb = bbs.add({
+            position: pos,
             image: BOLT_ICON,
             width: 22,
             height: 22,
             color: X_STAGES[0].color, // fresh: white
-            // Default depth test (disableDepthTestDistance = 0) so strikes on the
-            // far side of the planet are correctly hidden behind the globe.
-          },
-        });
+          });
+        }
+        strikes.set(id, { lat: strike.lat, lon: strike.lon, t: now, stage: 0, bb });
+        recent.push(now);
 
         // Fire the dramatic descending bolt + red impact flash — only where the
         // camera can actually see it.
         if (inView(strike.lon, strike.lat)) spawnBolt(strike.lon, strike.lat);
 
         // Enforce the cap by evicting the oldest strikes (Map preserves
-        // insertion order — walk keys instead of copying all of them).
+        // insertion order — take the first entry instead of copying them all).
         while (strikes.size > MAX_STRIKES) {
-          const oid = strikes.keys().next().value;
-          if (oid === undefined) break;
-          strikes.delete(oid);
-          ds.entities.removeById(`bolt-${oid}`);
+          const first = strikes.entries().next().value;
+          if (!first) break;
+          strikes.delete(first[0]);
+          retire(first[1]);
         }
         requestRenderSoon();
       };
@@ -402,7 +448,7 @@ export function LightningLayer() {
 
     // Step strikes through their discrete colour stages and retire expired ones.
     // The hot path is the early-out: a strike whose stage hasn't changed since
-    // last tick is skipped entirely — no allocation, no entity touch — so a sky
+    // last tick is skipped entirely — no allocation, no billboard touch — so a sky
     // full of settled crosshairs costs almost nothing and never forces a render.
     const tick = () => {
       const now = Date.now();
@@ -411,21 +457,17 @@ export function LightningLayer() {
         const age = now - s.t;
         if (age >= STRIKE_LIFETIME_MS) {
           strikes.delete(id);
-          ds.entities.removeById(`bolt-${id}`);
+          retire(s);
           changed = true;
           continue;
         }
         const stage = stageForAge(age);
         if (stage === s.stage) continue; // unchanged — leave the billboard alone
         s.stage = stage;
-        const entity = ds.entities.getById(`bolt-${id}`);
-        if (!entity?.billboard) continue;
         const st = X_STAGES[stage];
-        entity.billboard.color = new Cesium.ConstantProperty(st.color);
+        s.bb.color = st.color;
         // Drop to this stage's altitude so it sinks beneath newer strikes.
-        entity.position = new Cesium.ConstantPositionProperty(
-          Cesium.Cartesian3.fromDegrees(s.lon, s.lat, st.altM)
-        );
+        s.bb.position = Cesium.Cartesian3.fromDegrees(s.lon, s.lat, st.altM, undefined, scratchPos);
         changed = true;
       }
 
@@ -447,6 +489,7 @@ export function LightningLayer() {
       cancelled = true;
       clearInterval(ticker);
       offCamera();
+      offMoveEnd();
       if (renderTimer) clearTimeout(renderTimer);
       if (rafId != null) cancelAnimationFrame(rafId);
       if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -455,6 +498,10 @@ export function LightningLayer() {
         socket.close();
       }
       ds.entities.removeAll();
+      if (!viewer.isDestroyed()) {
+        viewer.scene.primitives.remove(bbs); // destroys the collection + GPU buffers
+        viewer.scene.requestRender();
+      }
       useLightningStatus.getState().setStatus({ connected: false, ratePerMin: 0 });
     };
   }, [viewer, active]);

@@ -13,6 +13,11 @@ const POI_INTERVAL_MAX_MS = 20_000;
 const POI_DWELL_MIN_MS = 12_000;
 const POI_DWELL_MAX_MS = 18_000;
 
+// Boundary glow: ring colour and its 0..1 pulse (drives width + alpha).
+const RING_COLOR = Cesium.Color.fromCssColorString('#7cffb0');
+const pulsePhase = (startMs: number) =>
+  0.5 + 0.5 * Math.sin(((Date.now() - startMs) / 1000) * Math.PI * 1.4);
+
 interface ParkPoi {
   title: string;
   unitCode?: string; // NPS park unit code → park boundary outline (e.g. GRCA)
@@ -154,6 +159,9 @@ export function NationalParksController() {
   const lastFactIndexRef = useRef<number[]>(PARKS.map(() => -1));
   // Active boundary DataSource reference for cleanup.
   const boundarySourceRef = useRef<Cesium.GeoJsonDataSource | null>(null);
+  // Pulsing ring outlines (one GroundPolylinePrimitive) + their preRender pulse.
+  const ringPrimitiveRef = useRef<Cesium.GroundPolylinePrimitive | null>(null);
+  const ringPulseOffRef = useRef<(() => void) | null>(null);
   // Monotonic park-visit token: boundary fetches that land after their visit
   // ended are dropped instead of leaking into viewer.dataSources.
   const visitSeqRef = useRef(0);
@@ -198,18 +206,27 @@ export function NationalParksController() {
       const now = Cesium.JulianDate.now();
       // Pulsing width + alpha for an animated glowing border.
       const startMs = Date.now();
-      const pulseWidth = new Cesium.CallbackProperty(() => {
-        const t = (Date.now() - startMs) / 1000;
-        return 3 + 2.5 * (0.5 + 0.5 * Math.sin(t * Math.PI * 1.4));
-      }, false);
-      const pulseMaterial = new Cesium.ColorMaterialProperty(
-        new Cesium.CallbackProperty(() => {
-          const t = (Date.now() - startMs) / 1000;
-          const a = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * Math.PI * 1.4));
-          return Cesium.Color.fromCssColorString('#7cffb0').withAlpha(a);
-        }, false)
-      );
-      // Snapshot existing polygon entities, then add polyline borders for each.
+      const p0 = pulsePhase(startMs);
+      // A ground polyline's width and colour are per-instance batch-table
+      // attributes, so all rings go into one primitive that is pulsed in place.
+      // As entities with a CallbackProperty width, Cesium would rebuild every
+      // ring's (survey-detailed) geometry and GPU buffers on every frame.
+      // Without ground-polyline support the entity path already degrades to a
+      // cheap in-place line, so keep entity rings there.
+      const entityPulse = Cesium.GroundPolylinePrimitive.isSupported(v.scene)
+        ? null
+        : {
+            width: new Cesium.CallbackProperty(() => 3 + 2.5 * pulsePhase(startMs), false),
+            material: new Cesium.ColorMaterialProperty(
+              new Cesium.CallbackProperty(
+                () => RING_COLOR.withAlpha(0.35 + 0.65 * pulsePhase(startMs)),
+                false
+              )
+            ),
+          };
+      const ringIds: string[] = [];
+      const instances: Cesium.GeometryInstance[] = [];
+      // Snapshot existing polygon entities, then add a border for each ring.
       for (const entity of source.entities.values.slice()) {
         const poly = entity.polygon;
         if (!poly) continue;
@@ -218,27 +235,79 @@ export function NationalParksController() {
         const rings = [hierarchy.positions, ...(hierarchy.holes ?? []).map((h) => h.positions)];
         for (const positions of rings) {
           if (!positions || positions.length < 2) continue;
-          source.entities.add({
-            polyline: {
+          if (entityPulse) {
+            source.entities.add({
+              polyline: {
+                positions: [...positions, positions[0]],
+                ...entityPulse,
+                clampToGround: true,
+              },
+            });
+            continue;
+          }
+          const id = `park-ring-${visit}-${ringIds.length}`;
+          ringIds.push(id);
+          instances.push(new Cesium.GeometryInstance({
+            id,
+            geometry: new Cesium.GroundPolylineGeometry({
               positions: [...positions, positions[0]],
-              width: pulseWidth,
-              material: pulseMaterial,
-              clampToGround: true,
+              width: 3 + 2.5 * p0,
+            }),
+            attributes: {
+              color: Cesium.ColorGeometryInstanceAttribute.fromColor(
+                RING_COLOR.withAlpha(0.35 + 0.65 * p0)
+              ),
             },
-          });
+          }));
         }
         poly.outline = new Cesium.ConstantProperty(false);
       }
 
-      removeBoundaryHighlight(v); // reclaim any predecessor before replacing the ref
+      removeBoundaryHighlight(v); // reclaim any predecessor before replacing the refs
       boundarySourceRef.current = source;
-      await v.dataSources.add(source);
+      const added = v.dataSources.add(source);
+      if (instances.length > 0) {
+        // scene.groundPrimitives already holds DataSourceDisplay's ground
+        // collection, so the rings still draw after (over) the fill.
+        const prim = v.scene.groundPrimitives.add(new Cesium.GroundPolylinePrimitive({
+          geometryInstances: instances,
+          appearance: new Cesium.PolylineColorAppearance(),
+        })) as Cesium.GroundPolylinePrimitive;
+        ringPrimitiveRef.current = prim;
+        // The attribute setters copy into the batch table, so reuse the buffers.
+        const widthVal = [0];
+        const colorScratch = new Cesium.Color();
+        const colorVal = new Uint8Array(4);
+        ringPulseOffRef.current = v.scene.preRender.addEventListener(() => {
+          // Instance attributes only exist once the worker-built primitive is ready.
+          if (!prim.ready) return;
+          const p = pulsePhase(startMs);
+          widthVal[0] = 3 + 2.5 * p;
+          Cesium.ColorGeometryInstanceAttribute.toValue(
+            RING_COLOR.withAlpha(0.35 + 0.65 * p, colorScratch),
+            colorVal
+          );
+          for (const id of ringIds) {
+            const attrs = prim.getGeometryInstanceAttributes(id);
+            if (!attrs) continue;
+            attrs.width = widthVal;
+            attrs.color = colorVal;
+          }
+        });
+      }
+      await added;
     } catch {
       // Boundary highlight is non-critical — silently skip on any failure.
     }
   }
 
   function removeBoundaryHighlight(v: Cesium.Viewer) {
+    ringPulseOffRef.current?.();
+    ringPulseOffRef.current = null;
+    if (ringPrimitiveRef.current) {
+      v.scene.groundPrimitives.remove(ringPrimitiveRef.current); // scene collections destroy on remove
+      ringPrimitiveRef.current = null;
+    }
     if (boundarySourceRef.current) {
       v.dataSources.remove(boundarySourceRef.current, true);
       boundarySourceRef.current = null;
@@ -263,6 +332,11 @@ export function NationalParksController() {
     v.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(OVERVIEW_LON, OVERVIEW_LAT, OVERVIEW_ALT),
       duration: 2.5,
+      complete: () => {
+        if (cancelledRef.current) return;
+        v.scene.requestRenderMode = prevRequestRender; // parked: render on demand
+        v.scene.requestRender();
+      },
     });
 
     function scheduleNextPark() {
@@ -272,6 +346,9 @@ export function NationalParksController() {
 
     function visitNextPark() {
       if (cancelledRef.current) return;
+      // The boundary pulse only advances on rendered frames, so render
+      // continuously from here until the fly-back lands.
+      v.scene.requestRenderMode = false;
       // Refill queue when exhausted.
       if (parkQueueRef.current.length === 0) {
         parkQueueRef.current = shuffledParkQueue();
@@ -321,6 +398,9 @@ export function NationalParksController() {
         duration: 4.5,
         complete: () => {
           if (cancelledRef.current) return;
+          // Parked on the overview until the next visit: render on demand.
+          v.scene.requestRenderMode = prevRequestRender;
+          v.scene.requestRender();
           updatePhase('rotating');
           scheduleNextPark();
         },
@@ -332,6 +412,9 @@ export function NationalParksController() {
 
     return () => {
       cancelledRef.current = true;
+      // Invalidate any boundary fetch still pending: a quick restart resets
+      // cancelledRef, so only the visit token keeps it out of the new session.
+      visitSeqRef.current++;
       if (poiTimerRef.current) clearTimeout(poiTimerRef.current);
       if (dwellTimerRef.current) clearTimeout(dwellTimerRef.current);
       removeBoundaryHighlight(v);

@@ -1,13 +1,14 @@
-import { lazy, Suspense } from 'react';
+import { Suspense } from 'react';
 import { usePanelStore } from './panelStore';
 import { useIsMobile } from '../ui/useIsMobile';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
+import { lazyWithReload } from '../lib/lazyWithReload';
 
 // Panels only exist after a user click, so the whole shell + content tree
 // (react-rnd, every *Details view, the widget registry) loads on demand; a
 // blank frame while the chunk fetches is imperceptible.
-const PanelHost = lazy(() => import('./PanelHost').then((m) => ({ default: m.PanelHost })));
-const MobilePanelDeck = lazy(() =>
+const PanelHost = lazyWithReload(() => import('./PanelHost').then((m) => ({ default: m.PanelHost })));
+const MobilePanelDeck = lazyWithReload(() =>
   import('./MobilePanelDeck').then((m) => ({ default: m.MobilePanelDeck }))
 );
 

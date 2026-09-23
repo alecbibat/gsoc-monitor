@@ -104,6 +104,8 @@ export function ShipModelLayer() {
       }
 
       v.scene.requestRender();
+    }).catch((err: unknown) => {
+      console.warn('[ships] 3D model chunk failed to load:', err);
     });
 
     return () => {

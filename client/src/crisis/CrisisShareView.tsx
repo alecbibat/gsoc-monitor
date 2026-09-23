@@ -1,12 +1,11 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import {
-  consumeSsoError, fetchAuthConfig, login, startSso,
+  clearSsoErrorParam, fetchAuthConfig, login, readSsoError, startSso,
   FALLBACK_AUTH_CONFIG, type AuthConfig,
 } from '../auth/authApi';
 import type { CrisisPublicState, IcsRole, PersonnelAssignment } from './crisisStore';
 import type { ShareLiveLayerId } from './shareLiveLayers';
 import { LOCATION_GROUPS, type LocationGroup } from '../layers/locations/locations';
-import { CrisisShareMap } from './CrisisShareMap';
 import { ShareWatchCard } from './ShareWatchCard';
 import { isShareLiveLayerId } from './shareLiveLayers';
 import { measureLayer } from './layerMeasure';
@@ -19,7 +18,7 @@ import { TYPE_STYLES, TimelineView, LogShowMore, DEFAULT_LOG_LIMIT, entryTypeOf 
 // the def lookups normalize them (contained → recovery, chemical → HazMat, …).
 import { incidentStatusDef, incidentTypeDef } from './taxonomy';
 import {
-  checklistTemplateFor, isChecklistStateMap,
+  checklistTemplateFor, foldChecklistResponse, isChecklistStateMap,
   type ChecklistItemState, type ChecklistStateMap,
 } from './checklistTemplate';
 import { intakeTemplateFor, isIntakeAnswers, answeredCount } from './intakeTemplate';
@@ -52,6 +51,14 @@ const CrisisShareGlobe = lazy(() =>
   import('./CrisisShareGlobe')
     .then((m) => ({ default: m.CrisisShareGlobe }))
     .catch(() => ({ default: GlobeUnavailable as unknown as typeof import('./CrisisShareGlobe').CrisisShareGlobe }))
+);
+// Leaflet is only needed for the flat fallback map (no live layers, pins or
+// vessels). Globe-mode share pages never render it, so keep it out of the
+// share view's static deps. Same stale-deploy catch as the globe.
+const CrisisShareMap = lazy(() =>
+  import('./CrisisShareMap')
+    .then((m) => ({ default: m.CrisisShareMap }))
+    .catch(() => ({ default: GlobeUnavailable as unknown as typeof import('./CrisisShareMap').CrisisShareMap }))
 );
 
 function fmtTs(iso: string) {
@@ -267,11 +274,12 @@ function ShareSignInGate({ token, onSignedIn }: { token: string; onSignedIn: () 
   const [authConfig, setAuthConfig] = useState<AuthConfig>(FALLBACK_AUTH_CONFIG);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(() => consumeSsoError());
+  const [error, setError] = useState<string | null>(readSsoError);
   const [submitting, setSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => { void fetchAuthConfig().then(setAuthConfig); }, []);
+  useEffect(() => { clearSsoErrorParam(); }, []);
 
   const ssoEnabled = authConfig.sso.enabled;
   const passwordIsSecondary = ssoEnabled && authConfig.passwordLoginAdminOnly;
@@ -416,6 +424,8 @@ export function CrisisShareView({ token }: { token: string }) {
   const [lockedBy, setLockedBy] = useState<null | 'signin' | 'password'>(null);
   // Bumped after a successful inline sign-in to re-run the snapshot fetch.
   const [reloadNonce, setReloadNonce] = useState(0);
+  // Bumped to reopen the live stream after the server CLOSED it.
+  const [sseNonce, setSseNonce] = useState(0);
   const [gateError, setGateError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   // Set once the snapshot fetch succeeds — gates the SSE stream so it never
@@ -536,6 +546,8 @@ export function CrisisShareView({ token }: { token: string }) {
     if (!unlocked) return;
     const qs = viewKey ? `?k=${viewKey}` : '';
     const es = new EventSource(`/api/crisis/share/${token}/events${qs}`);
+    let disposed = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     es.addEventListener('connected', (e) => setData(JSON.parse((e as MessageEvent).data) as CrisisPublicState));
     es.addEventListener('update',    (e) => setData(JSON.parse((e as MessageEvent).data) as CrisisPublicState));
     es.addEventListener('revoked',   () => {
@@ -555,17 +567,23 @@ export function CrisisShareView({ token }: { token: string }) {
       // the server now refuses the connection (e.g. the link expired, or it
       // was revoked while this tab's stream was already dead) — so resync via
       // the snapshot: a 410 lands the viewer on the closure page instead of a
-      // silently frozen "live" report.
+      // silently frozen "live" report. A link that is still live (or a server
+      // blip / offline) reopens the stream after a pause instead of freezing.
       if (es.readyState !== EventSource.CLOSED) return;
       const kq = viewKey ? `?k=${viewKey}` : '';
       fetch(`/api/crisis/share/${token}${kq}`)
         .then(async (r) => {
-          if (r.status === 410) setGone((await r.json()) as GonePayload);
+          if (disposed) return;
+          if (r.status === 410) { setGone((await r.json()) as GonePayload); return; }
+          const snapshot = r.ok ? ((await r.json()) as CrisisPublicState) : null;
+          if (disposed) return; // torn down while the body was read
+          if (snapshot) setData(snapshot);
+          if (r.ok || r.status >= 500) retry = setTimeout(() => setSseNonce((n) => n + 1), 15_000);
         })
-        .catch(() => { /* still offline — the viewer can reload manually */ });
+        .catch(() => { if (!disposed) retry = setTimeout(() => setSseNonce((n) => n + 1), 15_000); });
     };
-    return () => es.close();
-  }, [token, viewKey, unlocked]);
+    return () => { disposed = true; clearTimeout(retry); es.close(); };
+  }, [token, viewKey, unlocked, sseNonce]);
 
   const handlePassword = (password: string) => {
     // crypto.subtle only exists in secure contexts — on a plain-HTTP origin
@@ -617,7 +635,13 @@ export function CrisisShareView({ token }: { token: string }) {
           throw new Error(detail?.error || `HTTP ${res.status}`);
         }
         const { checklists } = (await res.json()) as { checklists: ChecklistStateMap };
-        setData((prev) => (prev ? { ...prev, checklists } : prev));
+        // Fold, don't replace: the SSE fanout of a teammate's LATER toggle can
+        // land before this response (newest server stamp wins per item).
+        setData((prev) => {
+          if (!prev) return prev;
+          const cur = isChecklistStateMap(prev.checklists) ? prev.checklists : {};
+          return { ...prev, checklists: foldChecklistResponse(checklists, cur) };
+        });
       })
       .catch((e) => {
         console.warn('[share] checklist toggle failed:', e);
@@ -993,7 +1017,11 @@ export function CrisisShareView({ token }: { token: string }) {
         ) : drawLayers.some((l) => l.visible && l.positions.length > 0) ? (
           <div>
             <h2 className="mb-3 text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Incident Map</h2>
-            <CrisisShareMap layers={drawnLayers} />
+            <Suspense
+              fallback={<div className="h-[420px] w-full overflow-hidden rounded-lg border border-white/8" style={{ background: '#05070a' }} />}
+            >
+              <CrisisShareMap layers={drawnLayers} />
+            </Suspense>
           </div>
         ) : null}
 

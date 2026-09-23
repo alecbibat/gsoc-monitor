@@ -35,7 +35,7 @@ function parseCoordValue(seg: string): { val: number; dir: string } | null {
 
   // DMS: 37° 46' 29.5" N  or  37°46'29.5"N
   const dms = s.match(
-    /^(\d+)\s*°\s*(\d+)\s*['']\s*(\d+(?:\.\d+)?)\s*[""]?\s*([NSEWnsew]?)$/
+    /^(\d+)\s*°\s*(\d+)\s*['\u2032\u2019]\s*(\d+(?:\.\d+)?)\s*["\u2033\u201D]?\s*([NSEWnsew]?)$/
   );
   if (dms) {
     const val = dmsToDecimal(parseFloat(dms[1]), parseFloat(dms[2]), parseFloat(dms[3]));
@@ -43,7 +43,7 @@ function parseCoordValue(seg: string): { val: number; dir: string } | null {
   }
 
   // DMS without seconds: 37° 46' N
-  const dm = s.match(/^(\d+)\s*°\s*(\d+(?:\.\d+)?)\s*['']\s*([NSEWnsew]?)$/);
+  const dm = s.match(/^(\d+)\s*°\s*(\d+(?:\.\d+)?)\s*['\u2032\u2019]\s*([NSEWnsew]?)$/);
   if (dm) {
     const val = dmsToDecimal(parseFloat(dm[1]), parseFloat(dm[2]), 0);
     return { val, dir: dm[3].toUpperCase() };

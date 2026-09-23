@@ -25,6 +25,9 @@ interface FuelZoneState {
   busy: boolean;
   error: string | null;
   seq: number; // increments per completed analysis → unique panel ids
+  // Bumped on every toggle/exit/reset; ties an in-flight analysis to the
+  // drawing session that started it.
+  session: number;
 
   toggle: (mode?: ZoneMode) => void;
   exit: () => void;
@@ -59,27 +62,28 @@ export const useFuelZoneStore = create<FuelZoneState>((set, get) => ({
   ...CLEARED,
   pendingFinish: 0,
   seq: 0,
+  session: 0,
 
   toggle: (mode = 'circle') => {
     const st = get();
     if (st.active && st.mode === mode) {
       // Same mode toggled off.
-      set({ active: false, ...CLEARED });
+      set((s) => ({ active: false, ...CLEARED, session: s.session + 1 }));
     } else {
       // Only one cursor-owning tool at a time — stand the measure tool down.
       // Activating, or switching mode while active, starts from a clean slate.
       useMeasureStore.getState().exit();
-      set({ active: true, mode, ...CLEARED });
+      set((s) => ({ active: true, mode, ...CLEARED, session: s.session + 1 }));
     }
   },
-  exit: () => set({ active: false, ...CLEARED }),
+  exit: () => set((s) => ({ active: false, ...CLEARED, session: s.session + 1 })),
   begin: (center) => set({ center, hasCenter: true, radiusM: 0, error: null }),
   setRadius: (radiusM) => set({ radiusM }),
   addVertex: (p) => set((s) => ({ vertices: [...s.vertices, p], error: null })),
   undoVertex: () => set((s) => ({ vertices: s.vertices.slice(0, -1) })),
   setCursor: (cursor) => set({ cursor }),
   requestFinish: () => set((s) => ({ pendingFinish: s.pendingFinish + 1 })),
-  reset: () => set({ ...CLEARED }),
+  reset: () => set((s) => ({ ...CLEARED, session: s.session + 1 })),
   setBusy: (busy) => set({ busy }),
   setError: (error) => set({ error, busy: false }),
   bumpSeq: () => set((s) => ({ seq: s.seq + 1 })),

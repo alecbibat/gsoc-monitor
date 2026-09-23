@@ -1,8 +1,9 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { lazyWithReload } from '../lib/lazyWithReload';
 
 // Popover body (and the provenance catalogue it imports) loads only when the
 // info button is first clicked.
-const InfoPanelPopover = lazy(() =>
+const InfoPanelPopover = lazyWithReload(() =>
   import('./InfoPanelPopover').then((m) => ({ default: m.InfoPanelPopover }))
 );
 

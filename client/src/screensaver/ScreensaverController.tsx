@@ -204,6 +204,9 @@ export function ScreensaverController() {
         duration: 4.5,
         complete: () => {
           if (cancelledRef.current) return;
+          // Static dwell (the rotation only runs while 'rotating'): render on demand.
+          v.scene.requestRenderMode = prevRequestRender;
+          v.scene.requestRender();
           updatePhase('at-poi');
           dwellTimerRef.current = setTimeout(leavePoiAndReturn, rand(POI_DWELL_MIN_MS, POI_DWELL_MAX_MS));
         },
@@ -212,6 +215,7 @@ export function ScreensaverController() {
 
     function leavePoiAndReturn() {
       if (cancelledRef.current) return;
+      v.scene.requestRenderMode = false; // fly-back + rotation need every frame
       updatePhase('flying-back');
       setCurrentPoi(null);
 

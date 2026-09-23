@@ -3,46 +3,20 @@ import type { WidgetId } from '../types';
 import { NewsWidget } from './news/NewsWidget';
 import { ProximityWidget } from './proximity/ProximityWidget';
 import { IntelWidget } from './intel/IntelWidget';
+import { WIDGET_META, type WidgetMeta } from './widgetMeta';
 
-export interface WidgetDef {
-  id: WidgetId;
-  title: string;
-  subtitle?: string;
-  label: string; // launcher button text
-  glyph: string; // small icon for the launcher button
-  accentClass: string;
+export interface WidgetDef extends WidgetMeta {
   render: () => ReactNode;
 }
 
-export const WIDGETS: WidgetDef[] = [
-  {
-    id: 'proximity',
-    title: 'Property Watch',
-    subtitle: 'Hazards near your locations',
-    label: 'Watch',
-    glyph: '🛡',
-    accentClass: 'border-accent-ok/40',
-    render: () => <ProximityWidget />,
-  },
-  {
-    id: 'news-feed',
-    title: 'Breaking News',
-    subtitle: 'GDELT · live feed',
-    label: 'News',
-    glyph: '📡',
-    accentClass: 'border-sky-500/40',
-    render: () => <NewsWidget />,
-  },
-  {
-    id: 'intel-feed',
-    title: 'Intel Feed',
-    subtitle: 'Scanner · crime · news · social',
-    label: 'Intel',
-    glyph: '🛰',
-    accentClass: 'border-cyan-500/40',
-    render: () => <IntelWidget />,
-  },
-];
+// Keyed by WidgetId so a new id without a renderer fails the typecheck.
+const RENDER: Record<WidgetId, () => ReactNode> = {
+  proximity: () => <ProximityWidget />,
+  'news-feed': () => <NewsWidget />,
+  'intel-feed': () => <IntelWidget />,
+};
+
+export const WIDGETS: WidgetDef[] = WIDGET_META.map((m) => ({ ...m, render: RENDER[m.id] }));
 
 export const WIDGET_BY_ID: Record<string, WidgetDef> = Object.fromEntries(
   WIDGETS.map((w) => [w.id, w])

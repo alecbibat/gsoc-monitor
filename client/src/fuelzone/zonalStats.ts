@@ -350,30 +350,32 @@ function emptyResult(meta: ZoneMeta): FuelZoneResult {
 }
 
 // Circle convenience wrapper: build the geodesic ring, then analyze it.
-export async function analyzeFuelZone(center: LngLat, radiusM: number): Promise<FuelZoneResult> {
+export async function analyzeFuelZone(center: LngLat, radiusM: number, timeoutMs?: number): Promise<FuelZoneResult> {
   return analyzeRing(circleRing(center, radiusM), {
     shape: 'circle',
     center,
     radiusM,
     vertexCount: 0,
-  });
+  }, timeoutMs);
 }
 
 // Polygon variant: analyze an arbitrary user-drawn boundary (≥3 vertices).
-export async function analyzeFuelPolygon(vertices: LngLat[]): Promise<FuelZoneResult> {
+export async function analyzeFuelPolygon(vertices: LngLat[], timeoutMs?: number): Promise<FuelZoneResult> {
   return analyzeRing(polygonRing(vertices), {
     shape: 'polygon',
     center: polygonCentroid(vertices),
     radiusM: 0,
     vertexCount: vertices.length,
-  });
+  }, timeoutMs);
 }
 
 // Run the zonal histogram for any closed ring ([lon,lat] pairs, wound clockwise)
 // and return the FBFM40 fuel-type breakdown. Talks to the LANDFIRE ImageServer
 // directly (open CORS); a POST with a form-encoded body is a "simple" CORS
-// request, so there's no preflight.
-async function analyzeRing(ring: number[][], meta: ZoneMeta): Promise<FuelZoneResult> {
+// request, so there's no preflight. `timeoutMs` (optional; the interactive
+// tool passes none) bounds the request + body read so a stalled upstream
+// rejects instead of hanging the caller.
+async function analyzeRing(ring: number[][], meta: ZoneMeta, timeoutMs?: number): Promise<FuelZoneResult> {
   const geometry = {
     rings: [ring],
     spatialReference: { wkid: 4326 },
@@ -384,15 +386,22 @@ async function analyzeRing(ring: number[][], meta: ZoneMeta): Promise<FuelZoneRe
   body.set('geometryType', 'esriGeometryPolygon');
   body.set('f', 'json');
 
-  const res = await fetch(`${LANDFIRE_FBFM40_IMAGESERVER}/computeHistograms`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body.toString(),
-  });
-  if (!res.ok) {
-    throw new Error(`LANDFIRE request failed (${res.status})`);
+  let data: any;
+  try {
+    const res = await fetch(`${LANDFIRE_FBFM40_IMAGESERVER}/computeHistograms`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
+    });
+    if (!res.ok) {
+      throw new Error(`LANDFIRE request failed (${res.status})`);
+    }
+    data = await res.json();
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'TimeoutError') throw new Error('LANDFIRE request timed out');
+    throw e;
   }
-  const data = await res.json();
   if (data?.error) {
     throw new Error(data.error.message || 'LANDFIRE returned an error');
   }

@@ -97,15 +97,19 @@ export function ssoErrorMessage(code: string | null): string | null {
   return SSO_ERRORS[code] ?? 'Single sign-on did not complete. Please try again.';
 }
 
+/** Message for an `?sso_error=` left behind by a failed callback. Pure: safe as a useState initializer (StrictMode double-invokes it in dev). */
+export function readSsoError(): string | null {
+  return ssoErrorMessage(new URLSearchParams(window.location.search).get('sso_error'));
+}
+
 /**
- * Read (and clear) an `?sso_error=` left behind by a failed callback, so the
- * message shows once and does not survive a refresh or reach a share link's
- * own query handling.
+ * Strip `?sso_error=` from the URL so the message shows once and does not
+ * survive a refresh or reach a share link's own query handling. Call from a
+ * mount effect, not during render.
  */
-export function consumeSsoError(): string | null {
+export function clearSsoErrorParam(): void {
   const params = new URLSearchParams(window.location.search);
-  const code = params.get('sso_error');
-  if (!code) return null;
+  if (!params.get('sso_error')) return;
   params.delete('sso_error');
   const qs = params.toString();
   window.history.replaceState(
@@ -113,5 +117,4 @@ export function consumeSsoError(): string | null {
     '',
     `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`
   );
-  return ssoErrorMessage(code);
 }
