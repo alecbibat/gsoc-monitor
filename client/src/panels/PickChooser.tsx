@@ -39,11 +39,15 @@ export function PickChooser({ bounds }: { bounds?: { width: number; height: numb
 
   useEffect(() => {
     if (!open) return;
+    // Document capture + stopPropagation (same as the crisis modals): one Esc
+    // dismisses only the chooser, not the crisis workspace docked around it.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') hide();
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      hide();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
   }, [open, hide]);
 
   if (!open) return null;

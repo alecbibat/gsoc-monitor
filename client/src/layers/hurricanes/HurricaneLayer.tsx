@@ -439,6 +439,14 @@ export function HurricaneLayer() {
       id == null
         ? Promise.resolve([])
         : queryGeo(`${SERVICE}/${id}/query?where=1%3D1&outFields=*&outSR=4326&returnGeometry=true&f=geojson`);
+    // Cones and tracks only decorate the storms, so one failing on its own drops
+    // just that sublayer (as before) instead of every storm. The position layers
+    // stay strict: they are the storms.
+    const querySoftLayer = (id: number | undefined): Promise<GeoJSON.Feature[]> =>
+      queryLayer(id).catch((err) => {
+        console.warn('NHC sublayer query failed', id, err);
+        return [];
+      });
     // Last successful GTWO result per sublayer: a transient GTWO failure keeps the
     // previous areas instead of blanking them, and never blocks the NHC feed.
     const lastGtwo = new Map<number, GeoJSON.Feature[]>();
@@ -485,9 +493,9 @@ export function HurricaneLayer() {
       let disturbances: GeoJSON.Feature[];
       try {
         [cones, obsTracks, fcstTracks, obsPts, fcstPts, disturbances] = await Promise.all([
-          queryLayer(coneId),
-          queryLayer(obsTrackId),
-          queryLayer(fcstTrackId),
+          querySoftLayer(coneId),
+          querySoftLayer(obsTrackId),
+          querySoftLayer(fcstTrackId),
           queryLayer(obsPtId),
           queryLayer(fcstPtId),
           getGtwoRegionLayerIds().then((ids) =>

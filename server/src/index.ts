@@ -259,12 +259,33 @@ function main() {
     });
   });
   app.use(serveClient);
+  // Tabs loaded before Cesium moved to cesium-<version>/ still resolve Cesium's
+  // base URL to /cesium/ for workers, wasm and assets they haven't fetched yet.
+  // Serve them from the current folder (same pinned files) with the old 1h cache.
+  let cesiumDir: string | undefined;
+  try {
+    cesiumDir = fs.readdirSync(clientDist).find((d) => /^cesium-\d/.test(d));
+  } catch {
+    /* no client build (dev) */
+  }
+  if (cesiumDir) {
+    app.use(
+      '/cesium',
+      express.static(path.join(clientDist, cesiumDir), {
+        setHeaders: (res) => res.setHeader('Cache-Control', 'public, max-age=3600'),
+      })
+    );
+  }
   app.get('*', (req, res) => {
     // A missing hashed chunk (stale tab requesting assets from a previous
     // deploy) must 404, not serve index.html — a 200 text/html response to a
     // module import makes React.lazy throw and blank the whole page. Same for a
     // Cesium worker/asset from a previous Cesium version's folder.
-    if (req.path.startsWith('/assets/') || req.path.startsWith('/cesium-')) {
+    if (
+      req.path.startsWith('/assets/') ||
+      req.path.startsWith('/cesium-') ||
+      req.path.startsWith('/cesium/')
+    ) {
       res.status(404).type('text/plain').send('Not found');
       return;
     }

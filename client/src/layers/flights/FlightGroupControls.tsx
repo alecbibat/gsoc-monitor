@@ -1,5 +1,6 @@
-import { lazy, Suspense } from 'react';
+import { useEffect, useState } from 'react';
 import { useLayersStore } from '../../store/layersStore';
+import { useFlightsStatus } from './flightsStore';
 import type { FlightGroupId } from '../../types';
 
 const GROUP_LABELS: Array<{ id: FlightGroupId; label: string }> = [
@@ -10,12 +11,32 @@ const GROUP_LABELS: Array<{ id: FlightGroupId; label: string }> = [
 
 // City table (~42 KB gzip) stays out of the entry chunk; see FlightActivity.
 export const loadFlightActivity = () => import('./FlightActivity');
-// A stale tab across a deploy gets a 404 for the old chunk hash. Render
-// nothing rather than let the rejection unmount the whole app (the main app
-// has no error boundary).
-const FlightActivity = lazy(() =>
-  loadFlightActivity().catch(() => ({ default: () => null }))
-);
+type FlightActivityComponent = typeof import('./FlightActivity').default;
+// Kept once loaded so a remount renders it straight away, as React.lazy did.
+let loadedFlightActivity: FlightActivityComponent | null = null;
+
+// Loads the feed on demand. A failed import (a stale tab across a deploy gets a
+// 404 for the old chunk hash, or a network blip) renders nothing rather than
+// unmounting the whole app (the main app has no error boundary), and is retried
+// on the next flight poll instead of being remembered for the session the way
+// React.lazy would.
+function FlightActivitySlot({ groups }: { groups: Record<FlightGroupId, boolean> }) {
+  const [Comp, setComp] = useState<FlightActivityComponent | null>(() => loadedFlightActivity);
+  const events = useFlightsStatus((s) => s.events);
+  useEffect(() => {
+    if (Comp) return;
+    let alive = true;
+    loadFlightActivity().then(
+      (m) => {
+        loadedFlightActivity = m.default;
+        if (alive) setComp(() => m.default);
+      },
+      () => {}
+    );
+    return () => { alive = false; };
+  }, [Comp, events]);
+  return Comp ? <Comp groups={groups} /> : null;
+}
 
 /**
  * Sub-controls under the Flights toggle: one checkbox per tracked roster, and
@@ -39,9 +60,7 @@ export function FlightGroupControls() {
           {label}
         </label>
       ))}
-      <Suspense fallback={null}>
-        <FlightActivity groups={groups} />
-      </Suspense>
+      <FlightActivitySlot groups={groups} />
     </div>
   );
 }
