@@ -279,6 +279,8 @@ export function IncidentSync() {
     let retryMs = 5_000;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     let resyncCtrl: AbortController | null = null;
+    let resyncRetry: ReturnType<typeof setTimeout> | undefined;
+    let resyncDelay = 5_000;
 
     const applyUpsert = (inc: Incident) => {
       // Don't stomp a blob edit we're still saving locally — our write wins,
@@ -336,6 +338,7 @@ export function IncidentSync() {
     // already have: touched by an SSE event or local write during the GET,
     // or with a blob write in flight when it started.
     const resync = () => {
+      clearTimeout(resyncRetry); // a new resync supersedes a scheduled retry
       resyncCtrl?.abort();
       const ctrl = new AbortController();
       resyncCtrl = ctrl;
@@ -350,7 +353,9 @@ export function IncidentSync() {
           return r.json() as Promise<Incident[]>;
         })
         .then((incidents) => {
-          if (ctrl.signal.aborted || disposed || !Array.isArray(incidents)) return;
+          if (ctrl.signal.aborted || disposed) return;
+          if (!Array.isArray(incidents)) throw new Error('unexpected body');
+          resyncDelay = 5_000;
           // A local incident with no baseline holds an edit whose push failed
           // (rolled back); the watcher re-pushes it on the next change, so the
           // snapshot must not revert it.
@@ -375,7 +380,18 @@ export function IncidentSync() {
             if (!seen.has(id) && !skip(id)) applyDelete(id);
           }
         })
-        .catch((e) => { if (!ctrl.signal.aborted) console.warn('[incident-sync] resync failed:', e); })
+        .catch((e) => {
+          if (ctrl.signal.aborted || disposed) return;
+          console.warn('[incident-sync] resync failed:', e);
+          // The stream can be back while the list GET still fails (database
+          // still recovering); retry with backoff so the missed changes land
+          // without waiting for the next disconnect. If the stream drops again,
+          // its next 'connected' resyncs anyway.
+          resyncRetry = setTimeout(() => {
+            if (!disposed && es?.readyState === EventSource.OPEN) resync();
+          }, resyncDelay);
+          resyncDelay = Math.min(resyncDelay * 2, 60_000);
+        })
         .finally(() => {
           if (resyncTouched === touched) resyncTouched = null;
           if (resyncCtrl === ctrl) resyncCtrl = null;
@@ -390,6 +406,7 @@ export function IncidentSync() {
       es = src;
       src.addEventListener('connected', () => {
         retryMs = 5_000;
+        resyncDelay = 5_000;
         // The initial load covers the very first connection; every later one
         // (browser auto-reconnect, or a reopened stream) may have missed events.
         if (initial && !seenConnect) { seenConnect = true; return; }
@@ -428,6 +445,7 @@ export function IncidentSync() {
     return () => {
       disposed = true;
       clearTimeout(retryTimer);
+      clearTimeout(resyncRetry);
       resyncCtrl?.abort();
       es?.close();
     };

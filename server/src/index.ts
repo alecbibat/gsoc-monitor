@@ -259,9 +259,12 @@ function main() {
     });
   });
   app.use(serveClient);
-  // Tabs loaded before Cesium moved to cesium-<version>/ still resolve Cesium's
-  // base URL to /cesium/ for workers, wasm and assets they haven't fetched yet.
-  // Serve them from the current folder (same pinned files) with the old 1h cache.
+  // Long-open tabs keep the Cesium base URL they booted with and fetch workers,
+  // wasm and assets lazily, the first time they need them: /cesium/ for tabs
+  // opened before Cesium moved to cesium-<version>/, and /cesium-<old>/ for tabs
+  // opened before a Cesium upgrade. Serve both from the current folder with the
+  // old 1h cache, as the unversioned /cesium/ path always did. Requests for the
+  // current version were already answered by serveClient above.
   let cesiumDir: string | undefined;
   try {
     cesiumDir = fs.readdirSync(clientDist).find((d) => /^cesium-\d/.test(d));
@@ -269,12 +272,11 @@ function main() {
     /* no client build (dev) */
   }
   if (cesiumDir) {
-    app.use(
-      '/cesium',
-      express.static(path.join(clientDist, cesiumDir), {
-        setHeaders: (res) => res.setHeader('Cache-Control', 'public, max-age=3600'),
-      })
-    );
+    const staleCesium = express.static(path.join(clientDist, cesiumDir), {
+      setHeaders: (res) => res.setHeader('Cache-Control', 'public, max-age=3600'),
+    });
+    app.use('/cesium', staleCesium);
+    app.use(/^\/cesium-\d[^/]*/, staleCesium);
   }
   app.get('*', (req, res) => {
     // A missing hashed chunk (stale tab requesting assets from a previous

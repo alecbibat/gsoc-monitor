@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import { cache } from '../cache';
-import { readAuthUser } from '../middleware/auth';
 
 const router = Router();
 
@@ -211,18 +210,32 @@ async function readCapped(r: Response, maxBytes: number): Promise<string> {
   return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
-// maxBytes is passed only for custom feeds: it caps the body and re-checks the
-// final URL after redirects. The built-in FEEDS keep the plain r.text() path.
+const MAX_FEED_REDIRECTS = 5;
+
+// maxBytes is passed only for custom feeds: it caps the body and follows
+// redirects by hand so every hop is checked before it is requested (a public
+// feed URL must not be able to bounce the server onto a private host). The
+// built-in FEEDS keep the plain fetch + r.text() path.
 async function fetchFeed(url: string, source: string, maxBytes?: number): Promise<NewsItem[]> {
-  const r = await fetch(url, {
-    signal: AbortSignal.timeout(8_000),
-    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; gsoc-monitor/1.0)' },
-  });
-  if (!r.ok) throw new Error(`${source} HTTP ${r.status}`);
-  if (maxBytes !== undefined && r.url && !isAllowedFeedUrl(r.url)) {
-    await r.body?.cancel();
-    throw new Error(`${source} redirected to a disallowed host`);
+  const signal = AbortSignal.timeout(8_000);
+  const headers = { 'User-Agent': 'Mozilla/5.0 (compatible; gsoc-monitor/1.0)' };
+  let r: Response;
+  if (maxBytes === undefined) {
+    r = await fetch(url, { signal, headers });
+  } else {
+    let target = url;
+    for (let hop = 0; ; hop++) {
+      r = await fetch(target, { signal, headers, redirect: 'manual' });
+      const location = r.status >= 300 && r.status < 400 ? r.headers.get('location') : null;
+      if (!location) break;
+      await r.body?.cancel();
+      const next = new URL(location, target).toString();
+      if (hop >= MAX_FEED_REDIRECTS) throw new Error(`${source} too many redirects`);
+      if (!isAllowedFeedUrl(next)) throw new Error(`${source} redirected to a disallowed host`);
+      target = next;
+    }
   }
+  if (!r.ok) throw new Error(`${source} HTTP ${r.status}`);
   const xml = maxBytes !== undefined ? await readCapped(r, maxBytes) : await r.text();
 
   const items: NewsItem[] = [];
@@ -308,11 +321,12 @@ async function getBase(): Promise<NewsResult & { stale?: boolean }> {
 
 router.get('/', async (req, res) => {
   // Parse user-supplied extra RSS feeds from ?extra=<url-encoded-json>.
-  // Custom feeds make the server fetch caller-chosen URLs. Only the signed-in
-  // dashboard sends them (NewsWidget/NewsTicker live behind AuthGate), so
-  // anonymous callers get the standard feed set.
+  // Custom feeds make the server fetch caller-chosen URLs, so each one must be a
+  // public http(s) URL and the count and size are capped. No session check: a
+  // wall display left signed in past the 30-day cookie would otherwise lose its
+  // custom sources silently while every other feed kept updating.
   const extraFeeds: Array<{ url: string; source: string }> = [];
-  if (typeof req.query.extra === 'string' && readAuthUser(req)) {
+  if (typeof req.query.extra === 'string') {
     try {
       const parsed: unknown = JSON.parse(req.query.extra);
       if (Array.isArray(parsed)) {
