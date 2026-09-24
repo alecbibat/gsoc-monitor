@@ -51,7 +51,11 @@ async function advanceUntil(until: () => boolean, maxMs = 10_000): Promise<void>
 }
 
 beforeEach(() => {
-  vi.useFakeTimers();
+  // setImmediate stays real: sliced scans (scan.ts) time their slices with the
+  // real perf_hooks clock and yield through setImmediate, so on a loaded
+  // machine a /near scan yields mid-way — with a faked setImmediate that yield
+  // would never fire under a bare `await`, and the test would hang.
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
   vi.setSystemTime(T0);
 });
 afterEach(() => {

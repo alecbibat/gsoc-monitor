@@ -235,9 +235,11 @@ describe('restore', () => {
     const c = mkStore('C');
     const waits: number[] = [];
     let pageCalls = 0;
+    const statesAtQuery: string[] = [];
     db.failWhen = (sql) => {
       if (!sql.startsWith('SELECT id, writer')) return null;
       pageCalls++;
+      statesAtQuery.push(p.restoreStatus().state);
       // Page 1 works, then the database drops out for 4 attempts.
       return pageCalls >= 2 && pageCalls <= 5 ? { err: new Error(`outage ${pageCalls}`) } : null;
     };
@@ -256,6 +258,9 @@ describe('restore', () => {
     });
     await p.restore();
     expect(waits).toEqual([3_000, 6_000, 12_000, 24_000]);
+    // A retried query runs as 'retrying' until one succeeds — no flip back to
+    // 'loading' before each attempt (the status line would flicker).
+    expect(statesAtQuery.slice(0, 6)).toEqual(['loading', 'loading', 'retrying', 'retrying', 'retrying', 'retrying']);
     const rs = p.restoreStatus();
     expect(rs).toMatchObject({ state: 'done', attempts: 5, lastError: null, strikes: 20_000 });
     // Resumed from the cursor: page 2's query was retried with the same cursor, nothing loaded twice.

@@ -564,6 +564,7 @@ export class Persistence {
             ])
           );
           phase = 'blocks';
+          this.rs.state = 'loading';
         }
 
         while (phase === 'blocks') {
@@ -588,6 +589,7 @@ export class Persistence {
           cache.passed(cursor.tLast);
           this.rs.backToMs = Math.max(cutoff, Math.min(this.rs.backToMs ?? Infinity, cursor.tLast));
           this.updateProgress();
+          this.rs.state = 'loading';
           retry = 0;
         }
 
@@ -620,6 +622,7 @@ export class Persistence {
           legacyCursor = { start: Number(last.chunk_start), id: Number(last.id) };
           this.rs.backToMs = Math.max(cutoff, Math.min(this.rs.backToMs ?? Infinity, legacyCursor.start));
           this.updateProgress();
+          this.rs.state = 'loading';
           retry = 0;
         }
 
@@ -640,8 +643,10 @@ export class Persistence {
         const wait = Math.min(60_000, 3_000 * 2 ** retry);
         retry++;
         this.log(`[lightning] restore attempt ${this.rs.attempts} failed (${this.rs.lastError}); retrying in ${wait / 1000} s`);
+        // Stay 'retrying' through the next attempt: flipping back to 'loading'
+        // before it succeeds made every status poll during a database outage
+        // alternate between "unavailable" and "loading 0%".
         await this.sleep(wait);
-        if (!this.stopped) this.rs.state = 'loading';
       }
     }
   }

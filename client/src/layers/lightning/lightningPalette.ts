@@ -41,10 +41,11 @@ export const STAGE_ENDS_S: readonly number[] = LIGHTNING_STAGES.map((s) => s.end
 export const STRIKE_LIFETIME_S = 86_400;
 
 /**
- * How long every individual live strike is kept as its own X — exactly the
- * white stage. After that only the server's stable sample of it remains, so
- * the thinning coincides with the white → yellow colour step and reads as
- * ageing rather than loss.
+ * How long an individual live strike is kept as its own X — exactly the white
+ * stage. After that only the server's stable sample of it remains, so the
+ * thinning coincides with the white → yellow colour step and reads as ageing
+ * rather than loss. (In a busy whole-globe view the live pool's caps can
+ * retire the oldest white Xs sooner; LEGEND_NOTE says "up to 2 min".)
  */
 export const LIVE_HOLD_S = LIGHTNING_STAGES[0].endS;
 
