@@ -9,7 +9,7 @@ import type { PanelData } from './panelStore';
 export function PanelHost({ panel }: { panel: PanelData }) {
   return (
     <Panel panel={panel} accentClass={panelAccent(panel.kind)}>
-      <PanelErrorBoundary>
+      <PanelErrorBoundary resetKey={panel.payload}>
         <PanelContent panel={panel} />
       </PanelErrorBoundary>
     </Panel>

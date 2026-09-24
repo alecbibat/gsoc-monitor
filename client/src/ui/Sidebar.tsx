@@ -1,8 +1,8 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useLayersStore } from '../store/layersStore';
 import { useFlightsStatus } from '../layers/flights/flightsStore';
-import { FlightGroupControls } from '../layers/flights/FlightGroupControls';
+import { FlightGroupControls, loadFlightActivity } from '../layers/flights/FlightGroupControls';
 import { useAlertsStatus } from '../layers/alerts/alertsStore';
 import { useEarthquakesStatus } from '../layers/earthquakes/earthquakesStore';
 import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
@@ -216,6 +216,20 @@ export function Sidebar() {
   const setSidebarOpen = useUiStore((s) => s.setSidebarOpen);
   const viewer = useCesiumViewer();
   const locationsActive = (active as Record<string, boolean>).locations ?? true;
+
+  // Prefetch the lazy flight-activity chunk at idle, while this deploy's chunk
+  // hashes are still current, so the feed is ready before Flights is toggled
+  // on (or a collapsed Tracking section is expanded).
+  useEffect(() => {
+    const run = () => { void loadFlightActivity().catch(() => {}); };
+    // Safari has no requestIdleCallback; fall back to a short timer there.
+    if (typeof window.requestIdleCallback === 'function') {
+      const id = window.requestIdleCallback(run, { timeout: 5000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const t = window.setTimeout(run, 2000);
+    return () => window.clearTimeout(t);
+  }, []);
 
   function shipsStatusText() {
     if (shipsStatus.noKey) return 'No AISSTREAM_API_KEY set in this environment';

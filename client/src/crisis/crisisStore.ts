@@ -450,9 +450,9 @@ interface CrisisState {
   // Active-incident field updates
   update: (patch: Partial<CrisisFields>) => void;
   setShareToken: (token: string | null) => void;
-  addShareLink: (token: string, url: string, password?: string, label?: string, expiresAt?: string) => void;
-  deactivateShareLink: (token: string) => void;
-  renewShareLink: (token: string, expiresAt: string) => void;
+  addShareLink: (token: string, url: string, password?: string, label?: string, expiresAt?: string, incidentId?: string) => void;
+  deactivateShareLink: (token: string, incidentId?: string) => void;
+  renewShareLink: (token: string, expiresAt: string, incidentId?: string) => void;
 
   // Roles
   addRole: (role: Omit<IcsRole, 'id' | 'builtin'>) => void;
@@ -471,7 +471,11 @@ interface CrisisState {
 
   // Action log
   addActionEntry: (type?: ActionEntryType) => string;
-  updateActionEntry: (id: string, patch: Partial<Pick<ActionLogEntry, 'description' | 'attachmentName' | 'attachmentData' | 'entryType'>>) => void;
+  updateActionEntry: (
+    id: string,
+    patch: Partial<Pick<ActionLogEntry, 'description' | 'attachmentName' | 'attachmentData' | 'entryType'>>,
+    incidentId?: string,
+  ) => void;
   removeActionEntry: (id: string) => void;
 
   // ICS checklists — optimistic local toggle (the sync layer posts it through
@@ -550,6 +554,14 @@ function patchActiveEditable(s: CrisisState, fn: (inc: Incident) => Incident): P
 // (the AAR) that by definition happens on frozen records.
 function patchById(s: CrisisState, id: string, fn: (inc: Incident) => Incident): Partial<CrisisState> {
   return { incidents: s.incidents.map((i) => (i.id === id ? fn(i) : i)) };
+}
+
+// Patch a named incident when given (async completions must land on the
+// incident they were issued for, not whichever is open now), else the active one.
+function patchTarget(s: CrisisState, incidentId: string | undefined, fn: (inc: Incident) => Incident): Partial<CrisisState> {
+  if (incidentId === undefined) return patchActive(s, fn);
+  if (!s.incidents.some((i) => i.id === incidentId)) return {};
+  return patchById(s, incidentId, fn);
 }
 
 // Patch whichever incident owns the given layer.
@@ -669,8 +681,8 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
         })),
       setShareToken: (token) => set((s) => patchActive(s, (inc) => ({ ...inc, shareToken: token }))),
 
-      addShareLink: (token, url, password, label, expiresAt) =>
-        set((s) => patchActive(s, (inc) => ({
+      addShareLink: (token, url, password, label, expiresAt, incidentId) =>
+        set((s) => patchTarget(s, incidentId, (inc) => ({
           ...inc,
           shareToken: token,
           shareLinks: [
@@ -687,14 +699,14 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
           ],
         }))),
 
-      renewShareLink: (token, expiresAt) =>
-        set((s) => patchActive(s, (inc) => ({
+      renewShareLink: (token, expiresAt, incidentId) =>
+        set((s) => patchTarget(s, incidentId, (inc) => ({
           ...inc,
           shareLinks: (inc.shareLinks ?? []).map((l) => (l.token === token ? { ...l, expiresAt } : l)),
         }))),
 
-      deactivateShareLink: (token) =>
-        set((s) => patchActive(s, (inc) => {
+      deactivateShareLink: (token, incidentId) =>
+        set((s) => patchTarget(s, incidentId, (inc) => {
           const updated = (inc.shareLinks ?? []).map((l) =>
             l.token === token ? { ...l, active: false } : l
           );
@@ -857,11 +869,20 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
         return id;
       },
 
-      updateActionEntry: (id, patch) =>
-        set((s) => patchActiveEditable(s, (inc) => ({
-          ...inc,
-          actionLog: inc.actionLog.map((e) => (e.id === id ? { ...e, ...patch } : e)),
-        }))),
+      updateActionEntry: (id, patch, incidentId) =>
+        set((s) => {
+          const fn = (inc: Incident): Incident => ({
+            ...inc,
+            actionLog: inc.actionLog.map((e) => (e.id === id ? { ...e, ...patch } : e)),
+          });
+          // No incidentId given: the active incident, as before (every sync UI call site).
+          if (incidentId === undefined) return patchActiveEditable(s, fn);
+          // Async completions (image upload) target their own incident, so they still
+          // land if the operator has navigated away. Archived incidents stay frozen (F3).
+          const target = s.incidents.find((i) => i.id === incidentId);
+          if (!target || target.archivedAt) return {};
+          return patchById(s, incidentId, fn);
+        }),
 
       removeActionEntry: (id) =>
         set((s) => patchActiveEditable(s, (inc) => ({ ...inc, actionLog: inc.actionLog.filter((e) => e.id !== id) }))),

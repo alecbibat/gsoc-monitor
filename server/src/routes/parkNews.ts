@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { createHash } from 'crypto';
 import { cache } from '../cache';
 import { config } from '../config';
 
@@ -85,9 +86,12 @@ function alertSeverity(category: string | undefined): 'alert' | 'urgent' | 'crit
   }
 }
 
-function idFrom(url: string, fallback: string): string {
-  const basis = url || fallback;
-  return Buffer.from(basis).toString('base64').slice(0, 24);
+// Hash the whole basis: a truncated base64 prefix only covers the first 18
+// bytes, which is identical for every www.nps.gov URL, so the id dedup below
+// collapsed nearly every alert and release into one item. Callers pass NPS's
+// own record id first, since distinct alerts can link to the same page.
+function idFrom(basis: string): string {
+  return createHash('sha1').update(basis).digest('base64url').slice(0, 24);
 }
 
 async function npsFetch<T>(path: string): Promise<T> {
@@ -115,7 +119,7 @@ async function fetchAllNewsReleases(): Promise<ParkItem[]> {
     const when = n.releaseDate ? Date.parse(n.releaseDate) : NaN;
     const url = (n.url ?? '').trim();
     items.push({
-      id: idFrom(url, n.id ?? `${park.code}-${n.title}`),
+      id: idFrom(n.id || url || `${park.code}-${n.title ?? ''}`),
       title: n.title ?? 'Park news',
       url: url || `https://www.nps.gov/${park.code}/`,
       source: `${park.name} NP News`,
@@ -143,7 +147,7 @@ async function fetchAllAlerts(): Promise<ParkItem[]> {
     const when = a.lastIndexedDate ? Date.parse(a.lastIndexedDate) : NaN;
     const url = (a.url ?? '').trim();
     items.push({
-      id: idFrom(url, a.id ?? `${a.parkCode}-${a.title}`),
+      id: idFrom(a.id || url || `${a.parkCode}-${a.title ?? ''}`),
       title: a.category ? `${a.category}: ${a.title ?? ''}`.trim() : a.title ?? 'Park alert',
       url: url || `https://www.nps.gov/${park.code}/planyourvisit/conditions.htm`,
       source: `${park.name} NP Alerts`,
@@ -159,14 +163,22 @@ async function fetchAllAlerts(): Promise<ParkItem[]> {
   return items;
 }
 
-const CACHE_KEY = 'park-news:v4';
+const CACHE_KEY = 'park-news:v5';
 const SUCCESS_TTL = 10 * 60_000;
 let lastGood: { items: ParkItem[]; updated: number } | null = null;
+// After both NPS calls fail, serve lastGood for a minute instead of re-hitting
+// an API that is down or already 429ing (DEMO_KEY's quota runs out quickly).
+const FAILURE_COOLDOWN = 60_000;
+let cooldownUntil = 0;
 
 router.get('/', async (_req, res) => {
   const cached = cache.get<{ items: ParkItem[]; updated: number }>(CACHE_KEY);
   if (cached) {
     res.json(cached);
+    return;
+  }
+  if (Date.now() < cooldownUntil && lastGood) {
+    res.json({ ...lastGood, stale: true });
     return;
   }
 
@@ -175,6 +187,20 @@ router.get('/', async (_req, res) => {
       fetchAllAlerts(),
       fetchAllNewsReleases(),
     ]);
+
+    // allSettled never rejects, so the catch below can't see a total outage.
+    // Keep the last good list instead of replacing every client's with [].
+    if (settled.every((r) => r.status === 'rejected')) {
+      for (const r of settled) console.error('[park-news] feed failed:', (r as PromiseRejectedResult).reason);
+      cooldownUntil = Date.now() + FAILURE_COOLDOWN;
+      if (lastGood) {
+        res.json({ ...lastGood, stale: true });
+        return;
+      }
+      // No previous data: keep the cold-failure response (200, empty list).
+      res.json({ items: [], updated: Date.now() });
+      return;
+    }
 
     const all: ParkItem[] = [];
     const seen = new Set<string>();

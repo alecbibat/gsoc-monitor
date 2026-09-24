@@ -90,6 +90,15 @@ interface SmokePayload {
 
 async function fetchSmokeData(): Promise<SmokePayload> {
   const now = new Date();
+  // Bound the whole walk under Heroku's 30 s router limit: three sequential
+  // 10 s attempts against a black-holed host would otherwise trip an H12.
+  const deadline = Date.now() + 25_000;
+  // Set when a day's file could not be fetched (network error, timeout, 5xx),
+  // as opposed to "not posted yet" (404) or "posted but empty".
+  let upstreamFailed = false;
+  const oldest = new Date(now);
+  oldest.setUTCDate(oldest.getUTCDate() - 2);
+  const oldestLabel = `${oldest.getUTCFullYear()}${padTwo(oldest.getUTCMonth() + 1)}${padTwo(oldest.getUTCDate())}`;
   // Try today, yesterday, day-before; HMS often posts late in the day so the
   // previous day's file is the most recent complete product until ~midday ET.
   for (let back = 0; back <= 2; back++) {
@@ -98,12 +107,19 @@ async function fetchSmokeData(): Promise<SmokePayload> {
     const label = `${d.getUTCFullYear()}${padTwo(d.getUTCMonth() + 1)}${padTwo(d.getUTCDate())}`;
     const url = kmlUrl(d);
 
+    const remaining = deadline - Date.now();
+    if (remaining < 2_000) { upstreamFailed = true; break; }
+
     let text: string;
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-      if (!res.ok) continue;
+      const res = await fetch(url, { signal: AbortSignal.timeout(Math.min(10_000, remaining)) });
+      if (!res.ok) {
+        if (res.status !== 404) upstreamFailed = true; // 404 = product not posted yet
+        continue;
+      }
       text = await res.text();
     } catch {
+      upstreamFailed = true;
       continue;
     }
 
@@ -116,6 +132,18 @@ async function fetchSmokeData(): Promise<SmokePayload> {
       updated: Date.now(),
       source: `NOAA HMS ${d.toISOString().slice(0, 10)}`,
     };
+  }
+
+  // Nothing found, but at least one day couldn't be fetched, so the answer is
+  // "unknown", not "no smoke". This fetcher never throws, so getOrFetch's
+  // staleOnError can't step in. Keep serving the previous good product if it
+  // falls inside the same 3-day window this walk searches, rather than
+  // caching an error payload over it (and over lastGood) for the whole TTL.
+  if (upstreamFailed) {
+    const stale = cache.getStale<SmokePayload>('smoke');
+    if (stale && stale.polygons.length > 0 && /^\d{8}$/.test(stale.date) && stale.date >= oldestLabel) {
+      return stale;
+    }
   }
 
   return {

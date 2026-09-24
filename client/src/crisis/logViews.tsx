@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { entryTypeOf, type ActionLogEntry, type DisplayEntryType } from './crisisStore';
 import { ZoomableImage } from './ImageLightbox';
@@ -326,7 +326,10 @@ function EntryDetailModal({ entry, onClose }: { entry: ActionLogEntry; onClose: 
   );
 }
 
-export function TimelineView({ entries }: { entries: ActionLogEntry[] }) {
+// Memoised: ActionLog re-renders on unrelated incident edits, and every card
+// here re-formats its timestamp. The root div is always rendered (empty state
+// inside it) so the ResizeObserver's one node is the one that later fills.
+export const TimelineView = memo(function TimelineView({ entries }: { entries: ActionLogEntry[] }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -340,71 +343,79 @@ export function TimelineView({ entries }: { entries: ActionLogEntry[] }) {
     return () => ro.disconnect();
   }, []);
 
-  const sorted = [...entries].sort(
+  const sorted = useMemo(() => [...entries].sort(
     (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  ), [entries]);
+  const layout = useMemo(
+    () => (width > 0 && sorted.length > 0 ? layoutSnake(sorted, width) : null),
+    [sorted, width]
   );
 
-  if (sorted.length === 0) {
-    return <p className="py-8 text-center text-[11px] text-white/25">No entries yet</p>;
-  }
-
-  const span =
-    new Date(sorted[sorted.length - 1].timestamp).getTime() -
-    new Date(sorted[0].timestamp).getTime();
+  const empty = sorted.length === 0;
+  const span = empty
+    ? 0
+    : new Date(sorted[sorted.length - 1].timestamp).getTime() -
+      new Date(sorted[0].timestamp).getTime();
   const open = openId ? sorted.find((e) => e.id === openId) : undefined;
 
   return (
     <div ref={wrapRef} className="relative">
-      <div className="mb-3 flex items-baseline justify-between text-[9px] text-white/30">
-        <span>
-          {sorted.length} {sorted.length === 1 ? 'entry' : 'entries'}
-          {span > 0 && <> · spanning {humanizeDuration(span)}</>}
-        </span>
-        <span>gap length ∝ time between entries · click a card for details</span>
-      </div>
-
-      {width > 0 && (() => {
-        const { pos, segments, height, cardW } = layoutSnake(sorted, width);
-        return (
-          <div className="relative" style={{ height }}>
-            <svg className="pointer-events-none absolute inset-0" width={width} height={height}>
-              {segments.map((s, i) => (
-                <path
-                  key={i}
-                  d={s.d}
-                  fill="none"
-                  stroke="rgba(255,255,255,0.18)"
-                  strokeWidth={1.5}
-                  strokeDasharray={s.dashed ? '4 4' : undefined}
-                />
-              ))}
-            </svg>
-            {segments.map((s, i) =>
-              s.label ? (
-                <span
-                  key={i}
-                  className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full border border-white/10 bg-ink-950 px-1.5 py-px text-[8px] text-white/45"
-                  style={{ left: s.label.x, top: s.label.y }}
-                >
-                  {s.label.text}
-                </span>
-              ) : null
-            )}
-            {sorted.map((entry, i) => (
-              <SnakeCard
-                key={entry.id}
-                entry={entry}
-                x={pos[i].x}
-                y={pos[i].row * (CARD_H + ROW_GAP)}
-                w={cardW}
-                onOpen={() => setOpenId(entry.id)}
-              />
-            ))}
+      {empty ? (
+        <p className="py-8 text-center text-[11px] text-white/25">No entries yet</p>
+      ) : (
+        <>
+          <div className="mb-3 flex items-baseline justify-between text-[9px] text-white/30">
+            <span>
+              {sorted.length} {sorted.length === 1 ? 'entry' : 'entries'}
+              {span > 0 && <> · spanning {humanizeDuration(span)}</>}
+            </span>
+            <span>gap length ∝ time between entries · click a card for details</span>
           </div>
-        );
-      })()}
+
+          {layout && (() => {
+            const { pos, segments, height, cardW } = layout;
+            return (
+              <div className="relative" style={{ height }}>
+                <svg className="pointer-events-none absolute inset-0" width={width} height={height}>
+                  {segments.map((s, i) => (
+                    <path
+                      key={i}
+                      d={s.d}
+                      fill="none"
+                      stroke="rgba(255,255,255,0.18)"
+                      strokeWidth={1.5}
+                      strokeDasharray={s.dashed ? '4 4' : undefined}
+                    />
+                  ))}
+                </svg>
+                {segments.map((s, i) =>
+                  s.label ? (
+                    <span
+                      key={i}
+                      className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full border border-white/10 bg-ink-950 px-1.5 py-px text-[8px] text-white/45"
+                      style={{ left: s.label.x, top: s.label.y }}
+                    >
+                      {s.label.text}
+                    </span>
+                  ) : null
+                )}
+                {sorted.map((entry, i) => (
+                  <SnakeCard
+                    key={entry.id}
+                    entry={entry}
+                    x={pos[i].x}
+                    y={pos[i].row * (CARD_H + ROW_GAP)}
+                    w={cardW}
+                    onOpen={() => setOpenId(entry.id)}
+                  />
+                ))}
+              </div>
+            );
+          })()}
+        </>
+      )}
 
       {open && <EntryDetailModal entry={open} onClose={() => setOpenId(null)} />}
     </div>
   );
-}
+});

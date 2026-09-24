@@ -17,15 +17,21 @@ export function MobilePanelDeck() {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const prevIdsRef = useRef<string[]>([]);
   const activeIdRef = useRef<string | null>(null);
-  // Set when focus moves programmatically (new panel, dot tap, close) so the
-  // paging effect scrolls — manual swipes never trigger it, avoiding a fight.
-  const pendingScrollRef = useRef(false);
   const rafRef = useRef(0);
   const [activeId, setActiveId] = useState<string | null>(null);
 
   useEffect(() => {
     activeIdRef.current = activeId;
   }, [activeId]);
+
+  // Page programmatically only when focus moves deliberately (new panel, dot
+  // tap, close); manual swipes never call this, so there is no fight with them.
+  // Scrolls straight to the chosen target, so it can't lag a render behind.
+  const pageTo = (idx: number) => {
+    const el = scrollerRef.current;
+    if (!el || idx < 0) return;
+    el.scrollTo({ left: idx * el.clientWidth, behavior: 'smooth' });
+  };
 
   // Focus a newly-opened panel; when the active one closes, fall back to the
   // last remaining panel. Re-snap whenever the open set changes.
@@ -34,10 +40,11 @@ export function MobilePanelDeck() {
     const prev = prevIdsRef.current;
     prevIdsRef.current = ids;
     const added = ids.find((id) => !prev.includes(id));
-    if (added || ids.length !== prev.length) pendingScrollRef.current = true;
-
     const cur = activeIdRef.current;
-    setActiveId(added ?? (cur && ids.includes(cur) ? cur : ids[ids.length - 1] ?? null));
+    const next = added ?? (cur && ids.includes(cur) ? cur : ids[ids.length - 1] ?? null);
+    setActiveId(next);
+    if ((added || ids.length !== prev.length) && next) pageTo(ids.indexOf(next));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panels]);
 
   const activeIndex = Math.max(
@@ -45,23 +52,14 @@ export function MobilePanelDeck() {
     panels.findIndex((p) => p.id === activeId)
   );
 
-  // Page programmatically only when focus moved deliberately.
-  useEffect(() => {
-    if (!pendingScrollRef.current) return;
-    pendingScrollRef.current = false;
-    const el = scrollerRef.current;
-    if (!el) return;
-    el.scrollTo({ left: activeIndex * el.clientWidth, behavior: 'smooth' });
-  }, [activeIndex, panels.length]);
-
   if (panels.length === 0) return null;
 
   const active = panels[activeIndex];
 
   const goTo = (id: string) => {
     if (id === activeIdRef.current) return;
-    pendingScrollRef.current = true;
     setActiveId(id);
+    pageTo(panels.findIndex((p) => p.id === id));
   };
 
   // Track the active page as the user swipes (rAF-throttled). Never scrolls.
@@ -136,7 +134,7 @@ export function MobilePanelDeck() {
             key={panel.id}
             className="hud-scroll h-full w-full shrink-0 snap-start overflow-y-auto px-4 pb-4 text-sm text-white/85"
           >
-            <PanelErrorBoundary>
+            <PanelErrorBoundary resetKey={panel.payload}>
               <PanelContent panel={panel} />
             </PanelErrorBoundary>
           </div>

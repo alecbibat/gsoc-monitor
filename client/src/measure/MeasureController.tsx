@@ -1,7 +1,7 @@
 import * as Cesium from 'cesium';
 import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
-import { useMeasureStore, type LngLat } from './measureStore';
+import { useMeasureStore, canFinish, type LngLat } from './measureStore';
 import { circleRing, radiusM } from './measureMath';
 
 const LINE_COLOR = Cesium.Color.fromCssColorString('#3ddcff');
@@ -15,6 +15,15 @@ function pickLngLat(viewer: Cesium.Viewer, pos: Cesium.Cartesian2): LngLat | nul
   if (!cart) return null;
   const c = Cesium.Cartographic.fromCartesian(cart);
   return { lon: Cesium.Math.toDegrees(c.longitude), lat: Cesium.Math.toDegrees(c.latitude) };
+}
+
+// Non-text <input> types: Backspace/Enter there aren't text editing, so the
+// measure shortcuts keep working when one of these has focus.
+const NON_TEXT_INPUT = new Set(['checkbox', 'radio', 'range', 'button', 'submit', 'reset', 'color', 'file', 'image']);
+function isTextEntry(t: EventTarget | null): boolean {
+  if (!(t instanceof HTMLElement)) return false;
+  if (t.isContentEditable || t.tagName === 'TEXTAREA') return true;
+  return t.tagName === 'INPUT' && !NON_TEXT_INPUT.has((t as HTMLInputElement).type);
 }
 
 export function MeasureController() {
@@ -62,12 +71,14 @@ export function MeasureController() {
     handler.setInputAction(() => {
       const s = store();
       // A circle closes itself on the second click, so a double-click there is
-      // just the same two clicks — leave its geometry alone.
-      if (s.mode === 'radius') return;
+      // just the same two clicks — leave its geometry alone. A finished shape
+      // ignored both clicks, so there is no duplicate vertex to drop.
+      if (s.mode === 'radius' || s.finished) return;
       // Otherwise the two clicks of a double-click already added a duplicate
-      // vertex; drop it, then finish the shape.
+      // vertex; drop it, then finish the shape if it is complete.
       if (s.points.length > 1) s.undo();
-      s.finish();
+      const after = store(); // re-read: `s` is a pre-undo snapshot
+      if (canFinish(after)) after.finish();
       v.scene.requestRender();
     }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
 
@@ -192,8 +203,12 @@ export function MeasureController() {
     const onKey = (e: KeyboardEvent) => {
       const s = useMeasureStore.getState();
       if (e.key === 'Escape') s.exit();
-      else if (e.key === 'Enter') s.finish();
-      else if (e.key === 'Backspace') {
+      // Enter/Backspace belong to the field when the user is typing (search box,
+      // crisis workspace forms) — don't finish/undo or swallow the keystroke.
+      else if (isTextEntry(e.target)) return;
+      else if (e.key === 'Enter') {
+        if (canFinish(s)) s.finish();
+      } else if (e.key === 'Backspace') {
         e.preventDefault();
         s.undo();
       }

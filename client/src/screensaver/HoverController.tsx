@@ -1,5 +1,5 @@
 import * as Cesium from 'cesium';
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useHoverStore } from './hoverStore';
 import { useEarthStatus } from '../layers/earth3d/earthStore';
@@ -63,9 +63,6 @@ export function HoverController() {
   const setPoint = useHoverStore((s) => s.setPoint);
   const ssActive = useScreensaverStore((s) => s.active);
 
-  const cancelledRef = useRef(false);
-  const rafRef = useRef(0);
-
   // Hover and the screensaver both drive the camera — if a screensaver starts,
   // bow out.
   useEffect(() => {
@@ -101,7 +98,10 @@ export function HoverController() {
     if (!viewer || !active || !point) return;
     const v = viewer;
     const { lat, lon } = point;
-    cancelledRef.current = false;
+    // Per-run flags: a previous point's pending terrain sample or fly-in must
+    // not start its orbit after hover is stopped and a new point picked.
+    let cancelled = false;
+    let raf = 0;
 
     const prevRenderMode = v.scene.requestRenderMode;
     const prevMaxChange = v.scene.maximumRenderTimeChange;
@@ -131,7 +131,7 @@ export function HoverController() {
       const sample = tilesReady
         ? await sampleArea(v, lon, lat, ringRadius0)
         : { base: null, max: null };
-      if (cancelledRef.current) return;
+      if (cancelled) return;
 
       let pitch = FAR_PITCH_RAD;
       let range = FAR_RANGE_M;
@@ -162,24 +162,24 @@ export function HoverController() {
         orientation: { heading: 0, pitch, roll: 0 },
         duration: 3.0,
         complete: () => {
-          if (cancelledRef.current) return;
+          if (cancelled) return;
           const orbitStart = performance.now();
           const tick = () => {
-            if (cancelledRef.current) return;
+            if (cancelled) return;
             const heading =
               (((performance.now() - orbitStart) % ORBIT_PERIOD_MS) * Cesium.Math.TWO_PI) /
               ORBIT_PERIOD_MS;
             v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, pitch, range));
-            rafRef.current = requestAnimationFrame(tick);
+            raf = requestAnimationFrame(tick);
           };
-          rafRef.current = requestAnimationFrame(tick);
+          raf = requestAnimationFrame(tick);
         },
       });
     })();
 
     return () => {
-      cancelledRef.current = true;
-      cancelAnimationFrame(rafRef.current);
+      cancelled = true;
+      cancelAnimationFrame(raf);
       v.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
       v.dataSources.remove(ds, true);
       v.scene.requestRenderMode = prevRenderMode;

@@ -312,8 +312,11 @@ async function fetchRiverDetail(lid: string): Promise<RiverDetail> {
   ]);
   if (!dRes.ok) throw new Error(`NWPS detail HTTP ${dRes.status}`);
   const d = (await dRes.json()) as NwpsDetail;
+  // Stageflow is optional. A body that times out, gets truncated or is not JSON
+  // degrades the same way as a failed stageflow request: no series, and the
+  // crest falls back to status.forecast.
   const sf = sRes && sRes.ok
-    ? ((await sRes.json()) as { observed?: NwpsStageFlowSide; forecast?: NwpsStageFlowSide })
+    ? ((await sRes.json().catch(() => null)) as { observed?: NwpsStageFlowSide; forecast?: NwpsStageFlowSide } | null)
     : null;
 
   const obs = d.status?.observed;

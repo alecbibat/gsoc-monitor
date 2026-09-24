@@ -175,9 +175,20 @@ function ringPhase(index: number): number {
  * Some viewers ask for less motion, and a globe of throbbing rings is exactly
  * what that setting is about. Honour it by freezing the rings mid-expansion —
  * the marker keeps its extra presence, it just stops moving.
+ *
+ * One MediaQueryList, created lazily. Its `.matches` is live, so an OS/browser
+ * reduced-motion toggle mid-session is still honoured. This avoids re-parsing
+ * the query (and allocating a new MediaQueryList) on every Cesium clock tick,
+ * because pingScale/pingAlpha run per ring, per frame.
  */
-export const prefersReducedMotion = (): boolean =>
-  typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+let reducedMotionMql: MediaQueryList | null | undefined;
+export const prefersReducedMotion = (): boolean => {
+  if (reducedMotionMql === undefined) {
+    reducedMotionMql =
+      typeof window !== 'undefined' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+  }
+  return reducedMotionMql?.matches ?? false;
+};
 
 const REST_PHASE = 0.45;
 

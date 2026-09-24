@@ -96,10 +96,15 @@ function getServiceLayers(): Promise<ServiceLayer[]> {
         const r = await fetch(`${SERVICE}?f=json`);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const meta = (await r.json()) as { layers?: ServiceLayer[] };
-        return meta.layers?.length ? meta.layers : FALLBACK_LAYERS;
+        if (meta.layers?.length) return meta.layers;
+        // ArcGIS reports errors as HTTP 200 + {error}; don't pin the fallback.
+        serviceLayersPromise = null;
+        return FALLBACK_LAYERS;
       } catch (err) {
-        // Metadata is non-fatal: fall back to documented indices and keep going.
+        // Metadata is non-fatal: fall back to documented indices for this poll,
+        // and clear the memo so the next poll retries discovery.
         console.warn('NHC service metadata unavailable, using fallback layers', err);
+        serviceLayersPromise = null;
         return FALLBACK_LAYERS;
       }
     })();
@@ -221,9 +226,12 @@ function getGtwoRegionLayerIds(): Promise<number[]> {
         const r = await fetch(`${GTWO}?f=json`);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const meta = (await r.json()) as { layers?: ServiceLayer[] };
-        return meta.layers ?? [];
+        if (meta.layers?.length) return meta.layers;
+        gtwoLayersPromise = null; // error body / empty directory: retry next poll
+        return [];
       } catch (err) {
         console.warn('GTWO service metadata unavailable, using fallback layer', err);
+        gtwoLayersPromise = null;
         return [];
       }
     })();
@@ -280,6 +288,9 @@ export function HurricaneLayer() {
     if (!viewer) return;
     const ds = new Cesium.CustomDataSource('hurricanes');
     dsRef.current = ds;
+    // A brand-new (empty) data source: the last-drawn signature described the
+    // previous one, so force the next load() to draw.
+    lastSigRef.current = '';
     viewer.dataSources.add(ds);
     return () => {
       viewer.dataSources.remove(ds, true);
@@ -306,6 +317,45 @@ export function HurricaneLayer() {
     // idles itself the moment the scene is storm-free.
     let spinRaf: number | null = null;
     let lastSpin = 0;
+    // Surface anchors of the drawn storm glyphs. The pump only asks for frames
+    // while at least one glyph could put a pixel on screen.
+    let stormAnchors: Cesium.Cartesian3[] = [];
+    const GLYPH_REACH_PX = 32; // 42px glyph centred on its anchor; rotated corner ≈ 30px
+    const LIMB_SAMPLE_PX = 36; // ≥ GLYPH_REACH_PX / cos(22.5°) for the 8-way limb probe
+    const scratchWin = new Cesium.Cartesian2();
+    const scratchSample = new Cesium.Cartesian2();
+    const scratchNormal = new Cesium.Cartesian3();
+    const scratchToCam = new Cesium.Cartesian3();
+    const scratchPick = new Cesium.Cartesian3();
+    const anyStormVisible = (): boolean => {
+      if (!stormAnchors.length) return false;
+      const scene = viewer.scene;
+      const camera = scene.camera;
+      const ellipsoid = scene.globe.ellipsoid;
+      const w = scene.canvas.clientWidth;
+      const h = scene.canvas.clientHeight;
+      for (const p of stormAnchors) {
+        const win = Cesium.SceneTransforms.worldToWindowCoordinates(scene, p, scratchWin);
+        if (!win) continue; // behind the camera
+        if (
+          win.x < -GLYPH_REACH_PX || win.y < -GLYPH_REACH_PX ||
+          win.x > w + GLYPH_REACH_PX || win.y > h + GLYPH_REACH_PX
+        ) continue; // glyph entirely off-canvas
+        // Near side of the globe (camera above the anchor's tangent plane): drawn.
+        ellipsoid.geodeticSurfaceNormal(p, scratchNormal);
+        Cesium.Cartesian3.subtract(camera.positionWC, p, scratchToCam);
+        if (Cesium.Cartesian3.dot(scratchToCam, scratchNormal) >= 0) return true;
+        // Far side: hidden by the globe except where the glyph pokes past the
+        // limb, so count it if any point on a ring around it misses the globe.
+        for (let i = 0; i < 8; i++) {
+          const a = (i * Math.PI) / 4;
+          scratchSample.x = win.x + LIMB_SAMPLE_PX * Math.cos(a);
+          scratchSample.y = win.y + LIMB_SAMPLE_PX * Math.sin(a);
+          if (!camera.pickEllipsoid(scratchSample, ellipsoid, scratchPick)) return true;
+        }
+      }
+      return false;
+    };
     const spinFrame = () => {
       if (cancelled) {
         spinRaf = null;
@@ -314,7 +364,7 @@ export function HurricaneLayer() {
       const now = performance.now();
       if (now - lastSpin >= SPIN_FRAME_MS) {
         lastSpin = now;
-        viewer.scene.requestRender();
+        if (anyStormVisible()) viewer.scene.requestRender();
       }
       spinRaf = requestAnimationFrame(spinFrame);
     };
@@ -330,6 +380,10 @@ export function HurricaneLayer() {
     // The tooltip itself is an HTML overlay driven by the store, so a Cesium
     // render is only needed when the highlighted dot actually changes.
     let hovered: Cesium.Entity | null = null;
+    // True while `ds` holds at least one forecast-position dot, which is the only
+    // thing the hover pick can match. With none drawn, every pick would end in
+    // hide()/setHovered(null), which are already the state, so we skip the GPU pick.
+    let hasForecastDots = false;
     const setHovered = (e: Cesium.Entity | null) => {
       if (hovered === e) return;
       if (hovered?.point) hovered.point.pixelSize = new Cesium.ConstantProperty(FCST_DOT_SIZE);
@@ -340,6 +394,7 @@ export function HurricaneLayer() {
     let lastPick = 0; // scene.pick is costly — throttle to ~16 picks/s
     const hoverHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
     hoverHandler.setInputAction((movement: Cesium.ScreenSpaceEventHandler.MotionEvent) => {
+      if (!hasForecastDots) return;
       const now = performance.now();
       if (now - lastPick < 60) return;
       lastPick = now;
@@ -370,20 +425,44 @@ export function HurricaneLayer() {
         return needles.every((needle) => n.includes(needle));
       })?.id;
 
+    // Strict: a failed storm-sublayer query must reach load()'s error path and
+    // keep the last good render, not pass for "no storms" and wipe the globe.
+    // ArcGIS reports errors as HTTP 200 + {error}, so check the body too.
     const queryGeo = async (url: string): Promise<GeoJSON.Feature[]> => {
-      try {
-        const r = await fetch(url);
-        if (!r.ok) return [];
-        const j = (await r.json()) as { features?: GeoJSON.Feature[] };
-        return j.features ?? [];
-      } catch {
-        return [];
-      }
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = (await r.json()) as { features?: GeoJSON.Feature[]; error?: { message?: string } };
+      if (j.error) throw new Error(j.error.message ?? 'ArcGIS error');
+      return j.features ?? [];
     };
     const queryLayer = (id: number | undefined): Promise<GeoJSON.Feature[]> =>
       id == null
         ? Promise.resolve([])
         : queryGeo(`${SERVICE}/${id}/query?where=1%3D1&outFields=*&outSR=4326&returnGeometry=true&f=geojson`);
+    // Cones and tracks only decorate the storms, so one failing on its own drops
+    // just that sublayer (as before) instead of every storm. The position layers
+    // stay strict: they are the storms.
+    const querySoftLayer = (id: number | undefined): Promise<GeoJSON.Feature[]> =>
+      queryLayer(id).catch((err) => {
+        console.warn('NHC sublayer query failed', id, err);
+        return [];
+      });
+    // Last successful GTWO result per sublayer: a transient GTWO failure keeps the
+    // previous areas instead of blanking them, and never blocks the NHC feed.
+    const lastGtwo = new Map<number, GeoJSON.Feature[]>();
+    const queryGtwo = (id: number): Promise<GeoJSON.Feature[]> =>
+      queryGeo(
+        `${GTWO}/${id}/query?where=1%3D1&outFields=*&outSR=4326&returnGeometry=true&f=geojson`
+      ).then(
+        (features) => {
+          lastGtwo.set(id, features);
+          return features;
+        },
+        (err) => {
+          console.warn('GTWO outlook query failed', id, err);
+          return lastGtwo.get(id) ?? [];
+        }
+      );
 
     const load = async () => {
       // JTWC invests (developing areas in the W Pacific / Indian Ocean / S Hem
@@ -414,19 +493,13 @@ export function HurricaneLayer() {
       let disturbances: GeoJSON.Feature[];
       try {
         [cones, obsTracks, fcstTracks, obsPts, fcstPts, disturbances] = await Promise.all([
-          queryLayer(coneId),
-          queryLayer(obsTrackId),
-          queryLayer(fcstTrackId),
+          querySoftLayer(coneId),
+          querySoftLayer(obsTrackId),
+          querySoftLayer(fcstTrackId),
           queryLayer(obsPtId),
           queryLayer(fcstPtId),
           getGtwoRegionLayerIds().then((ids) =>
-            Promise.all(
-              ids.map((id) =>
-                queryGeo(
-                  `${GTWO}/${id}/query?where=1%3D1&outFields=*&outSR=4326&returnGeometry=true&f=geojson`
-                )
-              )
-            ).then((results) => results.flat())
+            Promise.all(ids.map(queryGtwo)).then((results) => results.flat())
           ),
         ]);
       } catch (err) {
@@ -533,6 +606,7 @@ export function HurricaneLayer() {
       }
 
       const named = [...new Set(storms.values())].filter((s) => s.lat != null && s.lon != null);
+      stormAnchors = named.map((s) => Cesium.Cartesian3.fromDegrees(s.lon!, s.lat!, 0));
       const distList = (disturbances ?? []).filter((f) => ringParts(f.geometry).length > 0);
 
       // Skip the teardown/redraw when nothing meaningful changed.
@@ -571,6 +645,7 @@ export function HurricaneLayer() {
       ds.entities.removeAll();
       hovered = null;
       useHurricaneHover.getState().hide();
+      hasForecastDots = false;
 
       // 0) Areas of disturbance (GTWO 7-day formation outlook) — drawn first, as
       //    background context beneath any active storms.
@@ -777,6 +852,7 @@ export function HurricaneLayer() {
           },
         });
         attachForecast(dot, info);
+        hasForecastDots = true;
       }
 
       // 5) The storm itself — category-tinted glyph + label, clickable for a panel.

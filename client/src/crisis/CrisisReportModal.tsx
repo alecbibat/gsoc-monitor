@@ -3,19 +3,20 @@
 // in a portal, and print CSS injected via useEffect hides everything else on
 // the page so Ctrl-P / Cmd-P / Save as PDF renders only this report.
 
-import { lazy, Suspense, useEffect } from 'react';
+import { memo, Suspense, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { useCrisisStore, geometryLabel, entryTypeOf, type Incident, type IcsRole, type PersonnelAssignment } from './crisisStore';
+import { useCrisisStore, geometryLabel, entryTypeOf, type ActionLogEntry, type Incident, type IcsRole, type PersonnelAssignment } from './crisisStore';
 import { incidentStatusDef, incidentTypeDef } from './taxonomy';
 import { LOCATION_GROUPS } from '../layers/locations/locations';
 import { SHIP_GROUP_NAME, incidentShips, isShipGroupId } from './incidentShips';
 import { measureLayer } from './layerMeasure';
 import { usePrintStyles } from '../lib/printStyles';
+import { lazyWithReload } from '../lib/lazyWithReload';
 import { CorrectiveActions, FourQuestions, IcsSwimlane, ResponseMetrics, RosterTable } from './AarSections';
 
 // Lazy so Leaflet (used only by this printable report and the share view)
 // stays out of the main bundle.
-const CrisisShareMap = lazy(() =>
+const CrisisShareMap = lazyWithReload(() =>
   import('./CrisisShareMap').then((m) => ({ default: m.CrisisShareMap }))
 );
 
@@ -137,6 +138,49 @@ function OrgSubtree({ roleId, roles, assignments }: { roleId: string; roles: Ics
   );
 }
 
+// Memoised on the actionLog array. AAR edits spread the incident and keep
+// actionLog's identity, so typing in the AAR boxes no longer re-sorts and
+// re-formats the full, unpaginated log on every keystroke. Any real log change
+// (new entry, edit, remote merge) replaces the array and re-renders this.
+const ReportActionLog = memo(function ReportActionLog({ actionLog }: { actionLog: ActionLogEntry[] }) {
+  const sorted = useMemo(
+    () => [...actionLog].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()),
+    [actionLog]
+  );
+  if (actionLog.length === 0) return null;
+  return (
+    <div>
+      <h2 className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-white/30">
+        Actions &amp; Events Log
+        <span className="ml-2 font-normal normal-case text-white/25">({actionLog.length} entries)</span>
+      </h2>
+      <div className="divide-y divide-white/6 rounded-lg border border-white/8 bg-ink-950/60">
+        {sorted.map((entry) => (
+          <div key={entry.id} className="flex items-start gap-3 px-4 py-3">
+            <span className={`print-color mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-widest ${ENTRY_STYLES[entryTypeOf(entry)]}`}>
+              {entryTypeOf(entry)}
+            </span>
+            <span className="w-36 shrink-0 text-[10px] text-white/30">
+              {fmtTs(entry.timestamp)}
+              {entry.actor && <span className="block text-white/40">{entry.actor}</span>}
+            </span>
+            <p className={`flex-1 text-[12px] leading-snug ${entry.system ? 'italic text-white/45' : 'text-white/70'}`}>
+              {entry.description || <span className="text-white/25 italic">No description</span>}
+            </p>
+            {entry.attachmentData && (
+              <img
+                src={entry.attachmentData}
+                alt={entry.attachmentName}
+                className="shrink-0 max-h-48 max-w-[220px] rounded border border-white/12 object-cover shadow-lg"
+              />
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+});
+
 // ── Main modal ────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -156,9 +200,15 @@ export function CrisisReportModal({ incident: incidentProp, onClose }: Props) {
     useCrisisStore((s) => s.incidents.find((i) => i.id === incidentProp.id)) ?? incidentProp;
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    // Document capture + stopPropagation (same as logViews EntryDetailModal):
+    // one Esc closes only this report, not the whole crisis workspace behind it.
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      onClose();
+    };
+    document.addEventListener('keydown', handler, true);
+    return () => document.removeEventListener('keydown', handler, true);
   }, [onClose]);
 
   const { dot, badge, label: statusLabel } = incidentStatusDef(incident.incidentStatus);
@@ -308,39 +358,7 @@ export function CrisisReportModal({ incident: incidentProp, onClose }: Props) {
         <CorrectiveActions incident={incident} />
 
         {/* Action log */}
-        {incident.actionLog.length > 0 && (
-          <div>
-            <h2 className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-white/30">
-              Actions &amp; Events Log
-              <span className="ml-2 font-normal normal-case text-white/25">({incident.actionLog.length} entries)</span>
-            </h2>
-            <div className="divide-y divide-white/6 rounded-lg border border-white/8 bg-ink-950/60">
-              {[...incident.actionLog]
-                .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-                .map((entry) => (
-                  <div key={entry.id} className="flex items-start gap-3 px-4 py-3">
-                    <span className={`print-color mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-widest ${ENTRY_STYLES[entryTypeOf(entry)]}`}>
-                      {entryTypeOf(entry)}
-                    </span>
-                    <span className="w-36 shrink-0 text-[10px] text-white/30">
-                      {fmtTs(entry.timestamp)}
-                      {entry.actor && <span className="block text-white/40">{entry.actor}</span>}
-                    </span>
-                    <p className={`flex-1 text-[12px] leading-snug ${entry.system ? 'italic text-white/45' : 'text-white/70'}`}>
-                      {entry.description || <span className="text-white/25 italic">No description</span>}
-                    </p>
-                    {entry.attachmentData && (
-                      <img
-                        src={entry.attachmentData}
-                        alt={entry.attachmentName}
-                        className="shrink-0 max-h-48 max-w-[220px] rounded border border-white/12 object-cover shadow-lg"
-                      />
-                    )}
-                  </div>
-                ))}
-            </div>
-          </div>
-        )}
+        <ReportActionLog actionLog={incident.actionLog} />
 
         {/* Incident map */}
         {mapLayers.length > 0 && (

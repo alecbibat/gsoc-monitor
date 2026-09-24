@@ -158,7 +158,8 @@ export function FuelZoneController() {
       v: Cesium.Viewer,
       result: Awaited<ReturnType<typeof analyzeFuelZone>>,
       subtitle: string,
-      graphics: Cesium.Entity.ConstructorOptions
+      graphics: Cesium.Entity.ConstructorOptions,
+      session: number
     ) => {
       const store = useFuelZoneStore.getState;
       const seq = store().seq + 1;
@@ -181,7 +182,10 @@ export function FuelZoneController() {
         const entity = persistDsRef.current.entities.add(graphics);
         entityMapRef.current.set(panelId, entity);
       }
-      store().exit();
+      // A late result still opens its panel, but only ends the tool if the
+      // drawing session that requested it is still the current one — never
+      // tear down a newer session started while this one was in flight.
+      if (store().session === session) store().exit();
       v.scene.requestRender();
     },
     []
@@ -193,13 +197,17 @@ export function FuelZoneController() {
       const v = viewer;
       const store = useFuelZoneStore.getState;
       const radius = Math.min(MAX_RADIUS_M, rawRadius);
+      const session = store().session;
       store().setBusy(true);
       try {
         const result = await analyzeFuelZone(zoneCenter, radius);
-        commit(v, result, `${formatRadius(radius)} radius`, circleGraphics(zoneCenter, radius));
+        commit(v, result, `${formatRadius(radius)} radius`, circleGraphics(zoneCenter, radius), session);
       } catch (err) {
-        store().setError(err instanceof Error ? err.message : String(err));
-        v.scene.requestRender();
+        // A stale failure must not put a newer drawing session into error.
+        if (store().session === session) {
+          store().setError(err instanceof Error ? err.message : String(err));
+          v.scene.requestRender();
+        }
       }
     },
     [viewer, commit]
@@ -210,6 +218,7 @@ export function FuelZoneController() {
       if (!viewer || verts.length < 3) return;
       const v = viewer;
       const store = useFuelZoneStore.getState;
+      const session = store().session;
       store().setBusy(true);
       try {
         const result = await analyzeFuelPolygon(verts);
@@ -217,11 +226,14 @@ export function FuelZoneController() {
           v,
           result,
           `${verts.length}-point area`,
-          polygonGraphics(polygonRing(verts))
+          polygonGraphics(polygonRing(verts)),
+          session
         );
       } catch (err) {
-        store().setError(err instanceof Error ? err.message : String(err));
-        v.scene.requestRender();
+        if (store().session === session) {
+          store().setError(err instanceof Error ? err.message : String(err));
+          v.scene.requestRender();
+        }
       }
     },
     [viewer, commit]

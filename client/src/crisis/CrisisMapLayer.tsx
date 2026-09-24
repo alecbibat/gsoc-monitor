@@ -1,5 +1,5 @@
 import * as Cesium from 'cesium';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useCrisisStore, type DrawLayer } from './crisisStore';
 
@@ -25,8 +25,17 @@ function centroid(layer: DrawLayer): { lon: number; lat: number } {
   return { lon: sum.lon / n, lat: sum.lat / n };
 }
 
+// A signature of the drawn geometry only, so updates that don't touch the
+// drawings (log entries, status changes, text edits) never redraw the entities.
+export function drawSignature(layers: DrawLayer[]): string {
+  return layers
+    .map((l) => `${l.id}:${l.geometry}:${l.directional ? 'dir' : ''}:${l.color}:${l.name}:${l.visible}:${l.positions.map((p) => `${p.lat},${p.lon}`).join('|')}`)
+    .join(';');
+}
+
 // Exported for CrisisShareGlobe, which renders the same drawn layers on the
-// public share page's standalone viewer.
+// public share page's standalone viewer. Any new DrawLayer field read here
+// must also go into drawSignature, or edits to it won't redraw.
 export function addLayerEntities(ds: Cesium.CustomDataSource, layer: DrawLayer) {
   if (layer.positions.length === 0) return;
   const color = Cesium.Color.fromCssColorString(layer.color);
@@ -138,18 +147,27 @@ export function CrisisMapLayer() {
   // currently being viewed, when its layers reappear temporarily. Opening an
   // archived incident sets it as active; navigating back to the list clears it
   // and the layers hide again.
+  const shown = useMemo(
+    () =>
+      incidents
+        .filter((inc) => !inc.archivedAt || inc.id === activeIncidentId)
+        .flatMap((inc) => inc.drawLayers.filter((l) => l.visible && l.positions.length > 0)),
+    [incidents, activeIncidentId]
+  );
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  const sig = useMemo(() => drawSignature(shown), [shown]);
+
   useEffect(() => {
     const ds = dsRef.current;
     if (!ds || !viewer) return;
     ds.entities.removeAll();
-    incidents.forEach((inc) => {
-      if (inc.archivedAt && inc.id !== activeIncidentId) return;
-      inc.drawLayers
-        .filter((l) => l.visible && l.positions.length > 0)
-        .forEach((layer) => addLayerEntities(ds, layer));
-    });
+    shownRef.current.forEach((layer) => addLayerEntities(ds, layer));
     viewer.scene.requestRender();
-  }, [viewer, incidents, activeIncidentId]);
+    // Keyed on the drawn-geometry signature, not the incidents array, so edits
+    // that don't change what's drawn never tear down and rebuild the entities.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewer, sig]);
 
   // Click-to-identify: clicking a drawn layer opens its info popup
   useEffect(() => {

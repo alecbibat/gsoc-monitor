@@ -90,6 +90,9 @@ export function ShipLayer() {
     return () => {
       viewer.dataSources.remove(ds, true);
       dsRef.current = null;
+      // The next viewer gets a fresh, empty data source: its first load must
+      // redraw rather than match the old signature and skip.
+      lastSigRef.current = '';
     };
   }, [viewer]);
 

@@ -1,8 +1,9 @@
-import { lazy, Suspense, useState } from 'react';
+import { Suspense, useState } from 'react';
 import { useAuthStore } from './authStore';
+import { lazyWithReload } from '../lib/lazyWithReload';
 
 // Admin-only, opened from the menu — no reason to ship it to everyone eagerly.
-const AdminPanel = lazy(() => import('./AdminPanel').then((m) => ({ default: m.AdminPanel })));
+const AdminPanel = lazyWithReload(() => import('./AdminPanel').then((m) => ({ default: m.AdminPanel })));
 
 export function UserMenu() {
   const user = useAuthStore((s) => s.user);

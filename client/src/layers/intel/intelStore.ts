@@ -58,3 +58,9 @@ export const CATEGORY_META: Record<IntelCategory, { label: string; icon: string;
   social: { label: 'Social', icon: '💬', color: '#2dd4bf' },
   other: { label: 'Other', icon: '📍', color: '#94a3b8' },
 };
+
+// Unknown/future categories (bad watchlist row, server newer than this bundle)
+// render as 'Other' instead of throwing on undefined meta.
+export function categoryMeta(c: string): { label: string; icon: string; color: string } {
+  return CATEGORY_META[c as IntelCategory] ?? CATEGORY_META.other;
+}

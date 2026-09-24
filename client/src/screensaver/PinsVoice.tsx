@@ -52,6 +52,7 @@ function pickVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null 
 // the screensaver stops.
 export function PinsVoice() {
   const active = useScreensaverStore((s) => s.active);
+  const mode = useScreensaverStore((s) => s.mode);
   const phase = useScreensaverStore((s) => s.phase);
   const poi = useScreensaverStore((s) => s.currentPoi);
   const voiceEnabled = useScreensaverStore((s) => s.voiceEnabled);
@@ -71,10 +72,16 @@ export function PinsVoice() {
     return () => synth.removeEventListener?.('voiceschanged', refresh);
   }, []);
 
+  // A new tour mode starts a fresh announcement sequence (e.g. ISS -> Parks -> ISS
+  // should announce the station again even if Parks never reached a POI).
+  useEffect(() => { lastKey.current = ''; }, [mode]);
+
   useEffect(() => {
     if (!active || !voiceEnabled || phase !== 'at-poi' || !poi) return;
 
-    const key = `${poi.title}::${poi.lat}::${poi.lon}`;
+    // The ISS POI is re-published ~1x/s with the station's moving lat/lon; key it
+    // by identity so the announcement isn't cancelled and restarted every second.
+    const key = poi.category === 'iss' ? 'iss' : `${poi.title}::${poi.lat}::${poi.lon}`;
     if (lastKey.current === key) return;
     lastKey.current = key;
 

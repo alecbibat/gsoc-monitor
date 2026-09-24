@@ -138,7 +138,25 @@ export function RiversLayer() {
   useEffect(() => {
     if (!viewer || !active) return;
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // startVisiblePolling semantics on top of the adaptive self-scheduling: a
+    // tick that comes due while the tab is hidden is skipped (no multi-MB
+    // download, and the server's NWPS pull is allowed to idle-pause) and fires
+    // as soon as the tab is visible again.
+    let missed = false;
+    // After such a resume the server may serve its idle-paused snapshot while it
+    // refreshes behind the response; re-check shortly (bounded) so the fresh
+    // field lands without waiting a full 15-min cycle.
+    let staleChecks = 0;
+    const schedule = (delay: number) => {
+      timer = setTimeout(() => {
+        if (document.hidden) {
+          missed = true;
+          return;
+        }
+        void load();
+      }, delay);
+    };
     const load = async () => {
       let delay = POLL_MS;
       try {
@@ -151,6 +169,12 @@ export function RiversLayer() {
           dataRef.current = data.gauges;
           useRiversStatus.getState().setStatus({ counts: data.counts, loading: false, error: null });
           renderRef.current();
+          if (staleChecks > 0 && Date.now() - data.updated > 2 * POLL_MS) {
+            staleChecks--;
+            delay = 30_000;
+          } else {
+            staleChecks = 0;
+          }
         }
       } catch {
         if (!cancelled) {
@@ -158,12 +182,22 @@ export function RiversLayer() {
           delay = 30_000;
         }
       }
-      if (!cancelled) timer = setTimeout(load, delay);
+      if (!cancelled) schedule(delay);
     };
-    load();
+    // Only a skipped tick restarts the chain, so there is never a second one.
+    const onVisible = () => {
+      if (!document.hidden && missed) {
+        missed = false;
+        staleChecks = 4;
+        void load();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    void load();
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [viewer, active]);
 

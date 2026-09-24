@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { pool } from '../db';
 import { requireAuth } from '../middleware/auth';
 import { geocodePlace } from '../intel/geocode';
-import { SOURCE_KINDS, type SourceKind } from '../intel/types';
+import { INTEL_CATEGORIES, SOURCE_KINDS, type IntelCategory, type SourceKind } from '../intel/types';
 
 // Team-shared watchlist of intel sources. Any signed-in member can add a source
 // (a news site, a Google-News topic, a scanner agency, a crime dataset, a social
@@ -59,6 +59,11 @@ function validate(b: Body): { url: string | null; config: Record<string, unknown
   // staticGeo is server-derived from `place` (never client-supplied), so a
   // caller can't pin a source to arbitrary coordinates directly.
   delete config.staticGeo;
+  // The adapters use config.category verbatim as the item category; an unknown
+  // value would reach every client (share pages included) as unrenderable data.
+  if (config.category !== undefined && !INTEL_CATEGORIES.includes(config.category as IntelCategory)) {
+    return { url: null, config: {}, error: `config.category must be one of: ${INTEL_CATEGORIES.join(', ')}` };
+  }
   const url = typeof b.url === 'string' && b.url.trim() ? b.url.trim() : null;
   const need = (cond: unknown, msg: string) => (cond ? null : msg);
   const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');

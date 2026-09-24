@@ -70,6 +70,8 @@ export interface SnapshotOptions {
   /** Render the place-label layer above overlays (default true). */
   labels?: boolean;
   attribution?: string;
+  /** Aborts the render (returns null) once the report is closed. */
+  signal?: AbortSignal;
 }
 
 function loadImage(url: string, timeoutMs = 12_000): Promise<HTMLImageElement | null> {
@@ -100,7 +102,10 @@ export async function renderMapSnapshot(opts: SnapshotOptions): Promise<string |
       if (fitRadiusM / metersPerPxAt(z) <= w * 0.38) { zoom = z; break; }
     }
 
-    const mpp = metersPerPxAt(zoom);
+    // EPSG:3857 metres per canvas px. One canvas px = one slippy px at this
+    // zoom, and slippy px are uniform in Mercator metres (no cos(lat) term;
+    // metersPerPxAt is ground resolution and is only for choosing the zoom).
+    const mpp = (2 * MERC_MAX) / (TILE * 2 ** zoom);
     const cx = lonToMercX(centerLon);
     const cy = latToMercY(centerLat);
     const bbox3857: [number, number, number, number] = [
@@ -168,6 +173,7 @@ export async function renderMapSnapshot(opts: SnapshotOptions): Promise<string |
       }
     }
     await Promise.allSettled(tileJobs);
+    if (opts.signal?.aborted) return null;
 
     // ArcGIS export overlay for the exact bbox.
     if (opts.overlayUrl) {
@@ -178,6 +184,7 @@ export async function renderMapSnapshot(opts: SnapshotOptions): Promise<string |
         ctx.globalAlpha = 1;
       }
     }
+    if (opts.signal?.aborted) return null;
 
     // Labels above overlays so place names stay readable.
     if (opts.labels !== false) {
@@ -189,6 +196,7 @@ export async function renderMapSnapshot(opts: SnapshotOptions): Promise<string |
       }
       await Promise.allSettled(labelJobs);
     }
+    if (opts.signal?.aborted) return null;
 
     if (opts.draw) opts.draw(ctx, proj);
 

@@ -1,12 +1,12 @@
 import { usePanelStore } from '../panels/panelStore';
-import { WIDGETS } from './registry';
+import { WIDGET_META } from './widgetMeta';
 
 export function WidgetLauncher() {
   const open = usePanelStore((s) => s.open);
 
   return (
     <div className="pointer-events-auto flex items-center gap-1 rounded-lg border border-white/10 bg-ink-900/80 px-1.5 py-1 shadow-panel backdrop-blur-sm">
-      {WIDGETS.map((w) => (
+      {WIDGET_META.map((w) => (
         <button
           key={w.id}
           // Widgets are tools the operator launched on purpose, not map popups:

@@ -410,6 +410,10 @@ router.get('/share/:token/events', wrap(async (req: Request, res: Response) => {
   // so a signed-in viewer's stream authenticates the same way the snapshot did.
   const gate = await gateShare(req, row.password_hash);
   if (!gate.ok) { res.status(401).end(); return; }
+  // The viewer may have disconnected during the awaits above. Its 'close'
+  // event has then already fired, so the listener registered below would
+  // never run and the ping interval + sseClients entry would leak forever.
+  if (res.destroyed || req.socket?.destroyed) return;
 
   res.setHeader('Content-Type', 'text/event-stream');
   // no-transform: stops compression middleware and intermediaries from

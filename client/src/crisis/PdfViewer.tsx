@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { PDFDocumentProxy } from 'pdfjs-dist';
+import type { PDFDocumentProxy, PDFPageProxy, PageViewport, RenderTask } from 'pdfjs-dist';
 
 // ── In-page PDF reader ───────────────────────────────────────────────────────
 // Renders a fetched PDF (the incident's IAP) as stacked page canvases with
@@ -47,9 +47,10 @@ export function PdfViewer({ url, emptyMessage }: {
 }) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [zoom, setZoom] = useState(1);
+  const [measureTick, setMeasureTick] = useState(0);
   const pdfRef = useRef<PDFDocumentProxy | null>(null);
   const pagesRef = useRef<HTMLDivElement>(null);
-  const renderSeq = useRef(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   // Fetch + parse once per url.
   useEffect(() => {
@@ -82,36 +83,93 @@ export function PdfViewer({ url, emptyMessage }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url]);
 
-  // (Re)render all pages when the document or zoom changes.
+  // Lay out every page when the document or zoom changes, but paint a page's
+  // canvas only while it is within ~1 scroll-box height of view, and free it
+  // (width = height = 0 drops the backing store immediately, not at GC) once it
+  // scrolls further away, so canvas memory stays bounded to a few pages.
   useEffect(() => {
     const pdf = pdfRef.current;
     const host = pagesRef.current;
-    if (state.kind !== 'ready' || !pdf || !host) return;
-    const seq = ++renderSeq.current;
+    const root = scrollRef.current;
+    if (state.kind !== 'ready' || !pdf || !host || !root) return;
+    // Mounted inside a CSS-hidden tab (display:none): clientWidth is 0, so a
+    // fit-width layout now would pin every page to the 280 px floor. Defer until
+    // the host is actually laid out, then re-run via measureTick.
+    if (host.clientWidth === 0 && typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(() => {
+        if (host.clientWidth > 0) { ro.disconnect(); setMeasureTick((t) => t + 1); }
+      });
+      ro.observe(host);
+      return () => ro.disconnect();
+    }
+    let disposed = false;
+    type Slot = { page: PDFPageProxy; vp: PageViewport; canvas: HTMLCanvasElement; task: RenderTask | null; painted: boolean };
+    const slots = new Map<Element, Slot>();
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+
+    const release = (s: Slot) => {
+      if (s.task) { try { s.task.cancel(); } catch { /* already settled */ } s.task = null; }
+      if (!s.painted) return;
+      s.painted = false;
+      s.canvas.width = 0;
+      s.canvas.height = 0;
+    };
+    const paint = (s: Slot) => {
+      if (disposed || s.painted) return;
+      const { page, vp, canvas } = s;
+      canvas.width = Math.floor(vp.width * dpr);
+      canvas.height = Math.floor(vp.height * dpr);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { canvas.width = 0; canvas.height = 0; return; }
+      s.painted = true;
+      ctx.scale(dpr, dpr); // resizing resets the transform, so re-apply on every paint
+      const task = page.render({ canvasContext: ctx, canvas, viewport: vp });
+      s.task = task;
+      task.promise.then(
+        () => { if (s.task === task) s.task = null; },
+        (e: unknown) => {
+          if (s.task === task) s.task = null;
+          if ((e as { name?: string } | null)?.name !== 'RenderingCancelledException') console.warn('[pdf-viewer] render failed:', e);
+        },
+      );
+    };
+
+    const io = new IntersectionObserver((entries) => {
+      // Tab hidden (display:none): keep what is painted so switching back is instant, as today.
+      if (root.getClientRects().length === 0) return;
+      for (const en of entries) {
+        const s = slots.get(en.target);
+        if (!s) continue;
+        if (en.isIntersecting) paint(s); else release(s);
+      }
+    }, { root, rootMargin: '100% 0px' });
+
+    host.textContent = '';
+    const hostWidth = Math.max(280, host.clientWidth - 2); // measured after clearing, as today
     (async () => {
-      host.textContent = '';
-      const hostWidth = Math.max(280, host.clientWidth - 2);
-      const dpr = Math.min(3, window.devicePixelRatio || 1);
       for (let n = 1; n <= pdf.numPages; n++) {
-        if (renderSeq.current !== seq) return; // superseded by a newer render
         const page = await pdf.getPage(n);
-        if (renderSeq.current !== seq) return;
+        if (disposed) return;
         const base = page.getViewport({ scale: 1 });
-        const scale = (hostWidth / base.width) * zoom;
-        const vp = page.getViewport({ scale });
+        const vp = page.getViewport({ scale: (hostWidth / base.width) * zoom });
         const canvas = document.createElement('canvas');
-        canvas.width = Math.floor(vp.width * dpr);
-        canvas.height = Math.floor(vp.height * dpr);
+        canvas.width = 0; // placeholder: CSS-sized white box, no backing store until painted
+        canvas.height = 0;
         canvas.style.width = `${Math.floor(vp.width)}px`;
         canvas.style.height = `${Math.floor(vp.height)}px`;
         canvas.className = 'mx-auto mb-3 block rounded bg-white shadow-lg';
         host.appendChild(canvas);
-        const ctx = canvas.getContext('2d')!;
-        ctx.scale(dpr, dpr);
-        await page.render({ canvasContext: ctx, canvas, viewport: vp }).promise;
+        slots.set(canvas, { page, vp, canvas, task: null, painted: false });
+        io.observe(canvas); // observe immediately so page 1 paints without waiting for the rest
       }
-    })().catch((e) => console.warn('[pdf-viewer] render failed:', e));
-  }, [state, zoom]);
+    })().catch((e) => { if (!disposed) console.warn('[pdf-viewer] render failed:', e); });
+
+    return () => {
+      disposed = true;
+      io.disconnect();
+      for (const s of slots.values()) release(s); // cancels in-flight renders and frees old-zoom canvases now
+    };
+  }, [state, zoom, measureTick]);
 
   const zoomStep = (dir: 1 | -1) => {
     setZoom((z) => {
@@ -169,7 +227,7 @@ export function PdfViewer({ url, emptyMessage }: {
         </div>
       </div>
       {/* Horizontal scroll appears only when zoomed past fit-width */}
-      <div className="max-h-[78vh] overflow-auto p-3">
+      <div ref={scrollRef} className="max-h-[78vh] overflow-auto p-3">
         <div ref={pagesRef} className="min-w-fit" />
       </div>
     </div>

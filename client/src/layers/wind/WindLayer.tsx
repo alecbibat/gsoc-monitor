@@ -32,6 +32,8 @@ const HEAD_ALPHA = 0.9;
 const TRAIL_FALLOFF = 0.62;
 // Minimum pixel size for the oldest trail segment.
 const TRAIL_SIZE_MIN = 1.0;
+// Per-slot alpha multiplier (TRAIL_FALLOFF^(j+1)), precomputed once.
+const TRAIL_ALPHA = Array.from({ length: TRAIL_LEN }, (_, j) => Math.pow(TRAIL_FALLOFF, j + 1));
 
 // Speed → color ramp (m/s). Calm blues through green/yellow to hot reds.
 const RAMP: Array<[number, Cesium.Color]> = [
@@ -69,9 +71,10 @@ interface Particle {
   lat: number;
   age: number;
   life: number;
-  // Ring buffer of past positions (lon/lat before each step).
-  trailLons: Float32Array;
-  trailLats: Float32Array;
+  // Ring buffer of past positions (before each step), stored already projected
+  // so the trail never re-projects a point it projected as the head.
+  trailXYZ: Float64Array; // ring of projected positions, 3 doubles per slot
+  cur: Cesium.Cartesian3; // projection of (lon, lat, PARTICLE_ALT_M)
   trailHead: number; // index of next write slot
   trailFill: number; // how many slots have valid data (0..TRAIL_LEN)
 }
@@ -79,6 +82,7 @@ interface Particle {
 function randomizeParticle(p: Particle): void {
   p.lon = Math.random() * 360 - 180;
   p.lat = Math.random() * 2 * (LAT_LIMIT - 4) - (LAT_LIMIT - 4);
+  Cesium.Cartesian3.fromDegrees(p.lon, p.lat, PARTICLE_ALT_M, undefined, p.cur);
   p.age = 0;
   p.life = LIFE_MIN + Math.random() * (LIFE_MAX - LIFE_MIN);
   p.trailHead = 0;
@@ -110,8 +114,8 @@ export function WindLayer() {
         lat: 0,
         age: 0,
         life: 0,
-        trailLons: new Float32Array(TRAIL_LEN),
-        trailLats: new Float32Array(TRAIL_LEN),
+        trailXYZ: new Float64Array(TRAIL_LEN * 3),
+        cur: new Cesium.Cartesian3(),
         trailHead: 0,
         trailFill: 0,
       };
@@ -121,7 +125,7 @@ export function WindLayer() {
 
       headHandles.push(
         points.add({
-          position: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, PARTICLE_ALT_M),
+          position: p.cur, // add() clones
           pixelSize: POINT_SIZE,
           color: Cesium.Color.TRANSPARENT,
         })
@@ -132,7 +136,7 @@ export function WindLayer() {
         const size = Math.max(TRAIL_SIZE_MIN, POINT_SIZE - (j + 1) * 0.15);
         trailHandles.push(
           points.add({
-            position: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, PARTICLE_ALT_M),
+            position: p.cur, // add() clones
             pixelSize: size,
             color: Cesium.Color.TRANSPARENT,
           })
@@ -146,7 +150,8 @@ export function WindLayer() {
 
     const wind: [number, number] = [0, 0];
     const scratch = new Cesium.Color();
-    const scratchCart = new Cesium.Cartesian3();
+    const baseColor = new Cesium.Color();
+    const scratchTrail = new Cesium.Cartesian3();
 
     const update = () => {
       if (!sample) return;
@@ -169,8 +174,10 @@ export function WindLayer() {
         const spd = Math.hypot(u, vv);
 
         // Record current position into trail ring buffer before moving.
-        p.trailLons[p.trailHead] = p.lon;
-        p.trailLats[p.trailHead] = p.lat;
+        const o = p.trailHead * 3;
+        p.trailXYZ[o] = p.cur.x;
+        p.trailXYZ[o + 1] = p.cur.y;
+        p.trailXYZ[o + 2] = p.cur.z;
         p.trailHead = (p.trailHead + 1) % TRAIL_LEN;
         p.trailFill = Math.min(p.trailFill + 1, TRAIL_LEN);
 
@@ -196,15 +203,13 @@ export function WindLayer() {
         const f = p.age / p.life;
         const fade = f < 0.2 ? f / 0.2 : f > 0.75 ? (1 - f) / 0.25 : 1;
 
-        // Update head.
-        head.position = Cesium.Cartesian3.fromDegrees(
-          p.lon,
-          p.lat,
-          PARTICLE_ALT_M,
-          undefined,
-          scratchCart
-        );
-        speedColor(spd, scratch);
+        // Update head. p.cur is projected once here and reused as a trail slot
+        // next tick. The speed color is shared by head and trail: scratch keeps
+        // its RGB through the trail loop below, only alpha changes per slot.
+        Cesium.Cartesian3.fromDegrees(p.lon, p.lat, PARTICLE_ALT_M, undefined, p.cur);
+        head.position = p.cur;
+        speedColor(spd, baseColor);
+        Cesium.Color.clone(baseColor, scratch);
         scratch.alpha = Math.max(0, Math.min(1, fade)) * HEAD_ALPHA;
         head.color = scratch;
         head.show = true;
@@ -218,17 +223,13 @@ export function WindLayer() {
           }
           // Ring-buffer read: slot j steps behind the last written entry.
           const rIdx = ((p.trailHead - 1 - j) % TRAIL_LEN + TRAIL_LEN) % TRAIL_LEN;
-          th.position = Cesium.Cartesian3.fromDegrees(
-            p.trailLons[rIdx],
-            p.trailLats[rIdx],
-            PARTICLE_ALT_M,
-            undefined,
-            scratchCart
-          );
-          speedColor(spd, scratch);
+          const r = rIdx * 3;
+          scratchTrail.x = p.trailXYZ[r];
+          scratchTrail.y = p.trailXYZ[r + 1];
+          scratchTrail.z = p.trailXYZ[r + 2];
+          th.position = scratchTrail;
           // Alpha drops off exponentially along the trail.
-          const trailAlpha = fade * HEAD_ALPHA * Math.pow(TRAIL_FALLOFF, j + 1);
-          scratch.alpha = Math.max(0, trailAlpha);
+          scratch.alpha = Math.max(0, fade * HEAD_ALPHA * TRAIL_ALPHA[j]);
           th.color = scratch;
           th.show = true;
         }

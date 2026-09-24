@@ -26,7 +26,11 @@ router.get('/:code', async (req, res) => {
       url.searchParams.set('f', 'geojson');
       const r = await fetch(url.toString(), { signal: AbortSignal.timeout(12_000) });
       if (!r.ok) throw new Error(`NPS boundary service: ${r.status}`);
-      return r.json();
+      const j = (await r.json()) as { error?: { message?: string } };
+      if (j && typeof j === 'object' && 'error' in j && j.error) {
+        throw new Error(`NPS boundary service: ${j.error.message ?? 'ArcGIS error'}`);
+      }
+      return j;
     });
     res.set('Cache-Control', 'public, max-age=86400');
     res.json(data);

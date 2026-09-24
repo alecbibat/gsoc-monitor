@@ -33,8 +33,21 @@ export function ShipFocusCard() {
     return () => clearInterval(id);
   }, []);
 
+  // Visible = card is showing a ship right now. (Only reachable with isPins true below,
+  // so including isPins here is equivalent for the className and lets wireLive reset on exit.)
+  const visible = isPins && poi?.category === 'ship';
+
+  // The card stays mounted at opacity-0 between ship visits so the next ship still
+  // fades in, but the rAF-driven wireframe canvas only needs to exist while the card
+  // is visible plus its 500 ms fade-out.
+  const [wireLive, setWireLive] = useState(false);
+  useEffect(() => {
+    if (visible) { setWireLive(true); return; }
+    const id = setTimeout(() => setWireLive(false), 700); // > duration-500 fade
+    return () => clearTimeout(id);
+  }, [visible]);
+
   if (!isPins || !shown || shown.category !== 'ship') return null;
-  const visible = poi?.category === 'ship';
 
   const mmsi         = shown.meta?.mmsi as string | undefined;
   const speedKt      = shown.meta?.speedKt as number | null | undefined;
@@ -93,13 +106,17 @@ export function ShipFocusCard() {
         <div className="border-t" style={{ borderColor: `${color}25` }}>
           <div className="flex justify-center px-3.5 pt-1">
             {resolvedCls && (
-              <ShipWireframe2D
-                variant={resolvedCls === 'STAR' ? 'star' : 'wind'}
-                color={color}
-                masts={mastCountForShip(fleet?.name ?? shown.title)}
-                width={310}
-                height={116}
-              />
+              visible || wireLive ? (
+                <ShipWireframe2D
+                  variant={resolvedCls === 'STAR' ? 'star' : 'wind'}
+                  color={color}
+                  masts={mastCountForShip(fleet?.name ?? shown.title)}
+                  width={310}
+                  height={116}
+                />
+              ) : (
+                <div style={{ width: 310, height: 116 }} />
+              )
             )}
           </div>
 

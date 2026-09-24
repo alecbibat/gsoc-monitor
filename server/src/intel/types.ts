@@ -31,6 +31,8 @@ export type IntelCategory =
   | 'social'
   | 'other';
 
+export const INTEL_CATEGORIES: IntelCategory[] = ['scanner', 'crime', 'crash', 'fire', 'weather', 'news', 'social', 'other'];
+
 // A watchlist source — a built-in default or a team-added row from the DB.
 export interface IntelSource {
   id: string;

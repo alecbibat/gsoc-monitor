@@ -1,5 +1,5 @@
 import type { IntelItem } from '../../types';
-import { CATEGORY_META } from './intelStore';
+import { categoryMeta } from './intelStore';
 
 interface Props {
   payload: IntelItem;
@@ -30,7 +30,7 @@ const SEVERITY: Record<IntelItem['severity'], { label: string; cls: string }> = 
 
 export function IntelDetails({ payload }: Props) {
   const { title, text, author, url, publishedAt, lat, lon, place, category, source, severity } = payload;
-  const cat = CATEGORY_META[category];
+  const cat = categoryMeta(category);
   const sev = SEVERITY[severity];
 
   return (

@@ -97,7 +97,9 @@ function buildWindow(fc: WindForecast): { hours: HourPoint[]; peak: HourPoint | 
   // point's UTC offset, then read the UTC fields back (ISO sorts chronologically).
   const nowPrefix = new Date(Date.now() + fc.utcOffsetSeconds * 1000).toISOString().slice(0, 13);
   let start = time.findIndex((t) => t.slice(0, 13) >= nowPrefix);
-  if (start < 0) start = 0;
+  // Every hour is already past (a panel left open while refetches kept failing):
+  // show no hours rather than week-old ones labelled "now".
+  if (start < 0) start = time.length;
 
   const hours: HourPoint[] = [];
   let peak: HourPoint | null = null;
@@ -213,6 +215,11 @@ export function WindForecastDetails({ payload }: { payload: Payload }) {
   const [fc, setFc] = useState<WindForecast | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Bumps each time the forecast point's local hour rolls over, so the "now"
+  // headline, the chart start and the "next Nh" peak window keep sliding with
+  // the clock while the panel stays open, and quietly refreshes the forecast so
+  // a panel left open for days keeps a full window ahead of it.
+  const [hourTick, setHourTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -227,7 +234,35 @@ export function WindForecastDetails({ payload }: { payload: Payload }) {
     };
   }, [lat, lon, reloadKey]);
 
-  const win = useMemo(() => (fc ? buildWindow(fc) : null), [fc]);
+  // Hourly background refresh: swaps in new data only on success, so a failed
+  // refresh keeps the current forecast instead of showing the error screen. It
+  // also picks up a new UTC offset across a DST change. (The server caches each
+  // point for 30 min, so this is at most one upstream call per open panel.)
+  useEffect(() => {
+    if (hourTick === 0) return; // the initial load is the effect above
+    let cancelled = false;
+    api
+      .windForecast(lat, lon)
+      .then((d) => !cancelled && setFc(d))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [hourTick, lat, lon]);
+
+  const utcOffsetSeconds = fc?.utcOffsetSeconds;
+  useEffect(() => {
+    if (utcOffsetSeconds == null) return;
+    const HOUR_MS = 3_600_000;
+    // Same clock buildWindow uses for nowPrefix: the point's local time,
+    // including half-hour and quarter-hour offsets.
+    const shifted = Date.now() + utcOffsetSeconds * 1000;
+    const delay = HOUR_MS - (((shifted % HOUR_MS) + HOUR_MS) % HOUR_MS) + 1_000;
+    const t = window.setTimeout(() => setHourTick((n) => n + 1), delay);
+    return () => window.clearTimeout(t);
+  }, [utcOffsetSeconds, hourTick]);
+
+  const win = useMemo(() => (fc ? buildWindow(fc) : null), [fc, hourTick]);
 
   if (err) {
     return (

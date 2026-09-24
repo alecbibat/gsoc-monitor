@@ -1,7 +1,7 @@
 import { pool } from '../db';
 import { runAdapter } from './adapters';
 import { cachedPlace, geocodePlace } from './geocode';
-import type { IntelItem, IntelResponse, IntelSource, SourceKind } from './types';
+import { INTEL_CATEGORIES, type IntelItem, type IntelResponse, type IntelSource, type SourceKind } from './types';
 
 // Background OSINT ingest engine. Every REFRESH_MS it fans out over the built-in
 // sources plus the team's watchlist rows, normalizes everything into IntelItem,
@@ -144,15 +144,22 @@ async function loadDbSources(): Promise<IntelSource[]> {
         WHERE active = TRUE
         ORDER BY created_at ASC`
     );
-    return rows.map((r) => ({
-      id: r.id,
-      kind: r.kind as SourceKind,
-      label: r.label,
-      url: r.url ?? undefined,
-      config: (r.config ?? {}) as IntelSource['config'],
-      active: r.active,
-      builtin: false,
-    }));
+    return rows.map((r) => {
+      // Copy (never mutate the pg row) and drop a category the clients can't
+      // render (rows stored before the route validated it); the adapter then
+      // falls back to its normal default category for that kind.
+      const config = { ...(r.config ?? {}) } as IntelSource['config'] & Record<string, unknown>;
+      if (config.category !== undefined && !INTEL_CATEGORIES.includes(config.category)) delete config.category;
+      return {
+        id: r.id,
+        kind: r.kind as SourceKind,
+        label: r.label,
+        url: r.url ?? undefined,
+        config,
+        active: r.active,
+        builtin: false,
+      };
+    });
   } catch (err) {
     // DB unreachable (migration may still be retrying) — degrade to built-ins.
     console.warn('[intel] could not load watchlist sources:', err instanceof Error ? err.message : err);

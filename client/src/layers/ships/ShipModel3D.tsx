@@ -274,6 +274,10 @@ export function ShipModel3D({ variant, color, masts = 4, width = 190, height = 1
       });
       mat.dispose();
       renderer.dispose();
+      // dispose() frees three's caches but leaves the WebGL context alive until
+      // the detached canvas is GC'd; release it now so per-panel contexts don't
+      // pile up toward the browser's context cap alongside the Cesium globe.
+      renderer.forceContextLoss();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
     };
   }, [variant, color, masts, width, height]);

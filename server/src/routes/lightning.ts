@@ -89,7 +89,6 @@ const PERSIST_WINDOW_MS = 24 * 60 * 60_000;
 const SAVE_INTERVAL_MS = 5 * 60_000;
 const MAX_CHUNK = 300_000; // stride-thin one save after an extended DB outage
 let lastSavedT = 0; // newest strike time already persisted (high-water mark)
-let savingChunk = false;
 
 // Chunk codec: gzip(Float32 lat[] · Float32 lon[] · Uint32 tSec[]). Exported for
 // tests. Uint32 epoch-seconds is plenty — the display buckets by hour.
@@ -124,9 +123,7 @@ export function unpackStrikes(data: Buffer, n: number): { lat: Float32Array; lon
 // Persist the strikes received since the last save as one chunk, then prune
 // rows that have aged out of the window. DB errors leave lastSavedT untouched,
 // so the next attempt simply covers a longer span.
-async function saveChunk(): Promise<void> {
-  if (savingChunk || count === 0) return;
-  savingChunk = true;
+async function saveChunkNow(): Promise<void> {
   try {
     const newest = (head - 1 + CAP) % CAP;
     // Collect newest→oldest until we reach already-persisted strikes.
@@ -167,9 +164,24 @@ async function saveChunk(): Promise<void> {
     ]);
   } catch (err) {
     console.error('[lightning] chunk save failed:', err instanceof Error ? err.message : err);
-  } finally {
-    savingChunk = false;
   }
+}
+
+let saveInFlight: Promise<void> | null = null;
+function saveChunk(): Promise<void> {
+  if (saveInFlight) return saveInFlight;
+  if (count === 0) return Promise.resolve();
+  saveInFlight = saveChunkNow().finally(() => {
+    saveInFlight = null;
+  });
+  return saveInFlight;
+}
+
+// Final flush for shutdown: let a periodic save that is mid-INSERT finish
+// (rather than being cut off), then persist anything newer than it.
+export async function flushLightning(): Promise<void> {
+  if (saveInFlight) await saveInFlight;
+  await saveChunk();
 }
 
 // Load every chunk still in the window, oldest first, into the ring buffer.
@@ -239,7 +251,7 @@ function connect(): void {
   relayIndex++;
   let socket: WebSocket;
   try {
-    socket = new WebSocket(url);
+    socket = new WebSocket(url, { handshakeTimeout: 15_000 });
   } catch {
     scheduleReconnect();
     return;
@@ -319,9 +331,6 @@ export function initLightningStream(): void {
       }
     }
   }, 60_000).unref();
-  // Heroku sends SIGTERM before a dyno restart and allows ~30s of grace — a
-  // final small chunk write shrinks the loss window to near zero.
-  process.once('SIGTERM', () => void saveChunk());
 }
 
 // --- Query route -------------------------------------------------------------
@@ -351,6 +360,7 @@ function haversineM(aLat: number, aLon: number, bLat: number, bLon: number): num
 // serialized body briefly so a 24h query (a walk over up to ~1.4M ring slots)
 // runs once per interval, not once per client.
 const MEMO_TTL_MS = 10_000;
+const MEMO_MAX = 64; // hard cap: bounds a burst of distinct keys within one TTL (~64 × ≤0.56 MB)
 const queryMemo = new Map<string, { at: number; body: string }>();
 
 router.get('/', (req, res) => {
@@ -463,6 +473,18 @@ router.get('/', (req, res) => {
     connected,
     updated: Math.round(now / 1000),
   });
+  // Drop entries that can no longer be served (the hit test requires age < TTL);
+  // without this every distinct window/location retained its body forever.
+  for (const [k, m] of queryMemo) {
+    if (now - m.at >= MEMO_TTL_MS) queryMemo.delete(k);
+  }
+  // Bound a burst of distinct keys inside one TTL. After the sweep, Map insertion
+  // order is age order, so the first key is the oldest live entry.
+  while (queryMemo.size >= MEMO_MAX) {
+    const oldest = queryMemo.keys().next().value;
+    if (oldest === undefined) break;
+    queryMemo.delete(oldest);
+  }
   queryMemo.set(memoKey, { at: now, body });
   res.type('application/json').send(body);
 });

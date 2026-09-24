@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useAuthStore } from './authStore';
 import {
-  consumeSsoError, fetchAuthConfig, login, signup, startSso,
+  clearSsoErrorParam, fetchAuthConfig, login, readSsoError, signup, startSso,
   FALLBACK_AUTH_CONFIG, type AuthConfig,
 } from './authApi';
 import { GlobeAnimation } from './GlobeAnimation';
@@ -24,7 +24,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [showPassword, setShowPassword] = useState(false);
   // A failed SSO round trip comes back as ?sso_error=<code>; read it once on
   // mount so the reason is visible instead of a silently unchanged login page.
-  const [ssoError, setSsoError] = useState<string | null>(() => consumeSsoError());
+  // The read is pure and the URL is cleaned after commit: a side-effecting
+  // initializer loses the message to StrictMode's double render in dev.
+  const [ssoError, setSsoError] = useState<string | null>(readSsoError);
+  useEffect(() => { clearSsoErrorParam(); }, []);
 
   // Restore session from cookie on mount.
   useEffect(() => {

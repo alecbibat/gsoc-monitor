@@ -2,6 +2,7 @@ import { Component, type ReactNode } from 'react';
 
 interface Props {
   children: ReactNode;
+  resetKey?: unknown;
 }
 
 interface State {
@@ -20,6 +21,14 @@ export class PanelErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error) {
     console.error('Panel content failed to render:', error);
+  }
+
+  componentDidUpdate(prev: Props) {
+    // A re-open of the same panel (new payload object) retries rendering;
+    // unrelated re-renders (drag, resize, focus, lock) keep the error shown.
+    if (this.state.error && prev.resetKey !== this.props.resetKey) {
+      this.setState({ error: null });
+    }
   }
 
   render() {

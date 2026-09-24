@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CHECKLIST_PHASES, CHECKLIST_TEMPLATES, checklistTemplateFor,
-  isChecklistStateMap, roleProgress,
+  foldChecklistResponse, isChecklistStateMap, roleProgress,
 } from './checklistTemplate';
 
 const tpl = CHECKLIST_TEMPLATES.default;
@@ -55,5 +55,48 @@ describe('isChecklistStateMap', () => {
     expect(isChecklistStateMap([])).toBe(false);
     expect(isChecklistStateMap({ a: { checked: 'yes', at: 'x' } })).toBe(false);
     expect(isChecklistStateMap({ a: 'checked' })).toBe(false);
+  });
+});
+
+describe('foldChecklistResponse', () => {
+  const T1 = '2026-08-19T00:00:00.000Z';
+  const T2 = '2026-08-19T00:01:00.000Z';
+
+  it("keeps a teammate's newer entry that landed before an older response", () => {
+    const remote = { a: { checked: true, at: T1 }, b: { checked: false, at: T1 } };
+    const local = { a: { checked: true, at: T1 }, b: { checked: true, at: T2, by: 'Sam' } };
+    expect(foldChecklistResponse(remote, local)).toEqual(local);
+  });
+
+  it('replaces an older local entry with a newer remote one', () => {
+    const remote = { b: { checked: false, at: T2 } };
+    const local = { b: { checked: true, at: T1 } };
+    expect(foldChecklistResponse(remote, local)).toEqual(remote);
+  });
+
+  it('always takes the server entry for the item the response answers', () => {
+    // The local entry is the optimistic flip, stamped by a client clock that
+    // may run ahead of the server's.
+    const remote = { a: { checked: true, at: T1, by: 'Alex' } };
+    const local = { a: { checked: true, at: T2 } };
+    expect(foldChecklistResponse(remote, local, new Set(), 'a')).toEqual(remote);
+  });
+
+  it('keeps the local entry for an item whose toggle is still in flight', () => {
+    const remote = { a: { checked: true, at: T2 } };
+    const local = { a: { checked: false, at: T1 } };
+    expect(foldChecklistResponse(remote, local, new Set(['a']), 'a')).toEqual(local);
+  });
+
+  it('keeps local-only entries', () => {
+    const remote = { a: { checked: true, at: T1 } };
+    const local = { b: { checked: true, at: T2 } };
+    expect(foldChecklistResponse(remote, local)).toEqual({ a: remote.a, b: local.b });
+  });
+
+  it('falls back to the remote entry when a stamp is unparsable', () => {
+    const remote = { a: { checked: false, at: 'not-a-date' } };
+    const local = { a: { checked: true, at: T2 } };
+    expect(foldChecklistResponse(remote, local)).toEqual(remote);
   });
 });

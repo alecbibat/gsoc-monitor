@@ -128,11 +128,7 @@ export function PinsController() {
   const setPhase = useScreensaverStore((s) => s.setPhase);
   const setCurrentPoi = useScreensaverStore((s) => s.setCurrentPoi);
 
-  const cancelledRef = useRef(false);
   const queueRef = useRef<VisitEntry[]>([]);
-  const poiTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const rafRef = useRef(0);
 
   const isPins = active && mode === 'pins';
 
@@ -140,7 +136,12 @@ export function PinsController() {
     if (!isPins || !viewer) return;
     const v = viewer;
 
-    cancelledRef.current = false;
+    // Per-run state, so a stopped session's pending terrain sample or flight
+    // callback can't resume into (or clobber the timers of) a restarted one.
+    let cancelled = false;
+    let poiTimer: ReturnType<typeof setTimeout> | null = null;
+    let dwellTimer: ReturnType<typeof setTimeout> | null = null;
+    let raf = 0;
     queueRef.current = buildQueue();
 
     const prevRequestRender = v.scene.requestRenderMode;
@@ -150,35 +151,44 @@ export function PinsController() {
     v.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(OVERVIEW_LON, OVERVIEW_LAT, OVERVIEW_ALT),
       duration: 2.5,
+      complete: () => {
+        if (cancelled) return;
+        v.scene.requestRenderMode = prevRequestRender; // parked: render on demand
+        v.scene.requestRender();
+      },
     });
 
     function scheduleNext() {
-      if (cancelledRef.current) return;
-      poiTimerRef.current = setTimeout(visitNext, rand(POI_INTERVAL_MIN_MS, POI_INTERVAL_MAX_MS));
+      if (cancelled) return;
+      poiTimer = setTimeout(visitNext, rand(POI_INTERVAL_MIN_MS, POI_INTERVAL_MAX_MS));
     }
 
     function orbitDwell(target: Cesium.Cartesian3, range: number) {
       setPhase('at-poi');
       const orbitStart = performance.now();
       const tick = () => {
-        if (cancelledRef.current) return;
+        if (cancelled) return;
         const heading =
           (((performance.now() - orbitStart) % ORBIT_PERIOD_MS) * Cesium.Math.TWO_PI) /
           ORBIT_PERIOD_MS;
         v.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, ORBIT_PITCH_RAD, range));
-        rafRef.current = requestAnimationFrame(tick);
+        raf = requestAnimationFrame(tick);
       };
-      rafRef.current = requestAnimationFrame(tick);
+      raf = requestAnimationFrame(tick);
 
-      dwellTimerRef.current = setTimeout(() => {
-        cancelAnimationFrame(rafRef.current);
+      dwellTimer = setTimeout(() => {
+        cancelAnimationFrame(raf);
         v.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
         leaveAndReturn();
       }, rand(POI_DWELL_MIN_MS, POI_DWELL_MAX_MS));
     }
 
     async function visitNext() {
-      if (cancelledRef.current) return;
+      if (cancelled) return;
+      // Continuous from here until the fly-back lands: the loot beam and
+      // shockwave animate via CallbackProperties with no render driver of
+      // their own, so this must precede setCurrentPoi (and the await below).
+      v.scene.requestRenderMode = false;
       if (queueRef.current.length === 0) queueRef.current = buildQueue();
       const entry = queueRef.current.shift()!;
 
@@ -215,7 +225,7 @@ export function PinsController() {
           orientation: { heading: 0, pitch: ORBIT_PITCH_RAD, roll: 0 },
           duration: 5.0,
           complete: () => {
-            if (cancelledRef.current) return;
+            if (cancelled) return;
             orbitDwell(target, ORBIT_RANGE_M);
           },
         });
@@ -235,7 +245,7 @@ export function PinsController() {
       setCurrentPoi(poi);
 
       const baseH = await sampleGroundHeight(v, entry.lon, entry.lat);
-      if (cancelledRef.current) return;
+      if (cancelled) return;
 
       const target = Cesium.Cartesian3.fromDegrees(entry.lon, entry.lat, baseH);
       const back = PIN_ORBIT_RANGE_M * Math.cos(-ORBIT_PITCH_RAD);
@@ -247,34 +257,37 @@ export function PinsController() {
         orientation: { heading: 0, pitch: ORBIT_PITCH_RAD, roll: 0 },
         duration: 5.0,
         complete: () => {
-          if (cancelledRef.current) return;
+          if (cancelled) return;
           orbitDwell(target, PIN_ORBIT_RANGE_M);
         },
       });
     }
 
     function leaveAndReturn() {
-      if (cancelledRef.current) return;
+      if (cancelled) return;
       setPhase('flying-back');
       setCurrentPoi(null);
       v.camera.flyTo({
         destination: Cesium.Cartesian3.fromDegrees(OVERVIEW_LON, OVERVIEW_LAT, OVERVIEW_ALT),
         duration: 4.5,
         complete: () => {
-          if (cancelledRef.current) return;
+          if (cancelled) return;
+          // Parked on the overview until the next visit: render on demand.
+          v.scene.requestRenderMode = prevRequestRender;
+          v.scene.requestRender();
           setPhase('rotating');
           scheduleNext();
         },
       });
     }
 
-    poiTimerRef.current = setTimeout(scheduleNext, 2800);
+    poiTimer = setTimeout(scheduleNext, 2800);
 
     return () => {
-      cancelledRef.current = true;
-      if (poiTimerRef.current) clearTimeout(poiTimerRef.current);
-      if (dwellTimerRef.current) clearTimeout(dwellTimerRef.current);
-      cancelAnimationFrame(rafRef.current);
+      cancelled = true;
+      if (poiTimer) clearTimeout(poiTimer);
+      if (dwellTimer) clearTimeout(dwellTimer);
+      cancelAnimationFrame(raf);
       v.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
       v.scene.requestRenderMode = prevRequestRender;
       v.scene.maximumRenderTimeChange = prevMaxRenderTime;

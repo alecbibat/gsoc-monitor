@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useCrisisStore, selectActive, type ActionEntryType, type ActionLogEntry } from './crisisStore';
 import { uploadImage } from '../lib/cloudinary';
 import { ImageLightbox, ZoomableImage } from './ImageLightbox';
@@ -55,7 +55,9 @@ const NEXT_TYPE: Record<ActionEntryType, ActionEntryType> = {
 
 // ── Table row ─────────────────────────────────────────────────────────────────
 
-function LogRow({
+// Memoised: untouched entries keep their identity across store updates and the
+// callbacks are stable, so a keystroke only re-renders (and re-formats) its row.
+const LogRow = memo(function LogRow({
   entry,
   autoFocus,
   onAutoFocused,
@@ -87,18 +89,21 @@ function LogRow({
 
   const attachFile = async (file: File, name = file.name || 'pasted-image.png') => {
     const seq = ++uploadSeq.current;
+    // The row belongs to the incident open right now; completions must land there
+    // even if the operator leaves the incident while the upload is in flight.
+    const incidentId = useCrisisStore.getState().activeIncidentId ?? undefined;
     if (isImageFile(file)) {
       // Show the filename immediately so the user knows the upload started.
-      updateActionEntry(entry.id, { attachmentName: name, attachmentData: undefined });
+      updateActionEntry(entry.id, { attachmentName: name, attachmentData: undefined }, incidentId);
       try {
         const dataUrl = await compressImage(file);
         const url = await uploadImage(dataUrl);
         if (uploadSeq.current !== seq) return;
-        updateActionEntry(entry.id, { attachmentName: name, attachmentData: url });
+        updateActionEntry(entry.id, { attachmentName: name, attachmentData: url }, incidentId);
       } catch {
         if (uploadSeq.current !== seq) return;
         // Upload failed — keep the name but clear any stale image.
-        updateActionEntry(entry.id, { attachmentName: name, attachmentData: undefined });
+        updateActionEntry(entry.id, { attachmentName: name, attachmentData: undefined }, incidentId);
       }
     } else {
       updateActionEntry(entry.id, { attachmentName: name });
@@ -264,11 +269,13 @@ function LogRow({
       </td>
     </tr>
   );
-}
+});
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function ActionLog() {
+// Memoised (no props): SituationReport re-renders on every Executive Summary /
+// field keystroke, which must not re-filter and re-render the whole log.
+export const ActionLog = memo(function ActionLog() {
   const actionLog = useCrisisStore((s) => selectActive(s)?.actionLog ?? []);
   // Frozen archive (F3): entries render read-only and the add buttons hide,
   // while view toggles, pagination and the image lightbox stay usable.
@@ -283,16 +290,20 @@ export function ActionLog() {
   // Focus the new row's description so a Ctrl+V right after "+ Action/Event" lands in it.
   const [focusId, setFocusId] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<{ src: string; alt?: string } | null>(null);
+  const clearFocus = useCallback(() => setFocusId(null), []);
+  const openImage = useCallback((src: string, alt?: string) => setLightbox({ src, alt }), []);
 
-  const infoCount = actionLog.filter((e) => entryTypeOf(e) === 'info').length;
-  const systemCount = actionLog.filter((e) => entryTypeOf(e) === 'system').length;
-  const visibleLog = actionLog.filter(
-    (e) =>
-      !(hideInfo && entryTypeOf(e) === 'info') &&
-      !(hideSystem && entryTypeOf(e) === 'system')
-  );
+  const { infoCount, systemCount, visibleLog } = useMemo(() => ({
+    infoCount: actionLog.filter((e) => entryTypeOf(e) === 'info').length,
+    systemCount: actionLog.filter((e) => entryTypeOf(e) === 'system').length,
+    visibleLog: actionLog.filter(
+      (e) =>
+        !(hideInfo && entryTypeOf(e) === 'info') &&
+        !(hideSystem && entryTypeOf(e) === 'system')
+    ),
+  }), [actionLog, hideInfo, hideSystem]);
   // New entries are prepended, so slicing from the top keeps the newest rows visible.
-  const shownLog = visibleLog.slice(0, limit);
+  const shownLog = useMemo(() => visibleLog.slice(0, limit), [visibleLog, limit]);
 
   const handleAdd = (type: ActionEntryType) => {
     // A new info row must not be born hidden by the filter.
@@ -407,8 +418,8 @@ export function ActionLog() {
                         key={entry.id}
                         entry={entry}
                         autoFocus={entry.id === focusId}
-                        onAutoFocused={() => setFocusId(null)}
-                        onOpenImage={(src, alt) => setLightbox({ src, alt })}
+                        onAutoFocused={clearFocus}
+                        onOpenImage={openImage}
                         readOnly={archived}
                       />
                     ))}
@@ -437,4 +448,4 @@ export function ActionLog() {
       )}
     </section>
   );
-}
+});

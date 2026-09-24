@@ -1,3 +1,4 @@
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
@@ -12,6 +13,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // by default. Point it at the real location explicitly.
 const cesiumBuildRootPath = path.resolve(__dirname, '../node_modules/cesium/Build');
 
+// Serve Cesium from a version-scoped directory so the server can mark it immutable.
+// The files are verbatim copies of the pinned npm package, so the version fully
+// determines their content. vite-plugin-cesium's copy resets mtimes, so the
+// default ETag changed on every deploy.
+const cesiumVersion: string = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, '../node_modules/cesium/package.json'), 'utf8'),
+).version;
+
 export default defineConfig({
   // Stamped at build time (i.e. when Heroku builds the slug) so the UI can show
   // when the latest deploy went out.
@@ -23,6 +32,7 @@ export default defineConfig({
     cesium({
       cesiumBuildRootPath,
       cesiumBuildPath: path.join(cesiumBuildRootPath, 'Cesium') + '/',
+      cesiumBaseUrl: `cesium-${cesiumVersion}/`,
     }),
   ],
   server: {

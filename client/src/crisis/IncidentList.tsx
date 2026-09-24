@@ -17,9 +17,15 @@ function NewIncidentPicker({ onClose }: { onClose: () => void }) {
   const createIncident = useCrisisStore((s) => s.createIncident);
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    // Document capture + stopPropagation (same as logViews EntryDetailModal):
+    // one Esc closes only this picker, not the whole crisis workspace behind it.
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      onClose();
+    };
+    document.addEventListener('keydown', handler, true);
+    return () => document.removeEventListener('keydown', handler, true);
   }, [onClose]);
 
   const pick = (type: IncidentType) => {

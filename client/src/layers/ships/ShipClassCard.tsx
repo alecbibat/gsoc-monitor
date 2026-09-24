@@ -1,7 +1,22 @@
 import { lazy, Suspense } from 'react';
 
 // Pulls in Three.js — loaded on demand when a ship panel opens.
-const ShipModel3D = lazy(() => import('./ShipModel3D').then((m) => ({ default: m.ShipModel3D })));
+// If the chunk can't be fetched (e.g. a tab left open across a deploy: the
+// server 404s the old hashed chunk), the decorative model degrades to the
+// same empty box as the Suspense fallback instead of the lazy rejection
+// taking down the whole ship panel via PanelErrorBoundary.
+const ShipModel3D = lazy(() =>
+  import('./ShipModel3D')
+    .then((m) => ({ default: m.ShipModel3D }))
+    .catch((err: unknown) => {
+      console.warn('[ships] 3D model chunk failed to load:', err);
+      return { default: ModelPlaceholder };
+    })
+);
+
+function ModelPlaceholder(_props: { variant: 'star' | 'wind'; color: string; masts?: number }) {
+  return <div style={{ width: MODEL_W, height: MODEL_H }} />;
+}
 
 // Matches ShipModel3D's default width/height so the card doesn't jump when
 // the chunk resolves.

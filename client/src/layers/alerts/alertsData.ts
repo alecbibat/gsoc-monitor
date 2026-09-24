@@ -25,6 +25,11 @@ const ALERTS_TIMEOUT_MS = 20_000;
 // only reference county SAME codes, which we resolve against these polygons.
 const COUNTY_GEOJSON =
   'https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json';
+// A blackholed county host (DROP, no RST) would otherwise only fail at the OS
+// connect timeout (~2 min on Linux/ChromeOS), holding up every alerts redraw,
+// proximity scan and risk report that awaits it. Bound only the wait for
+// response headers: once the server answers, a slow body is left to finish.
+const COUNTY_HEADERS_TIMEOUT_MS = 20_000;
 
 export interface RawAlert {
   id?: string;
@@ -150,8 +155,11 @@ function extractRings(geometry: GeoJSON.Geometry | null | undefined): number[][]
 let countyPromise: Promise<Map<string, GeoJSON.Geometry>> | null = null;
 export function loadCounties(): Promise<Map<string, GeoJSON.Geometry>> {
   if (!countyPromise) {
-    countyPromise = fetch(COUNTY_GEOJSON)
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), COUNTY_HEADERS_TIMEOUT_MS);
+    countyPromise = fetch(COUNTY_GEOJSON, { signal: ctrl.signal })
       .then((r) => {
+        clearTimeout(timer); // headers arrived — never abort the body download
         if (!r.ok) throw new Error(`county geojson ${r.status}`);
         return r.json() as Promise<GeoJSON.FeatureCollection>;
       })
@@ -163,6 +171,7 @@ export function loadCounties(): Promise<Map<string, GeoJSON.Geometry>> {
         return map;
       })
       .catch((err) => {
+        clearTimeout(timer);
         countyPromise = null;
         throw err;
       });

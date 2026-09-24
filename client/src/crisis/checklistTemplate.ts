@@ -303,6 +303,32 @@ export function isChecklistStateMap(v: unknown): v is ChecklistStateMap {
   );
 }
 
+/**
+ * Fold a toggle endpoint's RESPONSE map into the checklist state already on
+ * screen. The server answers only after its share-snapshot fanout, so SSE
+ * upserts carrying LATER commits (a teammate's toggle) can land first; a
+ * wholesale replace would revert them. Per item the later server stamp wins
+ * (ties / unparsable stamps -> the response). Items in `keepLocal` (a toggle of
+ * theirs still in flight) keep the local entry; `ownItemId` (the item this
+ * response answers) always takes the server entry, because its local entry
+ * carries an optimistic client-clock stamp. Local-only entries are kept: the
+ * server never removes items, so they can only come from a newer echo.
+ */
+export function foldChecklistResponse(
+  remote: ChecklistStateMap,
+  local: ChecklistStateMap,
+  keepLocal: ReadonlySet<string> = new Set(),
+  ownItemId: string | null = null
+): ChecklistStateMap {
+  const merged: ChecklistStateMap = { ...local };
+  for (const [id, r] of Object.entries(remote)) {
+    const l = local[id];
+    if (l && keepLocal.has(id)) continue;
+    if (!l || id === ownItemId || !(Date.parse(l.at) > Date.parse(r.at))) merged[id] = r;
+  }
+  return merged;
+}
+
 /** Checked/total across one role, for the progress chips. */
 export function roleProgress(role: ChecklistRoleDef, state: ChecklistStateMap): { done: number; total: number } {
   let done = 0;

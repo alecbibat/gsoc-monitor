@@ -9,7 +9,7 @@ const AIRNOW_KEY = process.env.AIRNOW_API_KEY ?? '';
 const PURPLEAIR_KEY = process.env.PURPLEAIR_API_KEY ?? '';
 // CONUS bounding box — covers the continental US plus a bit of Canada/Mexico
 const BBOX = '-130,20,-60,55';
-const PARAMETERS = 'PM25,O3,PM10,CO,NO2,SO2';
+const PARAMETERS = 'OZONE,PM25,PM10,CO,NO2,SO2';
 const TTL_MS = 15 * 60 * 1000; // 15 min — AirNow is hourly; PurpleAir is ~real-time
 // PurpleAir CONUS can return >15k sensors; cap what we hand the client so the map
 // stays renderable. Over the cap we stride-sample to keep the spatial spread.
@@ -20,17 +20,38 @@ const PA_CONFIDENCE_MIN = 70;
 
 // --- Types ---
 
+// aq/data ("Observations by Monitoring Site") rows: {Latitude, Longitude, UTC,
+// Parameter, Unit, AQI, Category:<number>, SiteName (verbose=1)}. Reporting-area
+// fields are kept optional so that schema also parses unchanged.
 interface AirNowEntry {
-  DateObserved: string;
-  HourObserved: number;
-  LocalTimeZone: string;
-  ReportingArea: string;
-  StateCode: string;
   Latitude: number;
   Longitude: number;
-  ParameterName: string;
   AQI: number;
-  Category: { Number: number; Name: string };
+  UTC?: string; // "YYYY-MM-DDTHH:MM", UTC
+  Parameter?: string; // "PM2.5" | "OZONE" | "PM10" | "CO" | "NO2" | "SO2"
+  Category?: number | { Number: number; Name: string };
+  SiteName?: string;
+  DateObserved?: string;
+  HourObserved?: number;
+  LocalTimeZone?: string;
+  ReportingArea?: string;
+  StateCode?: string;
+  ParameterName?: string;
+}
+
+// One AirNow row normalized across both schemas.
+interface AirNowObs {
+  lat: number;
+  lon: number;
+  aqi: number;
+  param: string;
+  ts: number; // observation time, epoch ms (0 if unparseable)
+  hour: number;
+  tz: string;
+  area: string;
+  state: string;
+  catNum: number;
+  catName: string;
 }
 
 export interface AqiStation {
@@ -111,9 +132,55 @@ function epaCorrect(paCf1: number, rh: number): number {
 
 // --- AirNow -----------------------------------------------------------------
 
+const AIRNOW_PARAM_ALIAS: Record<string, string> = { OZONE: 'O3' }; // client labels use 'O3'
+
+function normalizeAirNow(e: AirNowEntry): AirNowObs | null {
+  if (!e || typeof e !== 'object') return null;
+  const lat = Number(e.Latitude);
+  const lon = Number(e.Longitude);
+  const aqi = Number(e.AQI);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(aqi) || aqi < 0) return null; // -1/-999 = no data
+  const rawParam = String(e.ParameterName ?? e.Parameter ?? '').trim();
+  if (!rawParam) return null;
+  const param = AIRNOW_PARAM_ALIAS[rawParam.toUpperCase()] ?? rawParam;
+  let ts: number;
+  let hour: number;
+  let tz: string;
+  if (typeof e.UTC === 'string' && e.UTC.trim()) {
+    const u = e.UTC.trim();
+    ts = Date.parse(/z$/i.test(u) ? u : `${u}Z`) || 0;
+    hour = ts ? new Date(ts).getUTCHours() : -1;
+    tz = 'UTC';
+  } else {
+    // Reporting-area schema: compare full timestamps, since HourObserved alone
+    // is hour-of-day (0–23) and yesterday's hour 23 would beat today's hour 0.
+    const h = Number(e.HourObserved);
+    ts = Date.parse(`${String(e.DateObserved ?? '').trim()}T${String(Number.isFinite(h) ? h : 0).padStart(2, '0')}:00:00Z`) || 0;
+    hour = Number.isFinite(h) ? h : -1;
+    tz = e.LocalTimeZone ?? '';
+  }
+  const cat =
+    e.Category && typeof e.Category === 'object' && typeof e.Category.Name === 'string'
+      ? { num: e.Category.Number, name: e.Category.Name }
+      : aqiToCategory(aqi); // numeric Category: same EPA breakpoints/names
+  return {
+    lat,
+    lon,
+    aqi,
+    param,
+    ts,
+    hour,
+    tz,
+    area: String(e.ReportingArea ?? e.SiteName ?? '').trim(),
+    state: e.StateCode ?? '',
+    catNum: cat.num,
+    catName: cat.name,
+  };
+}
+
 async function fetchAirNow(): Promise<AqiStation[]> {
-  // AirNow date format: YYYY-MM-DDTHH (local station time)
-  // Request a 3-hour window ending now so every timezone is covered.
+  // aq/data date format: YYYY-MM-DDTHH, in UTC (what toISOString gives).
+  // Request a 3-hour window ending now so late-reporting monitors are covered.
   const now = new Date();
   const endDate = now.toISOString().slice(0, 13);
   const startDate = new Date(now.getTime() - 3 * 60 * 60 * 1000).toISOString().slice(0, 13);
@@ -121,7 +188,7 @@ async function fetchAirNow(): Promise<AqiStation[]> {
   const url =
     `https://www.airnowapi.org/aq/data/?startDate=${startDate}&endDate=${endDate}` +
     `&parameters=${PARAMETERS}&BBOX=${BBOX}&dataType=A&format=application%2Fjson` +
-    `&verbose=0&monitorType=0&includerawconcentrations=0&API_KEY=${AIRNOW_KEY}`;
+    `&verbose=1&monitorType=0&includerawconcentrations=0&API_KEY=${AIRNOW_KEY}`;
 
   const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
   if (!res.ok) throw new Error(`AirNow returned HTTP ${res.status}`);
@@ -130,24 +197,20 @@ async function fetchAirNow(): Promise<AqiStation[]> {
   if (!Array.isArray(entries)) throw new Error('AirNow returned unexpected format');
 
   // Group by station location key, keeping the most recent observation per
-  // (station, parameter) pair (highest HourObserved wins within a location).
-  const byStation = new Map<string, Map<string, AirNowEntry>>();
-  for (const e of entries) {
-    if (e.AQI < 0) continue; // -1 = data not available
-    const key = `${e.Latitude.toFixed(3)},${e.Longitude.toFixed(3)}`;
+  // (station, parameter) pair — the window holds several hours per monitor.
+  const byStation = new Map<string, Map<string, AirNowObs>>();
+  for (const raw of entries) {
+    const o = normalizeAirNow(raw);
+    if (!o) continue;
+    const key = `${o.lat.toFixed(3)},${o.lon.toFixed(3)}`;
     let paramMap = byStation.get(key);
     if (!paramMap) {
-      paramMap = new Map<string, AirNowEntry>();
+      paramMap = new Map<string, AirNowObs>();
       byStation.set(key, paramMap);
     }
-    // Compare full timestamps: HourObserved alone is hour-of-day (0–23), so
-    // around each station's local midnight yesterday's hour-23 entry would beat
-    // today's hour-0 and pin stale readings for up to 3 hours.
-    const existing = paramMap.get(e.ParameterName);
-    const obsKey = (x: AirNowEntry) =>
-      Date.parse(`${x.DateObserved.trim()}T${String(x.HourObserved).padStart(2, '0')}:00:00Z`) || 0;
-    if (!existing || obsKey(e) > obsKey(existing)) {
-      paramMap.set(e.ParameterName, e);
+    const existing = paramMap.get(o.param);
+    if (!existing || o.ts > existing.ts) {
+      paramMap.set(o.param, o); // latest observation wins
     }
   }
 
@@ -155,24 +218,24 @@ async function fetchAirNow(): Promise<AqiStation[]> {
   const stations: AqiStation[] = [];
   for (const [key, paramMap] of byStation) {
     const allParams = [...paramMap.values()];
-    const dominant = allParams.reduce((max, e) => (e.AQI > max.AQI ? e : max));
+    const dominant = allParams.reduce((max, o) => (o.aqi > max.aqi ? o : max));
     stations.push({
       id: `aqi-${key}`,
       source: 'airnow',
-      lat: dominant.Latitude,
-      lon: dominant.Longitude,
-      aqi: dominant.AQI,
-      categoryNum: dominant.Category.Number,
-      categoryName: dominant.Category.Name,
-      parameter: dominant.ParameterName,
-      reportingArea: dominant.ReportingArea,
-      state: dominant.StateCode,
-      hourObserved: dominant.HourObserved,
-      timezone: dominant.LocalTimeZone,
-      all: allParams.map((e) => ({
-        parameter: e.ParameterName,
-        aqi: e.AQI,
-        category: e.Category.Name,
+      lat: dominant.lat,
+      lon: dominant.lon,
+      aqi: dominant.aqi,
+      categoryNum: dominant.catNum,
+      categoryName: dominant.catName,
+      parameter: dominant.param,
+      reportingArea: dominant.area,
+      state: dominant.state,
+      hourObserved: dominant.hour,
+      timezone: dominant.tz,
+      all: allParams.map((o) => ({
+        parameter: o.param,
+        aqi: o.aqi,
+        category: o.catName,
       })),
     });
   }

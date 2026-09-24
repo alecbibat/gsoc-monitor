@@ -2,11 +2,11 @@ import * as Cesium from 'cesium';
 import { useCallback, useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
-import { attachPanelData } from '../../cesium/entityPanelLink';
 import { api } from '../../api/client';
 import { startVisiblePolling } from '../../lib/poll';
 import { useAqiStatus } from './aqiStore';
 import type { AqiResponse } from '../../types';
+import type { PanelOpenData } from '../../panels/panelStore';
 
 // Official EPA / AirNow AQI color scale — the standard AirNow legend, keyed by
 // category number (1–6).
@@ -89,23 +89,32 @@ function paSize(cat: number): number {
   return 12 + (cat - 1) * 1.5; // 12–19.5px, smaller than the AirNow badges
 }
 
+// Fade out at globe scale so the map isn't a wall of dots. Billboards clone it,
+// so one shared instance is safe.
+const AQI_SCALE = new Cesium.NearFarScalar(1.0e5, 1.0, 6.0e6, 0.3);
+
 export function AqiLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.aqi);
   const showAirnow = useAqiStatus((s) => s.showAirnow);
   const showPurpleair = useAqiStatus((s) => s.showPurpleair);
 
-  const dsRef = useRef<Cesium.CustomDataSource | null>(null);
+  const bbRef = useRef<Cesium.BillboardCollection | null>(null);
   const dataRef = useRef<AqiResponse | null>(null);
 
+  // A raw BillboardCollection rather than entities: entity billboards are
+  // re-synced by BillboardVisualizer on every clock tick (every rAF, even when
+  // requestRenderMode skips the draw), which for thousands of static stations
+  // is milliseconds of CPU per frame. A primitive is only touched on a render.
   useEffect(() => {
     if (!viewer) return;
-    const ds = new Cesium.CustomDataSource('aqi');
-    dsRef.current = ds;
-    viewer.dataSources.add(ds);
+    const bb = viewer.scene.primitives.add(
+      new Cesium.BillboardCollection({ scene: viewer.scene })
+    ) as Cesium.BillboardCollection;
+    bbRef.current = bb;
     return () => {
-      viewer.dataSources.remove(ds, true);
-      dsRef.current = null;
+      bbRef.current = null;
+      if (!viewer.isDestroyed()) viewer.scene.primitives.remove(bb); // destroys bb
     };
   }, [viewer]);
 
@@ -113,9 +122,9 @@ export function AqiLayer() {
   // Kept separate from the fetch so flipping a source on/off re-renders instantly
   // without a network round-trip.
   const render = useCallback(() => {
-    const ds = dsRef.current;
-    if (!viewer || !ds) return;
-    ds.entities.removeAll();
+    const bb = bbRef.current;
+    if (!viewer || !bb) return;
+    bb.removeAll();
     if (!active) {
       viewer.scene.requestRender();
       return;
@@ -145,24 +154,25 @@ export function AqiLayer() {
       const isPa = s.source === 'purpleair';
       const cat = aqiCategory(s.aqi);
       const sz = isPa ? paSize(cat) : iconSize(s.aqi);
-      const entity = ds.entities.add({
-        id: s.id,
+      bb.add({
         position: Cesium.Cartesian3.fromDegrees(s.lon, s.lat, 0),
-        billboard: {
-          image: isPa ? paDotIcon(cat) : aqiIcon(s.aqi),
-          width: sz,
-          height: sz,
-          verticalOrigin: Cesium.VerticalOrigin.CENTER,
-          // Fade out at globe scale so the map isn't a wall of dots.
-          scaleByDistance: new Cesium.NearFarScalar(1.0e5, 1.0, 6.0e6, 0.3),
+        image: isPa ? paDotIcon(cat) : aqiIcon(s.aqi),
+        width: sz,
+        height: sz,
+        verticalOrigin: Cesium.VerticalOrigin.CENTER,
+        scaleByDistance: AQI_SCALE,
+        // The picked `id`: the global click handler reads `gsocPanel` off it
+        // exactly as it does off an entity (see entityPanelLink).
+        id: {
+          id: s.id,
+          gsocPanel: {
+            id: s.id,
+            kind: 'aqi',
+            title: s.reportingArea,
+            subtitle: `AQI ${s.aqi} · ${s.categoryName}${isPa ? ' · PurpleAir' : ''}`,
+            payload: s as unknown as Record<string, unknown>,
+          } satisfies PanelOpenData,
         },
-      });
-      attachPanelData(entity, {
-        id: s.id,
-        kind: 'aqi',
-        title: s.reportingArea,
-        subtitle: `AQI ${s.aqi} · ${s.categoryName}${isPa ? ' · PurpleAir' : ''}`,
-        payload: s as unknown as Record<string, unknown>,
       });
 
       visible++;
@@ -194,8 +204,7 @@ export function AqiLayer() {
   useEffect(() => {
     if (!viewer) return;
     if (!active) {
-      const ds = dsRef.current;
-      if (ds) ds.entities.removeAll();
+      bbRef.current?.removeAll();
       useAqiStatus.getState().setStatus({ count: 0, worstAqi: 0, worstCategory: '' });
       viewer.scene.requestRender();
       return;

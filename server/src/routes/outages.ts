@@ -455,15 +455,25 @@ async function fetchKubraSource(src: KubraSource): Promise<Outage[]> {
     });
   };
 
-  const fetchTile = async (qk: string): Promise<{ qk: string; records: KubraRecord[] }> => {
+  const fetchTile = async (qk: string): Promise<{ qk: string; records: KubraRecord[]; failed: boolean }> => {
     const qkh = qk.slice(-3).split('').reverse().join('');
     const path = cigd.includes('{qkh}') ? cigd.replace('{qkh}', qkh) : cigd;
     const url = `https://kubra.io/${path}/public/${clusterLayerId}/${qk}.json`;
     try {
-      const tile = await getJson<{ file_data?: KubraRecord[] }>(url);
-      return { qk, records: tile.file_data ?? [] };
-    } catch {
-      return { qk, records: [] }; // 404 = empty tile — normal
+      const tile = await getJson<{ file_data?: KubraRecord[] } | null>(url);
+      return { qk, records: tile?.file_data ?? [], failed: false };
+    } catch (err) {
+      // A missing tile (4xx from the tile store) is a normal empty tile. A
+      // transient failure (timeout, network error, 5xx, 429) is NOT: its parent
+      // must not be treated as fully refined, or its parked clusters are lost.
+      const name = (err as { name?: string } | null)?.name;
+      const msg = err instanceof Error ? err.message : '';
+      const failed =
+        name === 'TimeoutError' ||
+        name === 'AbortError' ||
+        (err instanceof TypeError && msg === 'fetch failed') ||
+        /^HTTP (5\d\d|429)\b/.test(msg);
+      return { qk, records: [], failed };
     }
   };
 
@@ -472,6 +482,11 @@ async function fetchKubraSource(src: KubraSource): Promise<Outage[]> {
     if (fetched + group.length > KUBRA_TILE_CAP) break; // whole group or nothing
     fetched += group.length;
     const tiles = await Promise.all(group.map(fetchTile));
+    // A failed child leaves its parent un-refined: skip the whole sibling group
+    // so the parent's parked clusters stay in `pending` and are flushed as
+    // aggregates below (same path as a cap/deadline truncation). Processing the
+    // successful siblings would double-count them against that aggregate.
+    if (group.length > 1 && tiles.some((t) => t.failed)) continue;
     for (const t of tiles) {
       const clusters = t.records.filter((r) => r.desc?.cluster === true);
       if (clusters.length > 0 && t.qk.length < KUBRA_MAX_QK_LEN) {

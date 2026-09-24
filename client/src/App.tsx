@@ -70,6 +70,7 @@ import { useCrisisStore } from './crisis/crisisStore';
 import { useCrisisMapFrameStore } from './ui/uiStore';
 import { useRiskReportStore } from './riskreport/riskReportStore';
 import { AuthGate } from './auth/AuthGate';
+import { lazyWithReload } from './lib/lazyWithReload';
 
 // Detect share link — renders a completely separate read-only view. Lazy so the
 // main bundle doesn't carry the share view or its Leaflet dependency (and the
@@ -83,10 +84,10 @@ const CrisisShareView = lazy(() =>
 // operator opens it, so its whole UI tree stays out of the entry chunk. The
 // gate only subscribes to the (eager) store; share-link auto-publish keeps
 // running in the always-mounted IncidentSync.
-const CrisisOverlay = lazy(() =>
+const CrisisOverlay = lazyWithReload(() =>
   import('./crisis/CrisisOverlay').then((m) => ({ default: m.CrisisOverlay }))
 );
-const RiskReportHost = lazy(() =>
+const RiskReportHost = lazyWithReload(() =>
   import('./riskreport/RiskReportHost').then((m) => ({ default: m.RiskReportHost }))
 );
 
@@ -115,9 +116,14 @@ function GlobeFrame({ viewer, children }: { viewer: Cesium.Viewer | null; childr
   return (
     <div
       className={frame ? 'fixed z-[50] overflow-hidden' : 'absolute inset-0'}
-      style={frame ? { left: frame.left, top: frame.top, width: frame.width, height: frame.height } : undefined}
+      // Docked: the non-none transform makes this box the containing block for
+      // the pick chooser's position:fixed layers, so its canvas-relative click
+      // coordinates land inside the dock's map window (same trick as
+      // CrisisShareGlobe's frame).
+      style={frame ? { left: frame.left, top: frame.top, width: frame.width, height: frame.height, transform: 'translateZ(0)' } : undefined}
     >
       {children}
+      <PickChooser bounds={frame ? { width: frame.width, height: frame.height } : undefined} />
     </div>
   );
 }
@@ -239,7 +245,6 @@ export default function App() {
           <RadarTimeline />
         </div>
         <HoverOverlay />
-        <PickChooser />
         <NewsTicker />
         <CrisisOverlayGate />
         <CrisisDrawController />

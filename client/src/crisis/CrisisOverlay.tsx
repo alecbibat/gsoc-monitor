@@ -49,6 +49,8 @@ function ShareLinksPanel() {
   const [label, setLabel] = useState('');
   // Access stats per token, fetched when the panel opens ("opened N× · last …").
   const [access, setAccess] = useState<Record<string, { count: number; viewers: number; lastAt: string | null }>>({});
+  // Tokens with a revoke in flight, so a double-click can't log it twice.
+  const revokingRef = useRef<Set<string>>(new Set());
 
   const shareLinks = inc?.shareLinks ?? [];
   const activeLinks = shareLinks.filter((l) => l.active);
@@ -74,6 +76,9 @@ function ShareLinksPanel() {
 
   const handleCreate = async () => {
     if (!inc) return;
+    // The link belongs to the incident being published, even if the operator
+    // has opened another one (or gone back to the list) by the time it resolves.
+    const incId = inc.id;
     setPublishing(true);
     setError(null);
     try {
@@ -96,7 +101,7 @@ function ShareLinksPanel() {
         token: string; url: string; password?: string; expiresAt?: string;
       };
       const fullUrl = `${window.location.origin}${url}`;
-      addShareLink(token, fullUrl, password, label.trim() || undefined, expiresAt);
+      addShareLink(token, fullUrl, password, label.trim() || undefined, expiresAt, incId);
       setLabel('');
       setOpen(true);
     } catch (err) {
@@ -108,21 +113,37 @@ function ShareLinksPanel() {
   };
 
   const handleRenew = async (token: string) => {
+    const incId = inc?.id;
     try {
       const res = await fetch(`/api/crisis/share/${token}/renew`, { method: 'POST', credentials: 'include' });
       if (!res.ok) throw new Error(String(res.status));
       const { expiresAt } = await res.json() as { expiresAt: string };
-      renewShareLink(token, expiresAt);
+      renewShareLink(token, expiresAt, incId);
     } catch (err) {
       console.warn('[crisis] renew failed', err);
     }
   };
 
+  // Revoke on the server first (as StandDownModal does) and only then mark it
+  // revoked locally — flipping first showed and logged a failed revoke (401,
+  // 503) as done while the link stayed live, with no Revoke button to retry.
+  // The flip targets the link's own incident in case the operator moved on.
   const handleDeactivate = async (token: string) => {
-    deactivateShareLink(token);
+    if (revokingRef.current.has(token)) return;
+    revokingRef.current.add(token);
+    const incId = inc?.id;
+    setError(null);
     try {
-      await fetch(`/api/crisis/share/${token}`, { method: 'DELETE' });
-    } catch { /* server already gone */ }
+      const res = await fetch(`/api/crisis/share/${token}`, { method: 'DELETE', credentials: 'include' });
+      // 404 = the server has no such row (already gone), so treat it as revoked.
+      if (!res.ok && res.status !== 404) throw new Error(String(res.status));
+      deactivateShareLink(token, incId);
+    } catch (err) {
+      console.warn('[crisis] revoke failed', err);
+      setError(`Could not revoke link (${err instanceof Error ? err.message : 'network error'}) — it is still live; please try again.`);
+    } finally {
+      revokingRef.current.delete(token);
+    }
   };
 
   const handleCopy = (url: string, token: string) => {

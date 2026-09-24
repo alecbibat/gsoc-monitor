@@ -193,8 +193,13 @@ export function recordTrackPoint(
 }
 
 // Recording only purges when a new moving fix arrives, so a parked aircraft
-// would otherwise keep yesterday's trail on the map (and in the snapshot)
-// forever. Run each group's age cutoff on every poll instead.
+// would otherwise keep yesterday's trail on the map forever. Run each group's
+// age cutoff on every poll instead. A partial prune does NOT dirty the
+// snapshot: loadSnapshot re-applies the same per-group cutoff on restore, so a
+// few aged-out points in the stored copy restore identically, and they are
+// dropped by the next save that happens for a real reason (fix, event,
+// airframe info). Only a trail that has fully aged out forces a save, so a
+// long-parked tail's dead trail doesn't linger in the snapshot indefinitely.
 function pruneHistories(): void {
   const now = Date.now();
   for (const [reg, pts] of history) {
@@ -204,7 +209,7 @@ function pruneHistories(): void {
       pts.shift();
       dropped = true;
     }
-    if (dropped) snapshotDirty = true;
+    if (dropped && pts.length === 0) snapshotDirty = true;
   }
 }
 
@@ -382,8 +387,15 @@ interface FlightsSnapshot {
 const SAVE_MIN_INTERVAL_MS = 30_000;
 let snapshotDirty = false;
 let lastSaveAt = 0;
+// Saves are held until the persisted snapshot has been read (row or no row):
+// booting while Postgres is unreachable must not let this process's partial
+// live state overwrite parked positions, trails and events it never restored.
+let snapshotLoaded = false;
+let snapshotLoadWarned = false;
+const SNAPSHOT_RELOAD_MS = 60_000;
 
 function saveSnapshot(): void {
+  if (!snapshotLoaded) return; // keep snapshotDirty set; the first post-load save writes the merged state
   if (!snapshotDirty || Date.now() - lastSaveAt < SAVE_MIN_INTERVAL_MS) return;
   snapshotDirty = false;
   lastSaveAt = Date.now();
@@ -423,6 +435,9 @@ async function loadSnapshot(attempts = 5): Promise<void> {
         'SELECT data FROM snapshots WHERE key = $1',
         [SNAPSHOT_KEY]
       );
+      // Set before the (synchronous) merge, not after: a malformed row that
+      // makes the merge throw must not hold saves forever.
+      snapshotLoaded = true;
       const snap = rows[0]?.data;
       if (!snap) return;
       let restored = 0;
@@ -472,10 +487,19 @@ async function loadSnapshot(attempts = 5): Promise<void> {
       return;
     } catch (err) {
       if (attempt === attempts) {
-        console.warn(
-          '[flights] snapshot load failed:',
-          err instanceof Error ? err.message : err
-        );
+        // Warn once, not on every background retry through a long outage.
+        if (!snapshotLoadWarned) {
+          snapshotLoadWarned = true;
+          console.warn(
+            '[flights] snapshot load failed:',
+            err instanceof Error ? err.message : err
+          );
+        }
+        if (!snapshotLoaded) {
+          // Keep trying in the background; saves stay held until a load succeeds.
+          const t = setTimeout(() => void loadSnapshot(1), SNAPSHOT_RELOAD_MS);
+          t.unref?.();
+        }
         return;
       }
       await new Promise((res) => setTimeout(res, 2_000 * attempt));
@@ -622,11 +646,20 @@ router.get('/registrations', async (_req, res) => {
   // First request after a cold boot or a long idle stretch: a fresh fix is one
   // fetch away, so take it rather than serving the keep-warm data.
   if (Date.now() - lastPollAt > FAST_POLL_MS + 5_000) {
-    try {
-      await poll();
-    } catch {
-      // Serve what we have — last-known is the product here.
-    }
+    // Wait briefly for the fresh fix, but never hold the request hostage to a
+    // slow upstream (a specials tick trickles 7 tails sequentially, each with a
+    // 10s timeout): past the bound, serve last-known. The poll keeps running
+    // and the next client tick picks up its result.
+    let waitTimer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      poll().catch(() => {
+        // Serve what we have — last-known is the product here.
+      }),
+      new Promise<void>((resolve) => {
+        waitTimer = setTimeout(resolve, 5_000);
+      }),
+    ]);
+    clearTimeout(waitTimer);
   }
   const now = Date.now();
   const flights = TRACKED_TAILS.flatMap((reg) => {

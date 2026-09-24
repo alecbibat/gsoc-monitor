@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { flyToBoundingBox, flyToLonLat } from '../cesium/flyTo';
 import { api } from '../api/client';
@@ -18,6 +18,9 @@ export function SearchBar() {
   const [results, setResults] = useState<Result[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bumped by every search (and result click) so a slow geocode response that
+  // lands after a newer one can't fly the camera or overwrite the input.
+  const seqRef = useRef(0);
 
   function flyToResult(r: Result) {
     if (!viewer) return;
@@ -34,10 +37,12 @@ export function SearchBar() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!viewer || !query.trim()) return;
+    const seq = ++seqRef.current; // supersedes any in-flight geocode
     setError(null);
 
     const latLonMatch = query.match(LAT_LON_RE);
     if (latLonMatch) {
+      setLoading(false); // the superseded request's finally will no longer clear it
       flyToLonLat(viewer, Number(latLonMatch[2]), Number(latLonMatch[1]));
       setResults([]);
       return;
@@ -46,6 +51,7 @@ export function SearchBar() {
     setLoading(true);
     try {
       const data = await api.geocode(query);
+      if (seq !== seqRef.current) return; // stale response
       if (data.length === 0) {
         setError('No matches found');
         setResults([]);
@@ -55,9 +61,10 @@ export function SearchBar() {
         setResults(data);
       }
     } catch {
+      if (seq !== seqRef.current) return;
       setError('Search failed');
     } finally {
-      setLoading(false);
+      if (seq === seqRef.current) setLoading(false);
     }
   }
 
@@ -82,7 +89,11 @@ export function SearchBar() {
           {results.map((r, i) => (
             <button
               key={i}
-              onClick={() => flyToResult(r)}
+              onClick={() => {
+                seqRef.current++; // an explicit pick beats any pending search
+                setLoading(false);
+                flyToResult(r);
+              }}
               className="block w-full truncate px-3 py-2 text-left text-[12px] text-white/75 hover:bg-white/10"
             >
               {r.display_name}
