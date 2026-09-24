@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import { cache } from '../cache';
+import { readAuthUser } from '../middleware/auth';
 
 const router = Router();
 
@@ -229,7 +230,10 @@ async function fetchFeed(url: string, source: string, maxBytes?: number): Promis
       const location = r.status >= 300 && r.status < 400 ? r.headers.get('location') : null;
       if (!location) break;
       await r.body?.cancel();
-      const next = new URL(location, target).toString();
+      // Headers arrive as latin1 byte strings; undici's own redirect handling
+      // re-reads a raw UTF-8 Location as UTF-8, so do the same.
+      const raw = /[^\x00-\x7f]/.test(location) ? Buffer.from(location, 'latin1').toString('utf8') : location;
+      const next = new URL(raw, target).toString();
       if (hop >= MAX_FEED_REDIRECTS) throw new Error(`${source} too many redirects`);
       if (!isAllowedFeedUrl(next)) throw new Error(`${source} redirected to a disallowed host`);
       target = next;
@@ -321,12 +325,11 @@ async function getBase(): Promise<NewsResult & { stale?: boolean }> {
 
 router.get('/', async (req, res) => {
   // Parse user-supplied extra RSS feeds from ?extra=<url-encoded-json>.
-  // Custom feeds make the server fetch caller-chosen URLs, so each one must be a
-  // public http(s) URL and the count and size are capped. No session check: a
-  // wall display left signed in past the 30-day cookie would otherwise lose its
-  // custom sources silently while every other feed kept updating.
+  // Custom feeds make the server fetch caller-chosen URLs. Only the signed-in
+  // dashboard sends them (NewsWidget/NewsTicker live behind AuthGate), so
+  // anonymous callers get the standard feed set.
   const extraFeeds: Array<{ url: string; source: string }> = [];
-  if (typeof req.query.extra === 'string') {
+  if (typeof req.query.extra === 'string' && readAuthUser(req)) {
     try {
       const parsed: unknown = JSON.parse(req.query.extra);
       if (Array.isArray(parsed)) {

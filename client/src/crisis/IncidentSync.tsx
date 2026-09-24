@@ -347,6 +347,7 @@ export function IncidentSync() {
       const busyAtStart = new Set(blobInflight.keys());
       const skip = (id: string) =>
         touched.has(id) || busyAtStart.has(id) || pending.has(id) || blobInflight.has(id);
+      let fetched = false; // past the GET: a later throw is bad data, not an outage
       fetch('/api/incidents', { credentials: 'include', signal: ctrl.signal })
         .then((r) => {
           if (!r.ok) throw new Error(String(r.status));
@@ -355,7 +356,7 @@ export function IncidentSync() {
         .then((incidents) => {
           if (ctrl.signal.aborted || disposed) return;
           if (!Array.isArray(incidents)) throw new Error('unexpected body');
-          resyncDelay = 5_000;
+          fetched = true;
           // A local incident with no baseline holds an edit whose push failed
           // (rolled back); the watcher re-pushes it on the next change, so the
           // snapshot must not revert it.
@@ -379,10 +380,13 @@ export function IncidentSync() {
           for (const id of [...serverState.keys()]) {
             if (!seen.has(id) && !skip(id)) applyDelete(id);
           }
+          resyncDelay = 5_000;
         })
         .catch((e) => {
           if (ctrl.signal.aborted || disposed) return;
           console.warn('[incident-sync] resync failed:', e);
+          // Retrying can't fix data that failed to apply; only a failed GET is.
+          if (fetched) return;
           // The stream can be back while the list GET still fails (database
           // still recovering); retry with backoff so the missed changes land
           // without waiting for the next disconnect. If the stream drops again,
