@@ -90,6 +90,7 @@ function stubFetch(lightning: (path: string) => { status: number; body: unknown 
     return {
       ok: r.status >= 200 && r.status < 300,
       status: r.status,
+      headers: new Headers({ 'content-type': 'application/json' }),
       json: async () => r.body,
     } as unknown as Response;
   });

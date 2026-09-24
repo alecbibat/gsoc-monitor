@@ -145,6 +145,4 @@ export const LEGEND_ITEMS: readonly { color: string; label: string; glyph: 'x' }
 );
 
 export const LEGEND_NOTE =
-  'Each new strike appears as a white X (with a bolt when in view) for its first 2 minutes. ' +
-  'After that the map keeps a stable sample: every active area keeps at least one X, busier ' +
-  'areas show more, and zooming in reveals more. Marks expire after 24 hours.';
+  'Every strike shows for 2 min; older ones are sampled (each active area keeps an X; zoom in for more).';

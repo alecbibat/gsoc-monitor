@@ -19,6 +19,9 @@ export class LightningHttpError extends Error {
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, { signal });
   if (!res.ok) throw new LightningHttpError(res.status, path);
+  // A server without this route answers the SPA fallback — index.html with a
+  // 200 — so treat any non-JSON body as the missing route it really is.
+  if (!(res.headers.get('content-type') ?? '').includes('json')) throw new LightningHttpError(404, path);
   return res.json() as Promise<T>;
 }
 

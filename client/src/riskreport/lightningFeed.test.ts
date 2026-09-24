@@ -49,6 +49,7 @@ function stubFetch(byPath: (path: string) => Reply) {
     return {
       ok: r.status >= 200 && r.status < 300,
       status: r.status,
+      headers: new Headers({ 'content-type': 'html' in r ? 'text/html; charset=utf-8' : 'application/json' }),
       json: async () => ('html' in r ? JSON.parse(r.html) : r.body),
     } as unknown as Response;
   });
