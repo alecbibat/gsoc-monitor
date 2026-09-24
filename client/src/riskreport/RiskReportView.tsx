@@ -6,6 +6,8 @@ import { ChipStrip, ForecastStrip, LegendRow, MapFigure, OutlookStrip, WindChart
 import { FUEL_GROUPS, rgbCss } from '../layers/fuel/fbfm40';
 import { OUTLOOK_LEGEND } from '../layers/fireOutlook/fireOutlookMeta';
 import { QPF_LEGEND } from '../layers/precip/precipStore';
+import { LEGEND_ITEMS as LIGHTNING_LEGEND } from '../layers/lightning/lightningPalette';
+import { coverageCaption } from './lightningSection';
 import { usePrintStyles } from '../lib/printStyles';
 import { RiskScanLoading } from './RiskScanLoading';
 
@@ -70,13 +72,6 @@ function QpfRampLegend() {
     </div>
   );
 }
-
-const LIGHTNING_LEGEND = [
-  { color: '#ffd84d', label: '<1 h' },
-  { color: '#ff9d2e', label: '1–6 h' },
-  { color: '#ff5a3c', label: '6–12 h' },
-  { color: '#d8466e', label: '12–24 h' },
-];
 
 // ── Property wildfire risk report (roadmap Track 3, wildfire end-to-end) ─────
 // Select property → the assembly cross-references every wildfire input at the
@@ -391,15 +386,23 @@ function ReportBody({ data }: { data: WildfireReportData }) {
         </>
       )}
 
-      {/* Lightning — 24 h of strikes, age-tinted */}
+      {/* Lightning — 24 h of strikes as X marks in the globe's age ramp */}
       {byId('lightning') && (
         <Section section={byId('lightning')!}>
           <div className="space-y-2">
             <MapFigure
               src={data.maps.lightning}
-              caption={`Lightning strikes, past 24 h — dots tinted by age, rings at 25 / 100 mi${
-                data.lightning.strikes100mi !== undefined ? ` · ${data.lightning.strikes100mi.toLocaleString()} within 100 mi` : ''
-              }`}
+              caption={[
+                `Lightning strikes, past 24 h — X marks colored by age, rings at 25 / 100 mi${
+                  data.lightning.strikes100mi !== undefined
+                    ? ` · ${data.lightning.countsExact === false ? '≈' : ''}${data.lightning.strikes100mi.toLocaleString()} within 100 mi`
+                    : ''
+                }`,
+                data.lightning.mapNote,
+                coverageCaption(data.lightning.coverage),
+              ]
+                .filter(Boolean)
+                .join(' · ')}
             />
             {data.maps.lightning && <LegendRow items={LIGHTNING_LEGEND} />}
           </div>

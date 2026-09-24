@@ -81,8 +81,9 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
       icon: '🌩',
       source: 'Blitzortung.org',
       method:
-        'A volunteer network of ground sensors times each strike’s radio signal (time-of-arrival) to triangulate its location, streamed live.',
-      trust: 'The same community network behind lightningmaps.org, widely used for real-time strike data.',
+        'A volunteer network of ground sensors times each strike’s radio signal (time-of-arrival) to triangulate its location, streamed live. Our server stays connected around the clock and records every strike it receives, so 24-hour counts are exact and the map opens on the last 24 hours: each strike is an X that ages from white through yellow, orange, red and purple, then expires at 24 hours, with new strikes arriving live on top.',
+      trust:
+        'The same community network behind lightningmaps.org, widely used for real-time strike data. Any time our collector was offline is flagged as a gap rather than shown as a quiet sky.',
       url: 'https://www.blitzortung.org',
     },
   },
