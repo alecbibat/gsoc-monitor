@@ -1,4 +1,5 @@
 import type { OutlookDayCell, WildfireReportData } from './riskTypes';
+import { xGlyphSvg } from '../layers/lightning/lightningPalette';
 
 // ── Visual widgets for the risk report ───────────────────────────────────────
 // Pure SVG/JSX renderers over data the assembly already fetched — print-safe
@@ -190,23 +191,41 @@ export const shortDayDate = (iso: string | null) => {
 
 // A compact swatch legend row — fuel groups, outlook classes, smoke density,
 // lightning age. `line: true` renders a short bar; `hatch: true` renders a
-// diagonally-hatched square (matches drawHatchedPolygon overlays). Print-safe:
-// swatches keep their colors on paper.
-export function LegendRow({ items, className }: { items: { color: string; label: string; line?: boolean; hatch?: boolean }[]; className?: string }) {
+// diagonally-hatched square (matches drawHatchedPolygon overlays); `glyph:
+// 'x'` renders the strike X the map draws, dark casing included so the white
+// stage still shows on paper. Print-safe: swatches keep their colors on paper
+// (the X is stroked SVG, which the print theme's color/background rules skip).
+export interface LegendItem {
+  color: string;
+  label: string;
+  line?: boolean;
+  hatch?: boolean;
+  glyph?: 'x';
+}
+
+export function LegendRow({ items, className }: { items: readonly LegendItem[]; className?: string }) {
   return (
     <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-1 ${className ?? ''}`}>
       {items.map((it) => (
         <span key={it.label} className="flex items-center gap-1.5 text-[9px] text-white/50">
-          <span
-            className={`print-color inline-block shrink-0 ${
-              it.line ? 'h-1 w-4 rounded-full' : 'h-2.5 w-2.5 rounded-[2px] ring-1 ring-white/15'
-            }`}
-            style={{
-              background: it.hatch
-                ? `repeating-linear-gradient(45deg, ${it.color} 0 2px, transparent 2px 6px)`
-                : it.color,
-            }}
-          />
+          {it.glyph === 'x' ? (
+            <span
+              className="print-color inline-flex h-3 w-3 shrink-0 items-center justify-center"
+              // Palette-generated markup (no user input): the same X as drawStrikeX.
+              dangerouslySetInnerHTML={{ __html: xGlyphSvg(it.color, 12) }}
+            />
+          ) : (
+            <span
+              className={`print-color inline-block shrink-0 ${
+                it.line ? 'h-1 w-4 rounded-full' : 'h-2.5 w-2.5 rounded-[2px] ring-1 ring-white/15'
+              }`}
+              style={{
+                background: it.hatch
+                  ? `repeating-linear-gradient(45deg, ${it.color} 0 2px, transparent 2px 6px)`
+                  : it.color,
+              }}
+            />
+          )}
           {it.label}
         </span>
       ))}
