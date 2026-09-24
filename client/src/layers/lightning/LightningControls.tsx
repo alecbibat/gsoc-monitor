@@ -1,24 +1,41 @@
 import { useLightningStatus, LIGHTNING_WINDOWS } from './lightningStore';
+import {
+  GAP_CHIP_MIN,
+  collectorLine,
+  countForWindow,
+  fmtClock,
+  gapMinutes,
+  type ReadoutTone,
+} from './lightningReadout';
 
-function fmtMinutes(min: number): string {
-  if (min >= 60) {
-    const h = min / 60;
-    return `${Number.isInteger(h) ? h : h.toFixed(1)}h`;
-  }
-  return `${Math.max(0, Math.round(min))}m`;
-}
+const TONE: Record<ReadoutTone, string> = {
+  ok: 'text-accent-ok/80',
+  muted: 'text-white/40',
+  warn: 'text-accent-warn',
+  danger: 'text-accent-danger',
+};
 
+// Sidebar card for the lightning layer. The counts are the server's exact
+// totals over every received strike — the globe shows a sample of them — and
+// the lines below say how far to trust them: the collector's health, any
+// blind spots in the last 24 h, and where live strikes come from.
 export function LightningControls() {
   const windowMinutes = useLightningStatus((s) => s.windowMinutes);
   const setWindow = useLightningStatus((s) => s.setWindow);
-  const history = useLightningStatus((s) => s.history);
+  const server = useLightningStatus((s) => s.server);
+  const fieldError = useLightningStatus((s) => s.field.error);
+  const liveSource = useLightningStatus((s) => s.liveSource);
 
-  const label = LIGHTNING_WINDOWS.find((w) => w.value === windowMinutes)?.label ?? '1h';
-  const building = !history.error && history.count > 0 && history.coverageMin < windowMinutes;
+  const label = LIGHTNING_WINDOWS.find((w) => w.value === windowMinutes)?.label ?? '24h';
+  const counts = server?.counts ?? null;
+  const n = counts ? countForWindow(counts, windowMinutes) : null;
+  const health = collectorLine(server, fieldError);
+  const gaps = server?.coverage.gaps ?? [];
+  const blindMin = gapMinutes(gaps);
 
   return (
     <div className="space-y-2.5 pt-1">
-      {/* History window selector */}
+      {/* Window selector — hides older marks client-side; nothing refetches. */}
       <div>
         <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-white/30">
           Show strikes from the last
@@ -40,28 +57,48 @@ export function LightningControls() {
         </div>
       </div>
 
-      {/* History readout */}
-      <div className="text-[10px] leading-relaxed text-white/45">
-        {history.error ? (
-          <span className="text-accent-danger">History feed unavailable</span>
-        ) : history.loading && history.count === 0 ? (
-          'Loading history…'
-        ) : (
-          <>
-            <span className="font-semibold tabular-nums text-white/75">
-              {history.count.toLocaleString()}
+      {/* Readout */}
+      <div className="space-y-0.5 text-[10px] leading-relaxed text-white/45">
+        {counts && n !== null ? (
+          <div>
+            <span
+              className="font-semibold tabular-nums text-white/75"
+              title={
+                counts.exact ? undefined : 'Includes older history that was kept 1-in-6 and is counted ×6'
+              }
+            >
+              {counts.exact ? '' : '≈'}
+              {n.toLocaleString()}
             </span>{' '}
             strikes in the last {label}
-            {history.thinned && <span className="text-white/30"> · sampled to fit</span>}
-          </>
+          </div>
+        ) : (
+          // With an error and nothing loaded yet, the health line below says it.
+          !fieldError && <div>Loading strikes…</div>
         )}
-        {building && (
-          <div className="text-white/30">
-            collector buffer covers ~{fmtMinutes(history.coverageMin)} so far
+        {health && <div className={TONE[health.tone]}>{health.text}</div>}
+        {(blindMin >= GAP_CHIP_MIN || liveSource === 'server') && (
+          <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+            {blindMin >= GAP_CHIP_MIN && (
+              <span
+                className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-300"
+                title={gaps.map((g) => `${fmtClock(g.fromMs)}–${fmtClock(g.toMs)}`).join(', ')}
+              >
+                Blind {blindMin.toLocaleString()} min in 24 h
+              </span>
+            )}
+            {liveSource === 'server' && (
+              <span
+                className="text-[9px] text-white/35"
+                title="This browser can't reach Blitzortung directly, so new strikes arrive through the server every 10 s."
+              >
+                live via server
+              </span>
+            )}
           </div>
         )}
       </div>
-      {/* The strike-age color keys live on the map itself (LightningLegend via
+      {/* The strike-age color key lives on the map itself (LightningLegend via
           MapLegends). */}
     </div>
   );

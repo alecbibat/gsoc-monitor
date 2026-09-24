@@ -51,10 +51,6 @@ interface LightningStatusState {
   // Server collector health, from each /field response.
   server: LightningStatusLite | null;
   field: LightningFieldStatus;
-  /** @deprecated TEMPORARY shim for the old history layer; removed with LightningHistoryLayer. */
-  history: { count: number; coverageMin: number; thinned: boolean; loading: boolean; error: boolean };
-  /** @deprecated TEMPORARY shim; see `history`. */
-  setHistory: (partial: Partial<LightningStatusState['history']>) => void;
   setStatus: (
     partial: Partial<Pick<LightningStatusState, 'connected' | 'ratePerMin' | 'error' | 'liveSource'>>
   ) => void;
@@ -75,8 +71,6 @@ export const useLightningStatus = create<LightningStatusState>()(
       liveSource: 'offline',
       server: null,
       field: EMPTY_FIELD,
-      history: { count: 0, coverageMin: 0, thinned: false, loading: false, error: false },
-      setHistory: (partial) => set((prev) => ({ history: { ...prev.history, ...partial } })),
       setStatus: (partial) => set(partial),
       setWindow: (windowMinutes) => set({ windowMinutes }),
       setServer: (server) => set({ server }),

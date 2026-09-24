@@ -11,7 +11,6 @@ import { EarthTimeBar } from './ui/EarthTimeBar';
 import { FlightLayer } from './layers/flights/FlightLayer';
 import { HurricaneLayer } from './layers/hurricanes/HurricaneLayer';
 import { LightningLayer } from './layers/lightning/LightningLayer';
-import { LightningHistoryLayer } from './layers/lightning/LightningHistoryLayer';
 import { RiversLayer } from './layers/rivers/RiversLayer';
 import { FireOutlookLayer } from './layers/fireOutlook/FireOutlookLayer';
 import { FireLayer } from './layers/fires/FireLayer';
@@ -193,7 +192,6 @@ export default function App() {
           <WindArrowsLayer />
           <WindProbeController />
           <LightningLayer />
-          <LightningHistoryLayer />
           <FlightLayer />
           <ShipLayer />
           <SatelliteLayer />
