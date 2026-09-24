@@ -187,6 +187,30 @@ describe('per-minute ring', () => {
     expect(s2.gaps(now, 5, null, NOW - 3 * MIN)).toEqual([{ fromMs: NOW - 4 * MIN, toMs: now }]);
   });
 
+  it('adds explicit blind intervals: holes that straddle a minute boundary, merged, clipped and ≥ 30 s', () => {
+    const now = NOW + 30_000;
+    const s = mk(10_000_000, () => now);
+    // A strike every 10 s for the last 20 min, except a 140 s hole from 20 s into
+    // minute −10 to 40 s into minute −8 (minute −9 is empty), and an 80 s one
+    // from 20 s into minute −5 to 40 s into minute −4 (no minute is empty).
+    const holes = [
+      { fromMs: NOW - 10 * MIN + 20_000, toMs: NOW - 8 * MIN + 40_000 },
+      { fromMs: NOW - 5 * MIN + 20_000, toMs: NOW - 4 * MIN + 40_000 },
+    ];
+    for (let t = NOW - 20 * MIN; t < now; t += 10_000) {
+      if (!holes.some((h) => t > h.fromMs && t < h.toMs)) s.appendLive(t / 10, 1, 1);
+    }
+    // Empty minutes alone: only the whole one inside the 140 s hole; the 80 s hole is invisible.
+    expect(s.gaps(now, 20, null)).toEqual([{ fromMs: NOW - 9 * MIN, toMs: NOW - 8 * MIN }]);
+    const short = { fromMs: NOW - 15 * MIN, toMs: NOW - 15 * MIN + 29_000 }; // a relay hop: ignored
+    expect(s.gaps(now, 20, null, null, [...holes, short])).toEqual(holes); // the 140 s one merged with its empty minute
+    // Clipped to the window, and to what the restore has reached.
+    expect(s.gaps(now, 4, null, null, holes)).toEqual([{ fromMs: now - 4 * MIN, toMs: NOW - 4 * MIN + 40_000 }]);
+    expect(s.gaps(now, 20, NOW - 4 * MIN, null, holes)).toEqual([{ fromMs: NOW - 4 * MIN, toMs: NOW - 4 * MIN + 40_000 }]);
+    // A collector down since mid-minute: all of it, not just the current minute.
+    expect(s.gaps(now, 2, null, NOW - 40_000)).toEqual([{ fromMs: NOW - 40_000, toMs: now }]);
+  });
+
   it('marks the first writer per minute, and MIXED once live meets another writer', () => {
     const s = mk();
     const a = s.writerIdOf('a');

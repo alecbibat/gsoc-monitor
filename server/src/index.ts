@@ -169,8 +169,8 @@ function main() {
   // trails accumulating (and persisted) even when no client is connected.
   initFlightsTracker();
   // Persistent Blitzortung collector: every strike of the last 24 h, kept in
-  // memory and in Postgres, behind /api/lightning (display field, exact counts
-  // near a location, collector health). It starts collecting immediately and
+  // memory and in Postgres, behind /api/lightning (display field, counts near
+  // a location, collector health). It starts collecting immediately and
   // restores the persisted history in the background — never the other way
   // round, so a slow or unreachable database costs no live strikes.
   initLightning();

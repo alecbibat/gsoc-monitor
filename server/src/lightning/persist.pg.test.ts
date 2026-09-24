@@ -128,7 +128,13 @@ describe.skipIf(!URL)('persistence on Postgres', () => {
     const p = createPersistence({ db: pool, store: s, writer: 'pg-legacy', now: () => NOW, bootMs: NOW, log: () => {} });
     await p.restore();
     // Both chunks are read (the old one could straddle), only the in-window strikes are kept.
-    expect(p.restoreStatus()).toMatchObject({ legacyRows: 2, legacyStrikes: 100, legacyBeforeMs: NOW });
+    // legacyBeforeMs: the end of the newest minute filled from them (whole seconds in that format).
+    const newest = Math.round(t[99] / 1000) * 1000;
+    expect(p.restoreStatus()).toMatchObject({
+      legacyRows: 2,
+      legacyStrikes: 100,
+      legacyBeforeMs: (Math.floor(newest / 60_000) + 1) * 60_000,
+    });
     expect(s.countsWindow(NOW, 1440)).toEqual({ sum: 600, legacy: true });
     // A save prunes rows past 25 h from both tables.
     await pool.query(

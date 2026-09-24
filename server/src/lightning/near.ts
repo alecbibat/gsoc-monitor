@@ -1,7 +1,9 @@
 // Strikes near a location: exact counts, the nearest strike and map points.
 // This is what the risk report reads, so the counts are computed over every
 // stored strike before any thinning (the old route strided the points and then
-// presented the thinned count as the truth).
+// presented the thinned count as the truth). "Every stored strike" is the
+// catch: records the memory cap evicted are not counted, so `exact` is false
+// and the route's coverage leaves that time out when the window reaches it.
 //
 // The scan rejects cheaply before the trig: a quantized latitude band, then a
 // longitude window that is exact for a spherical cap (|Δλ| ≤ asin(sin δ / cos φ))
@@ -9,7 +11,7 @@
 
 import { RETENTION_MS } from './constants';
 import { MarkList } from './marks';
-import { QMAX, dqLat, dqLon, haversineMi, qLat, qLon } from './quant';
+import { QMAX, dqLat, dqLon, haversineMi, qLat, qLon, strikeHash } from './quant';
 import { scanSnapshot, slicer } from './scan';
 import type { StrikeStore } from './store';
 import type { LightningNearResponse } from './types';
@@ -23,6 +25,12 @@ export interface NearQuery {
   hours: number;
   /** ≤ 20000 */
   maxPoints: number;
+  /**
+   * Thin by strike hash (a spatially unbiased sample, so inRadius / returned
+   * scales a count of returned points) instead of newest-per-cell. For the
+   * legacy route: the bundles it serves scale counts that way.
+   */
+  uniform?: boolean;
 }
 
 export type NearResult = Pick<
@@ -56,14 +64,14 @@ function lonWindow(lat: number, lon: number, deltaRad: number): { lonMin: number
 /**
  * Near query over the store. counts/nearest cover every record in the radius
  * and window; points are thinned only when they exceed maxPoints (the nearest
- * is always included). `exact` is false when the window reaches pre-upgrade
- * (×6) history or evicted time.
+ * is always included). `exact` is false when the window holds a minute of
+ * pre-upgrade (×6) history (the per-minute ring's flag) or reaches evicted time.
  */
 export async function near(
   store: StrikeStore,
   q: NearQuery,
   now: number,
-  fidelity: { legacyBeforeMs: number | null; evictedBeforeMs: number | null }
+  fidelity: { evictedBeforeMs: number | null }
 ): Promise<NearResult> {
   const nowTick = Math.floor(now / 10);
   const winTicks = Math.min(RETENTION_MS / 10, Math.round(q.hours * 360_000));
@@ -127,7 +135,7 @@ export async function near(
     kept = Array.from({ length: pts.n }, (_, i) => i);
   } else {
     sampled = true;
-    kept = await thin(pts, q.maxPoints);
+    kept = q.uniform ? await hashSample(pts, q.maxPoints, nearestI) : await thin(pts, q.maxPoints);
     if (nearestI >= 0 && !kept.includes(nearestI)) {
       if (kept.length >= q.maxPoints) {
         // Make room by dropping the oldest other point.
@@ -151,7 +159,7 @@ export async function near(
 
   const exact =
     !sawLegacy &&
-    !(fidelity.legacyBeforeMs !== null && fidelity.legacyBeforeMs > winStartMs) &&
+    !store.countsWindow(now, winTicks / 6_000).legacy &&
     !(fidelity.evictedBeforeMs !== null && fidelity.evictedBeforeMs > winStartMs);
 
   return {
@@ -213,39 +221,83 @@ async function thin(pts: MarkList, maxPoints: number): Promise<number[]> {
   return [];
 }
 
+/**
+ * Every point whose strike hash is below the largest 2^16-wide edge that
+ * leaves room for the nearest, plus the nearest: whether a strike is kept
+ * does not depend on where it is, so a count of kept points scales by
+ * inRadius / returned (minus the one forced-in nearest).
+ */
+async function hashSample(pts: MarkList, maxPoints: number, nearestI: number): Promise<number[]> {
+  const sl = slicer();
+  const hs = new Uint32Array(pts.n);
+  const hist = new Uint32Array(65_536);
+  for (let i = 0; i < pts.n; i++) {
+    const y = sl.tick();
+    if (y) await y;
+    hs[i] = strikeHash(pts.tick[i], pts.la[i], pts.lo[i]);
+    hist[hs[i] >>> 16]++;
+  }
+  const room = nearestI >= 0 ? maxPoints - 1 : maxPoints;
+  let k = 0;
+  let sum = 0;
+  while (k < hist.length && sum + hist[k] <= room) sum += hist[k++];
+  const edge = k * 65_536;
+  const kept: number[] = [];
+  for (let i = 0; i < pts.n; i++) if (hs[i] < edge) kept.push(i);
+  return kept;
+}
+
 const NEAR_MEMO_MS = 30_000;
 const NEAR_MEMO_KEYS = 128;
 
-/** 30 s memo + single flight per (location, radius, window, maxPoints). */
+/**
+ * 30 s memo + single flight per (location, radius, window, maxPoints, thinning).
+ * Nothing is memoized while `cacheable` is false (history still restoring: the
+ * next request may see much more), and clear() — called when the restore
+ * finishes and after each catch-up — also drops scans already running, so a
+ * count taken before new history arrived is never served after it.
+ */
 export class NearService {
   private memo = new Map<string, { at: number; result: NearResult }>();
   private inflight = new Map<string, Promise<NearResult>>();
+  private generation = 0;
 
   constructor(
     private store: StrikeStore,
-    private fidelity: () => { legacyBeforeMs: number | null; evictedBeforeMs: number | null },
-    private now: () => number = Date.now
+    private fidelity: () => { evictedBeforeMs: number | null },
+    private now: () => number = Date.now,
+    private cacheable: () => boolean = () => true
   ) {}
 
   async get(q: NearQuery): Promise<NearResult> {
-    const key = `${q.lat.toFixed(3)},${q.lon.toFixed(3)},${q.radiusMi},${q.hours},${q.maxPoints}`;
+    const key = `${q.lat.toFixed(3)},${q.lon.toFixed(3)},${q.radiusMi},${q.hours},${q.maxPoints}${q.uniform ? ',u' : ''}`;
     const now = this.now();
     const m = this.memo.get(key);
     if (m && now - m.at < NEAR_MEMO_MS) return m.result;
     let p = this.inflight.get(key);
     if (!p) {
-      p = near(this.store, q, now, this.fidelity()).finally(() => this.inflight.delete(key));
+      const gen = this.generation;
+      const memoize = this.cacheable();
+      const run: Promise<NearResult> = near(this.store, q, now, this.fidelity()).finally(() => {
+        if (this.inflight.get(key) === run) this.inflight.delete(key);
+      });
+      p = run;
       this.inflight.set(key, p);
       const result = await p;
-      for (const [k, v] of this.memo) if (now - v.at >= NEAR_MEMO_MS) this.memo.delete(k);
-      if (this.memo.size >= NEAR_MEMO_KEYS) this.memo.delete(this.memo.keys().next().value as string);
-      this.memo.set(key, { at: now, result });
+      if (memoize && gen === this.generation) {
+        for (const [k, v] of this.memo) if (now - v.at >= NEAR_MEMO_MS) this.memo.delete(k);
+        if (this.memo.size >= NEAR_MEMO_KEYS) this.memo.delete(this.memo.keys().next().value as string);
+        this.memo.set(key, { at: now, result });
+      }
       return result;
     }
     return p;
   }
 
+  /** Forget every result (and scan in flight): the history changed, or memory is short. */
   clear(): void {
     this.memo.clear();
+    this.inflight.clear();
+    this.generation++;
   }
 }

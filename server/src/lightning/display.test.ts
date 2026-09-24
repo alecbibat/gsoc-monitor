@@ -106,6 +106,25 @@ describe('display field sampling', () => {
     }
   });
 
+  it('a 10 % larger old stratum changes its marks by far less than 10 % (the threshold is cut to the strike, not to a histogram bin)', async () => {
+    // A busy 12–24 h stratum: ~350k strikes in one storm against a 190-mark
+    // share, so a histogram bin (1/4096 of the stratum) is half the share.
+    const storm = [{ lat: 35, lon: -97, sd: 0.3 }];
+    const old = (n: number, seed: number) =>
+      genStrikes({ n, nowMs: NOW - 12 * H, spanMs: 12 * H, seed, cells: storm, isolatedShare: 0 });
+    const base = old(350_000, 21);
+    const s = storeWith(base);
+    const inStratum = (m: Rec) => NOW / 10 - m.tick >= 12 * 360_000;
+    const before = decode((await computeField(s, { bbox: null, budget: 1_000 }, NOW)).field).filter(inStratum);
+    for (const r of old(35_000, 22)) s.appendLive(r.tick, r.latQ, r.lonQ);
+    const after = decode((await computeField(s, { bbox: null, budget: 1_000 }, NOW)).field).filter(inStratum);
+    expect(before.length).toBeGreaterThan(150); // the stratum's share (190) is used, not half of it
+    expect(Math.abs(after.length - before.length) / before.length).toBeLessThan(0.03);
+    // ~1/1.1 of the old sample stays: the threshold moved by the population change, no more.
+    const kept = new Set(after.map(key));
+    expect(before.filter((m) => kept.has(key(m))).length / before.length).toBeGreaterThan(0.85);
+  });
+
   it('zooming in keeps ≥ 99 % of the parent view’s marks inside the sub-box', async () => {
     const s = storeWith(DAY);
     const cases: [BBox | null, BBox][] = [
@@ -193,6 +212,35 @@ describe('FieldService', () => {
     const c = await svc.get(null, 4_000);
     expect(c!.result).not.toBe(a!.result);
     expect(c!.degraded).toBeNull();
+  });
+
+  it('sweeps results no request can be served any more, on get() and on its own', async () => {
+    let now = NOW;
+    const s = storeWith(DAY.slice(0, 2_000));
+    const svc = new FieldService(s, () => now);
+    const boxes: BBox[] = [[-10, -10, 10, 10], [0, 0, 20, 20], [-100, 30, -90, 40], [100, -20, 120, 0]];
+    for (const b of boxes) await svc.get(b, 4_000);
+    expect(svc.stats()).toMatchObject({ memoKeys: 4, lastKeys: 4 });
+    now += 30_000; // the next bucket: memo entries are dead, `last` can still serve 'stale'
+    await svc.get(null, 4_000);
+    expect(svc.stats()).toMatchObject({ memoKeys: 1, lastKeys: 5 });
+    now += 5 * 60_000 + 1; // past STALE_MAX_MS: nothing can be served, even with no request
+    svc.sweep();
+    expect(svc.stats()).toMatchObject({ memoKeys: 0, lastKeys: 0 });
+  });
+
+  it('clear() (restore done) drops results, including one a scan already running would have memoized', async () => {
+    const s = storeWith(DAY.slice(0, 2_000));
+    const svc = new FieldService(s, () => NOW);
+    const running = svc.get(null, 4_000);
+    await new Promise((resolve) => setImmediate(resolve)); // the scan has its snapshot and yielded
+    svc.clear(); // the restore finished while this scan ran on the partial history
+    const first = await running;
+    expect(svc.stats().memoKeys).toBe(0);
+    for (const r of DAY.slice(2_000, 4_000)) s.appendLive(r.tick, r.latQ, r.lonQ);
+    const next = await svc.get(null, 4_000); // same bucket, but recomputed
+    expect(next!.result).not.toBe(first!.result);
+    expect(next!.result.view.total).toBe(4_000);
   });
 
   it('serves a stale body (≤ 5 min) or null (503) when the scan queue is full', async () => {

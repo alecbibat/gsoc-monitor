@@ -20,15 +20,21 @@
 //      min of its children's, so a coarser level keeps a SUBSET of the finer
 //      reps) until they fit, else the lowest-hash reps are kept.
 //   2. hash sample: every strike with hash < p_s, where p_s is the largest
-//      histogram edge at which the sample plus the reps it does not already
-//      contain still fit C_s.
+//      hash at which the sample plus the reps it does not already contain
+//      still fit C_s. Pass 1's histogram finds the 2^20-wide bin p_s lies in;
+//      pass 2 sets that bin's strikes aside and cuts inside it to the strike.
+//      (Cutting at a bin edge moved ~1/4096 of the stratum at once — for a
+//      busy 12–24 h stratum, up to half its marks in one poll.)
 //   3. p_s never increases with age (s ≥ 2): as a strike ages into the next
 //      stratum it can only disappear, never pop in.
 // Because both parts are functions of strike identity and a fixed lattice,
-// insertion order never matters, a new poll keeps the old marks, and zooming
-// into a sub-box keeps the parent's marks inside it (all of them in practice;
-// only when the sub-box holds nearly all of the parent's strikes can its finer
-// reps displace a few % of the parent's hash sample).
+// insertion order never matters. A new poll keeps the old marks except at the
+// margins: when a stratum's population changes by x %, its p_s moves so that
+// about x % of its sample changes, and a cell's rep changes when its min-hash
+// strike arrives or ages out. Zooming into a sub-box keeps the parent's marks
+// inside it (all of them in practice; only when the sub-box holds nearly all
+// of the parent's strikes can its finer reps displace a few % of the parent's
+// hash sample).
 
 import {
   FIELD_BUCKET_MS,
@@ -283,7 +289,11 @@ async function sampleSnapshot(
   await yieldToLoop();
   const repH: Uint32Array[] = [];
   const repRef: Int32Array[] = [];
-  const p: number[] = [];
+  // Per stratum: the bin its threshold lies in (HIST_BINS = everything fits),
+  // the sample below that bin, and the reps at or above it.
+  const kBin: number[] = [];
+  const kSample: number[] = [];
+  const kAbove: number[] = [];
   for (let s = 0; s < NSTRATA; s++) {
     const { rows, cols: colsArr } = byStratum[s];
     let { rh, rr, cnt } = byStratum[s];
@@ -305,11 +315,11 @@ async function sampleSnapshot(
     repH.push(rh.subarray(0, cnt));
     repRef.push(rr.subarray(0, cnt));
 
-    // The threshold: the largest bin edge whose hash sample fits what the reps
-    // leave of C_s. Reps are each cell's MIN hash, so many of them fall inside
-    // the sample anyway; those are counted once, not twice (output = sample +
-    // reps above the edge ≤ C_s). Counting them twice would let a zoomed-in
-    // view's finer reps squeeze out marks the wider view showed.
+    // The threshold's bin: the last one whose whole hash sample fits what the
+    // reps leave of C_s. Reps are each cell's MIN hash, so many of them fall
+    // inside the sample anyway; those are counted once, not twice (output =
+    // sample + reps above the threshold ≤ C_s). Counting them twice would let
+    // a zoomed-in view's finer reps squeeze out marks the wider view showed.
     const repHist = new Uint32Array(HIST_BINS);
     for (let i = 0; i < cnt; i++) repHist[rh[i] >>> 20]++;
     let sample = 0;
@@ -323,14 +333,22 @@ async function sampleSnapshot(
       above = nextAbove;
       k++;
     }
-    let ps = k * BIN_WIDTH; // keep h < ps; k = 4096 → 2^32 = everything
-    if (s >= 2) ps = Math.min(ps, p[s - 1]);
-    p.push(ps);
+    kBin.push(k);
+    kSample.push(sample);
+    kAbove.push(above);
     await yieldToLoop();
   }
+  // p_s ≤ p_{s-1} (s ≥ 2), so a stratum's threshold may lie in a younger
+  // stratum's lower bin: that is the bin whose strikes pass 2 sets aside.
+  const eBin = kBin.slice();
+  for (let s = 2; s < NSTRATA; s++) eBin[s] = Math.min(eBin[s], eBin[s - 1]);
+  const lowEdge = eBin.map((e) => e * BIN_WIDTH); // e = 4096 → 2^32 = everything
+  const highEdge = eBin.map((e) => (e >= HIST_BINS ? e * BIN_WIDTH : (e + 1) * BIN_WIDTH));
 
-  // --- Pass 2: emit the hash sample (same snapshot, same now), then the reps it missed.
+  // --- Pass 2: emit the hash sample below each boundary bin (same snapshot,
+  // same now) and set the boundary bin's strikes aside.
   const out = new MarkList(q.budget);
+  const aside = Array.from({ length: NSTRATA }, () => ({ marks: new MarkList(64), h: [] as number[] }));
   await scanSnapshot(
     snap,
     (words, n, _weight, baseTick) => {
@@ -344,11 +362,32 @@ async function sampleSnapshot(
         const tick = baseTick + ((lo >>> 20) | ((hi >>> 20) << 12));
         const age = nowTick - tick;
         if (age >= DAY_TICKS) continue;
-        if (strikeHash(tick, latQ, lonQ) < p[stratumOf(age)]) out.push(tick, latQ, lonQ);
+        const s = stratumOf(age);
+        const h = strikeHash(tick, latQ, lonQ);
+        if (h < lowEdge[s]) out.push(tick, latQ, lonQ);
+        else if (h < highEdge[s]) {
+          aside[s].marks.push(tick, latQ, lonQ);
+          aside[s].h.push(h);
+        }
       }
     },
     (_s, i) => inBox[i] === 1
   );
+
+  // --- The exact thresholds, then the set-aside strikes below them and the reps they missed.
+  const p: number[] = [];
+  for (let s = 0; s < NSTRATA; s++) {
+    let ps: number;
+    if (eBin[s] >= HIST_BINS) ps = 2 ** 32;
+    else if (kBin[s] > eBin[s]) ps = p[s - 1]; // its own bin is past the younger stratum's threshold
+    else {
+      ps = cutInBin(kBin[s], kSample[s], kAbove[s], C[s], aside[s].h, repH[s]);
+      if (s >= 2) ps = Math.min(ps, p[s - 1]);
+    }
+    p.push(ps);
+    const { marks, h } = aside[s];
+    for (let i = 0; i < marks.n; i++) if (h[i] < ps) out.push(marks.tick[i], marks.la[i], marks.lo[i]);
+  }
   for (let s = 0; s < NSTRATA; s++) {
     const rh = repH[s];
     const rr = repRef[s];
@@ -368,6 +407,34 @@ async function sampleSnapshot(
     fieldJson: JSON.stringify(field),
     builtAt: now,
   };
+}
+
+/**
+ * The exact threshold inside bin k: the largest p (one past a strike's hash)
+ * with sample(h < p) + reps(h ≥ p) ≤ cap, starting from the bin's lower edge
+ * (sample and above as the histogram left them there). Strikes sharing a hash
+ * are taken together, so the answer never depends on scan order. A rep in the
+ * bin is also one of its strikes: passing it moves it from `above` to the sample.
+ */
+function cutInBin(k: number, sample: number, above: number, cap: number, binH: number[], repHs: Uint32Array): number {
+  const hs = Uint32Array.from(binH).sort();
+  const reps = Uint32Array.from(repHs.filter((h) => h >>> 20 === k)).sort();
+  let p = k * BIN_WIDTH;
+  let ri = 0;
+  for (let i = 0; i < hs.length; ) {
+    const h = hs[i];
+    let j = i + 1;
+    while (j < hs.length && hs[j] === h) j++;
+    let r = 0;
+    while (ri + r < reps.length && reps[ri + r] <= h) r++;
+    if (sample + (j - i) + above - r > cap) break;
+    sample += j - i;
+    above -= r;
+    ri += r;
+    p = h + 1;
+    i = j;
+  }
+  return p;
 }
 
 /**
@@ -480,12 +547,15 @@ const STALE_MAX_MS = 5 * 60_000;
  * Memoized, admission-controlled field computation. One result per (view,
  * budget) per FIELD_BUCKET_MS bucket; concurrent requests for a key share one
  * scan; at most 2 scans run and 8 wait. Past that the key's last result is
- * served as 'stale' (≤ 5 min old), else the caller answers 503 busy.
+ * served as 'stale' (≤ 5 min old), else the caller answers 503 busy. Results
+ * that can no longer be served either way are swept, not kept until 64 keys
+ * push them out.
  */
 export class FieldService {
   private memo = new Map<string, FieldResult>();
   private last = new Map<string, FieldResult>();
   private inflight = new Map<string, Promise<FieldResult>>();
+  private generation = 0;
   readonly gate = new ScanGate(2, 8);
 
   constructor(
@@ -496,6 +566,7 @@ export class FieldService {
   async get(bbox: BBox | null, budget: number): Promise<{ result: FieldResult; degraded: null | 'stale' } | null> {
     const key = `${bboxKey(bbox)}|${budget}`;
     const now = this.now();
+    this.sweep(now);
     const memo = this.memo.get(key);
     if (memo && Math.floor(memo.builtAt / FIELD_BUCKET_MS) === Math.floor(now / FIELD_BUCKET_MS)) {
       return { result: memo, degraded: null };
@@ -516,9 +587,13 @@ export class FieldService {
   private async run(key: string, bbox: BBox | null, budget: number): Promise<FieldResult> {
     await this.gate.acquire();
     try {
+      const gen = this.generation;
       const result = await computeField(this.store, { bbox, budget }, this.now());
-      remember(this.memo, key, result);
-      remember(this.last, key, result);
+      // Not if clear() ran meanwhile: the history changed under this scan.
+      if (gen === this.generation) {
+        remember(this.memo, key, result);
+        remember(this.last, key, result);
+      }
       return result;
     } finally {
       this.gate.release();
@@ -526,14 +601,22 @@ export class FieldService {
     }
   }
 
-  /** Drop cached results (memory pressure). */
+  /** Drop results no request can be served any more: memo from past buckets, `last` past STALE_MAX_MS. */
+  sweep(now = this.now()): void {
+    const bucket = Math.floor(now / FIELD_BUCKET_MS);
+    for (const [k, v] of this.memo) if (Math.floor(v.builtAt / FIELD_BUCKET_MS) !== bucket) this.memo.delete(k);
+    for (const [k, v] of this.last) if (now - v.builtAt > STALE_MAX_MS) this.last.delete(k);
+  }
+
+  /** Drop cached results (memory pressure, or the restore finished). */
   clear(): void {
     this.memo.clear();
     this.last.clear();
+    this.generation++;
   }
 
-  stats(): { memoKeys: number; running: number; waiting: number } {
-    return { memoKeys: this.memo.size, ...this.gate.stats() };
+  stats(): { memoKeys: number; lastKeys: number; running: number; waiting: number } {
+    return { memoKeys: this.memo.size, lastKeys: this.last.size, ...this.gate.stats() };
   }
 }
 

@@ -36,8 +36,9 @@ export const SEG_CAP = 16_384;
 
 /**
  * Memory cap on stored records (8 bytes each). The default is 24 h at ~140/s
- * in ~96 MB; the memory guard lowers it under RSS pressure. Counts stay exact
- * even when old records are evicted (the per-minute ring keeps them).
+ * in ~96 MB; the memory guard lowers it under RSS pressure. When old records
+ * are evicted only the per-minute counts (/status) keep them: /near counts and
+ * the map lose them, and say so (fidelity.evictedBeforeMs, /near coverage).
  */
 export const MAX_RECORDS_FLOOR = 1_000_000;
 export function parseMaxRecords(env: string | undefined): number {

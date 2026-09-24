@@ -109,6 +109,94 @@ describe('Collector', () => {
     c.stop();
   });
 
+  describe('an outage on relays that accept the socket but send nothing keeps its first downSince', () => {
+    /** For `ms`, open every new socket as it appears and never deliver a strike. */
+    async function silentRelays(last: () => FakeWs, ms: number): Promise<void> {
+      const opened = new Set<FakeWs>();
+      const end = Date.now() + ms;
+      while (Date.now() < end) {
+        const ws = last();
+        if (!opened.has(ws)) {
+          opened.add(ws);
+          ws.open();
+        }
+        vi.advanceTimersByTime(5_000);
+        await flush();
+      }
+    }
+    /** Wait for the next live socket, open it and deliver one strike on it. */
+    async function strikeOnNextSocket(last: () => FakeWs): Promise<void> {
+      while (last().terminated) {
+        vi.advanceTimersByTime(1_000);
+        await flush();
+      }
+      last().open();
+      last().strike(36, -97);
+    }
+
+    it('after a strike: the watchdog cycles for 3 h, downSince stays at the last strike', async () => {
+      const { c, sockets, last } = setup();
+      c.start();
+      last().open();
+      last().strike(35, -97);
+      const heardAt = Date.now();
+      await silentRelays(last, 3 * 3_600_000);
+      expect(sockets.length).toBeGreaterThan(20); // many watchdog/backoff cycles
+      expect(c.status()).toMatchObject({ downSince: heardAt, lastStrikeAt: heardAt });
+      // The first strike ends the outage and records it as a blind interval.
+      await strikeOnNextSocket(last);
+      expect(c.status().downSince).toBeNull();
+      expect(c.status().blind).toEqual([{ fromMs: heardAt, toMs: Date.now() }]);
+      c.stop();
+    });
+
+    it('after a close: silent reconnects for 1 h keep downSince at the close', async () => {
+      const { c, last } = setup();
+      c.start();
+      last().open();
+      last().strike(35, -97);
+      vi.advanceTimersByTime(10_000);
+      const closedAt = Date.now();
+      last().terminate(); // the relay drops us
+      await flush();
+      await silentRelays(last, 3_600_000);
+      expect(c.status().downSince).toBe(closedAt);
+      c.stop();
+    });
+
+    it('from boot: 2 h of silent relays keep downSince at boot, and the boot hole is not the collector’s to record', async () => {
+      const { c, last } = setup();
+      c.start();
+      await silentRelays(last, 2 * 3_600_000);
+      expect(c.status()).toMatchObject({ downSince: T0, lastStrikeAt: null });
+      await strikeOnNextSocket(last);
+      expect(c.status()).toMatchObject({ downSince: null, blind: [] });
+      c.stop();
+    });
+  });
+
+  it('keeps at most 64 ended blind intervals, none older than 25 h', async () => {
+    const { c, last } = setup();
+    c.start();
+    last().open();
+    last().strike(0, 0);
+    for (let k = 0; k < 70; k++) {
+      last().terminate();
+      await flush();
+      vi.advanceTimersByTime(2_000); // backoff 1 s (reset by each strike) + jitter 0
+      last().open();
+      last().strike(k, 1);
+    }
+    const blind = c.status().blind;
+    expect(blind).toHaveLength(64);
+    expect(blind.every((b) => b.toMs - b.fromMs === 2_000)).toBe(true); // close → strike on the next socket
+    vi.advanceTimersByTime(25 * 3_600_000);
+    expect(c.status().blind.length).toBeLessThan(64);
+    vi.advanceTimersByTime(200_000);
+    expect(c.status().blind).toEqual([]);
+    c.stop();
+  });
+
   it('stop() closes the socket and never reconnects', async () => {
     const { c, sockets, last } = setup();
     c.start();

@@ -150,6 +150,34 @@ describe('save', () => {
     expect(db.blocks.reduce((a, b) => a + b.n, 0)).toBe(20_000 - st.droppedUnsaved);
   });
 
+  it('a pending row does not hold on to its segment, so an evicted segment’s buffer can be freed', async () => {
+    const db = new FakeDb();
+    const s = mkStore('A');
+    const p = createPersistence({ db, store: s, writer: 'A', now: () => NOW, log: () => {} });
+    db.failWhen = (sql) => (sql.startsWith('INSERT') ? { err: new Error('db down') } : null);
+    for (const r of genStrikes({ n: SEG_CAP + 100, nowMs: NOW, spanMs: 10 * MIN, seed: 31 })) s.appendLive(r.tick, r.latQ, r.lonQ);
+    await p.save();
+    const [first, open] = s.ownSegments();
+    s.setCapacity(1_000);
+    s.enforceCapacity(); // the memory guard evicts the full own segment while its row is pending
+    expect(s.ownSegments()).toEqual([open]);
+    /** Anything reachable from a pending row that is the evicted segment or its buffer. */
+    const reaches = (v: unknown, depth = 0): boolean => {
+      if (v === first || v === first.words || v === first.words.buffer) return true;
+      if (depth > 3 || v === null || typeof v !== 'object' || Buffer.isBuffer(v)) return false;
+      return Object.values(v).some((x) => reaches(x, depth + 1));
+    };
+    const pending = (p as unknown as { pending: object[] }).pending;
+    expect(pending).toHaveLength(2);
+    expect(pending.some((row) => reaches(row))).toBe(false);
+    // The rows still carry their data, and only the segment still held is marked saved.
+    db.failWhen = null;
+    await p.save();
+    expect(db.blocks.map((b) => b.n)).toEqual([SEG_CAP, 100]);
+    expect(open.savedN).toBe(100);
+    expect(first.savedN).toBe(0);
+  });
+
   it('flushAll saves everything and is bounded when the database hangs', async () => {
     const db = new FakeDb();
     const s = mkStore('A');
@@ -285,42 +313,105 @@ describe('restore', () => {
     expect(p.restoreStatus().dupes).toBe(overlap);
   });
 
-  it('imports legacy chunks ×6 only for time before the oldest new row', async () => {
+  it('dedupes exactly even when the store evicts over capacity between restore pages', async () => {
+    const db = new FakeDb();
+    const all = genStrikes({ n: 120_000, nowMs: NOW, spanMs: 12 * H, seed: 33 });
+    const cut1 = Math.floor((NOW - 8 * H) / 10);
+    const cut2 = Math.floor((NOW - 7.5 * H) / 10);
+    // Rows of ~40 s each, so one overlap minute's rows from A and B land in different pages.
+    await writerDay(db, 'A', all.filter((x) => x.tick < cut2), 600);
+    await writerDay(db, 'B', all.filter((x) => x.tick >= cut1), 600);
+    // Capacity well under the day: every page end evicts the oldest segments,
+    // including the one holding the page's (oldest) overlap strikes.
+    const c = new StrikeStore({ capacity: 3 * SEG_CAP, selfWriter: 'C', now: () => NOW });
+    const p = createPersistence({ db, store: c, writer: 'C', now: () => NOW, sleep: noSleep, log: () => {} });
+    await p.restore();
+    const overlap = all.filter((x) => x.tick >= cut1 && x.tick < cut2).length;
+    expect(overlap).toBeGreaterThan(4_000);
+    expect(c.stats().evictedRecords).toBeGreaterThan(50_000);
+    expect(p.restoreStatus().dupes).toBe(overlap);
+    expect(c.countsWindow(NOW, 1440).sum).toBe(all.length); // nothing counted twice
+    for (let m = Math.floor(cut1 / 6_000); m <= Math.floor(cut2 / 6_000); m++) {
+      expect(c.minuteCount(m)).toBe(all.filter((x) => Math.floor(x.tick / 6_000) === m).length);
+    }
+  });
+
+  /** A pre-upgrade chunk: n strikes stepMs apart from startMs (lat varies, lon 20), and their stored times. */
+  function chunk(startMs: number, n: number, stepMs: number) {
+    const lat: number[] = [];
+    const lon: number[] = [];
+    const t: number[] = [];
+    for (let i = 0; i < n; i++) {
+      lat.push(10 + i * 0.01);
+      lon.push(20);
+      t.push(startMs + i * stepMs);
+    }
+    // The format keeps whole seconds.
+    return { chunk_start: startMs, n, data: packStrikes(lat, lon, t), t: t.map((x) => Math.round(x / 1000) * 1000) };
+  }
+  const minuteOf = (ms: number) => Math.floor(ms / MIN);
+
+  it('imports legacy chunks ×6 only into minutes no new-format writer covered', async () => {
     const db = new FakeDb();
     const v2 = genStrikes({ n: 1_000, nowMs: NOW, spanMs: 2 * H, seed: 13 }); // new rows cover the last 2 h
     await writerDay(db, 'A', v2, 4);
+    const v2Minutes = new Set(v2.map((r) => minuteOf(r.tick * 10)));
     const oldestV2 = Math.min(...db.blocks.map((b) => b.t_first));
-    const chunk = (startMs: number, n: number, stepMs: number) => {
-      const lat: number[] = [];
-      const lon: number[] = [];
-      const t: number[] = [];
-      for (let i = 0; i < n; i++) {
-        lat.push(10 + i * 0.01);
-        lon.push(20);
-        t.push(startMs + i * stepMs);
-      }
-      return { chunk_start: startMs, n, data: packStrikes(lat, lon, t) };
-    };
-    db.addChunk(chunk(NOW - 10 * H, 100, 3_000)); // fully usable
-    db.addChunk(chunk(NOW - RETENTION_MS - 2 * MIN, 100, 3_000)); // straddles the window start: 2 min are too old
-    db.addChunk(chunk(oldestV2 - 60_000, 100, 1_000)); // straddles the first new row: only the first minute
-    db.addChunk(chunk(NOW - 30 * MIN, 50, 1_000)); // entirely covered by the new rows: skipped
+    const chunks = [
+      chunk(NOW - 10 * H, 100, 3_000), // fully usable
+      chunk(NOW - RETENTION_MS - 2 * MIN, 100, 3_000), // straddles the window start: 2 min are too old
+      chunk(oldestV2 - 60_000, 100, 1_000), // straddles the first new row: only the minutes before it
+      chunk(NOW - 30 * MIN, 50, 1_000), // inside new-format minutes: read, nothing imported
+    ];
+    for (const { t: _t, ...row } of chunks) db.addChunk(row);
+    const imported = chunks.flatMap((ch) => ch.t).filter((t) => t >= NOW - RETENTION_MS && !v2Minutes.has(minuteOf(t)));
     const c = mkStore('C');
     const p = createPersistence({ db, store: c, writer: 'C', now: () => NOW, sleep: noSleep, log: () => {} });
     await p.restore();
     const rs = p.restoreStatus();
-    expect(rs.legacyRows).toBe(3);
-    expect(rs.legacyStrikes).toBe(100 + 60 + 60);
-    expect(rs.legacyBeforeMs).toBe(oldestV2);
+    expect(rs.legacyRows).toBe(4);
+    expect(imported.length).toBeGreaterThan(160);
+    expect(imported.length).toBeLessThan(220);
+    expect(rs.legacyStrikes).toBe(imported.length);
+    expect(imported.every((t) => t < oldestV2)).toBe(true);
+    // The fidelity mark is the end of the newest minute actually filled from legacy history.
+    expect(rs.legacyBeforeMs).toBe((minuteOf(Math.max(...imported)) + 1) * MIN);
     const legacy = c.segments().filter((g) => g.legacy);
-    expect(legacy.reduce((a, g) => a + g.n, 0)).toBe(220);
+    expect(legacy.reduce((a, g) => a + g.n, 0)).toBe(imported.length);
     expect(legacy.every((g) => g.weight === 6)).toBe(true);
-    expect(c.countsWindow(NOW, 1440)).toEqual({ sum: 1_000 + 6 * 220, legacy: true });
+    expect(c.countsWindow(NOW, 1440)).toEqual({ sum: 1_000 + 6 * imported.length, legacy: true });
     expect(c.countsWindow(NOW, 60).legacy).toBe(false);
     // Legacy coordinates were float32; quantizing them lands within a step.
     const one = recordAt(legacy[0].words, legacy[0].baseTick, 0);
     expect(Math.abs(dqLon(one.lonQ) - 20)).toBeLessThan(1e-3);
     expect(Math.abs(dqLat(one.latQ) - 10)).toBeLessThan(2);
+  });
+
+  it('fills a rollback: legacy chunks written between new-format hours are restored, not reported blind', async () => {
+    const db = new FakeDb();
+    // This release ran 20–10 h and 5–0 h ago; a rollback to the pre-upgrade
+    // release wrote only lightning_chunks for 10–5 h ago.
+    const before = genStrikes({ n: 3_000, nowMs: NOW - 10 * H, spanMs: 10 * H, seed: 41 });
+    const after = genStrikes({ n: 3_000, nowMs: NOW, spanMs: 5 * H, seed: 42 });
+    await writerDay(db, 'A', before, 20);
+    await writerDay(db, 'B', after, 20);
+    const chunks = Array.from({ length: 60 }, (_, k) => chunk(NOW - 10 * H + k * 5 * MIN, 30, 10_000));
+    for (const { t: _t, ...row } of chunks) db.addChunk(row);
+    const v2Minutes = new Set([...before, ...after].map((r) => minuteOf(r.tick * 10)));
+    const imported = chunks.flatMap((ch) => ch.t).filter((t) => !v2Minutes.has(minuteOf(t)));
+    const c = mkStore('C');
+    const p = createPersistence({ db, store: c, writer: 'C', now: () => NOW, sleep: noSleep, log: () => {} });
+    await p.restore();
+    const rs = p.restoreStatus();
+    expect(rs).toMatchObject({ legacyRows: 60, legacyStrikes: imported.length, strikes: 6_000 });
+    expect(imported.length).toBeGreaterThan(1_750); // all but the minutes at the two edges
+    expect(rs.legacyBeforeMs).toBe((minuteOf(Math.max(...imported)) + 1) * MIN);
+    expect(rs.legacyBeforeMs).toBeLessThanOrEqual(NOW - 5 * H + MIN);
+    expect(c.countsWindow(NOW, 1440)).toEqual({ sum: 6_000 + 6 * imported.length, legacy: true });
+    expect(c.countsWindow(NOW, 4 * 60).legacy).toBe(false); // the last 4 h are all new-format: exact
+    // Every minute of the rollback holds strikes: none of it reads as collector blind time.
+    const blind = c.gaps(NOW, 1440, null).filter((g) => g.toMs > NOW - 10 * H + MIN && g.fromMs < NOW - 5 * H - MIN);
+    expect(blind).toEqual([]);
   });
 
   it('catch-up loads rows an old dyno flushed after the restore passed, deduped against live', async () => {
@@ -346,6 +437,45 @@ describe('restore', () => {
     now = boot + 300_000;
     expect(await p.catchUp()).toMatchObject({ rows: 0, strikes: 0 });
     expect(p.restoreStatus().catchUps).toHaveLength(2);
+  });
+
+  it('measures the restart hole to this boot’s first live strike; a late final flush reaching past it closes it', async () => {
+    const db = new FakeDb();
+    const boot = NOW;
+    let now = boot;
+    // The old dyno's last saved strike is 50 s before boot, this boot's first 30 s after:
+    // an 80 s hole across a minute boundary, both minutes holding strikes.
+    await writerDay(db, 'A', genStrikes({ n: 2_000, nowMs: boot - 50_000, spanMs: 2 * H, seed: 51 }), 5);
+    const aLast = Math.max(...db.blocks.map((b) => b.t_last));
+    const c = mkStore('C', () => now);
+    const p = createPersistence({ db, store: c, writer: 'C', now: () => now, bootMs: boot, sleep: noSleep, log: () => {} });
+    const first = boot + 30_000;
+    c.appendLive(first / 10, qLat(35), qLon(-97));
+    expect(p.bootHole()).toBeNull(); // not before the restore is done
+    await p.restore();
+    expect(p.restoreStatus().bootHole).toEqual({ fromMs: aLast, toMs: first });
+    expect(c.gaps(boot + 60_000, 10, null, null, [p.bootHole()!])).toEqual([{ fromMs: aLast, toMs: first }]);
+    // A was still collecting (Heroku ran both dynos): its final flush, found by catch-up, covers the hole.
+    now = boot + 90_000;
+    db.addBlock(block('A', 99, genStrikes({ n: 200, nowMs: boot + 40_000, spanMs: 80_000, seed: 52 })));
+    await p.catchUp();
+    expect(p.bootHole()).toBeNull();
+  });
+
+  it('reports no restart hole when nothing precedes the boot, or another writer’s rows reach past its first strike', async () => {
+    const empty = mkStore('C');
+    const p = createPersistence({ db: new FakeDb(), store: empty, writer: 'C', now: () => NOW, sleep: noSleep, log: () => {} });
+    empty.appendLive(NOW / 10 + 100, 1, 1);
+    await p.restore();
+    expect(p.bootHole()).toBeNull();
+    // An overlapping writer whose rows began before this boot's first strike and end after it.
+    const db = new FakeDb();
+    db.addBlock(block('A', 0, genStrikes({ n: 500, nowMs: NOW + 20_000, spanMs: 5 * MIN, seed: 53 })));
+    const c = mkStore('C2', () => NOW + 30_000);
+    c.appendLive(NOW / 10 + 500, 2, 2);
+    const q = createPersistence({ db, store: c, writer: 'C2', now: () => NOW + 30_000, bootMs: NOW, sleep: noSleep, log: () => {} });
+    await q.restore();
+    expect(q.bootHole()).toBeNull();
   });
 
   it('skips and counts a corrupt row instead of failing the restore', async () => {

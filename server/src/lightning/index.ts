@@ -1,7 +1,9 @@
 // Lightning: a persistent server-side Blitzortung collector that keeps EVERY
 // strike of the last 24 h (store.ts), persists them to Postgres (persist.ts)
-// so restarts and deploys lose at most a minute, and serves the display field,
-// exact near-location counts and collector health under /api/lightning.
+// so a restart or deploy loses at most the last unsaved minute of what was
+// collected (the time no collector ran is lost too, and flagged as blind), and
+// serves the display field, near-location counts and collector health under
+// /api/lightning.
 //
 // This module holds the process singleton; service.ts does the wiring.
 

@@ -2,7 +2,7 @@
 // changes every second and the client decides how often to poll.
 //
 //   GET /field?bbox=w,s,e,n&budget&fresh   the display field for a view (display.ts)
-//   GET /near?lat&lon&radiusMi&hours&maxPoints   exact counts around a place (near.ts)
+//   GET /near?lat&lon&radiusMi&hours&maxPoints   counts around a place (near.ts)
 //   GET /status, GET /debug               collector health (status.ts)
 //   GET /?minutes[&lat&lon&radiusMi]      LEGACY shape, kept for old bundles
 //                                         still open on wall displays
@@ -131,10 +131,16 @@ export function createLightningRouter(getCtx: () => LightningContext | null): Ro
       const r = await ctx.near.get(q);
       const now = ctx.now();
       const c = ctx.collector.status(now);
+      const fid = fidelity(ctx);
       res.json({
         ...r,
-        fidelity: fidelity(ctx),
-        coverage: coverage(ctx, now, Math.max(1, Math.round(q.hours * 60)), c),
+        // The response time, like every other field here. Counts, points and
+        // the nearest come from a ≤ 30 s memo (as of r.now): re-base its age.
+        now,
+        nearest: r.nearest && { ...r.nearest, ageS: r.nearest.ageS + Math.round((now - r.now) / 1000) },
+        fidelity: fid,
+        // Evicted time is not covered: the counts above no longer include it.
+        coverage: coverage(ctx, now, Math.max(1, Math.round(q.hours * 60)), c, fid.evictedBeforeMs),
         collector: collectorLite(c, now),
       });
     })
@@ -182,12 +188,15 @@ export function createLightningRouter(getCtx: () => LightningContext | null): Ro
       let totalInWindow: number;
       let thinned: boolean;
       if (anyNear) {
+        // Old bundles scale (points within d) × totalInWindow / returned, so
+        // the points must be an unbiased sample, not newest-per-cell.
         const r = await ctx.near.get({
           lat: round3(lat!),
           lon: round3(lon!),
           radiusMi: Math.min(500, rad!),
           hours: minutes / 60,
           maxPoints: 20_000,
+          uniform: true,
         });
         outLat = r.points.lat.map(round3);
         outLon = r.points.lon.map(round3);
@@ -224,7 +233,7 @@ export function createLightningRouter(getCtx: () => LightningContext | null): Ro
         totalInWindow,
         returned: outLat.length,
         thinned,
-        coverageMin: coverage(ctx, now, minutes, c).coveredMin,
+        coverageMin: coverage(ctx, now, minutes, c, anyNear ? ctx.store.evictedBeforeMs : null).coveredMin,
         connected: c.connected,
         updated: Math.round(now / 1000),
       });

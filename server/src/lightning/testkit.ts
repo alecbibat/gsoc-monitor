@@ -193,9 +193,14 @@ export class FakeDb implements Queryable {
       const limit = Number(/LIMIT (\d+)/.exec(sql)?.[1] ?? 1e9);
       return rs.sort(desc).slice(0, limit).map(blockOut);
     }
-    if (sql.startsWith('SELECT min(t_first) AS t_first FROM lightning_blocks')) {
-      const rs = this.blocks.filter((b) => b.t_last >= num(p[0]));
-      return [{ t_first: rs.length ? String(Math.min(...rs.map((b) => b.t_first))) : null }];
+    if (sql.startsWith('SELECT writer, min(t_first) AS t_first, max(t_last) AS t_last FROM lightning_blocks')) {
+      const spans = new Map<string, { t_first: number; t_last: number }>();
+      for (const b of this.blocks) {
+        if (b.t_last < num(p[0]) || b.writer === p[1]) continue;
+        const s = spans.get(b.writer);
+        spans.set(b.writer, s ? { t_first: Math.min(s.t_first, b.t_first), t_last: Math.max(s.t_last, b.t_last) } : b);
+      }
+      return [...spans].map(([writer, s]) => ({ writer, t_first: String(s.t_first), t_last: String(s.t_last) }));
     }
     if (sql.startsWith('SELECT id FROM lightning_blocks')) {
       return this.blocks.filter((b) => b.t_last >= num(p[0]) && b.writer !== p[1]).map((b) => ({ id: String(b.id) }));

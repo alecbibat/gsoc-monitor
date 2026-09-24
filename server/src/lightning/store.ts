@@ -18,8 +18,10 @@
 // only recycled once no scan can still be reading it.
 //
 // A per-minute ring keeps exact (weighted) counts for every minute of the
-// last 25 h. Counts, rates and collector gaps come from it, so they stay
-// exact even when the memory guard evicts old records.
+// last 25 h. The /status counts, rates and whole-minute collector gaps come
+// from it, so those stay exact even when the memory guard evicts old records.
+// Anything read from the records themselves (/near, the display field) does
+// not: evicted strikes are gone from it, and evictedBeforeMs says from when.
 
 import { PRUNE_GRACE_MS, RETENTION_MS, SEG_CAP } from './constants';
 import type { LightningGap } from './types';
@@ -40,6 +42,8 @@ export const RING_MINUTES = 1_500;
 export const MIXED_WRITER = 0xffff;
 /** Buffers kept for reuse after segments are dropped. */
 const POOL_MAX = 32;
+/** Explicit blind intervals shorter than this are ignored (a relay hop, not a hole). */
+export const MIN_BLIND_MS = 30_000;
 
 const POW20 = 1_048_576;
 const POW40 = 1_099_511_627_776;
@@ -120,6 +124,8 @@ export class StrikeStore {
   /** Strikes before this time are no longer held (memory cap); null when nothing was evicted. */
   evictedBeforeMs: number | null = null;
   evictedRecords = 0;
+  /** Time of this process's first live strike (where its own coverage starts); null before it. */
+  firstLiveMs: number | null = null;
 
   private ringStamp = new Int32Array(RING_MINUTES).fill(-1);
   private ringCount = new Float64Array(RING_MINUTES);
@@ -166,6 +172,7 @@ export class StrikeStore {
       this.openOwn = seg;
     }
     this.put(seg, tick, latQ, lonQ);
+    if (this.firstLiveMs === null) this.firstLiveMs = tick * 10;
     const slot = this.ringSlot(Math.floor(tick / TICKS_PER_MIN), true);
     if (slot >= 0) {
       this.ringCount[slot] += 1;
@@ -246,8 +253,9 @@ export class StrikeStore {
 
   /**
    * Evict whole segments, oldest newest-record first, until the store fits
-   * its capacity. The per-minute counts are deliberately left alone, so
-   * counts stay exact; evictedBeforeMs tells readers the points are gone.
+   * its capacity. The per-minute counts are deliberately left alone, so the
+   * /status counts stay exact; evictedBeforeMs tells readers that anything
+   * counted from the records (/near, the field) no longer covers that time.
    */
   enforceCapacity(): number {
     if (this.recordCount <= this.cap) return 0;
@@ -383,13 +391,23 @@ export class StrikeStore {
   }
 
   /**
-   * Collector blind spots inside the trailing window: runs of ≥ 1 completed
-   * minute with no strike at all (the global stream never has an empty
-   * minute), plus the current partial minute while the collector is down.
-   * Time before unknownBeforeMs (history still being restored) is unknown, not
-   * a gap, and is left out.
+   * Collector blind spots inside the trailing window, merged and oldest first:
+   *   - runs of ≥ 1 completed minute with no strike at all (the global stream
+   *     never has an empty minute),
+   *   - explicit blind intervals of ≥ MIN_BLIND_MS (a collector outage, the
+   *     restart hole), which also catch the holes that straddle a minute
+   *     boundary without emptying a whole minute,
+   *   - [downSinceMs, now] while the collector is down.
+   * Time before unknownBeforeMs (history still being restored) is unknown,
+   * not a gap, and is left out.
    */
-  gaps(nowMs: number, windowMin: number, unknownBeforeMs: number | null, downSinceMs: number | null = null): LightningGap[] {
+  gaps(
+    nowMs: number,
+    windowMin: number,
+    unknownBeforeMs: number | null,
+    downSinceMs: number | null = null,
+    blind: readonly LightningGap[] = []
+  ): LightningGap[] {
     const cur = Math.floor(nowMs / 60_000);
     const winStart = nowMs - windowMin * 60_000;
     const floorMs = Math.max(winStart, unknownBeforeMs ?? -Infinity);
@@ -403,16 +421,18 @@ export class StrikeStore {
         runStart = -1;
       }
     }
-    if (downSinceMs !== null) {
-      raw.push({ fromMs: runStart >= 0 ? runStart * 60_000 : Math.max(cur * 60_000, downSinceMs), toMs: nowMs });
-    } else if (runStart >= 0) {
-      raw.push({ fromMs: runStart * 60_000, toMs: cur * 60_000 });
-    }
+    if (runStart >= 0) raw.push({ fromMs: runStart * 60_000, toMs: cur * 60_000 });
+    if (downSinceMs !== null) raw.push({ fromMs: downSinceMs, toMs: nowMs });
+    for (const b of blind) if (b.toMs - b.fromMs >= MIN_BLIND_MS) raw.push({ fromMs: b.fromMs, toMs: b.toMs });
+    raw.sort((a, b) => a.fromMs - b.fromMs);
     const out: LightningGap[] = [];
     for (const g of raw) {
       const fromMs = Math.max(g.fromMs, floorMs);
       const toMs = Math.min(g.toMs, nowMs);
-      if (toMs > fromMs) out.push({ fromMs, toMs });
+      if (!(toMs > fromMs)) continue;
+      const prev = out[out.length - 1];
+      if (prev && fromMs <= prev.toMs) prev.toMs = Math.max(prev.toMs, toMs);
+      else out.push({ fromMs, toMs });
     }
     return out;
   }
