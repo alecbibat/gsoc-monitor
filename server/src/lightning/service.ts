@@ -63,8 +63,10 @@ export function createLightningService(deps: ServiceDeps): LightningService {
   const field = new FieldService(store, now);
   const near = new NearService(
     store,
-    () => ({ legacyBeforeMs: persist.legacyBeforeMs, evictedBeforeMs: store.evictedBeforeMs }),
-    now
+    () => ({ evictedBeforeMs: store.evictedBeforeMs }),
+    now,
+    // A near count taken mid-restore is only good for that request.
+    () => persist.restoreStatus().state === 'done'
   );
   const guard = new MemoryGuard({
     store,
@@ -126,12 +128,20 @@ export function createLightningService(deps: ServiceDeps): LightningService {
     log(`[lightning] boot ${bootId}; collecting now, restoring history in the background`);
     // Collect first: the restore runs alongside, never in front of, ingest.
     collector.start();
-    later(RESTORE_DELAY_MS, () => void persist.restore());
-    for (const at of CATCH_UP_AT_MS) later(at, () => void persist.catchUp());
+    // New history makes memoized results wrong: drop them when the restore
+    // (legacy import included) finishes and after each catch-up.
+    later(RESTORE_DELAY_MS, () =>
+      void persist.restore().then(() => {
+        near.clear();
+        field.clear();
+      })
+    );
+    for (const at of CATCH_UP_AT_MS) later(at, () => void persist.catchUp().then(() => near.clear()));
     every(SAVE_INTERVAL_MS, () => void persist.save());
     every(PRUNE_EVERY_MS, () => {
       store.prune(now());
       store.enforceCapacity();
+      field.sweep(); // also when no request comes to do it
     });
     every(GUARD_EVERY_MS, () => guard.tick());
     every(SUMMARY_EVERY_MS, () => log(summary()));

@@ -129,14 +129,15 @@ export async function migrate() {
 
       -- Lightning strike history: EVERY strike of the last ~25 h, so restarts
       -- and deploys (the dyno filesystem is wiped on both) lose at most the
-      -- last minute. One row per save per store segment (~1-2 rows a minute),
-      -- each a run of packed records: data = gzip of byte-shuffled 8-byte
-      -- records, base_tick turns their 24-bit offsets back into 10 ms ticks
-      -- (lightning/codec.ts). writer is the dyno boot that collected them and
-      -- seq its save counter: (writer, seq) makes a retried INSERT after a lost
-      -- ack a no-op. t_first/t_last are epoch ms; the index serves the restore
-      -- (newest first) and the prune. pg returns BIGINT as a string — the
-      -- reader Number()s every one.
+      -- last unsaved minute of what was collected (the restart hole itself is
+      -- flagged as blind time). One row per save per store segment (~1-2
+      -- rows a minute), each a run of packed records: data = gzip of
+      -- byte-shuffled 8-byte records, base_tick turns their 24-bit offsets
+      -- back into 10 ms ticks (lightning/codec.ts). writer is the dyno boot
+      -- that collected them and seq its save counter: (writer, seq) makes a
+      -- retried INSERT after a lost ack a no-op. t_first/t_last are epoch ms;
+      -- the index serves the restore (newest first) and the prune. pg returns
+      -- BIGINT as a string — the reader Number()s every one.
       CREATE TABLE IF NOT EXISTS lightning_blocks (
         id         BIGSERIAL   PRIMARY KEY,
         writer     TEXT        NOT NULL,

@@ -19,6 +19,9 @@ const BACKOFF_MAX_S = 60;
 const DAY_MS = 24 * 60 * 60_000;
 /** Exact repeats of a recent strike (a relay replaying frames after a reconnect) are dropped. */
 const DUPE_WINDOW = 4_096;
+/** Ended blind intervals kept for coverage: the last BLIND_MAX within BLIND_KEEP_MS. */
+const BLIND_MAX = 64;
+const BLIND_KEEP_MS = 25 * 60 * 60_000;
 
 /** The subset of a ws client the collector uses (a fake in tests). */
 export interface WsLike {
@@ -46,6 +49,12 @@ export interface CollectorStatus {
   dupes: number;
   received: number;
   synthetic: boolean;
+  /**
+   * Ended outages after the first strike, [went down, first strike after],
+   * oldest first. The boot hole is persistence's to measure (another writer
+   * may have covered it); the ongoing outage is downSince.
+   */
+  blind: { fromMs: number; toMs: number }[];
 }
 
 export interface CollectorOptions {
@@ -76,6 +85,7 @@ export class Collector {
   private lastStrikeAt: number | null = null;
   private strikeSinceOpen = false;
   private reconnectTimes: number[] = [];
+  private blind: { fromMs: number; toMs: number }[] = [];
 
   private received = 0;
   private networkTimed = 0;
@@ -214,8 +224,9 @@ export class Collector {
     const lastHeard = Math.max(this.lastStrikeAt ?? 0, this.connectedSince ?? 0);
     if (now - lastHeard < WATCHDOG_SILENCE_MS) return;
     this.log(`[lightning] no strikes for ${Math.round((now - lastHeard) / 1000)} s on an open socket — reconnecting`);
-    // Down since it went quiet, not since we noticed.
-    this.downSince = lastHeard;
+    // Down since it went quiet, not since we noticed. An earlier downSince
+    // stays: this socket opened during an outage and never delivered a strike.
+    if (this.downSince === null) this.downSince = lastHeard;
     this.connected = false;
     try {
       ws.terminate(); // → 'close' → scheduleReconnect
@@ -253,10 +264,12 @@ export class Collector {
 
     this.received++;
     if (networkTime) this.networkTimed++;
+    const hadStrike = this.lastStrikeAt !== null;
     this.lastStrikeAt = recv;
     if (!this.strikeSinceOpen) {
       this.strikeSinceOpen = true;
       this.failures = 0;
+      if (this.downSince !== null && hadStrike) this.recordBlind(this.downSince, recv);
       this.downSince = null;
     }
     const sec = Math.floor(recv / 1000);
@@ -267,6 +280,11 @@ export class Collector {
     }
     this.secCount[slot]++;
     this.onStrikeCb(tick, latQ, lonQ);
+  }
+
+  private recordBlind(fromMs: number, toMs: number): void {
+    this.blind.push({ fromMs, toMs });
+    while (this.blind.length > BLIND_MAX || (this.blind.length && this.blind[0].toMs < toMs - BLIND_KEEP_MS)) this.blind.shift();
   }
 
   ratePerMin(now = this.now()): number {
@@ -291,6 +309,7 @@ export class Collector {
       dupes: this.dupes,
       received: this.received,
       synthetic: this.syntheticRate !== null,
+      blind: this.blind.filter((b) => b.toMs >= now - BLIND_KEEP_MS),
     };
   }
 

@@ -3,9 +3,13 @@ import type { Server } from 'http';
 import express from 'express';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { STAGE_ENDS_S } from './constants';
+import type { Persistence } from './persist';
+import { haversineMi, qLat, qLon } from './quant';
 import { type LightningContext, createLightningRouter, parseBBox, roundDown } from './routes';
 import { createLightningService } from './service';
-import { FakeDb, FakeWs, genStrikes } from './testkit';
+import { FakeDb, FakeWs, type Rec, genStrikes } from './testkit';
+
+const H = 3_600_000;
 
 let server: Server;
 let base = '';
@@ -43,6 +47,33 @@ async function get(path: string): Promise<{ status: number; body: any; headers: 
 }
 
 const keys = (o: object) => Object.keys(o).sort();
+
+/** A service and app of its own (clock, capacity, history), with its restore done on an empty database. */
+async function standalone(opts: { now: () => number; capacity?: number }) {
+  const svc = createLightningService({
+    db: new FakeDb(),
+    wsFactory: (url) => new FakeWs(url),
+    log: () => {},
+    memoryUsage: () => ({ rss: 200e6, heapUsed: 50e6, arrayBuffers: 30e6 }),
+    capacity: opts.capacity ?? 5_000_000,
+    now: opts.now,
+  });
+  await (svc.ctx.persist as Persistence).restore();
+  const app = express();
+  app.use('/api/lightning', createLightningRouter(() => svc.ctx));
+  const srv = await new Promise<Server>((resolve) => {
+    const s2 = app.listen(0, () => resolve(s2));
+  });
+  const url = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/api/lightning`;
+  return {
+    ctx: svc.ctx,
+    get: async (path: string): Promise<any> => (await fetch(url + path)).json(),
+    close: () => new Promise<void>((resolve) => srv.close(() => resolve())),
+  };
+}
+const add = (c: LightningContext, recs: Rec[]) => {
+  for (const r of recs.slice().sort((a, b) => a.tick - b.tick)) c.store.appendLive(r.tick, r.latQ, r.lonQ);
+};
 
 describe('GET /field', () => {
   it('answers the contract shape with no-store', async () => {
@@ -93,6 +124,58 @@ describe('GET /near', () => {
     expect(keys(body.nearest)).toEqual(['ageS', 'lat', 'lon', 'mi']);
     expect(body.points.t.length).toBeLessThanOrEqual(6_000); // default maxPoints
     expect(body.coverage.windowMin).toBe(1_440);
+  });
+
+  it('leaves evicted time out of its coverage; /status coverage and counts keep it', async () => {
+    const now = Date.now();
+    const t = await standalone({ now: () => now, capacity: 100_000 });
+    try {
+      // A storm near the site 12–24 h ago, then 12 h of strikes far away: the cap evicts the storm.
+      add(t.ctx, genStrikes({ n: 60_000, nowMs: now - 12 * H, spanMs: 12 * H, seed: 61, cells: [{ lat: 35, lon: -95, sd: 0.05 }], isolatedShare: 0 }));
+      add(t.ctx, genStrikes({ n: 90_000, nowMs: now, spanMs: 12 * H, seed: 62, cells: [{ lat: -10, lon: 20, sd: 1 }], isolatedShare: 0 }));
+      t.ctx.store.enforceCapacity();
+      const evictedBeforeMs = t.ctx.store.evictedBeforeMs!;
+      expect(evictedBeforeMs).toBeGreaterThan(now - 12 * H);
+      const n = await t.get('/near?lat=35&lon=-95&radiusMi=130&hours=24');
+      expect(n.counts).toMatchObject({ inRadius: 0, exact: false });
+      expect(n.nearest).toBeNull();
+      expect(n.fidelity.evictedBeforeMs).toBe(evictedBeforeMs);
+      // "None within 25 mi" is only true of the time since the evicted records ended.
+      expect(Math.abs(n.coverage.coveredMin - (now - evictedBeforeMs) / 60_000)).toBeLessThanOrEqual(1);
+      expect(n.coverage.gaps).toEqual([]);
+      const legacy = await t.get('/?minutes=1440&lat=35&lon=-95&radiusMi=130');
+      expect(legacy.coverageMin).toBe(n.coverage.coveredMin);
+      // The per-minute counts never lose evicted strikes: /status still covers and counts the day.
+      const st = await t.get('/status');
+      expect(st.coverage.coveredMin).toBe(1_440);
+      expect(st.counts).toMatchObject({ m1440: 150_000, exact: true });
+      // A window that ends before the evicted span is fully covered and exact.
+      const recent = await t.get('/near?lat=-10&lon=20&radiusMi=300&hours=6');
+      expect(recent.coverage.coveredMin).toBe(360);
+      expect(recent.counts.exact).toBe(true);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('answers with the response time, re-basing the memoized nearest strike’s age', async () => {
+    let now = Date.now();
+    const t = await standalone({ now: () => now });
+    try {
+      t.ctx.store.appendLive(Math.floor((now - 60_000) / 10), qLat(35), qLon(-97));
+      const a = await t.get('/near?lat=35&lon=-97&radiusMi=10');
+      expect(a.now).toBe(now);
+      expect(a.nearest.ageS).toBe(60);
+      now += 20_000;
+      t.ctx.store.appendLive(Math.floor((now - 1_000) / 10), qLat(35.01), qLon(-97)); // not in the memo yet
+      const b = await t.get('/near?lat=35&lon=-97&radiusMi=10');
+      expect(b.counts).toEqual(a.counts); // served from the ≤ 30 s memo…
+      expect(b.now).toBe(now); // …but stamped with the response time
+      expect(b.nearest.ageS).toBe(80);
+      expect(b.coverage.windowMin).toBe(1_440);
+    } finally {
+      await t.close();
+    }
   });
 
   it('rejects bad parameters', async () => {
@@ -152,6 +235,29 @@ describe('GET / (legacy)', () => {
     expect(n.totalInWindow).toBeLessThan(30_000);
     expect((await get('/?minutes=5000')).body.windowMin).toBe(1_440);
     expect((await get('/')).body.windowMin).toBe(60);
+  });
+
+  it('near a point: an unbiased sample above 20000 in radius, so old bundles’ scaled counts hold', async () => {
+    const now = Date.now();
+    const t = await standalone({ now: () => now });
+    try {
+      add(t.ctx, genStrikes({ n: 60_000, nowMs: now, spanMs: 24 * H, seed: 71, cells: [{ lat: 35, lon: -95, sd: 0.1 }], isolatedShare: 0 }));
+      add(t.ctx, genStrikes({ n: 8_000, nowMs: now, spanMs: 24 * H, seed: 72, cells: [{ lat: 35, lon: -95, sd: 1.5 }], isolatedShare: 0 }));
+      const body = await t.get('/?minutes=1440&lat=35&lon=-95&radiusMi=130');
+      const exact = (await t.get('/near?lat=35&lon=-95&radiusMi=130&hours=24&maxPoints=1')).counts;
+      expect(body).toMatchObject({ thinned: true, totalInWindow: exact.inRadius });
+      expect(body.returned).toBeLessThanOrEqual(20_000);
+      // What a pre-upgrade bundle computes: (points within d) × totalInWindow / returned.
+      for (const [d, want] of [
+        [25, exact.le25],
+        [100, exact.le100],
+      ]) {
+        const within = body.lat.filter((lat: number, i: number) => haversineMi(35, -95, lat, body.lon[i]) <= d).length;
+        expect(Math.abs((within * body.totalInWindow) / body.returned - want) / want).toBeLessThan(0.05);
+      }
+    } finally {
+      await t.close();
+    }
   });
 
   it('rejects bad parameters with 400', async () => {

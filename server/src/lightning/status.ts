@@ -40,14 +40,27 @@ export function collectorLite(c: CollectorStatus, now: number): LightningCollect
 /**
  * Coverage of the trailing window. While the restore runs, time before what it
  * has reached (or before boot, if it has not started) is unknown rather than a
- * gap; the collector's own time since boot is always known.
+ * gap; the collector's own time since boot is always known. Gaps include the
+ * collector's ended outages and the restart hole, not just empty minutes.
+ *
+ * heldFromMs is for answers counted from the stored records (/near): time
+ * before it — fidelity.evictedBeforeMs — is not covered there either, since
+ * the memory cap dropped those strikes. Only the per-minute counts keep it.
  */
-export function coverage(src: StatusSources, now: number, windowMin: number, c?: CollectorStatus): LightningCoverage {
+export function coverage(
+  src: StatusSources,
+  now: number,
+  windowMin: number,
+  c?: CollectorStatus,
+  heldFromMs: number | null = null
+): LightningCoverage {
   const rs = src.persist.restoreStatus();
   const col = c ?? src.collector.status(now);
   const restoring = rs.state !== 'done';
-  const unknownBeforeMs = restoring ? Math.min(src.bootMs, rs.backToMs ?? src.bootMs) : null;
-  const gaps = src.store.gaps(now, windowMin, unknownBeforeMs, col.downSince);
+  const restoreFrom = restoring ? Math.min(src.bootMs, rs.backToMs ?? src.bootMs) : null;
+  const unknownBeforeMs = restoreFrom === null ? heldFromMs : Math.max(restoreFrom, heldFromMs ?? -Infinity);
+  const blind = rs.bootHole ? [...col.blind, rs.bootHole] : col.blind;
+  const gaps = src.store.gaps(now, windowMin, unknownBeforeMs, col.downSince, blind);
   const winStart = now - windowMin * 60_000;
   let blindMs = 0;
   for (const g of gaps) blindMs += g.toMs - g.fromMs;

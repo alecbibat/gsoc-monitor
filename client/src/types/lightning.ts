@@ -23,7 +23,13 @@ export interface LightningGap {
   toMs: number;
 }
 
-/** Exact strike counts over the trailing windows (every received strike). */
+/**
+ * Strike counts over the trailing windows, from the per-minute counts (every
+ * received strike, including ones the memory cap has since evicted).
+ * Windows are minute-aligned: mN sums every minute bucket that overlaps the
+ * last N minutes, the current partial minute included — the last N to N+1
+ * minutes, so up to one minute's strikes over. `exact` means not sampled.
+ */
 export interface LightningCounts {
   m60: number;
   m360: number;
@@ -35,9 +41,17 @@ export interface LightningCounts {
 
 export interface LightningCoverage {
   windowMin: number;
-  /** Minutes of the window the collector actually covered (window − gaps − unknown). */
+  /**
+   * Minutes of the window the answer actually covers (window − gaps − unknown).
+   * For /near, time before fidelity.evictedBeforeMs is unknown too: its counts
+   * and points no longer include those strikes.
+   */
   coveredMin: number;
-  /** Collector blind spots of ≥ 1 min inside the window, oldest first. */
+  /**
+   * Collector blind spots inside the window, oldest first: minutes with no
+   * strike, outages and the restart hole (≥ 30 s, to the second), and the
+   * ongoing outage.
+   */
   gaps: LightningGap[];
   /** The server is still loading persisted history; time before restoredBackToMs is unknown, not a gap. */
   restoring: boolean;
@@ -55,9 +69,16 @@ export interface LightningCollector {
 }
 
 export interface LightningFidelity {
-  /** Strikes before this time come from pre-upgrade history kept 1-in-6 (counted ×6). */
+  /**
+   * Strikes before this time may come from pre-upgrade history kept 1-in-6
+   * (counted ×6): the end of the newest minute filled from it.
+   */
   legacyBeforeMs: number | null;
-  /** Strikes before this time are no longer held (memory cap); counts stay exact. */
+  /**
+   * Strikes before this time are no longer held (memory cap). Only the
+   * per-minute counts (LightningCounts, /status) still include them; /near
+   * counts, its nearest strike and every map point do not.
+   */
   evictedBeforeMs: number | null;
 }
 
@@ -108,12 +129,17 @@ export interface LightningFieldResponse {
 /** GET /api/lightning/near?lat=&lon=&radiusMi=130&hours=24&maxPoints=6000 */
 export interface LightningNearResponse {
   v: 1;
+  /** Server epoch ms of the response. counts, points and nearest may be up to 30 s older (memoized); nearest.ageS is re-based to `now`. */
   now: number;
   lat: number;
   lon: number;
   radiusMi: number;
   hours: number;
-  /** Computed over every stored strike before any point thinning. */
+  /**
+   * Computed over every stored strike before any point thinning. exact is
+   * false when the window holds pre-upgrade (×6) minutes or reaches
+   * fidelity.evictedBeforeMs (evicted strikes are not counted).
+   */
   counts: { le5: number; le25: number; le100: number; inRadius: number; exact: boolean };
   /** Closest stored strike within the radius and window; null when none. */
   nearest: { mi: number; ageS: number; lat: number; lon: number } | null;

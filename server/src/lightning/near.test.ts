@@ -6,7 +6,7 @@ import { type Rec, genStrikes, prng } from './testkit';
 
 const NOW = Date.UTC(2026, 8, 24, 12, 0, 0);
 const H = 3_600_000;
-const NO_FIDELITY = { legacyBeforeMs: null, evictedBeforeMs: null };
+const NO_FIDELITY = { evictedBeforeMs: null };
 const MI_PER_DEG_LAT = (Math.PI * 3958.7613) / 180;
 
 function storeWith(recs: Rec[]): StrikeStore {
@@ -127,12 +127,68 @@ describe('near', () => {
     const s = storeWith([at(35, -97, 60_000)]);
     s.appendImport(Math.floor((NOW - 20 * H) / 10), qLat(35.01), qLon(-97), 6, s.writerIdOf('legacy'));
     const q = { lat: 35, lon: -97, radiusMi: 10, maxPoints: 100 };
-    const day = await near(s, { ...q, hours: 24 }, NOW, { legacyBeforeMs: NOW - 19 * H, evictedBeforeMs: null });
+    const day = await near(s, { ...q, hours: 24 }, NOW, NO_FIDELITY);
     expect(day.counts).toMatchObject({ inRadius: 7, exact: false });
-    const hour = await near(s, { ...q, hours: 1 }, NOW, { legacyBeforeMs: NOW - 19 * H, evictedBeforeMs: null });
+    const hour = await near(s, { ...q, hours: 1 }, NOW, NO_FIDELITY);
     expect(hour.counts).toMatchObject({ inRadius: 1, exact: true });
-    const evicted = await near(s, { ...q, hours: 6 }, NOW, { legacyBeforeMs: null, evictedBeforeMs: NOW - 2 * H });
+    const evicted = await near(s, { ...q, hours: 6 }, NOW, { evictedBeforeMs: NOW - 2 * H });
     expect(evicted.counts.exact).toBe(false);
+  });
+
+  it('is an estimate when the window holds a minute of ×6 history, even with none of it in the radius', async () => {
+    const s = storeWith([at(35, -97, 60_000)]);
+    s.appendImport(Math.floor((NOW - 3 * H) / 10), qLat(0), qLon(0), 6, s.writerIdOf('legacy')); // far away
+    const q = { lat: 35, lon: -97, radiusMi: 10, maxPoints: 100 };
+    expect((await near(s, { ...q, hours: 6 }, NOW, NO_FIDELITY)).counts).toEqual({ le5: 1, le25: 1, le100: 1, inRadius: 1, exact: false });
+    expect((await near(s, { ...q, hours: 2 }, NOW, NO_FIDELITY)).counts.exact).toBe(true);
+  });
+
+  it('uniform thinning keeps an unbiased sample, so inRadius / returned scales a count of points', async () => {
+    const storm = genStrikes({ n: 60_000, nowMs: NOW, spanMs: 24 * H, seed: 31, cells: [{ lat: 35, lon: -95, sd: 0.1 }], isolatedShare: 0 });
+    const scattered = genStrikes({ n: 8_000, nowMs: NOW, spanMs: 24 * H, seed: 32, cells: [{ lat: 35, lon: -95, sd: 1.5 }], isolatedShare: 0 });
+    const closest = at(35.0001, -95.0001, 23 * H);
+    const s = storeWith([...storm, ...scattered, closest]);
+    const q = { lat: 35, lon: -95, radiusMi: 130, hours: 24, maxPoints: 20_000 };
+    const r = await near(s, { ...q, uniform: true }, NOW, NO_FIDELITY);
+    expect(r.points.sampled).toBe(true);
+    expect(r.points.t.length).toBeLessThanOrEqual(20_000);
+    expect(r.points.t.length).toBeGreaterThan(19_000);
+    expect(r.points.t).toContain(closest.tick / 100);
+    const scale = r.counts.inRadius / r.points.t.length;
+    for (const [d, exact] of [
+      [5, r.counts.le5],
+      [25, r.counts.le25],
+      [100, r.counts.le100],
+    ]) {
+      const within = r.points.lat.filter((lat, i) => haversineMi(35, -95, lat, r.points.lon[i]) <= d).length;
+      expect(Math.abs(within * scale - exact) / exact).toBeLessThan(0.05);
+    }
+    // Newest-per-cell (the default) collapses the storm: the same scaling is far off.
+    const cells = await near(s, q, NOW, NO_FIDELITY);
+    const within25 = cells.points.lat.filter((lat, i) => haversineMi(35, -95, lat, cells.points.lon[i]) <= 25).length;
+    expect((within25 * cells.counts.inRadius) / cells.points.t.length / cells.counts.le25).toBeLessThan(0.5);
+  });
+
+  it('NearService memoizes nothing while history is restoring, and clear() drops a scan in flight', async () => {
+    let restoring = true;
+    const s = storeWith([at(35, -97)]);
+    const svc = new NearService(s, () => NO_FIDELITY, () => NOW, () => !restoring);
+    const q = { lat: 35, lon: -97, radiusMi: 10, hours: 24, maxPoints: 100 };
+    const early = await svc.get(q);
+    expect(early.counts.inRadius).toBe(1);
+    s.appendImport(Math.floor((NOW - H) / 10), qLat(35), qLon(-97), 1, s.writerIdOf('restored'));
+    restoring = false;
+    const done = await svc.get(q); // not the mid-restore answer
+    expect(done.counts.inRadius).toBe(2);
+    expect(await svc.get(q)).toBe(done); // memoized from here on
+    // A scan that started before new history arrived is neither memoized nor joined.
+    const running = svc.get({ ...q, radiusMi: 20 });
+    svc.clear();
+    s.appendImport(Math.floor((NOW - 2 * H) / 10), qLat(35), qLon(-97), 1, s.writerIdOf('restored'));
+    const fresh = svc.get({ ...q, radiusMi: 20 });
+    expect((await running).counts.inRadius).toBe(2);
+    expect((await fresh).counts.inRadius).toBe(3);
+    expect((await svc.get({ ...q, radiusMi: 20 })).counts.inRadius).toBe(3);
   });
 
   it('NearService memoizes for 30 s per key', async () => {

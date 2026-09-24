@@ -1,8 +1,9 @@
 // Memory guard. The whole app shares one 512 MB Basic dyno, and the strike
 // store is by far its largest resident (8 bytes a strike, ~70–100 MB for 24 h
 // at 100/s). If the process gets near the limit (R14 swapping, then an R15
-// kill that loses everything unsaved), shed the OLDEST strikes first: counts
-// stay exact (the per-minute ring is untouched) and /status reports it.
+// kill that loses everything unsaved), shed the OLDEST strikes first. The
+// per-minute counts (/status) stay exact (the ring is untouched); /near counts
+// and the map lose those strikes, and fidelity.evictedBeforeMs says from when.
 
 import { RSS_HIGH_BYTES, RSS_LOW_BYTES } from './constants';
 import type { StrikeStore } from './store';
@@ -51,7 +52,7 @@ export class MemoryGuard {
       this.pressure = true;
       this.log(
         `[lightning] rss ${mb(rss)} MB > ${mb(RSS_HIGH_BYTES)} MB — capacity ${store.capacity}, ` +
-          `evicted ${before - store.records} oldest strikes (counts stay exact)`
+          `evicted ${before - store.records} oldest strikes (per-minute counts kept; /near and the map lose them)`
       );
       return;
     }
