@@ -128,8 +128,8 @@ export function Sidebar() {
       serverDownSince: s.server?.collector.downSince ?? null,
       serverRatePerMin: s.server?.collector.ratePerMin ?? 0,
       restoring: s.server ? s.server.coverage.restoring || s.server.restore.state !== 'done' : false,
+      restoreState: s.server?.restore.state ?? null,
       restoreProgress: s.server?.restore.progress ?? 0,
-      connected: s.connected,
       ratePerMin: s.ratePerMin,
       liveSource: s.liveSource,
     }))

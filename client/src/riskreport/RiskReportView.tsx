@@ -7,7 +7,7 @@ import { FUEL_GROUPS, rgbCss } from '../layers/fuel/fbfm40';
 import { OUTLOOK_LEGEND } from '../layers/fireOutlook/fireOutlookMeta';
 import { QPF_LEGEND } from '../layers/precip/precipStore';
 import { LEGEND_ITEMS as LIGHTNING_LEGEND } from '../layers/lightning/lightningPalette';
-import { coverageCaption } from './lightningSection';
+import { coverageCaption, lightningCountPrefix } from './lightningSection';
 import { usePrintStyles } from '../lib/printStyles';
 import { RiskScanLoading } from './RiskScanLoading';
 
@@ -395,7 +395,7 @@ function ReportBody({ data }: { data: WildfireReportData }) {
               caption={[
                 `Lightning strikes, past 24 h — X marks colored by age, rings at 25 / 100 mi${
                   data.lightning.strikes100mi !== undefined
-                    ? ` · ${data.lightning.countsExact === false ? '≈' : ''}${data.lightning.strikes100mi.toLocaleString()} within 100 mi`
+                    ? ` · ${lightningCountPrefix(data.lightning)}${data.lightning.strikes100mi.toLocaleString()} within 100 mi`
                     : ''
                 }`,
                 data.lightning.mapNote,

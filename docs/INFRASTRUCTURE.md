@@ -82,9 +82,13 @@ positions, SSE client sets, and the auth failed-login rate-limit map.
 
 The lightning collector's working set is in memory too, but it is **rebuilt from
 `lightning_blocks` at boot**: a full-fidelity strike log in segments of 8 B/strike,
-capped at 12M strikes (`LIGHTNING_MAX_STRIKES`, ~96 MB) with a memory guard. When
-the cap or the guard evicts the oldest positions, counts stay exact and
-`/api/lightning/status` reports what was evicted.
+capped at 12M strikes (`LIGHTNING_MAX_STRIKES`, ~96 MB) with a memory guard —
+24 h up to ~140 strikes/s. Restarts and deploys lose at most a minute or two,
+reported as a coverage gap. When the cap or the guard evicts the oldest
+positions, only the global counts in `/api/lightning/status` stay exact (a
+per-minute ring keeps them) and `/status` reports what was evicted. Counts and
+the nearest strike around a place (`/near`) cover only the time since: the
+risk report prints them as lower bounds ("≥N") and says so in its bottom line.
 
 ### Browser storage (per user, per device)
 

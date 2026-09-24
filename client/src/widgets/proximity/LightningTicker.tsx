@@ -11,6 +11,12 @@ const POLL_MS = 15_000;
 // A healthy global stream delivers several strikes a second; a minute of
 // silence means the collector isn't hearing the network.
 const LIVE_MAX_AGE_S = 60;
+// Each poll aborts the one before it, and an aborted poll isn't a failure —
+// so a server that answers nothing within the poll never "fails". Two polls
+// without an answer means the last one can't vouch for now.
+const STALE_MS = 2 * POLL_MS;
+// Re-render this often so staleness shows even when no poll ever settles.
+const STALE_CHECK_MS = 5_000;
 
 const BOLT = '#ffd60a';
 
@@ -49,9 +55,38 @@ function Sparkline({ data }: { data: number[] }) {
   );
 }
 
+/**
+ * What the ticker may claim. An unreachable server (a failed poll, or no
+ * answer for STALE_MS — since mount when none ever came) vouches for
+ * nothing: no LIVE, and no "offline" either.
+ */
+export function tickerHealth(p: {
+  collector: LightningStatusResponse['collector'] | null;
+  failed: boolean;
+  /** Client time of the last successful poll; null until one. */
+  lastOkAt: number | null;
+  mountedAt: number;
+  nowMs: number;
+}): { unreachable: boolean; live: boolean; offline: boolean } {
+  const { collector: c } = p;
+  const unreachable = p.failed || p.nowMs - (p.lastOkAt ?? p.mountedAt) > STALE_MS;
+  const offline = !unreachable && c !== null && (!c.connected || c.downSince !== null);
+  const live =
+    !unreachable && c !== null && c.connected && c.lastStrikeAgeS !== null && c.lastStrikeAgeS < LIVE_MAX_AGE_S;
+  return { unreachable, live, offline };
+}
+
 export function LightningTicker() {
   const [status, setStatus] = useState<LightningStatusResponse | null>(null);
   const [failed, setFailed] = useState(false);
+  const [lastOkAt, setLastOkAt] = useState<number | null>(null);
+  const [mountedAt] = useState(() => Date.now());
+  const [nowMs, setNowMs] = useState(mountedAt);
+
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), STALE_CHECK_MS);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     let ctrl: AbortController | null = null;
@@ -65,6 +100,7 @@ export function LightningTicker() {
           if (c.signal.aborted) return;
           setStatus(s);
           setFailed(false);
+          setLastOkAt(Date.now());
         })
         .catch(() => {
           if (!c.signal.aborted) setFailed(true);
@@ -78,14 +114,7 @@ export function LightningTicker() {
   }, []);
 
   const collector = status?.collector ?? null;
-  // A failed poll can't vouch for the last answer: no LIVE, no "offline" either.
-  const offline = !failed && collector !== null && (!collector.connected || collector.downSince !== null);
-  const live =
-    !failed &&
-    collector !== null &&
-    collector.connected &&
-    collector.lastStrikeAgeS !== null &&
-    collector.lastStrikeAgeS < LIVE_MAX_AGE_S;
+  const { unreachable, live, offline } = tickerHealth({ collector, failed, lastOkAt, mountedAt, nowMs });
 
   return (
     <div className="rounded-lg border border-white/8 bg-white/5 px-3 py-2.5">
@@ -131,13 +160,13 @@ export function LightningTicker() {
               strikes aren’t being recorded.
             </div>
           )}
-          {failed && (
+          {unreachable && (
             <div className="mt-1 text-[10px] leading-snug text-white/35">Server unreachable — retrying.</div>
           )}
         </>
       ) : (
         <div className="mt-1 text-[11px] leading-snug text-white/35">
-          {failed ? 'Lightning status unavailable — retrying.' : 'Checking the global strike feed…'}
+          {unreachable ? 'Lightning status unavailable — retrying.' : 'Checking the global strike feed…'}
         </div>
       )}
     </div>
