@@ -24,7 +24,6 @@ import { PrecipLayer } from '../layers/precip/PrecipLayer';
 import { HurricaneLayer } from '../layers/hurricanes/HurricaneLayer';
 import { HurricaneTooltip } from '../layers/hurricanes/HurricaneTooltip';
 import { LightningLayer } from '../layers/lightning/LightningLayer';
-import { LightningHistoryLayer } from '../layers/lightning/LightningHistoryLayer';
 import { WindLayer } from '../layers/wind/WindLayer';
 import { WindArrowsLayer } from '../layers/wind/WindArrowsLayer';
 import { FireLayer } from '../layers/fires/FireLayer';
@@ -548,8 +547,7 @@ export function CrisisShareGlobe({
             {live.has('radar') && <RadarLayer />}
             {live.has('precip') && <PrecipLayer />}
             {live.has('hurricanes') && <HurricaneLayer />}
-            {live.has('lightning') && <LightningLayer />}
-            {live.has('lightning') && <LightningHistoryLayer />}
+            {live.has('lightning') && <LightningLayer variant="share" />}
             {live.has('wind') && <WindLayer />}
             {live.has('windArrows') && <WindArrowsLayer />}
             {live.has('fires') && <FireLayer />}

@@ -1,48 +1,25 @@
-// Live strike-age legend. Mirrors X_STAGES in LightningLayer: a fresh crosshair
-// steps white → yellow → orange → red over its 10-minute lifetime.
-const RAMP_CSS =
-  'linear-gradient(to right, #ffffff 0% 30%, #ffe14d 30% 60%, #ff9d2e 60% 90%, #ff3b30 90% 100%)';
+import { LEGEND_ITEMS, LEGEND_NOTE, xGlyphSvg } from './lightningPalette';
 
-// History dot colours — must match AGE_COLORS in LightningHistoryLayer.
-const HISTORY_LEGEND = [
-  { color: '#ffd84d', label: '<1h' },
-  { color: '#ff9d2e', label: '<6h' },
-  { color: '#ff5a3c', label: '<12h' },
-  { color: '#d8466e', label: '<24h' },
-];
+// Strike-age key for the lightning layer: one X per colour stage, the same
+// table (lightningPalette.ts) the globe draws from, so the legend can't drift.
+// Store-free: shown as a floating map card (see MapLegends) and under the
+// share-link globe.
+const SWATCHES = LEGEND_ITEMS.map((item) => ({ ...item, svg: xGlyphSvg(item.color, 12) }));
 
-// Symbology key for both lightning renderings (history dots + live crosshairs).
-// Shown as a floating map card (see MapLegends) and under the share-link globe.
 export function LightningLegend() {
   return (
-    <div className="space-y-2 pt-1">
-      <div>
-        <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-white/30">
-          History age (dots)
-        </div>
-        <div className="flex gap-2.5">
-          {HISTORY_LEGEND.map((h) => (
-            <div key={h.label} className="flex items-center gap-1 text-[9px] text-white/40">
-              <span
-                className="h-2 w-2 rounded-full ring-1 ring-white/10"
-                style={{ backgroundColor: h.color }}
-              />
-              {h.label}
-            </div>
-          ))}
-        </div>
+    <div className="space-y-1.5 pt-1">
+      <div className="text-[10px] font-medium uppercase tracking-wider text-white/30">Strike age</div>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+        {SWATCHES.map((s) => (
+          <div key={s.label} className="flex items-center gap-1.5 text-[10px] text-white/50">
+            {/* Static markup from our own palette table — no user input. */}
+            <span className="flex h-3 w-3 shrink-0" dangerouslySetInnerHTML={{ __html: s.svg }} />
+            {s.label}
+          </div>
+        ))}
       </div>
-
-      <div>
-        <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-white/30">
-          Live strike age (crosshairs)
-        </div>
-        <div className="h-2 w-full rounded-full ring-1 ring-white/10" style={{ background: RAMP_CSS }} />
-        <div className="mt-0.5 flex justify-between text-[9px] text-white/35">
-          <span>just now</span>
-          <span>~10 min</span>
-        </div>
-      </div>
+      <p className="text-[9px] leading-snug text-white/35">{LEGEND_NOTE}</p>
     </div>
   );
 }
