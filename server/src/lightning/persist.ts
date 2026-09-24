@@ -21,6 +21,7 @@
 // Each boot is its own writer (the bootId), so two overlapping dynos never
 // collide on (writer, seq).
 
+import { performance } from 'perf_hooks';
 import {
   DB_KEEP_MS,
   DB_PRUNE_EVERY_MS,
@@ -32,7 +33,7 @@ import {
 import { CorruptRowError, decodeRow, encodeRow } from './codec';
 import { unpackStrikes } from './legacyCodec';
 import { qLat, qLon, tickOf } from './quant';
-import { yieldToLoop } from './scan';
+import { SLICE_MS, yieldToLoop } from './scan';
 import type { Segment, StrikeStore } from './store';
 import { MIXED_WRITER, TICKS_PER_MIN, identityKey, latQOf, lonQOf, tOffOf } from './store';
 
@@ -124,6 +125,8 @@ export interface PersistenceDeps {
   bootMs?: number;
   sleep?: (ms: number) => Promise<void>;
   log?: (msg: string) => void;
+  /** Bound on queued-but-unsaved row bytes (tests lower it). */
+  maxPendingBytes?: number;
 }
 
 const defaultSleep = (ms: number) =>
@@ -170,6 +173,7 @@ export class Persistence {
   private readonly now: () => number;
   readonly bootMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly maxPendingBytes: number;
   private readonly log: (msg: string) => void;
 
   // --- save state
@@ -218,8 +222,11 @@ export class Persistence {
     this.now = deps.now ?? Date.now;
     this.bootMs = deps.bootMs ?? this.now();
     this.sleep = deps.sleep ?? defaultSleep;
+    this.maxPendingBytes = deps.maxPendingBytes ?? MAX_PENDING_BYTES;
     this.log = deps.log ?? ((m) => console.log(m));
     this.legacyWid = this.store.writerIdOf('legacy:lightning_chunks');
+    // Until the first save, unsaved strikes are as old as the boot.
+    this.lastFormAt = this.bootMs;
   }
 
   // --- SAVE -----------------------------------------------------------------
@@ -255,14 +262,17 @@ export class Persistence {
     }
     // A long outage: bound memory, drop the OLDEST queued rows, and say so.
     let dropped = 0;
-    while (this.pendingBytes > MAX_PENDING_BYTES && this.pending.length > 1) {
+    while (this.pendingBytes > this.maxPendingBytes && this.pending.length > 1) {
       const row = this.pending.shift()!;
       this.pendingBytes -= row.data.length;
       this.droppedUnsaved += row.n;
       dropped += row.n;
     }
     if (dropped > 0) {
-      this.log(`[lightning] save backlog over ${MAX_PENDING_BYTES >> 20} MB — dropped ${dropped} unsaved strikes (${this.droppedUnsaved} total)`);
+      this.log(
+        `[lightning] save backlog over ${Math.round(this.maxPendingBytes / 1_048_576)} MB — ` +
+          `dropped the oldest ${dropped} unsaved strikes (${this.droppedUnsaved} this boot)`
+      );
     }
   }
 
@@ -398,7 +408,7 @@ export class Persistence {
 
   private async runRestore(): Promise<void> {
     const t0 = this.now();
-    const cutoff = t0 - RETENTION_MS;
+    let cutoff = t0 - RETENTION_MS;
     const cache = new IdentityCache(this.store);
     let phase: 'plan' | 'blocks' | 'legacyPlan' | 'legacy' = 'plan';
     let cursor: { tLast: number; id: number } | null = null;
@@ -409,6 +419,8 @@ export class Persistence {
 
     while (!this.stopped) {
       this.rs.attempts++;
+      // A restore that spent a long outage retrying should not load what has since expired.
+      cutoff = Math.max(cutoff, this.now() - RETENTION_MS);
       try {
         if (phase === 'plan') {
           const { rows } = await this.db.query(
@@ -441,13 +453,12 @@ export class Persistence {
             phase = 'legacyPlan';
             break;
           }
-          for (const row of rows) this.ingestBlock(row, cutoff, cache);
+          await this.eachSliced(rows, (row) => this.ingestBlock(row, cutoff, cache));
           const last = rows[rows.length - 1];
           cursor = { tLast: Number(last.t_last), id: Number(last.id) };
           this.rs.backToMs = Math.max(cutoff, Math.min(this.rs.backToMs ?? Infinity, cursor.tLast));
           this.updateProgress();
           retry = 0;
-          await yieldToLoop();
         }
 
         if (phase === 'legacyPlan') {
@@ -477,13 +488,12 @@ export class Persistence {
           const { rows } = (await this.db.query(sql, params)) as { rows: ChunkRow[] };
           if (this.stopped) return;
           if (rows.length === 0) break;
-          for (const row of rows) this.ingestLegacy(row, cutoff, oldestV2Ms);
+          await this.eachSliced(rows, (row) => this.ingestLegacy(row, cutoff, oldestV2Ms));
           const last = rows[rows.length - 1];
           legacyCursor = { start: Number(last.chunk_start), id: Number(last.id) };
           this.rs.backToMs = Math.max(cutoff, Math.min(this.rs.backToMs ?? Infinity, legacyCursor.start));
           this.updateProgress();
           retry = 0;
-          await yieldToLoop();
         }
 
         if (this.rs.legacyStrikes > 0) this.rs.legacyBeforeMs = oldestV2Ms;
@@ -508,6 +518,27 @@ export class Persistence {
         if (!this.stopped) this.rs.state = 'loading';
       }
     }
+  }
+
+  /**
+   * Ingest a page row by row, handing the event loop back whenever a slice is
+   * used up (a page of dense rows is ~300k strikes at 200/s), and keep the
+   * store inside its capacity as history arrives. Rows are atomic: the dedupe
+   * state never sees half a row.
+   */
+  private async eachSliced<T>(rows: T[], ingest: (row: T) => void): Promise<void> {
+    let t0 = performance.now();
+    for (const row of rows) {
+      ingest(row);
+      if (performance.now() - t0 >= SLICE_MS) {
+        await yieldToLoop();
+        t0 = performance.now();
+      }
+    }
+    // Restoring runs newest → oldest, so anything over capacity is the oldest
+    // just restored; it is evicted but stays counted (the ring keeps it).
+    this.store.enforceCapacity();
+    await yieldToLoop();
   }
 
   private updateProgress(): void {
@@ -631,8 +662,7 @@ export class Persistence {
           [missing.slice(i, i + RESTORE_PAGE_ROWS)]
         )) as { rows: BlockRow[] };
         const cutoff = this.now() - RETENTION_MS;
-        for (const row of page) this.ingestBlock(row, cutoff, cache);
-        await yieldToLoop();
+        await this.eachSliced(page, (row) => this.ingestBlock(row, cutoff, cache));
       }
       const r = record(null);
       this.log(`[lightning] catch-up: ${r.rows} new rows from other writers, ${r.strikes} strikes, ${r.dupes} overlap dupes`);

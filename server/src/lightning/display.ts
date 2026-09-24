@@ -20,12 +20,15 @@
 //      min of its children's, so a coarser level keeps a SUBSET of the finer
 //      reps) until they fit, else the lowest-hash reps are kept.
 //   2. hash sample: every strike with hash < p_s, where p_s is the largest
-//      histogram edge whose count fits the rest of C_s.
+//      histogram edge at which the sample plus the reps it does not already
+//      contain still fit C_s.
 //   3. p_s never increases with age (s ≥ 2): as a strike ages into the next
 //      stratum it can only disappear, never pop in.
 // Because both parts are functions of strike identity and a fixed lattice,
-// zooming into a sub-box keeps the parent's marks, a new poll keeps the old
-// ones, and output order/insertion order never matter.
+// insertion order never matters, a new poll keeps the old marks, and zooming
+// into a sub-box keeps the parent's marks inside it (all of them in practice;
+// only when the sub-box holds nearly all of the parent's strikes can its finer
+// reps displace a few % of the parent's hash sample).
 
 import {
   FIELD_BUCKET_MS,
@@ -253,29 +256,37 @@ async function sampleSnapshot(
   const cols0 = colsAt(baseLevel);
 
   // --- Per stratum: reps (coarsened to fit), then the hash threshold.
+  // Split the table into per-stratum (row, col, h, ref) arrays: two passes over it.
   const counts = new Int32Array(NSTRATA);
   for (let slot = 0; slot < REP_SIZE; slot++) {
     if (keys[slot] !== -1) counts[Math.floor(keys[slot] / cellsPer)]++;
   }
+  const byStratum = Array.from(counts, (c) => ({
+    rows: new Int32Array(c),
+    cols: new Int32Array(c),
+    rh: new Uint32Array(c),
+    rr: new Int32Array(c),
+    cnt: 0,
+  }));
+  for (let slot = 0; slot < REP_SIZE; slot++) {
+    const k = keys[slot];
+    if (k === -1) continue;
+    const s = Math.floor(k / cellsPer);
+    const cell = k - s * cellsPer;
+    const b = byStratum[s];
+    b.rows[b.cnt] = Math.floor(cell / cols0);
+    b.cols[b.cnt] = cell % cols0;
+    b.rh[b.cnt] = hs[slot];
+    b.rr[b.cnt] = refs[slot];
+    b.cnt++;
+  }
+  await yieldToLoop();
   const repH: Uint32Array[] = [];
   const repRef: Int32Array[] = [];
   const p: number[] = [];
   for (let s = 0; s < NSTRATA; s++) {
-    const rows = new Int32Array(counts[s]);
-    const colsArr = new Int32Array(counts[s]);
-    let rh = new Uint32Array(counts[s]);
-    let rr = new Int32Array(counts[s]);
-    let cnt = 0;
-    for (let slot = 0; slot < REP_SIZE; slot++) {
-      const k = keys[slot];
-      if (k === -1 || Math.floor(k / cellsPer) !== s) continue;
-      const cell = k - s * cellsPer;
-      rows[cnt] = Math.floor(cell / cols0);
-      colsArr[cnt] = cell % cols0;
-      rh[cnt] = hs[slot];
-      rr[cnt] = refs[slot];
-      cnt++;
-    }
+    const { rows, cols: colsArr } = byStratum[s];
+    let { rh, rr, cnt } = byStratum[s];
     let lvl = baseLevel;
     while (cnt > repCap[s] && lvl < LADDER_DEG.length - 1) {
       lvl++;

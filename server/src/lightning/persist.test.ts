@@ -124,6 +124,32 @@ describe('save', () => {
     expect(db.blocks.map((b) => b.seq)).toEqual(db.blocks.map((_, i) => i));
   });
 
+  it('bounds the queue through a long outage by dropping the OLDEST rows, and counts them', async () => {
+    const db = new FakeDb();
+    const s = mkStore('A');
+    const logs: string[] = [];
+    const p = createPersistence({ db, store: s, writer: 'A', now: () => NOW, log: (m) => logs.push(m), maxPendingBytes: 40_000 });
+    db.failWhen = (sql) => (sql.startsWith('INSERT') ? { err: new Error('db down') } : null);
+    const recs = genStrikes({ n: 20_000, nowMs: NOW, spanMs: 60 * MIN, seed: 3 });
+    for (let k = 0; k < 10; k++) {
+      for (const r of recs.slice(k * 2_000, (k + 1) * 2_000)) s.appendLive(r.tick, r.latQ, r.lonQ);
+      await p.save();
+    }
+    const st = p.status();
+    expect(st.droppedUnsaved).toBeGreaterThan(0);
+    expect(st.pendingBytes).toBeLessThanOrEqual(40_000);
+    expect(st.pendingRecords + st.droppedUnsaved).toBe(20_000);
+    expect(logs.some((l) => l.includes('dropped the oldest'))).toBe(true);
+    db.failWhen = null;
+    await p.save();
+    // What survived is the newest run of rows, in order.
+    const seqs = db.blocks.map((b) => b.seq);
+    const next = p.status().nextSeq;
+    expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, i) => next - seqs.length + i));
+    expect(seqs.length).toBeLessThan(next);
+    expect(db.blocks.reduce((a, b) => a + b.n, 0)).toBe(20_000 - st.droppedUnsaved);
+  });
+
   it('flushAll saves everything and is bounded when the database hangs', async () => {
     const db = new FakeDb();
     const s = mkStore('A');
