@@ -114,11 +114,11 @@ export async function migrate() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
-      -- Lightning strike history, persisted in ~5-minute append-only chunks so
-      -- the 24h buffer survives deploys and dyno restarts (the dyno filesystem
-      -- is wiped on both). data = gzip(Float32 lat[] · Float32 lon[] · Uint32
-      -- tSec[]), ~30-60 KB per chunk, ~290 rows/day; rows older than the window
-      -- are pruned on each save.
+      -- LEGACY lightning history (pre-upgrade: 1 strike in 6, ~5-minute
+      -- chunks). Nothing writes it any more; the new collector imports what is
+      -- left of it once, read-only (counted ×6, flagged as estimates), and the
+      -- save loop prunes it with lightning_blocks. Drop it in a later release,
+      -- once no row is younger than 25 h.
       CREATE TABLE IF NOT EXISTS lightning_chunks (
         id          BIGSERIAL   PRIMARY KEY,
         chunk_start BIGINT      NOT NULL,
@@ -126,6 +126,30 @@ export async function migrate() {
         data        BYTEA       NOT NULL,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      -- Lightning strike history: EVERY strike of the last ~25 h, so restarts
+      -- and deploys (the dyno filesystem is wiped on both) lose at most the
+      -- last minute. One row per save per store segment (~1-2 rows a minute),
+      -- each a run of packed records: data = gzip of byte-shuffled 8-byte
+      -- records, base_tick turns their 24-bit offsets back into 10 ms ticks
+      -- (lightning/codec.ts). writer is the dyno boot that collected them and
+      -- seq its save counter: (writer, seq) makes a retried INSERT after a lost
+      -- ack a no-op. t_first/t_last are epoch ms; the index serves the restore
+      -- (newest first) and the prune. pg returns BIGINT as a string — the
+      -- reader Number()s every one.
+      CREATE TABLE IF NOT EXISTS lightning_blocks (
+        id         BIGSERIAL   PRIMARY KEY,
+        writer     TEXT        NOT NULL,
+        seq        INTEGER     NOT NULL,
+        t_first    BIGINT      NOT NULL,
+        t_last     BIGINT      NOT NULL,
+        n          INTEGER     NOT NULL,
+        base_tick  BIGINT      NOT NULL,
+        data       BYTEA       NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (writer, seq)
+      );
+      CREATE INDEX IF NOT EXISTS lightning_blocks_t_last ON lightning_blocks (t_last);
 
       -- Small key/value snapshots for layers whose latest state should survive
       -- deploys (the dyno filesystem is wiped on every deploy/restart). First
