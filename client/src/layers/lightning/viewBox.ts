@@ -3,10 +3,13 @@
 //     instead of refetching on every camera move;
 //   - equivalent views across clients share one server memo key;
 //   - the box is a little larger than the view, so a short pan still has marks.
-// Two cases:
+// Three cases:
 //   - Zoomed in (both spans ≤ 150°): snap outward to a unit about a quarter of
 //     the larger span, from a fixed ladder so the key only changes when the
 //     zoom level really does.
+//   - Zoomed in with a pole in frame: Cesium widens the rectangle to every
+//     longitude and that pole's latitude but keeps the real opposite edge, so
+//     the box is the polar cap down to that edge, snapped on the latitude span.
 //   - Zoomed out (whole-globe view, where Cesium's view rectangle is either
 //     undefined or MAX_VALUE and says nothing useful): a hemisphere-sized box
 //     around the camera's sub-point, snapped to 15°. Its latitude band is ±75°;
@@ -68,6 +71,10 @@ export function hemisphereBox(sub: { lat: number; lon: number }): ViewBox {
   return make(wrapWest(lon - HEMI_HALF_LON), s, wrapEast(lon + HEMI_HALF_LON), n);
 }
 
+/** The ladder unit for a span: about a quarter of it. */
+const snapUnit = (span: number) =>
+  SNAP_UNITS_DEG.find((u) => u >= span / 4) ?? SNAP_UNITS_DEG[SNAP_UNITS_DEG.length - 1];
+
 /**
  * The canonical /field box for a view rectangle (degrees; null when Cesium
  * can't compute one) and the camera's sub-point.
@@ -81,10 +88,22 @@ export function viewBoxFor(
   }
   const latSpan = rect.north - rect.south;
   const lonSpanDeg = lonSpan(rect.west, rect.east);
-  if (latSpan > HEMISPHERE_SPAN_DEG || lonSpanDeg > HEMISPHERE_SPAN_DEG) return hemisphereBox(sub);
+  if (latSpan > HEMISPHERE_SPAN_DEG) return hemisphereBox(sub);
+  if (lonSpanDeg > HEMISPHERE_SPAN_DEG) {
+    // A pole in frame: a cap to the view's far edge, not the hemisphere band
+    // (several times the area, which would dilute the in-view sample).
+    const unit = snapUnit(latSpan);
+    // Kept off the pole itself so a cap always has height.
+    if (rect.north >= 90) {
+      return make(-180, Math.min(90 - unit, Math.floor(rect.south / unit) * unit), 180, 90);
+    }
+    if (rect.south <= -90) {
+      return make(-180, -90, 180, Math.max(unit - 90, Math.ceil(rect.north / unit) * unit));
+    }
+    return hemisphereBox(sub);
+  }
 
-  const want = Math.max(latSpan, lonSpanDeg) / 4;
-  const unit = SNAP_UNITS_DEG.find((u) => u >= want) ?? SNAP_UNITS_DEG[SNAP_UNITS_DEG.length - 1];
+  const unit = snapUnit(Math.max(latSpan, lonSpanDeg));
   const down = (v: number) => Math.floor(v / unit) * unit;
   const up = (v: number) => Math.ceil(v / unit) * unit;
 

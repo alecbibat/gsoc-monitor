@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   LEGEND_ITEMS,
+  LEGEND_NOTE,
   LIGHTNING_STAGES,
   LIVE_HOLD_S,
   STAGE_ENDS_S,
@@ -75,6 +76,16 @@ describe('lightning palette', () => {
     expect(LEGEND_ITEMS[0]).toEqual({ color: 'rgba(255,255,255,1)', label: '<2 min', glyph: 'x' });
     expect(stageCss(99)).toBe(stageCss(LIGHTNING_STAGES.length - 1));
     expect(xGlyphSvg('#fff')).toContain('<svg');
+  });
+
+  it('words the legend note so it holds when the live caps bind', () => {
+    // A busy zoomed-out view fills the live pool, which drops in-view strikes
+    // before 2 min — so no promise that every strike shows that long.
+    expect(LEGEND_NOTE).not.toMatch(/every strike/i);
+    expect(LEGEND_NOTE).toContain(`up to ${LIVE_HOLD_S / 60} min`);
+    expect(LEGEND_NOTE).toMatch(/older ones are sampled/);
+    // Three short lines on the map's legend card.
+    expect(LEGEND_NOTE.length).toBeLessThanOrEqual(125);
   });
 
   it('draws the report X as a dark casing then the stage colour', () => {

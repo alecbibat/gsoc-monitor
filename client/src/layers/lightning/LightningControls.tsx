@@ -3,6 +3,8 @@ import {
   GAP_CHIP_MIN,
   collectorLine,
   countForWindow,
+  countIsExact,
+  evictionLine,
   fmtClock,
   gapMinutes,
   type ReadoutTone,
@@ -18,7 +20,8 @@ const TONE: Record<ReadoutTone, string> = {
 // Sidebar card for the lightning layer. The counts are the server's exact
 // totals over every received strike — the globe shows a sample of them — and
 // the lines below say how far to trust them: the collector's health, any
-// blind spots in the last 24 h, and where live strikes come from.
+// blind spots in the last 24 h, positions the server no longer holds, and
+// where live strikes come from.
 export function LightningControls() {
   const windowMinutes = useLightningStatus((s) => s.windowMinutes);
   const setWindow = useLightningStatus((s) => s.setWindow);
@@ -29,7 +32,9 @@ export function LightningControls() {
   const label = LIGHTNING_WINDOWS.find((w) => w.value === windowMinutes)?.label ?? '24h';
   const counts = server?.counts ?? null;
   const n = counts ? countForWindow(counts, windowMinutes) : null;
+  const exact = server ? countIsExact(server, windowMinutes) : true;
   const health = collectorLine(server, fieldError);
+  const evicted = evictionLine(server, windowMinutes);
   const gaps = server?.coverage.gaps ?? [];
   const blindMin = gapMinutes(gaps);
 
@@ -63,11 +68,9 @@ export function LightningControls() {
           <div>
             <span
               className="font-semibold tabular-nums text-white/75"
-              title={
-                counts.exact ? undefined : 'Includes older history that was kept 1-in-6 and is counted ×6'
-              }
+              title={exact ? undefined : 'Includes older history that was kept 1-in-6 and is counted ×6'}
             >
-              {counts.exact ? '' : '≈'}
+              {exact ? '' : '≈'}
               {n.toLocaleString()}
             </span>{' '}
             strikes in the last {label}
@@ -77,6 +80,7 @@ export function LightningControls() {
           !fieldError && <div>Loading strikes…</div>
         )}
         {health && <div className={TONE[health.tone]}>{health.text}</div>}
+        {evicted && <div className={TONE[evicted.tone]}>{evicted.text}</div>}
         {(blindMin >= GAP_CHIP_MIN || liveSource === 'server') && (
           <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
             {blindMin >= GAP_CHIP_MIN && (

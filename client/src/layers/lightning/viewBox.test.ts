@@ -68,6 +68,34 @@ describe('view box: zoomed in', () => {
   });
 });
 
+describe('view box: a pole in frame', () => {
+  // Cesium's rectangle for a view around a pole: every longitude, the pole's
+  // latitude, and the real opposite edge.
+  it('asks for the polar cap, snapped on the latitude span', () => {
+    // Alaska / the Arctic from 3,500 km: 28° → a 10° unit.
+    expect(viewBoxFor(rect(-180, 62, 180, 90), { lat: 78, lon: -150 }).key).toBe('-180,60,180,90');
+    expect(viewBoxFor(rect(-180, 55, 180, 90), { lat: 68, lon: 20 }).key).toBe('-180,50,180,90');
+    // Antarctica: 20° → a 5° unit.
+    expect(viewBoxFor(rect(-180, -90, 180, -70.4), { lat: -80, lon: 0 }).key).toBe('-180,-90,180,-70');
+  });
+
+  it('tightens as the view zooms in on the pole', () => {
+    const wide = viewBoxFor(rect(-180, 55, 180, 90), SUB);
+    const close = viewBoxFor(rect(-180, 80.3, 180, 90), SUB);
+    expect(close.key).toBe('-180,80,180,90');
+    expect(close.bbox[1]).toBeGreaterThan(wide.bbox[1]);
+    // A tiny cap still has height.
+    expect(viewBoxFor(rect(-180, 90, 180, 90), SUB).key).toBe('-180,89.5,180,90');
+    expect(viewBoxFor(rect(-180, -90, 180, -90), SUB).key).toBe('-180,-90,180,-89.5');
+  });
+
+  it('keeps the hemisphere box for a pole view whose latitude span is itself huge', () => {
+    expect(viewBoxFor(rect(-180, -70, 180, 90), { lat: 40, lon: -100 }).key).toBe(
+      hemisphereBox({ lat: 40, lon: -100 }).key
+    );
+  });
+});
+
 describe('view box: whole globe', () => {
   it('uses a hemisphere box when there is no view rectangle', () => {
     expect(viewBoxFor(null, { lat: 3, lon: 10 }).key).toBe('-90,-75,120,75');
