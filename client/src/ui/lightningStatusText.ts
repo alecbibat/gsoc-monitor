@@ -43,6 +43,11 @@ export function lightningStatusText(s: LightningStatusInputs, fmtTime: (ms: numb
     return `Loading 24 h history… ${pct}%`;
   }
   if (s.connected) return `${s.ratePerMin.toLocaleString()} strikes/min · live`;
-  if (s.liveSource === 'server') return `${s.serverRatePerMin.toLocaleString()} strikes/min · via server`;
+  // The browser socket isn't delivering (yet, or at all) but the server's
+  // collector is: its fresh list already feeds the live Xs, so say so rather
+  // than "Connecting…" for the first 30 s of every load.
+  if (s.liveSource === 'server' || s.serverConnected === true) {
+    return `${s.serverRatePerMin.toLocaleString()} strikes/min · via server`;
+  }
   return 'Connecting…';
 }

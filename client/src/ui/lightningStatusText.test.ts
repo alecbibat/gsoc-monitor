@@ -43,7 +43,13 @@ describe('lightningStatusText', () => {
 
   it('falls back to the server relay, then to connecting', () => {
     expect(text({ connected: false, liveSource: 'server' })).toBe(`${(6100).toLocaleString()} strikes/min · via server`);
-    expect(text({ connected: false, liveSource: 'offline' })).toBe('Connecting…');
+    expect(text({ connected: false, liveSource: 'offline', serverConnected: null })).toBe('Connecting…');
+  });
+
+  it('shows the server rate while the browser socket is still connecting', () => {
+    // First 30 s of a load: no socket strike yet, but the server collector is
+    // up and its fresh list is already feeding the live Xs.
+    expect(text({ connected: false, liveSource: 'offline' })).toBe(`${(6100).toLocaleString()} strikes/min · via server`);
   });
 
   it('no server status yet is not "offline"', () => {
