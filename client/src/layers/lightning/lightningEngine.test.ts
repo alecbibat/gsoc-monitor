@@ -292,6 +292,37 @@ describe('lightning engine', () => {
     stop();
   });
 
+  it('follows a camera that never rests (no moveEnd) once its box holds for two ticks', async () => {
+    const { setRect, camera, stop } = await startWithField();
+    // A close-up that settled: moveEnd, the fast path.
+    setRect(5, 40, 15, 50);
+    camera.moveEnd.raiseEvent();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][0].bbox).toEqual([5, 40, 15, 50]);
+    // The fly-back: a different box on every tick, so nothing is fetched mid-flight.
+    for (const [w, s, e, n] of [
+      [-10, 20, 30, 60],
+      [-60, 0, 0, 60],
+    ]) {
+      setRect(w, s, e, n);
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Then the whole-globe rotation: the camera keeps turning, so no moveEnd.
+    setRect(-180, -90, 180, 90);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    // The hemisphere box around the camera's sub-point (35° N, 97° W).
+    expect(fetchMock.mock.calls[2][0].bbox).toEqual([-180, -45, 180, 90]);
+    // Held: nothing more until the poll.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    stop();
+  });
+
   it('keeps the view box through a small pan (no refetch)', async () => {
     const { setRect, camera, stop } = await startWithField();
     setRect(-109.5, 25.5, -84.5, 45.5); // still inside the 5° snapped box

@@ -145,4 +145,4 @@ export const LEGEND_ITEMS: readonly { color: string; label: string; glyph: 'x' }
 );
 
 export const LEGEND_NOTE =
-  'Every strike shows for 2 min; older ones are sampled (each active area keeps an X; zoom in for more).';
+  'Recent strikes show individually for up to 2 min; older ones are sampled (each active area keeps an X; zoom in for more).';

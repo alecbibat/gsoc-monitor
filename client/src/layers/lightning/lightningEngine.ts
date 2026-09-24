@@ -18,7 +18,8 @@ import { XBillboardPool, styleX } from './xBillboards';
 // strike is an X in the shared palette (lightningPalette.ts), drawn from two
 // sources merged by strike key:
 //
-//   LIVE  — every strike younger than LIVE_HOLD_S (2 min): the browser's own
+//   LIVE  — strikes younger than LIVE_HOLD_S (2 min), as many as the pool's
+//           caps hold (the oldest go first in a busy view): the browser's own
 //           Blitzortung socket (with the bolt animation when in view) plus
 //           each /field response's `fresh` list, which fills the first two
 //           minutes on load and stands in for the socket when it's down.
@@ -348,7 +349,8 @@ export function startLightning(viewer: Cesium.Viewer, variant: LightningVariant)
   let stopPolling = startVisiblePolling(poll, POLL_MS);
 
   // A new box refetches right away; a move within the same snapped box waits
-  // for the poll.
+  // for the poll. moveEnd is the fast path; the tick below catches a camera
+  // that never comes to rest (the screensaver's rotation).
   let moveTimer: ReturnType<typeof setTimeout> | null = null;
   const onMoveEnd = () => {
     if (moveTimer) clearTimeout(moveTimer);
@@ -370,9 +372,29 @@ export function startLightning(viewer: Cesium.Viewer, variant: LightningVariant)
     if (restageField(clock.now())) requestRenderNow();
   });
 
+  // Cesium raises moveEnd only after the camera has held still, so a camera
+  // that keeps turning would keep the last box it settled on (say a close-up
+  // before the fly-back) until the next poll. The tick re-checks it and takes
+  // a new box once it has held for two ticks, so a flight doesn't abort a
+  // request every second on its way.
+  let pendingViewKey: string | null = null;
+  const checkView = () => {
+    const next = currentView();
+    if (next.key === view.key) {
+      pendingViewKey = null;
+    } else if (next.key !== pendingViewKey) {
+      pendingViewKey = next.key;
+    } else {
+      pendingViewKey = null;
+      view = next;
+      load(true);
+    }
+  };
+
   // --- 1 s tick ------------------------------------------------------------
   const tick = () => {
     if (cancelled || viewer.isDestroyed()) return;
+    checkView();
     const nowMs = clock.now();
     let changed = false;
     // Live strikes retire at the hold; their field twins (if sampled) take over.
