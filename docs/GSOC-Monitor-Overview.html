@@ -364,7 +364,7 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
 
   <div class="cards">
     <div class="card"><h4>Real lightning, seconds after it strikes</h4><p>The browser connects straight to the Blitzortung community network: each detected strike plays a jagged bolt descending from 120 km in 150 ms and a red impact flash, then settles as a white X that ages white → yellow → orange → red → rose → purple → indigo over 24 hours before it expires — with a live strikes-per-minute ticker.</p></div>
-    <div class="card"><h4>24-hour strike history, deploy-proof</h4><p>The server runs a 24/7 collector that records every strike and persists it to Postgres in gzip-packed one-minute blocks, so restarts and deploys lose nothing and the globe opens on the last 24 hours, in the same X marks as the live strikes. Strike counts are exact, sidebar chips narrow the view to 1/6/12/24 hours, and any time the collector was blind is flagged, not hidden.</p></div>
+    <div class="card"><h4>24-hour strike history, deploy-proof</h4><p>The server runs a 24/7 collector that records every strike and persists it to Postgres in gzip-packed one-minute blocks, so restarts and deploys lose at most a minute or two, flagged as a blind spot, and the globe opens on the last 24 hours, in the same X marks as the live strikes. Strike counts are exact (shown as lower bounds if the memory cap ever drops old positions), sidebar chips narrow the view to 1/6/12/24 hours, and any time the collector was blind is flagged, not hidden.</p></div>
     <div class="card"><h4>Hurricanes with true cyclonic spin</h4><p>Every active tropical cyclone is a rotating three-arm spiral glyph — counter-clockwise north of the equator, clockwise south — tinted by Saffir-Simpson category, with cone of uncertainty, observed and forecast tracks, and hoverable forecast points showing winds in mph and knots.</p></div>
     <div class="card"><h4>Global formation watch</h4><p>NHC 7-day outlook areas render as risk-tinted polygons with formation-odds bars — and for the basins NHC doesn't cover, the server parses JTWC's plain-text advisories into mapped invest areas with Low/Medium/High potential. West Pacific typhoons are not a blind spot.</p></div>
   </div>
@@ -375,7 +375,7 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
     <p class="feat"><b>Formation summary.</b> The sidebar rolls the world up to one line: "2 active systems · 3 areas to watch."</p>
   </div>
 
-  <div class="tech-strip"><span class="t">UNDER THE HOOD ·</span> speaks Blitzortung's undocumented wire protocol (LZW frame decoder, relay rotation) · full-fidelity 8-byte-per-strike log (12M-strike cap) keeps every strike of the last 24 h · regex parser for JTWC's hard-wrapped bulletins</div>
+  <div class="tech-strip"><span class="t">UNDER THE HOOD ·</span> speaks Blitzortung's undocumented wire protocol (LZW frame decoder, relay rotation) · full-fidelity 8-byte-per-strike log (12M-strike cap) keeps every strike of the last 24 h up to ~140 strikes/s; beyond that the oldest positions are evicted and flagged · regex parser for JTWC's hard-wrapped bulletins</div>
   <div class="folio"><span>GSOC MONITOR — CAPABILITY OVERVIEW</span><span>07.2026 · 04</span></div>
 </section>
 

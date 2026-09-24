@@ -11,9 +11,14 @@ import type { RiskTarget } from './riskTypes';
 // radius-filtered history instead, so a client deployed ahead of (or rolled
 // back behind) its server still produces a lightning section.
 
+/**
+ * `receivedAt` is the client clock when the response arrived. Paired with the
+ * server's response-time clock it removes the skew for the map; the time the
+ * report later spends waiting on other feeds must not age the strikes.
+ */
 export type LightningFeed =
-  | { kind: 'near'; near: LightningNearResponse }
-  | { kind: 'legacy'; history: LightningHistoryResponse };
+  | { kind: 'near'; near: LightningNearResponse; receivedAt: number }
+  | { kind: 'legacy'; history: LightningHistoryResponse; receivedAt: number };
 
 /**
  * An older server has no /near route. Express 404s it only when there is no
@@ -37,20 +42,16 @@ export async function fetchLightningFeed(
       maxPoints: 6000,
       signal,
     });
-    return { kind: 'near', near };
+    return { kind: 'near', near, receivedAt: Date.now() };
   } catch (e) {
     if (signal?.aborted || !isMissingRoute(e)) throw e;
     const history = await api.lightningHistory(1440, { lat: target.lat, lon: target.lon, radiusMi: 130 });
-    return { kind: 'legacy', history };
+    return { kind: 'legacy', history, receivedAt: Date.now() };
   }
 }
 
-export function lightningSectionFromFeed(
-  feed: LightningFeed,
-  target: RiskTarget,
-  nowMs: number
-): LightningSectionResult {
+export function lightningSectionFromFeed(feed: LightningFeed, target: RiskTarget): LightningSectionResult {
   return feed.kind === 'near'
-    ? buildLightningSection(feed.near, nowMs)
-    : legacyLightningSection(feed.history, target, nowMs);
+    ? buildLightningSection(feed.near, feed.receivedAt)
+    : legacyLightningSection(feed.history, target, feed.receivedAt);
 }

@@ -535,7 +535,7 @@ export async function assembleWildfireReport(
       lightning.unavailable = `Lightning history unavailable (${lightningRes.error ?? 'unknown error'})`;
       sections.push({ id: 'lightning', title: 'Lightning (24 h)', level: 'low', drivers: [], unavailable: lightning.unavailable });
     } else {
-      lightningSec = lightningSectionFromFeed(lightningRes.value, target, Date.now());
+      lightningSec = lightningSectionFromFeed(lightningRes.value, target);
       lightning = lightningSec.lightning;
       sections.push(lightningSec.section);
     }

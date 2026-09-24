@@ -161,4 +161,4 @@ The architecture is designed for easy extension. For each new layer:
 4. Add a proxy route under `server/src/routes/`
 5. Add a toggle to `Sidebar.tsx`
 
-Shipped since: hurricanes (NOAA NHC), lightning (Blitzortung — the server records every strike around the clock, and the globe opens on the last 24 h as age-colored X marks with live strikes on top), FIRMS fire hotspots, ships (AISStream), satellite tracker (CelesTrak TLE + satellite.js), the Earth map type (NASA MODIS Terra/Aqua daily true color via GIBS — AM/PM passes, date-steppable back to 2000).
+Shipped since: hurricanes (NOAA NHC), lightning (Blitzortung — the server records every strike around the clock, flagging any blind spot such as a restart's minute or two, and the globe opens on the last 24 h as age-colored X marks with live strikes on top), FIRMS fire hotspots, ships (AISStream), satellite tracker (CelesTrak TLE + satellite.js), the Earth map type (NASA MODIS Terra/Aqua daily true color via GIBS — AM/PM passes, date-steppable back to 2000).

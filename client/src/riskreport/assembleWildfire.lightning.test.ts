@@ -132,6 +132,29 @@ describe('assembleWildfireReport — lightning', () => {
     expect(report.overall.drivers.filter((d) => d.startsWith('⚠ Lightning collector blind'))).toHaveLength(1);
   });
 
+  it('after memory-cap eviction a quiet report says its counts are a floor, in the bottom line', async () => {
+    const now = Date.now();
+    const evictedBeforeMs = now - 4 * 3_600_000;
+    stubFetch(() => ({
+      status: 200,
+      body: nearResp(now, {
+        counts: { le5: 0, le25: 0, le100: 3, inRadius: 3, exact: false },
+        fidelity: { legacyBeforeMs: null, evictedBeforeMs },
+        coverage: { windowMin: 1440, coveredMin: 1440, gaps: [], restoring: false, restoredBackToMs: null },
+      }),
+    }));
+    const report = await assembleWildfireReport(TARGET);
+    const hhmm = new Date(evictedBeforeMs).toISOString().slice(11, 16);
+    const sec = report.sections.find((s) => s.id === 'lightning')!;
+    expect(sec.level).toBe('low');
+    expect(sec.countLabel).toBe(`None ≤25 mi since ${hhmm}`);
+    const evicted = report.overall.drivers.filter((d) => d.startsWith(`⚠ Strike positions before ${hhmm} UTC were dropped`));
+    expect(evicted).toHaveLength(1);
+    expect(evicted[0]).toContain('a nearby strike before then would be missed');
+    expect(report.overall.drivers.some((d) => d.includes('exact'))).toBe(false);
+    expect(report.lightning.countsFromMs).toBe(evictedBeforeMs);
+  });
+
   it('draws each unexpired strike as an X, skipping the expired one', async () => {
     const now = Date.now();
     stubFetch(() => ({ status: 200, body: nearResp(now) }));
@@ -176,7 +199,10 @@ describe('assembleWildfireReport — lightning', () => {
     const sec = report.sections.find((s) => s.id === 'lightning')!;
     expect(sec.unavailable).toBeUndefined();
     expect(sec.level).toBe('elevated');
-    expect(report.lightning.strikes25mi).toBe(1);
+    // That server kept 1 strike in 6: the one sampled strike reads as ≈6, with the caveat in the bottom line.
+    expect(report.lightning.strikes25mi).toBe(6);
+    expect(sec.countLabel).toBe('≈6 ≤25 mi');
+    expect(report.overall.drivers.some((d) => d.includes('1-in-6 sample'))).toBe(true);
   });
 
   it('a failing /near (not a missing route) makes the section unavailable, never Low', async () => {

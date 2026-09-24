@@ -135,8 +135,17 @@ export interface WildfireReportData {
     /** Closest strike within 130 mi over all stored strikes, and its age. */
     nearestMi?: number;
     nearestAgeS?: number;
-    /** false while pre-upgrade 1-in-6 history is inside the window — counts print with "≈". */
+    /**
+     * false while pre-upgrade 1-in-6 history is inside the window — counts
+     * print with "≈" — or once the memory cap evicted positions inside it.
+     */
     countsExact?: boolean;
+    /**
+     * Set when the memory cap evicted strike positions inside the window: the
+     * counts and nearest strike cover only this time (epoch ms) → now, so
+     * they print as lower bounds ("≥"). See lightningCountPrefix.
+     */
+    countsFromMs?: number;
     /** Collector blind spots inside the window (epoch ms), for the map caption. */
     coverage?: { windowMin: number; coveredMin: number; gaps: { fromMs: number; toMs: number }[] };
     /** Honesty caveats (blind time, restore, offline, eviction, legacy sampling). */

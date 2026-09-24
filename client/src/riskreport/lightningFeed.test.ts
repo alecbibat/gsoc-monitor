@@ -62,7 +62,7 @@ describe('fetchLightningFeed', () => {
   it('uses /near with the report radius, window and point budget', async () => {
     const calls = stubFetch(() => ({ status: 200, body: NEAR }));
     const feed = await fetchLightningFeed(TARGET);
-    expect(feed).toEqual({ kind: 'near', near: NEAR });
+    expect(feed).toEqual({ kind: 'near', near: NEAR, receivedAt: expect.any(Number) });
     expect(calls).toHaveLength(1);
     const u = new URL(calls[0], 'http://x');
     expect(u.pathname).toBe('/api/lightning/near');
@@ -80,7 +80,7 @@ describe('fetchLightningFeed', () => {
       p.startsWith('/api/lightning/near') ? { status: 404, body: {} } : { status: 200, body: LEGACY }
     );
     const feed = await fetchLightningFeed(TARGET);
-    expect(feed).toEqual({ kind: 'legacy', history: LEGACY });
+    expect(feed).toEqual({ kind: 'legacy', history: LEGACY, receivedAt: expect.any(Number) });
     expect(calls[1]).toBe('/api/lightning?minutes=1440&lat=40.123&lon=-105.500&radiusMi=130');
   });
 
@@ -110,10 +110,24 @@ describe('fetchLightningFeed', () => {
 
 describe('lightningSectionFromFeed', () => {
   it('routes each feed kind to its builder', () => {
-    const a = lightningSectionFromFeed({ kind: 'near', near: NEAR }, TARGET, NOW);
+    const a = lightningSectionFromFeed({ kind: 'near', near: NEAR, receivedAt: NOW }, TARGET);
     expect(a.section.level).toBe('guarded');
     expect(a.lightning.strikes25mi).toBe(7); // the server's count, not the one point
-    const b = lightningSectionFromFeed({ kind: 'legacy', history: LEGACY }, TARGET, NOW);
-    expect(b.lightning.strikes25mi).toBe(1);
+    const b = lightningSectionFromFeed({ kind: 'legacy', history: LEGACY, receivedAt: NOW }, TARGET);
+    expect(b.lightning.strikes25mi).toBe(6); // the one sampled strike, ×6
+  });
+
+  it('removes clock skew at the moment the response arrived, not when the report is assembled', async () => {
+    stubFetch(() => ({ status: 200, body: NEAR }));
+    // The client clock reads 5 s ahead of the server when /near arrives…
+    const now = vi.spyOn(Date, 'now').mockReturnValue(NOW + 5_000);
+    const feed = await fetchLightningFeed(TARGET);
+    expect(feed.receivedAt).toBe(NOW + 5_000);
+    // …and the report is built 40 s later, after the slowest other feed.
+    now.mockReturnValue(NOW + 45_000);
+    const sec = lightningSectionFromFeed(feed, TARGET);
+    now.mockRestore();
+    // A 900 s-old strike stays 900 s old on the client clock at receive time.
+    expect(sec.mapStrikes[0].t).toBe(NOW / 1000 + 5 - 900);
   });
 });
