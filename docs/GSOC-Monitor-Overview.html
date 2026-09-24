@@ -360,11 +360,11 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
   <div class="kicker">03 · Severe weather</div>
   <h2 class="section-title">Lightning &amp; hurricanes</h2>
   <hr class="section-rule">
-  <p class="lede">Live global lightning with cinematic strike animations and a replayable 24-hour history, and worldwide tropical-cyclone tracking with no ocean-basin blind spots.</p>
+  <p class="lede">Live global lightning with cinematic strike animations over a 24-hour history recorded around the clock, and worldwide tropical-cyclone tracking with no ocean-basin blind spots.</p>
 
   <div class="cards">
-    <div class="card"><h4>Real lightning, seconds after it strikes</h4><p>The browser connects straight to the Blitzortung community network: each detected strike plays a jagged bolt descending from 120 km in 150 ms, a red impact flash, then a glowing crosshair that ages white → yellow → orange → red over 10 minutes — up to 2,500 on screen, with a live strikes-per-minute ticker.</p></div>
-    <div class="card"><h4>24-hour strike history, deploy-proof</h4><p>Sidebar chips replay the last 1/6/12/24 hours as an age-tinted point cloud of up to 20,000 strikes. Behind it, the server runs a 24/7 collector whose ring buffer is persisted to Postgres in gzip-packed 5-minute chunks — the history survives restarts and deploys.</p></div>
+    <div class="card"><h4>Real lightning, seconds after it strikes</h4><p>The browser connects straight to the Blitzortung community network: each detected strike plays a jagged bolt descending from 120 km in 150 ms and a red impact flash, then settles as a white X that ages white → yellow → orange → red → rose → purple → indigo over 24 hours before it expires — with a live strikes-per-minute ticker.</p></div>
+    <div class="card"><h4>24-hour strike history, deploy-proof</h4><p>The server runs a 24/7 collector that records every strike and persists it to Postgres in gzip-packed one-minute blocks, so restarts and deploys lose nothing and the globe opens on the last 24 hours, in the same X marks as the live strikes. Strike counts are exact, sidebar chips narrow the view to 1/6/12/24 hours, and any time the collector was blind is flagged, not hidden.</p></div>
     <div class="card"><h4>Hurricanes with true cyclonic spin</h4><p>Every active tropical cyclone is a rotating three-arm spiral glyph — counter-clockwise north of the equator, clockwise south — tinted by Saffir-Simpson category, with cone of uncertainty, observed and forecast tracks, and hoverable forecast points showing winds in mph and knots.</p></div>
     <div class="card"><h4>Global formation watch</h4><p>NHC 7-day outlook areas render as risk-tinted polygons with formation-odds bars — and for the basins NHC doesn't cover, the server parses JTWC's plain-text advisories into mapped invest areas with Low/Medium/High potential. West Pacific typhoons are not a blind spot.</p></div>
   </div>
@@ -375,7 +375,7 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
     <p class="feat"><b>Formation summary.</b> The sidebar rolls the world up to one line: "2 active systems · 3 areas to watch."</p>
   </div>
 
-  <div class="tech-strip"><span class="t">UNDER THE HOOD ·</span> speaks Blitzortung's undocumented wire protocol (LZW frame decoder, relay rotation) · 3M-slot typed-array ring buffer spans 24 h at ~200 strikes/sec · regex parser for JTWC's hard-wrapped bulletins</div>
+  <div class="tech-strip"><span class="t">UNDER THE HOOD ·</span> speaks Blitzortung's undocumented wire protocol (LZW frame decoder, relay rotation) · full-fidelity 8-byte-per-strike log (12M-strike cap) keeps every strike of the last 24 h · regex parser for JTWC's hard-wrapped bulletins</div>
   <div class="folio"><span>GSOC MONITOR — CAPABILITY OVERVIEW</span><span>07.2026 · 04</span></div>
 </section>
 
@@ -456,7 +456,7 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
     <p class="feat"><b>Property pins.</b> Canvas-drawn teardrop pins, terrain-clamped so they sit correctly on mountainsides, in 13 group colors.</p>
     <p class="feat"><b>Measure tools.</b> Click-to-draw geodesic distance and spherical-excess area with dual metric/imperial readouts — real ellipsoid math, not flat-earth approximations.</p>
     <p class="feat"><b>Nearest sister properties.</b> Road-routed distances to the three closest properties, each with a "Fly there" button.</p>
-    <p class="feat"><b>Live lightning ticker.</b> Global strikes-per-minute with a pulsing LIVE badge and rolling sparkline, inside the property watch widget.</p>
+    <p class="feat"><b>Live lightning ticker.</b> Global strikes-per-minute from the always-on server collector, with a pulsing LIVE badge and a 60-minute sparkline, inside the property watch widget — live even with the lightning layer off.</p>
     <p class="feat"><b>Data-quality curation.</b> Two live-tested outage feeds were excluded for stale phantom records — correctness over raw coverage.</p>
   </div>
 
