@@ -172,7 +172,13 @@ export function Sidebar() {
     }))
   );
   const radarStatus = useRadarStore(
-    useShallow((s) => ({ loading: s.loading, error: s.error, past: s.past, nowcast: s.nowcast }))
+    useShallow((s) => ({
+      loading: s.loading,
+      error: s.error,
+      past: s.past,
+      nowcast: s.nowcast,
+      coolingDownMs: s.coolingDownMs,
+    }))
   );
   const precipPeriod = usePrecipStore((s) => s.period);
   const fireOutlookError = useFireOutlookStore((s) => s.error);

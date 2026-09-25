@@ -7,6 +7,8 @@ import { EarthquakeLayer } from './layers/earthquakes/EarthquakeLayer';
 import { AlertsLayer } from './layers/alerts/AlertsLayer';
 import { RadarLayer } from './layers/radar/RadarLayer';
 import { RadarTimeline } from './layers/radar/RadarTimeline';
+import { RadarHoverReadout } from './layers/radar/RadarHoverReadout';
+import { RadarHotkeys } from './layers/radar/RadarHotkeys';
 import { EarthTimeBar } from './ui/EarthTimeBar';
 import { FlightLayer } from './layers/flights/FlightLayer';
 import { HurricaneLayer } from './layers/hurricanes/HurricaneLayer';
@@ -176,6 +178,7 @@ export default function App() {
         <GlobeFrame viewer={viewer}>
         <CesiumGlobe onReady={setViewer}>
           <RadarLayer />
+          <RadarHoverReadout />
           <EarthquakeLayer />
           <AlertsLayer />
           <HurricaneLayer />
@@ -227,6 +230,7 @@ export default function App() {
         <ScreensaverToast />
         <MeasureOverlay />
         <FuelZoneOverlay />
+        <RadarHotkeys />
         {/* Bottom-right HUD stack: legend cards for active layers, then the
             wind probe readout anchored at the bottom of the stack. Max height
             keeps the whole stack on-screen (short viewports): the legend list

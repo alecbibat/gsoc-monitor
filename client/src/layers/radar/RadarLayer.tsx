@@ -1,26 +1,56 @@
-import * as Cesium from 'cesium';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
-import { addImageryBelowLabels } from '../../cesium/labelOverlay';
 import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
 import { startVisiblePolling } from '../../lib/poll';
+import { getGpuInfo } from '../../perf/gpuInfo';
+import { prefersReducedMotion } from '../ships/shipMarkers';
 import { useRadarStore } from './radarStore';
-import { buildTimeline, clampIndex, nextIndex, nowIndex } from './radarTimeline';
-import { makeRadarProvider } from './rainviewer';
+import { buildTimeline } from './radarTimeline';
+import { RadarEngine, type EngineSettings } from './radarEngine';
+import { DEFAULT_TIMING, SNAP_TIMING, type PlaybackTiming } from './radarPlayback';
+import { getRadarTileClient } from './radarTileClient';
 
-// RainViewer publishes a frame every 10 minutes; polling a bit faster keeps
-// the newest frame within a couple of minutes of publication.
-const POLL_MS = 2 * 60_000;
-// Playback cadence, with a longer hold on the final frame before looping so
-// the eye can settle on the latest picture.
-const FRAME_MS = 650;
-const END_HOLD_MS = 1500;
+// RainViewer publishes a frame every 10 minutes and lists it within about a
+// minute; the server caches the manifest for 60 s, so polling at the same
+// rate shows a new frame within ~2 minutes of capture.
+const POLL_MS = 60_000;
+// Data-space smoothing radius (source pixels): enough to round off the
+// mosaic's pixel steps without softening storm structure.
+const SMOOTH_SIGMA = 0.8;
 
-// Animated precipitation radar: one imagery layer per timeline frame, all kept
-// loaded, with only the current frame's alpha above zero. Cesium skips
-// zero-alpha imagery when it draws, so resident frames cost nothing until
-// they're stepped to — which is what makes scrubbing and playback instant.
+// Render quality.
+//   standard — the default: tiles one level coarser than the screen could use
+//              (a quarter of the requests against RainViewer's rate limit, and
+//              of the GPU memory with 13 frames resident); both settle on the
+//              same z7 data when zoomed in, so only mid zooms are softer.
+//   sharp    — screen-resolution tiles; four times the requests and memory.
+//   lite     — standard tiles with stepped frames instead of crossfades, for
+//              weak or software-rendered GPUs.
+// A `gsoc-radar-quality` localStorage value overrides the detection.
+type RadarQuality = 'sharp' | 'standard' | 'lite';
+
+function radarQuality(): RadarQuality {
+  try {
+    const forced = localStorage.getItem('gsoc-radar-quality');
+    if (forced === 'sharp' || forced === 'standard' || forced === 'lite') return forced;
+  } catch {
+    // storage unavailable: fall through to detection
+  }
+  const gpu = getGpuInfo();
+  return gpu.tier === 'low' || gpu.software ? 'lite' : 'standard';
+}
+
+function tileWidthFor(q: RadarQuality): 512 | 1024 {
+  return q === 'sharp' ? 512 : 1024;
+}
+
+function timingFor(q: RadarQuality): PlaybackTiming {
+  return prefersReducedMotion() || q === 'lite' ? SNAP_TIMING : DEFAULT_TIMING;
+}
+
+// Animated precipitation radar. React only feeds settings and frames to the
+// RadarEngine, which owns the imagery layers, playback and preloading.
 export function RadarLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active.radar);
@@ -28,22 +58,14 @@ export function RadarLayer() {
   const past = useRadarStore((s) => s.past);
   const nowcast = useRadarStore((s) => s.nowcast);
   const windowMinutes = useRadarStore((s) => s.windowMinutes);
-  const currentIndex = useRadarStore((s) => s.currentIndex);
-  const playing = useRadarStore((s) => s.playing);
   const opacity = useRadarStore((s) => s.opacity);
+  const palette = useRadarStore((s) => s.palette);
+  const speed = useRadarStore((s) => s.speed);
+  const snow = useRadarStore((s) => s.snow);
+  const engineRef = useRef<RadarEngine | null>(null);
+  const refetchRef = useRef<() => void>(() => {});
 
-  // Layers keyed by frame path, plus the timeline order of those paths. A
-  // manifest refresh then only adds the new frame and drops the expired one —
-  // the frame on screen is never torn down and re-downloaded.
-  const layersRef = useRef(new Map<string, Cesium.ImageryLayer>());
-  const orderRef = useRef<string[]>([]);
-
-  const showFrame = (index: number, alpha: number) => {
-    orderRef.current.forEach((path, i) => {
-      const layer = layersRef.current.get(path);
-      if (layer) layer.alpha = i === index ? alpha : 0;
-    });
-  };
+  const timeline = useMemo(() => buildTimeline(past, nowcast, windowMinutes), [past, nowcast, windowMinutes]);
 
   // Poll the manifest while the layer is on.
   useEffect(() => {
@@ -59,80 +81,71 @@ export function RadarLayer() {
         }
       }
     };
+    refetchRef.current = () => void load();
     const stop = startVisiblePolling(() => void load(), POLL_MS);
     return () => {
       cancelled = true;
+      refetchRef.current = () => {};
       stop();
     };
   }, [active]);
 
-  // Drop every layer when the viewer goes away — on unmount, or when a WebGL
-  // context loss rebuilds it (a destroyed viewer must not be touched; the
-  // reconcile effect below repopulates the new one).
+  // One engine per viewer. A WebGL context loss rebuilds the viewer; the new
+  // engine re-creates its layers from the tile worker's caches.
   useEffect(() => {
-    const layers = layersRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+    const s = useRadarStore.getState();
+    const quality = radarQuality();
+    const settings: EngineSettings = {
+      palette: s.palette,
+      opacity: s.opacity,
+      speed: s.speed,
+      snow: s.snow,
+      sigma: SMOOTH_SIGMA,
+      tileWidth: tileWidthFor(quality),
+      timing: timingFor(quality),
+      autoplay: !prefersReducedMotion(),
+    };
+    const engine = new RadarEngine(viewer, getRadarTileClient, settings);
+    engineRef.current = engine;
     return () => {
-      if (viewer && !viewer.isDestroyed()) {
-        for (const layer of layers.values()) viewer.imageryLayers.remove(layer, true);
-      }
-      layers.clear();
-      orderRef.current = [];
+      engine.destroy();
+      if (engineRef.current === engine) engineRef.current = null;
     };
   }, [viewer]);
 
-  // Reconcile the layer stack with the current timeline.
+  // Surface RainViewer rate-limit back-off in the sidebar status, and refresh
+  // the manifest early if a frame's tiles have expired upstream.
   useEffect(() => {
-    if (!viewer || viewer.isDestroyed()) return;
-    const layers = layersRef.current;
-    const timeline = active && host ? buildTimeline(past, nowcast, windowMinutes) : [];
-    const wanted = new Set(timeline.map((t) => t.frame.path));
-    for (const [path, layer] of layers) {
-      if (!wanted.has(path)) {
-        viewer.imageryLayers.remove(layer, true);
-        layers.delete(path);
-      }
-    }
-    for (const t of timeline) {
-      if (!layers.has(t.frame.path)) {
-        const layer = addImageryBelowLabels(viewer, makeRadarProvider(host, t.frame));
-        layer.alpha = 0;
-        layers.set(t.frame.path, layer);
-      }
-    }
-    const hadFrames = orderRef.current.length > 0;
-    orderRef.current = timeline.map((t) => t.frame.path);
-
-    // First frames in: open on the newest observed picture (current
-    // conditions) and let playback run forward from there. Later updates just
-    // keep the index in range.
-    const s = useRadarStore.getState();
-    const index = hadFrames ? clampIndex(s.currentIndex, timeline.length) : nowIndex(timeline);
-    if (index !== s.currentIndex) s.setCurrentIndex(index);
-    showFrame(index, s.opacity);
-    viewer.scene.requestRender();
-  }, [viewer, active, host, past, nowcast, windowMinutes]);
-
-  // Step the visible frame; apply opacity changes live.
-  useEffect(() => {
-    if (!viewer || viewer.isDestroyed()) return;
-    showFrame(clampIndex(currentIndex, orderRef.current.length), opacity);
-    viewer.scene.requestRender();
-  }, [viewer, currentIndex, opacity]);
-
-  // Playback.
-  useEffect(() => {
-    if (!active || !playing) return;
-    let timer = 0;
-    const tick = () => {
-      const s = useRadarStore.getState();
-      const length = buildTimeline(s.past, s.nowcast, s.windowMinutes).length;
-      if (length > 1) s.setCurrentIndex(nextIndex(s.currentIndex, length));
-      const atEnd = length > 1 && useRadarStore.getState().currentIndex === length - 1;
-      timer = window.setTimeout(tick, atEnd ? END_HOLD_MS : FRAME_MS);
+    if (!active) return;
+    const client = getRadarTileClient();
+    let refetchTimer: ReturnType<typeof setTimeout> | null = null;
+    const offStatus = client.onStatus((st) => useRadarStore.getState().setCoolingDown(st.coolingDownMs));
+    const offGone = client.onGone(() => {
+      if (refetchTimer) return;
+      refetchTimer = setTimeout(() => {
+        refetchTimer = null;
+        refetchRef.current();
+      }, 2000);
+    });
+    return () => {
+      offStatus();
+      offGone();
+      if (refetchTimer) clearTimeout(refetchTimer);
     };
-    timer = window.setTimeout(tick, FRAME_MS);
-    return () => window.clearTimeout(timer);
-  }, [active, playing]);
+  }, [active]);
+
+  useEffect(() => {
+    engineRef.current?.setActive(active);
+  }, [viewer, active]);
+
+  useEffect(() => {
+    if (active && host) engineRef.current?.setTimeline(host, timeline);
+  }, [viewer, active, host, timeline]);
+
+  useEffect(() => {
+    engineRef.current?.updateSettings({ opacity, palette, speed, snow });
+  }, [viewer, opacity, palette, speed, snow]);
 
   return null;
 }

@@ -24,6 +24,8 @@ import { LAYER_LEGENDS } from '../layers/layerLegends';
 import type { DrawLayer } from './crisisStore';
 import { RadarLayer } from '../layers/radar/RadarLayer';
 import { RadarTimeline } from '../layers/radar/RadarTimeline';
+import { RadarHoverReadout } from '../layers/radar/RadarHoverReadout';
+import { useRadarStore } from '../layers/radar/radarStore';
 import { PrecipLayer } from '../layers/precip/PrecipLayer';
 import { HurricaneLayer } from '../layers/hurricanes/HurricaneLayer';
 import { HurricaneTooltip } from '../layers/hurricanes/HurricaneTooltip';
@@ -54,6 +56,9 @@ import { useMeasureStore } from '../measure/measureStore';
 // this module only ever loads on the share page (lazy import), so the operator
 // app is unaffected.
 useLayersStore.persist.setOptions({ name: 'gsoc-share-view-layers' });
+// Same for the radar preferences (palette, opacity, loop speed): a viewer
+// changing the scrubber's speed must not rewrite the operator's 'gsoc-radar'.
+useRadarStore.persist.setOptions({ name: 'gsoc-share-radar' });
 
 // Force the layer flags to exactly the given enabled set. Everything else is
 // switched off — including whatever the operator's persisted state hydrated
@@ -549,6 +554,7 @@ export function CrisisShareGlobe({
       >
           <CesiumGlobe onReady={setViewer}>
             {live.has('radar') && <RadarLayer />}
+            {live.has('radar') && <RadarHoverReadout />}
             {live.has('precip') && <PrecipLayer />}
             {live.has('hurricanes') && <HurricaneLayer />}
             {live.has('lightning') && <LightningLayer variant="share" />}

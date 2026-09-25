@@ -5,7 +5,7 @@ Global Situational & Operational Conditions Monitor — a real-time 3D globe das
 ## Phase 1 features
 
 - **3D globe** — CesiumJS with starfield, real sun lighting (day/night terminator), dark/light/satellite/topo basemaps plus an Earth map type: NASA's daily MODIS true-color mosaic with an AM/PM (Terra/Aqua) toggle and a date picker back to Feb 2000.
-- **Precipitation radar** — RainViewer's global composite as a looping 2-hour animation of 10-minute frames: a scrubbable timeline with play/pause, a 30/60/120-min window and opacity control. Tiles render as served (no client-side repainting); place labels stay on top.
+- **Precipitation radar** — RainViewer's global composite as a zoom.earth-style loop of 10-minute frames (30 min / 1 h / 2 h). Tiles are decoded back to reflectivity (exact against RainViewer's published colour table), smoothed in data space and repainted in a choice of palettes (Classic, Vivid, or RainViewer's own) with translucent light rain and snow in white; place labels stay on top. Playback crossfades between frames without dimming overlaps and only ever steps onto frames whose tiles have loaded, so the loop starts on the newest picture and grows back in time as frames arrive. The timeline has a gliding playhead with a "Now" time bubble, hour ticks, a loading ring, a Latest button and ½×/1×/2× speed; Space and the arrow keys drive it, and hovering the map reads out the intensity under the cursor (e.g. "Heavy rain · 42 dBZ").
 - **Earthquakes** — USGS live feed, magnitude-scaled colored points, click for details panel.
 - **NWS Weather Alerts** — every active alert, including zone/county-based ones (winter, heat, flood, red-flag) resolved to polygons server-side; severity-coded overlays with full alert text in click panels.
 - **Live flights** — adsb.fi ADS-B (free, no key), plane icons rotated to heading, favorites list, auto-refresh when camera moves.
@@ -40,7 +40,7 @@ npm run dev:client
 | NWS (api.weather.gov) | No key needed | Set `NWS_USER_AGENT` to identify your app per NWS policy: `"my-app (me@email.com)"`. Used for both alerts and zone-geometry lookups. |
 | USGS Earthquakes | No key needed | Fully public. |
 | CelesTrak (satellites) | No key needed | Public TLE data; the server caches each group for 2h per CelesTrak's guidance. |
-| RainViewer (radar) | No key needed | Public manifest + tile CDN. The free tier serves one fixed palette (the colour-scheme parameter is ignored) and currently no nowcast frames; the layer shows forecast frames automatically if they return. |
+| RainViewer (radar) | No key needed | Public manifest + tile CDN. Since January 2026 the free tier serves zoom levels up to 7 only (the layer never asks for more; Cesium magnifies z7), one fixed palette (the layer decodes and repaints it), no nowcast frames (forecast frames show automatically if they return), and about 100 requests per IP per minute: tiles are fetched by a browser worker under an 80-per-minute budget shared across tabs, backing off on HTTP 429, and cached in the browser (Cache Storage) so reloads don't refetch. RainViewer's free tier is licensed for personal/educational use; attribution "Weather data by RainViewer" is shown in the radar legend. |
 | NASA GIBS (Earth basemap) | No key needed | Public WMTS tiles of the daily MODIS Terra/Aqua true-color mosaic, fetched straight from the browser (no server involvement). |
 | Nominatim (geocoding) | No key needed | Uses OSM data; `NWS_USER_AGENT` string is also used here as User-Agent per their policy. |
 
