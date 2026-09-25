@@ -1,9 +1,11 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import {
   useCrisisStore, selectActive,
   DEFAULT_ROLES, roleSiblings, roleSubtreeIds,
-  type IcsRole, type MoveRoleTarget, type PersonnelAssignment, type PersonnelDetails,
+  activeAssignmentsInSubtree, assignmentRoleTitle, isSamePerson,
+  type Incident, type IcsRole, type MoveRoleTarget, type PersonnelAssignment, type PersonnelDetails,
+  type PersonnelMember,
   IC_COLOR, CMD_COLOR, OPS_COLOR, PLAN_COLOR, LOG_COLOR, FIN_COLOR,
 } from './crisisStore';
 
@@ -195,6 +197,99 @@ function isAncestorOf(roles: readonly IcsRole[], ancestorId: string, id: string)
   return false;
 }
 
+// ── Staffing ──────────────────────────────────────────────────────────────────
+
+const NO_ASSIGNMENTS: PersonnelAssignment[] = [];
+const NO_PERSONNEL: PersonnelMember[] = [];
+
+const people = (n: number) => `${n} ${n === 1 ? 'person' : 'people'}`;
+
+/** People assigned beneath a role (not on it) — what collapsing it hides. */
+export function staffedBelow(inc: Pick<Incident, 'roles' | 'assignments'> | null, roleId: string): number {
+  if (!inc) return 0;
+  return activeAssignmentsInSubtree(inc.roles, inc.assignments, roleId).filter((a) => a.roleId !== roleId).length;
+}
+
+/** The role `name` / `personnelId` currently holds, if any (store identity rule). */
+export function activeRoleOf(
+  inc: Pick<Incident, 'roles' | 'assignments'>,
+  name: string,
+  personnelId?: string,
+): IcsRole | undefined {
+  const a = inc.assignments.find((x) => !x.endedAt && isSamePerson(x, name, personnelId));
+  return a ? inc.roles.find((r) => r.id === a.roleId) : undefined;
+}
+
+/** The pool member a typed name refers to — only when exactly one matches. */
+export function poolMemberNamed(personnel: readonly PersonnelMember[], name: string): PersonnelMember | undefined {
+  const key = name.trim().toLowerCase();
+  if (!key) return undefined;
+  const hits = personnel.filter((p) => p.name.trim().toLowerCase() === key);
+  return hits.length === 1 ? hits[0] : undefined;
+}
+
+/**
+ * The top-level (command) seats that seating this person in `targetRoleId`
+ * would leave empty — one person holds one role, so assignRole ends their
+ * current one. Only these moves get a confirm: ordinary moves between other
+ * roles go straight through (the log records where the person came from).
+ */
+export function commandSeatsVacated(
+  inc: Pick<Incident, 'roles' | 'assignments'>,
+  targetRoleId: string,
+  name: string,
+  personnelId?: string,
+): IcsRole[] {
+  return inc.assignments.flatMap((a) => {
+    if (a.endedAt || a.roleId === targetRoleId || !isSamePerson(a, name, personnelId)) return [];
+    const role = inc.roles.find((r) => r.id === a.roleId);
+    if (!role || role.parentId !== null) return [];
+    const othersHold = inc.assignments.some((b) => !b.endedAt && b.roleId === role.id && b.id !== a.id);
+    return othersHold ? [] : [role];
+  });
+}
+
+// Assign through the store — after a confirm when the move would empty a
+// command seat — and announce the log's own sentence for it. Re-seating the
+// current holder only updates their details and logs nothing, so nothing is
+// said. False when the operator backed out.
+function assignAndAnnounce(
+  roleId: string,
+  name: string,
+  details: PersonnelDetails,
+  personnelId: string | undefined,
+  announce: (m: string) => void,
+): boolean {
+  const st = useCrisisStore.getState();
+  const before = selectActive(st);
+  if (!before) return false;
+  const vacated = commandSeatsVacated(before, roleId, name, personnelId);
+  if (vacated.length > 0) {
+    const target = before.roles.find((r) => r.id === roleId)?.title ?? 'this role';
+    const seats = vacated.map((r) => r.title).join(' and ');
+    if (!confirm(`${name} is the ${seats}. Moving them to ${target} will leave ${seats} vacant — continue?`)) {
+      return false;
+    }
+  }
+  st.assignRole(roleId, name, details, personnelId);
+  const after = selectActive(useCrisisStore.getState());
+  const top = after?.actionLog[0];
+  if (after && after.actionLog !== before.actionLog && top?.system === 'assignment') announce(top.description);
+  return true;
+}
+
+// The store refuses to remove a branch anyone is still assigned in. The chart
+// checks first, but a peer may have staffed it since — say so rather than
+// silently doing nothing. True when the role is gone.
+function removeRoleChecked(roleId: string): boolean {
+  useCrisisStore.getState().removeRole(roleId);
+  const inc = selectActive(useCrisisStore.getState());
+  if (!inc || !inc.roles.some((r) => r.id === roleId)) return true;
+  const n = activeAssignmentsInSubtree(inc.roles, inc.assignments, roleId).length;
+  if (n > 0) alert(`This role can't be removed: ${people(n)} still assigned in its branch. Release them first.`);
+  return false;
+}
+
 // ── Quick-add form ────────────────────────────────────────────────────────────
 
 function QuickAddForm({
@@ -306,8 +401,11 @@ function ConnectorRow({ children, dashed = false }: { children: React.ReactNode;
           style={{ left: `${sidePct}%`, right: `${sidePct}%`, background: barStyle }}
         />
       )}
+      {/* Keyed by the child's own key (toArray keeps RoleSubtree's role id):
+          an index key would remount every later sibling — losing its expand
+          and add-child state — whenever a role is added, removed or moved. */}
       {items.map((child, i) => (
-        <div key={i} className="flex flex-1 flex-col items-center">
+        <div key={(React.isValidElement(child) ? child.key : null) ?? i} className="flex flex-1 flex-col items-center">
           <Stem dashed={dashed} />
           {child}
         </div>
@@ -356,6 +454,7 @@ function NodeCard({
   selected,
   onSelect,
   onRemoved,
+  hasKids,
   collapsedKids,
   onExpand,
 }: {
@@ -363,6 +462,8 @@ function NodeCard({
   selected: boolean;
   onSelect: () => void;
   onRemoved?: () => void;
+  /** Has sub-roles (shown or not). */
+  hasKids: boolean;
   /** Sub-roles exist but are collapsed out of view. */
   collapsedKids: boolean;
   onExpand: () => void;
@@ -373,7 +474,6 @@ function NodeCard({
   const activeAssignments = useCrisisStore(useShallow((s) =>
     (selectActive(s)?.assignments ?? []).filter((a) => a.roleId === role.id && !a.endedAt)
   ));
-  const removeRole = useCrisisStore((s) => s.removeRole);
 
   const isRoot = role.parentId === null;
   const isEmpty = activeAssignments.length === 0;
@@ -465,15 +565,13 @@ function NodeCard({
       if (a && a.roleId !== role.id) {
         // assignRole ends their current assignment (one role per person) and
         // logs the handover, exactly as a pool drop would.
-        st.assignRole(role.id, a.name, { title: a.title, phone: a.phone, email: a.email }, a.personnelId);
-        dnd.announce(`${a.name} assigned as ${role.title}`);
+        assignAndAnnounce(role.id, a.name, { title: a.title, phone: a.phone, email: a.email }, a.personnelId, dnd.announce);
       }
     } else if (inc) {
       const memberId = payload(PERSONNEL_MIME);
       const member = (inc.personnel ?? []).find((p) => p.id === memberId);
       if (member) {
-        st.assignRole(role.id, member.name, { title: member.title, phone: member.phone, email: member.email }, member.id);
-        dnd.announce(`${member.name} assigned as ${role.title}`);
+        assignAndAnnounce(role.id, member.name, { title: member.title, phone: member.phone, email: member.email }, member.id, dnd.announce);
       }
     }
     // The source may have unmounted mid-drag (a moved card re-renders under its
@@ -484,10 +582,7 @@ function NodeCard({
 
   const handleRemove = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirm(`Remove "${role.title}"?`)) {
-      removeRole(role.id);
-      onRemoved?.();
-    }
+    if (confirm(`Remove "${role.title}"?`) && removeRoleChecked(role.id)) onRemoved?.();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -513,6 +608,7 @@ function NodeCard({
     <div
       role="button"
       tabIndex={0}
+      data-role-card={role.id}
       aria-pressed={selected}
       aria-label={`${role.title}${role.abbrev ? ` (${role.abbrev})` : ''}: ${names || 'unassigned'}`}
       draggable={dnd.editable}
@@ -541,9 +637,12 @@ function NodeCard({
         </span>
       )}
 
-      {/* Remove button — visible on hover when empty. Mouse-only: keyboard
-          users remove from the edit panel (no nested focus stops in a card). */}
-      {isEmpty && dnd.editable && (
+      {/* Remove button — on hover, for an empty LEAF role only: removing a
+          branch (or the top of the structure) is a deliberate act in the edit
+          panel, which spells out the sub-roles going with it. Mouse-only:
+          keyboard users remove from the edit panel (no nested focus stops in
+          a card). */}
+      {isEmpty && !hasKids && !isRoot && dnd.editable && (
         <button
           type="button"
           tabIndex={-1}
@@ -633,11 +732,17 @@ function RoleSubtree({
   roleId: string;
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onRemoved?: () => void;
+  onRemoved?: (id: string) => void;
   depth?: number;
 }) {
   const { editable } = useContext(ChartDndContext);
-  const [kidsCollapsed, setKidsCollapsed] = useState(depth >= 1);
+  // Sections open collapsed to keep the chart compact — unless someone is
+  // staffed inside, who must never be hidden by default (read once, at mount).
+  const [kidsCollapsed, setKidsCollapsed] = useState(
+    () => depth >= 1 && staffedBelow(selectActive(useCrisisStore.getState()), roleId) === 0
+  );
+  // While collapsed, how many people the branch hides (for the toggle label).
+  const hiddenStaff = useCrisisStore((s) => (kidsCollapsed ? staffedBelow(selectActive(s), roleId) : 0));
   const [addingChild, setAddingChild] = useState(false);
   const role = useCrisisStore((s) => selectActive(s)?.roles.find((r) => r.id === roleId));
   // useShallow: moveRole keeps untouched roles identical, so unrelated edits
@@ -667,7 +772,8 @@ function RoleSubtree({
         role={role}
         selected={role.id === selectedId}
         onSelect={() => onSelect(role.id)}
-        onRemoved={onRemoved}
+        onRemoved={() => onRemoved?.(role.id)}
+        hasKids={hasKids}
         collapsedKids={!showKids && regularKids.length > 0}
         onExpand={() => setKidsCollapsed(false)}
       />
@@ -685,7 +791,7 @@ function RoleSubtree({
           </div>
           <ConnectorRow dashed>
             {commandKids.map((r) => (
-              <RoleSubtree key={r.id} roleId={r.id} selectedId={selectedId} onSelect={onSelect} depth={depth + 1} />
+              <RoleSubtree key={r.id} roleId={r.id} selectedId={selectedId} onSelect={onSelect} onRemoved={onRemoved} depth={depth + 1} />
             ))}
           </ConnectorRow>
         </div>
@@ -707,12 +813,17 @@ function RoleSubtree({
         <button
           type="button"
           aria-expanded={!kidsCollapsed}
-          aria-label={`${kidsCollapsed ? 'Expand' : 'Collapse'} sub-roles of ${role.title}`}
+          aria-label={`${kidsCollapsed ? 'Expand' : 'Collapse'} sub-roles of ${role.title}${
+            kidsCollapsed && hiddenStaff ? ` (${people(hiddenStaff)} assigned)` : ''
+          }`}
           onClick={(e) => { e.stopPropagation(); setKidsCollapsed((v) => !v); }}
           className="mt-2 flex items-center gap-1 rounded border border-white/10 bg-white/4 px-2 py-0.5 text-[10px] text-white/45 transition hover:border-white/20 hover:text-white/70"
         >
           <span aria-hidden style={{ color: role.color }}>{kidsCollapsed ? '▼' : '▲'}</span>
-          {kidsCollapsed ? `Expand (${regularKids.length + commandKids.length})` : 'Collapse'}
+          {/* Command staff always shows, so only general staff is "hidden". */}
+          {kidsCollapsed
+            ? `Expand (${regularKids.length}${hiddenStaff ? ` · ${hiddenStaff} staffed` : ''})`
+            : 'Collapse'}
         </button>
       )}
 
@@ -722,7 +833,7 @@ function RoleSubtree({
           {commandKids.length === 0 && <Stem />}
           <ConnectorRow>
             {regularKids.map((r) => (
-              <RoleSubtree key={r.id} roleId={r.id} selectedId={selectedId} onSelect={onSelect} depth={depth + 1} />
+              <RoleSubtree key={r.id} roleId={r.id} selectedId={selectedId} onSelect={onSelect} onRemoved={onRemoved} depth={depth + 1} />
             ))}
           </ConnectorRow>
         </>
@@ -751,7 +862,9 @@ function RoleSubtree({
 
 function PersonnelPool() {
   const dnd = useContext(ChartDndContext);
-  const personnel = useCrisisStore((s) => selectActive(s)?.personnel ?? []);
+  const personnel = useCrisisStore((s) => selectActive(s)?.personnel ?? NO_PERSONNEL);
+  const assignments = useCrisisStore((s) => selectActive(s)?.assignments ?? NO_ASSIGNMENTS);
+  const roles = useCrisisStore((s) => selectActive(s)?.roles ?? DEFAULT_ROLES);
   const addPersonnelMember = useCrisisStore((s) => s.addPersonnelMember);
   const removePersonnelMember = useCrisisStore((s) => s.removePersonnelMember);
 
@@ -761,10 +874,31 @@ function PersonnelPool() {
   const [phoneInput, setPhoneInput] = useState('');
   const [emailInput, setEmailInput] = useState('');
   const nameRef = useRef<HTMLInputElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+
+  // Who's already seated, so operators can see who's free before dragging
+  // (seating someone moves them out of their current role).
+  const seatOf = useMemo(() => {
+    const m = new Map<string, IcsRole>();
+    for (const p of personnel) {
+      const role = activeRoleOf({ roles, assignments }, p.name, p.id);
+      if (role) m.set(p.id, role);
+    }
+    return m;
+  }, [personnel, roles, assignments]);
 
   useEffect(() => {
     if (adding) nameRef.current?.focus();
   }, [adding]);
+
+  // Esc cancels the form, not the whole crisis workspace (the overlay closes
+  // on any Escape that reaches window).
+  const handleFormKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();
+    setAdding(false);
+    toggleRef.current?.focus();
+  };
 
   const handleAdd = () => {
     const n = nameInput.trim();
@@ -790,6 +924,8 @@ function PersonnelPool() {
           )}
         </div>
         <button
+          ref={toggleRef}
+          aria-expanded={adding}
           onClick={() => setAdding((v) => !v)}
           className="text-[10px] text-white/30 transition hover:text-white/60"
         >
@@ -798,7 +934,7 @@ function PersonnelPool() {
       </div>
 
       {adding && (
-        <div className="mb-3 space-y-2 rounded-lg border border-white/8 bg-white/3 p-2.5">
+        <div onKeyDown={handleFormKeyDown} className="mb-3 space-y-2 rounded-lg border border-white/8 bg-white/3 p-2.5">
           <div className="flex flex-wrap gap-2">
             <input
               ref={nameRef}
@@ -851,37 +987,48 @@ function PersonnelPool() {
 
       {personnel.length === 0 && !adding ? (
         <p className="text-[10px] text-white/20">
-          Add people here, then drag them onto roles above to assign.
+          Add people here, then drag them onto roles above — or pick them in a role's panel — to assign.
         </p>
       ) : (
         <div className="flex flex-wrap gap-1.5">
-          {personnel.map((member) => (
-            <div
-              key={member.id}
-              draggable={dnd.editable}
-              onDragStart={(e) => dnd.begin(e, { kind: 'personnel', id: member.id })}
-              onDragEnd={dnd.end}
-              className={`group flex items-center gap-1.5 rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-white/60 transition hover:border-white/18 ${
-                dnd.editable ? 'cursor-grab active:cursor-grabbing' : ''
-              } ${dnd.drag?.kind === 'personnel' && dnd.drag.id === member.id ? 'opacity-40' : ''}`}
-            >
-              <span aria-hidden className="text-white/25 select-none">⠿</span>
-              <span>{member.name}</span>
-              {member.title && (
-                <span className="text-white/30">· {member.title}</span>
-              )}
-              {member.phone && <span className="text-white/25" title={member.phone}>☎</span>}
-              {member.email && <span className="text-white/25" title={member.email}>✉</span>}
-              <button
-                onClick={() => removePersonnelMember(member.id)}
-                aria-label={`Remove ${member.name} from pool`}
-                className="ml-0.5 text-white/15 opacity-0 transition hover:text-red-400/70 focus-visible:opacity-100 group-hover:opacity-100"
-                title="Remove from pool"
+          {personnel.map((member) => {
+            const seat = seatOf.get(member.id);
+            const dragging = dnd.drag?.kind === 'personnel' && dnd.drag.id === member.id;
+            return (
+              <div
+                key={member.id}
+                draggable={dnd.editable}
+                onDragStart={(e) => dnd.begin(e, { kind: 'personnel', id: member.id })}
+                onDragEnd={dnd.end}
+                title={seat ? `Assigned as ${seat.title}` : undefined}
+                className={`group flex items-center gap-1.5 rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-white/60 transition hover:border-white/18 ${
+                  dnd.editable ? 'cursor-grab active:cursor-grabbing' : ''
+                } ${dragging ? 'opacity-40' : seat ? 'opacity-60 hover:opacity-100' : ''}`}
               >
-                ×
-              </button>
-            </div>
-          ))}
+                <span aria-hidden className="text-white/25 select-none">⠿</span>
+                <span>{member.name}</span>
+                {member.title && (
+                  <span className="text-white/30">· {member.title}</span>
+                )}
+                {seat && (
+                  <span className="font-bold" style={{ color: seat.color }}>
+                    <span aria-hidden>· {seat.abbrev || seat.title}</span>
+                    <span className="sr-only">, assigned as {seat.title}</span>
+                  </span>
+                )}
+                {member.phone && <span className="text-white/25" title={member.phone}>☎</span>}
+                {member.email && <span className="text-white/25" title={member.email}>✉</span>}
+                <button
+                  onClick={() => removePersonnelMember(member.id)}
+                  aria-label={`Remove ${member.name} from pool`}
+                  className="ml-0.5 text-white/15 opacity-0 transition hover:text-red-400/70 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+                  title="Remove from pool"
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -968,20 +1115,27 @@ function PositionControls({ role }: { role: IcsRole }) {
   );
 }
 
-function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void }) {
+function EditPanel({ roleId, onClose, docked }: {
+  roleId: string;
+  onClose: () => void;
+  /** Beside the chart (wide layout) rather than stacked below it. */
+  docked: boolean;
+}) {
+  const { announce } = useContext(ChartDndContext);
   const role = useCrisisStore((s) => selectActive(s)?.roles.find((r) => r.id === roleId));
   const assignments = useCrisisStore(useShallow((s) =>
     (selectActive(s)?.assignments ?? []).filter((a) => a.roleId === roleId).sort(
       (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
     )
   ));
-  const roles = useCrisisStore((s) => selectActive(s)?.roles ?? []);
+  const roles = useCrisisStore((s) => selectActive(s)?.roles ?? DEFAULT_ROLES);
+  const allAssignments = useCrisisStore((s) => selectActive(s)?.assignments ?? NO_ASSIGNMENTS);
+  const personnel = useCrisisStore((s) => selectActive(s)?.personnel ?? NO_PERSONNEL);
   const updateRole    = useCrisisStore((s) => s.updateRole);
-  const removeRole    = useCrisisStore((s) => s.removeRole);
-  const assignRole    = useCrisisStore((s) => s.assignRole);
   const endAssignment = useCrisisStore((s) => s.endAssignment);
   const addRole       = useCrisisStore((s) => s.addRole);
   const panelRef = useRef<HTMLDivElement>(null);
+  const poolListId = useId();
 
   const [nameInput, setNameInput] = useState('');
   const [titleInput, setTitleInput] = useState('');
@@ -997,22 +1151,57 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
   const activeAssignments = assignments.filter((a) => !a.endedAt);
   const activeAssignment = activeAssignments[0];
 
+  // A fresh, EMPTY form per role. Pre-filling the current holder made
+  // "Reassign" a one-click duplicate of them; they're shown above the form
+  // with their own End button, and typing their name updates their details.
   useEffect(() => {
-    setNameInput(activeAssignment?.name ?? '');
-    setTitleInput(activeAssignment?.title ?? '');
-    setPhoneInput(activeAssignment?.phone ?? '');
-    setEmailInput(activeAssignment?.email ?? '');
+    setNameInput('');
+    setTitleInput('');
+    setPhoneInput('');
+    setEmailInput('');
     setAddingChild(false);
   }, [roleId]);
 
-  // On narrow screens the panel stacks below the (often tall) chart, where a
-  // tap on a card would otherwise open it out of sight.
+  // Take keyboard focus to the panel (not an input: that would pop the
+  // on-screen keyboard over it on phones). Stacked below the often tall chart,
+  // a tap on a card would otherwise open it out of sight.
   useEffect(() => {
-    if (!window.matchMedia?.('(max-width: 767px)').matches) return;
-    panelRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    const el = panelRef.current;
+    if (!el) return;
+    if (!docked) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    el.focus({ preventScroll: true });
   }, [roleId]);
 
   if (!role) return null;
+
+  // Pool members not already in this role — the tap/keyboard way to assign.
+  const poolChoices = personnel.filter((m) => !activeAssignments.some((a) => isSamePerson(a, m.name, m.id)));
+  const typed = nameInput.trim();
+  const typedMember = poolMemberNamed(personnel, typed);
+  const typedIsHolder = !!typed && activeAssignments.some((a) => isSamePerson(a, typed, typedMember?.id));
+
+  // Removing takes the whole branch, so anyone assigned anywhere in it blocks
+  // it (the store refuses too) — nobody is silently un-staffed.
+  const branchStaff = activeAssignmentsInSubtree(roles, allAssignments, roleId);
+  const subRoleCount = roleSubtreeIds(roles, roleId).size - 1;
+  const staffList = branchStaff
+    .map((a) => {
+      if (a.roleId === roleId) return a.name;
+      const r = roles.find((x) => x.id === a.roleId);
+      return `${a.name} (${r?.abbrev || r?.title || 'sub-role'})`;
+    })
+    .join(', ');
+  const removeHintId = `${poolListId}-remove`;
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Esc backs out of the panel, not the whole crisis workspace (the overlay
+    // closes on any Escape that reaches window) — or first out of the
+    // sub-role form, if that's open.
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();
+    if (addingChild) setAddingChild(false);
+    else onClose();
+  };
 
   const fmt = (iso: string) => {
     try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
@@ -1020,17 +1209,27 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
   };
 
   const handleAssign = () => {
-    const n = nameInput.trim();
-    if (!n) return;
-    assignRole(roleId, n, {
-      title: titleInput.trim() || undefined,
-      phone: phoneInput.trim() || undefined,
-      email: emailInput.trim() || undefined,
-    });
+    if (!typed) return;
+    // A name that is someone in the pool IS that person: link them (so the
+    // AAR counts one person, not two) and fill any blank details from the pool.
+    const ok = assignAndAnnounce(roleId, typedMember?.name ?? typed, {
+      title: titleInput.trim() || typedMember?.title || undefined,
+      phone: phoneInput.trim() || typedMember?.phone || undefined,
+      email: emailInput.trim() || typedMember?.email || undefined,
+    }, typedMember?.id, announce);
+    if (!ok) return;
     setNameInput('');
     setTitleInput('');
     setPhoneInput('');
     setEmailInput('');
+  };
+
+  const handleRemove = () => {
+    const what = subRoleCount > 0
+      ? `"${role.title}" and its ${subRoleCount} sub-role${subRoleCount === 1 ? '' : 's'}`
+      : `"${role.title}"`;
+    if (!confirm(`Remove ${what}? Past assignments stay in the AAR record.`)) return;
+    if (removeRoleChecked(roleId)) onClose();
   };
 
   const handleAddChild = () => {
@@ -1056,8 +1255,14 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
     <div
       ref={panelRef}
       role="region"
+      tabIndex={-1}
       aria-label={`Edit role: ${role.title}`}
-      className="w-full shrink-0 space-y-4 rounded-lg border border-white/10 bg-ink-900/90 p-4 text-[11px] md:w-64"
+      onKeyDown={handleKeyDown}
+      className={`space-y-4 rounded-lg border border-white/10 bg-ink-900/90 p-4 text-[11px] outline-none focus-visible:ring-1 focus-visible:ring-accent/40 ${
+        // Docked: pinned in view while the chart scrolls (a deep role's
+        // panel would otherwise sit at the top, scrolled away).
+        docked ? 'sticky top-2 max-h-[calc(100vh-10rem)] w-64 shrink-0 overflow-y-auto' : 'w-full'
+      }`}
     >
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -1151,14 +1356,53 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
             <button onClick={() => endAssignment(activeAssignment.id)} className="shrink-0 text-[9px] text-red-400/60 hover:text-red-400">End</button>
           </div>
         )}
+        {/* From the pool — a tap or keypress, for phones and keyboards that
+            can't drag chips onto cards. A person seated elsewhere moves. */}
+        {poolChoices.length > 0 && (
+          <div className="mb-2">
+            <p className="mb-1 text-[9px] text-white/35">From personnel pool</p>
+            <div className="flex max-h-32 flex-wrap gap-1 overflow-y-auto">
+              {poolChoices.map((m) => {
+                const seat = activeRoleOf({ roles, assignments: allAssignments }, m.name, m.id);
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => assignAndAnnounce(roleId, m.name, { title: m.title, phone: m.phone, email: m.email }, m.id, announce)}
+                    aria-label={`Assign ${m.name} as ${role.title}${seat ? ` (moves them from ${seat.title})` : ''}`}
+                    title={seat ? `Now ${seat.title} — assigning moves them` : m.title}
+                    className={`rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] transition hover:border-accent/40 hover:text-white/90 ${
+                      seat ? 'text-white/45' : 'text-white/70'
+                    }`}
+                  >
+                    {m.name}
+                    {seat && (
+                      <span aria-hidden className="ml-1 font-bold" style={{ color: seat.color }}>
+                        · {seat.abbrev || seat.title}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1.5 text-[9px] text-white/25">or type a name:</p>
+          </div>
+        )}
         <input
           aria-label="Full name"
+          list={personnel.length > 0 ? poolListId : undefined}
+          autoComplete="off"
           className="mb-1 w-full rounded border border-white/8 bg-white/10 px-2 py-1 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
           placeholder="Full name"
           value={nameInput}
           onChange={(e) => setNameInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleAssign()}
         />
+        {personnel.length > 0 && (
+          <datalist id={poolListId}>
+            {personnel.map((m) => <option key={m.id} value={m.name} />)}
+          </datalist>
+        )}
         <input
           aria-label="Title or rank (optional)"
           className="mb-1 w-full rounded border border-white/8 bg-white/10 px-2 py-1 text-[11px] text-white/80 outline-none placeholder-white/20 focus:border-white/20"
@@ -1187,10 +1431,10 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
         />
         <button
           onClick={handleAssign}
-          disabled={!nameInput.trim()}
+          disabled={!typed}
           className="w-full rounded bg-accent/15 py-1 text-[10px] text-accent transition hover:bg-accent/25 disabled:opacity-30"
         >
-          {role.isSupport ? 'Add to Role' : activeAssignment ? 'Reassign' : 'Assign'}
+          {typedIsHolder ? 'Update details' : role.isSupport ? 'Add to Role' : activeAssignment ? 'Reassign' : 'Assign'}
         </button>
       </div>
 
@@ -1270,37 +1514,25 @@ function EditPanel({ roleId, onClose }: { roleId: string; onClose: () => void })
         )}
       </div>
 
-      {/* Delete role — available for any role when empty */}
-      {(() => {
-        const activeCount = assignments.filter((a) => !a.endedAt).length;
-        if (activeCount > 0) return null;
-        return (
-          <button
-            onClick={() => {
-              if (confirm(`Remove "${role.title}" and all its sub-roles?`)) {
-                removeRole(roleId);
-                onClose();
-              }
-            }}
-            className="w-full rounded border border-red-500/20 py-1 text-[10px] text-red-400/50 transition hover:border-red-500/40 hover:text-red-400"
-          >
-            Remove role
-          </button>
-        );
-      })()}
-
-      {/* Reset to defaults */}
-      <button
-        onClick={() => {
-          if (confirm('Reset org chart to default ICS/NIMS structure?')) {
-            useCrisisStore.getState().resetRoles();
-            onClose();
-          }
-        }}
-        className="w-full text-[9px] text-white/20 transition hover:text-white/40"
-      >
-        Reset to defaults
-      </button>
+      {/* Remove role (and its branch) — only once nobody in it is assigned */}
+      <div>
+        <button
+          type="button"
+          onClick={handleRemove}
+          disabled={branchStaff.length > 0}
+          aria-describedby={branchStaff.length > 0 ? removeHintId : undefined}
+          className="w-full rounded border border-red-500/20 py-1 text-[10px] text-red-400/50 transition hover:border-red-500/40 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-red-500/20 disabled:hover:text-red-400/50"
+        >
+          {subRoleCount > 0 ? `Remove role + ${subRoleCount} sub-role${subRoleCount === 1 ? '' : 's'}` : 'Remove role'}
+        </button>
+        {branchStaff.length > 0 && (
+          <p id={removeHintId} className="mt-1 text-[9px] text-white/35">
+            {branchStaff.length === 1
+              ? `To remove it, first release ${staffList}.`
+              : `To remove it, first release the ${people(branchStaff.length)} assigned in this branch: ${staffList}.`}
+          </p>
+        )}
+      </div>
     </div>
   );
 }
@@ -1345,10 +1577,87 @@ function RestoreSection() {
   );
 }
 
+// Back to the standard structure — reachable even with every role removed
+// (it used to live in the role panel, which needs a role to open). Custom
+// roles go, so anyone still seated in one blocks it, like removing a role.
+function ResetRolesButton({ onReset }: { onReset: () => void }) {
+  const handleReset = () => {
+    const inc = selectActive(useCrisisStore.getState());
+    if (!inc) return;
+    const builtin = new Set(DEFAULT_ROLES.map((r) => r.id));
+    const stranded = inc.assignments.filter((a) => !a.endedAt && !builtin.has(a.roleId));
+    if (stranded.length > 0) {
+      alert(
+        `Resetting removes custom roles. First release the ${people(stranded.length)} assigned to them: ` +
+        stranded.map((a) => `${a.name} (${assignmentRoleTitle(inc, a.roleId) ?? 'removed role'})`).join(', ') + '.'
+      );
+      return;
+    }
+    if (!confirm(
+      'Reset the org chart to the standard ICS/NIMS structure? Custom roles are removed and standard roles ' +
+      'return to their default places. People in standard roles stay assigned; past assignments stay in the AAR record.'
+    )) return;
+    useCrisisStore.getState().resetRoles();
+    onReset();
+  };
+  return (
+    <button
+      type="button"
+      onClick={handleReset}
+      className="rounded px-2 py-1 text-[9px] text-white/20 transition hover:text-white/45"
+    >
+      Reset to defaults
+    </button>
+  );
+}
+
+// People still assigned to a role that is no longer on the chart — a peer
+// removed it as they were seated, or an older client's reset dropped it.
+// Invisible on the chart yet still counted as staff, so list them here to be
+// released. Normally empty: removing a staffed role is refused.
+function UnplacedAssignments() {
+  const roles = useCrisisStore((s) => selectActive(s)?.roles ?? DEFAULT_ROLES);
+  const assignments = useCrisisStore((s) => selectActive(s)?.assignments ?? NO_ASSIGNMENTS);
+  const endAssignment = useCrisisStore((s) => s.endAssignment);
+  const unplaced = assignments.filter((a) => !a.endedAt && !roles.some((r) => r.id === a.roleId));
+  if (unplaced.length === 0) return null;
+  const inc = selectActive(useCrisisStore.getState());
+  return (
+    <div className="mt-3 w-full max-w-md rounded border border-amber-400/25 bg-amber-400/5 p-2.5 text-left">
+      <p className="text-[10px] font-semibold text-amber-200/80">
+        Assigned to removed roles ({unplaced.length})
+      </p>
+      <ul className="mt-1.5 space-y-1">
+        {unplaced.map((a) => (
+          <li key={a.id} className="flex items-center justify-between gap-2 text-[10px] text-white/65">
+            <span className="min-w-0 truncate">
+              {a.name} <span className="text-white/35">· {(inc && assignmentRoleTitle(inc, a.roleId)) ?? 'removed role'}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => endAssignment(a.id)}
+              className="shrink-0 text-[9px] text-red-400/60 hover:text-red-400"
+            >
+              Release
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// Below this width the role panel stacks under the chart instead of beside
+// it: a 256px panel would squeeze the chart to a sliver. Measured, not a
+// viewport breakpoint — the live-map dock takes up to half the screen.
+const PANEL_BESIDE_MIN_PX = 640;
+
 export function IcsOrgChart() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingRoot, setAddingRoot] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const layoutRef = useRef<HTMLDivElement>(null);
+  const [docked, setDocked] = useState(false);
   const rootRoles = useCrisisStore(useShallow((s) =>
     (selectActive(s)?.roles ?? []).filter((r) => r.parentId === null).sort((a, b) => a.order - b.order)
   ));
@@ -1417,8 +1726,34 @@ export function IcsOrgChart() {
     });
   }, [rootRoles.length]);
 
+  useLayoutEffect(() => {
+    const el = layoutRef.current;
+    if (!el) return;
+    const measure = () => setDocked(el.clientWidth >= PANEL_BESIDE_MIN_PX);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const handleSelect = (id: string) => {
     setSelectedId((prev) => (prev === id ? null : id));
+  };
+  const handleRemoved = useCallback((id: string) => {
+    setSelectedId((prev) => (prev === id ? null : prev));
+  }, []);
+  // Hand focus back to the card the panel was for, so a keyboard user carries
+  // on from where they were (the panel took focus when it opened).
+  const closePanel = () => {
+    const id = selectedId;
+    setSelectedId(null);
+    if (!id) return;
+    requestAnimationFrame(() => {
+      layoutRef.current
+        ?.querySelector<HTMLElement>(`[data-role-card="${CSS.escape(id)}"]`)
+        ?.focus();
+    });
   };
 
   return (
@@ -1429,13 +1764,13 @@ export function IcsOrgChart() {
             <span aria-hidden className="select-none text-white/25">⠿</span>
             Drag roles to reorganize · drag people onto roles to assign
             {/* Touch screens often can't drag: the edit panel's Position controls can. */}
-            <span className="hidden [@media(pointer:coarse)]:inline">· or tap a role to move it</span>
-            <span className="sr-only">. Keyboard: select a role, then use Position in its edit panel.</span>
+            <span className="hidden [@media(pointer:coarse)]:inline">· or tap a role to move it or assign people</span>
+            <span className="sr-only">. Keyboard: select a role, then use its edit panel to move it or assign people.</span>
           </p>
         )}
         <p aria-live="polite" className="sr-only">{announcement}</p>
 
-        <div className="flex flex-col gap-4 md:flex-row">
+        <div ref={layoutRef} className={`flex gap-4 ${docked ? 'flex-row items-start' : 'flex-col'}`}>
           {/* Scrollable chart */}
           <div ref={scrollRef} className="min-w-0 flex-1 overflow-x-auto">
             <div className="flex w-max min-w-full flex-col items-center py-4">
@@ -1445,7 +1780,7 @@ export function IcsOrgChart() {
                   roleId={r.id}
                   selectedId={selectedId}
                   onSelect={handleSelect}
-                  onRemoved={() => { if (selectedId === r.id) setSelectedId(null); }}
+                  onRemoved={handleRemoved}
                 />
               ))}
 
@@ -1455,23 +1790,27 @@ export function IcsOrgChart() {
                   {addingRoot ? (
                     <QuickAddForm parentId={null} parentColor={IC_COLOR} onDone={() => setAddingRoot(false)} />
                   ) : (
-                    <button
-                      onClick={() => setAddingRoot(true)}
-                      className="flex items-center gap-1 rounded border border-white/8 px-3 py-1 text-[9px] text-white/25 transition hover:border-white/18 hover:text-white/55"
-                    >
-                      + Add top-level role
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setAddingRoot(true)}
+                        className="flex items-center gap-1 rounded border border-white/8 px-3 py-1 text-[9px] text-white/25 transition hover:border-white/18 hover:text-white/55"
+                      >
+                        + Add top-level role
+                      </button>
+                      <ResetRolesButton onReset={() => setSelectedId(null)} />
+                    </div>
                   )}
                 </div>
               )}
 
               <RestoreSection />
+              <UnplacedAssignments />
             </div>
           </div>
 
           {/* Edit panel */}
           {selectedId && (
-            <EditPanel roleId={selectedId} onClose={() => setSelectedId(null)} />
+            <EditPanel roleId={selectedId} onClose={closePanel} docked={docked} />
           )}
         </div>
 

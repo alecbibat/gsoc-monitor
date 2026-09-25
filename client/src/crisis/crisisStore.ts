@@ -379,6 +379,48 @@ export function roleSiblings(roles: readonly IcsRole[], parentId: string | null,
     .sort((a, b) => a.order - b.order);
 }
 
+/**
+ * Whether assignment `a` is held by the person named `name` / `personnelId`:
+ * by pool id when both sides have one (so namesakes don't collide and a rename
+ * can't break the link), else by case-insensitive name for manual, pool-less
+ * entries. The one identity rule for assignRole and the org chart.
+ */
+export function isSamePerson(
+  a: Pick<PersonnelAssignment, 'name' | 'personnelId'>,
+  name: string,
+  personnelId?: string,
+): boolean {
+  return personnelId && a.personnelId
+    ? a.personnelId === personnelId
+    : a.name.trim().toLowerCase() === name.trim().toLowerCase();
+}
+
+/** Open assignments on a role or anywhere beneath it — what blocks removeRole. */
+export function activeAssignmentsInSubtree(
+  roles: readonly IcsRole[],
+  assignments: readonly PersonnelAssignment[],
+  roleId: string,
+): PersonnelAssignment[] {
+  const ids = roleSubtreeIds(roles, roleId);
+  return assignments.filter((a) => !a.endedAt && ids.has(a.roleId));
+}
+
+/**
+ * A role's title, including roles since removed: assignments outlive the roles
+ * they were on (they're the AAR's staffing record), and every assignment's log
+ * entry recorded the title it was made under. The log is newest-first, so a
+ * renamed role reads by its latest title. Undefined when neither knows it.
+ */
+export function assignmentRoleTitle(
+  inc: Pick<Incident, 'roles' | 'actionLog'>,
+  roleId: string,
+): string | undefined {
+  return (
+    inc.roles.find((r) => r.id === roleId)?.title ??
+    inc.actionLog.find((e) => e.system === 'assignment' && e.meta?.roleId === roleId)?.meta?.roleTitle
+  );
+}
+
 const COMPLEXITY_LABEL = (c: ComplexityType | null | undefined) =>
   COMPLEXITY_TYPES.find((t) => t.id === c)?.label ?? 'unset';
 
@@ -626,14 +668,23 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
       incidents: [],
       syncState: 'idle',
 
-      toggle: () => set((s) => (s.open ? { open: false } : { open: true, activeIncidentId: null })),
+      // Reopening returns to the incident the operator closed the workspace
+      // on (the top-bar button is how they get back mid-incident); Esc steps
+      // back to the list before closing, so a deliberate exit from the list
+      // still reopens on the list. Falls back to the list if it was deleted.
+      toggle: () =>
+        set((s) => (s.open
+          ? { open: false }
+          : { open: true, activeIncidentId: s.incidents.some((i) => i.id === s.activeIncidentId) ? s.activeIncidentId : null })),
       close: () => set({ open: false }),
       setOpen: (open) => set({ open }),
       setTab: (activeTab) => set({ activeTab }),
 
       createIncident: (type) => {
         const inc = newIncident(type);
-        set((s) => ({ incidents: [...s.incidents, inc], activeIncidentId: inc.id, open: true }));
+        // A new incident opens on its Situation Report (name, property, type
+        // first), not on whichever tab the previous incident was left on.
+        set((s) => ({ incidents: [...s.incidents, inc], activeIncidentId: inc.id, open: true, activeTab: 'situation-report' }));
         return inc.id;
       },
       openIncident: (id) => set({ activeIncidentId: id, open: true }),
@@ -642,6 +693,11 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
         set((s) => ({
           incidents: s.incidents.filter((i) => i.id !== id),
           activeIncidentId: s.activeIncidentId === id ? null : s.activeIncidentId,
+          // Same as applyRemoteDelete: never leave a draw session on a layer that is gone.
+          activeDrawLayerId:
+            s.incidents.find((i) => i.id === id)?.drawLayers.some((l) => l.id === s.activeDrawLayerId)
+              ? null
+              : s.activeDrawLayerId,
         })),
 
       standDownIncident: (id, reason) =>
@@ -791,25 +847,30 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
       updateRole: (id, patch) =>
         set((s) => patchActiveEditable(s, (inc) => ({ ...inc, roles: inc.roles.map((r) => (r.id === id ? { ...r, ...patch } : r)) }))),
 
+      // Removes a role and its whole subtree — but never the people in it or
+      // their history:
+      //   - Refused (a no-op) while anyone in the branch is still assigned.
+      //     The chart disables Remove and says who to release first; this
+      //     also catches a peer's assignment that landed after the confirm.
+      //   - Assignments are NOT deleted. The ended ones on these roles are the
+      //     AAR's staffing record (roster, swimlane, personnel count); they
+      //     outlive the roles, titled via assignmentRoleTitle. Restoring a
+      //     builtin role with the same id reattaches its history.
       removeRole: (id) =>
         set((s) => patchActiveEditable(s, (inc) => {
-          const toRemove = new Set<string>();
-          const collect = (pid: string) => {
-            toRemove.add(pid);
-            inc.roles.filter((r) => r.parentId === pid).forEach((c) => collect(c.id));
-          };
-          collect(id);
-          const title = inc.roles.find((r) => r.id === id)?.title ?? 'role';
+          const role = inc.roles.find((r) => r.id === id);
+          if (!role || activeAssignmentsInSubtree(inc.roles, inc.assignments, id).length > 0) return inc;
+          const toRemove = roleSubtreeIds(inc.roles, id);
+          const title = role.title;
           const subCount = toRemove.size - 1;
           return {
             ...inc,
             roles: inc.roles.filter((r) => !toRemove.has(r.id)),
-            assignments: inc.assignments.filter((a) => !toRemove.has(a.roleId)),
             actionLog: [
               sysEntry(
                 'role-removed',
                 `ICS role removed: ${title}${subCount > 0 ? ` (and ${subCount} sub-role${subCount === 1 ? '' : 's'})` : ''}`,
-                { roleTitle: title, subRoles: String(subCount) }
+                { roleId: id, roleTitle: title, subRoles: String(subCount) }
               ),
               ...inc.actionLog,
             ],
@@ -918,16 +979,33 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
         set((s) => patchActiveEditable(s, (inc) => {
           const now = new Date().toISOString();
           const role = inc.roles.find((r) => r.id === roleId);
-          const endPrevious = !role?.isSupport;
-          // Match "the same person" by personnel id when we have one (so identical
-          // names don't collide and a rename can't break the link); otherwise fall
-          // back to case-insensitive name matching for manual, pool-less entries.
-          const samePerson = (a: PersonnelAssignment) =>
-            personnelId && a.personnelId
-              ? a.personnelId === personnelId
-              : a.name.toLowerCase() === name.toLowerCase();
+          // A role a peer just removed: an assignment to it would be invisible.
+          if (!role) return inc;
+          const endPrevious = !role.isSupport;
+          const samePerson = (a: PersonnelAssignment) => isSamePerson(a, name, personnelId);
+
+          // Re-assigning whoever already holds this role is not a new
+          // assignment — that would split their AAR swimlane bar, reset their
+          // time in role, and list them twice on a support role. It's how the
+          // role panel corrects their details: update in place, log nothing.
+          const current = inc.assignments.find((a) => !a.endedAt && a.roleId === roleId && samePerson(a));
+          if (current) {
+            const patch: Partial<PersonnelAssignment> = {};
+            for (const k of ['title', 'phone', 'email'] as const) {
+              const v = details?.[k];
+              if (v !== undefined && v !== current[k]) patch[k] = v;
+            }
+            if (personnelId && !current.personnelId) patch.personnelId = personnelId;
+            if (Object.keys(patch).length === 0) return inc;
+            return {
+              ...inc,
+              assignments: inc.assignments.map((a) => (a.id === current.id ? { ...a, ...patch } : a)),
+            };
+          }
+
           // End any other active assignment for this person across all roles
           // (one person cannot hold more than one role at a time).
+          const movedFrom = inc.assignments.filter((a) => !a.endedAt && a.roleId !== roleId && samePerson(a));
           const assignments = inc.assignments.map((a) => {
             if (a.endedAt) return a;
             if (samePerson(a) && a.roleId !== roleId) {
@@ -938,12 +1016,25 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
             }
             return a;
           });
-          // Command-transfer history is AAR gold: record who took the role and
-          // whom they replaced, as a structured system event.
-          const displaced = inc.assignments.find(
-            (a) => !a.endedAt && a.roleId === roleId && !samePerson(a)
+          // Command-transfer history is AAR gold: record who took the role,
+          // whom they replaced, and which seat they left — a move can leave
+          // even the IC seat empty, and the log (the AAR narrative, and what
+          // share-link readers see) must say so.
+          const displaced = endPrevious
+            ? inc.assignments.find((a) => !a.endedAt && a.roleId === roleId)
+            : undefined;
+          const fromTitle = (a: PersonnelAssignment) => assignmentRoleTitle(inc, a.roleId) ?? 'a removed role';
+          const vacated = movedFrom.filter(
+            (m) => !assignments.some((a) => !a.endedAt && a.roleId === m.roleId)
           );
-          const roleTitle = role?.title ?? 'role';
+          const from = movedFrom.map(fromTitle).join(', ');
+          const notes = [
+            ...(displaced ? [`replacing ${displaced.name}`] : []),
+            ...(movedFrom.length
+              ? [`moved from ${from}${vacated.length === movedFrom.length ? ', now vacant' : ''}`]
+              : []),
+          ];
+          const roleTitle = role.title;
           return {
             ...inc,
             assignments: [
@@ -953,8 +1044,13 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
             actionLog: [
               sysEntry(
                 'assignment',
-                `${name} assigned as ${roleTitle}${displaced && endPrevious ? ` (replacing ${displaced.name})` : ''}`,
-                { roleId, roleTitle, name, ...(displaced && endPrevious ? { replaced: displaced.name } : {}) }
+                `${name} assigned as ${roleTitle}${notes.length ? ` (${notes.join('; ')})` : ''}`,
+                {
+                  roleId, roleTitle, name,
+                  ...(displaced ? { replaced: displaced.name } : {}),
+                  ...(movedFrom.length ? { from, fromRoleId: movedFrom.map((a) => a.roleId).join(',') } : {}),
+                  ...(vacated.length ? { vacated: vacated.map(fromTitle).join(', ') } : {}),
+                }
               ),
               ...inc.actionLog,
             ],
@@ -964,18 +1060,19 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
       endAssignment: (id) =>
         set((s) => patchActiveEditable(s, (inc) => {
           const target = inc.assignments.find((a) => a.id === id);
-          const roleTitle = target ? inc.roles.find((r) => r.id === target.roleId)?.title ?? 'role' : 'role';
+          // Already released (a double tap, or a peer got there first): its
+          // end time is the record — never re-stamp it.
+          if (!target || target.endedAt) return inc;
+          const roleTitle = assignmentRoleTitle(inc, target.roleId) ?? 'a removed role';
           return {
             ...inc,
             assignments: inc.assignments.map((a) => (a.id === id ? { ...a, endedAt: new Date().toISOString() } : a)),
-            actionLog: target && !target.endedAt
-              ? [
-                  sysEntry('assignment-ended', `${target.name} released from ${roleTitle}`, {
-                    roleId: target.roleId, roleTitle, name: target.name,
-                  }),
-                  ...inc.actionLog,
-                ]
-              : inc.actionLog,
+            actionLog: [
+              sysEntry('assignment-ended', `${target.name} released from ${roleTitle}`, {
+                roleId: target.roleId, roleTitle, name: target.name,
+              }),
+              ...inc.actionLog,
+            ],
           };
         })),
 
