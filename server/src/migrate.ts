@@ -189,7 +189,8 @@ export async function migrate() {
       -- block for its scope, and "reset to default" deletes it. kind is
       -- 'checklist-block' | 'intake-block' | 'checklist-roles'; scope_key is
       -- 'type|property' with '*' for "any" ('*' alone for the role list).
-      -- revision is the optimistic-concurrency token a save must quote.
+      -- revision is the optimistic-concurrency token a save (and a reset,
+      -- when it says) must quote.
       CREATE TABLE IF NOT EXISTS crisis_template_overrides (
         kind       TEXT        NOT NULL,
         scope_key  TEXT        NOT NULL,
@@ -199,6 +200,20 @@ export async function migrate() {
         updated_by TEXT,
         PRIMARY KEY (kind, scope_key)
       );
+
+      -- Every override's revision comes from this one sequence
+      -- (crisisTemplates/store.ts), so no number is ever issued twice — not
+      -- even to a scope that was reset (row deleted) and saved again, where a
+      -- per-row count would restart and match an old editor's stale revision.
+      -- Seeded past the revisions stored before it existed.
+      DO $$
+      BEGIN
+        IF to_regclass('crisis_template_revision_seq') IS NULL THEN
+          CREATE SEQUENCE crisis_template_revision_seq AS integer;
+          PERFORM setval('crisis_template_revision_seq',
+            COALESCE((SELECT MAX(revision) FROM crisis_template_overrides), 0) + 1, false);
+        END IF;
+      END $$;
     `);
 
     // Signup code. If SIGNUP_CODE is set in the environment it is authoritative

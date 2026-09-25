@@ -33,7 +33,15 @@ export function toLocalInput(stored: string | null | undefined): string {
   return `${year}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** The current minute as a stored instant — what a "Now" button writes. */
+/**
+ * The current minute as a stored instant — what a "Now" button writes.
+ * Truncated in UTC, never through local wall time: in the hour a DST
+ * fall-back repeats, "01:30" names two instants and resolves to the earlier
+ * one — an hour early (setSeconds does the same). Every zone in use today is
+ * a whole number of minutes off UTC, so this is the same local minute.
+ */
 export function nowForInput(now: Date = new Date()): string {
-  return fromLocalInput(toLocalInput(now.toISOString()));
+  const d = new Date(now.getTime());
+  d.setUTCSeconds(0, 0);
+  return d.toISOString();
 }

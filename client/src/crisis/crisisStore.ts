@@ -380,6 +380,29 @@ export function roleSiblings(roles: readonly IcsRole[], parentId: string | null,
 }
 
 /**
+ * Depth-first in the order the chart draws it (command staff, then general
+ * staff, each by order) — for the "Reports to" picker and the AAR swimlane.
+ * The roles ARRAY order says nothing: moving a role only renumbers `order`.
+ * Roles whose parent is missing aren't on the chart and aren't included.
+ */
+export function chartOrder(roles: readonly IcsRole[]): { role: IcsRole; depth: number }[] {
+  const out: { role: IcsRole; depth: number }[] = [];
+  const seen = new Set<string>();
+  const walk = (parentId: string | null, depth: number) => {
+    for (const cmd of [true, false]) {
+      for (const r of roleSiblings(roles, parentId, cmd)) {
+        if (seen.has(r.id)) continue;
+        seen.add(r.id);
+        out.push({ role: r, depth });
+        walk(r.id, depth + 1);
+      }
+    }
+  };
+  walk(null, 0);
+  return out;
+}
+
+/**
  * Whether assignment `a` is held by the person named `name` / `personnelId`:
  * by pool id when both sides have one (so namesakes don't collide and a rename
  * can't break the link), else by case-insensitive name for manual, pool-less
@@ -544,7 +567,12 @@ interface CrisisState {
   backToList: () => void;
   removeIncident: (id: string) => void;
   /** endAt: when the incident actually ended (ISO) — defaults to its End field, else now. */
-  standDownIncident: (id: string, reason?: string, endAt?: string) => void;
+  /**
+   * `endAt`: an End the operator chose. `autoEndAt`: the instant to stamp
+   * when End is left automatic (the one the stand-down dialog showed);
+   * defaults to now. Only `endAt` counts as operator-entered.
+   */
+  standDownIncident: (id: string, reason?: string, endAt?: string, autoEndAt?: string) => void;
   reopenIncident: (id: string) => void;
 
   // Active-incident field updates
@@ -715,7 +743,7 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
               : s.activeDrawLayerId,
         })),
 
-      standDownIncident: (id, reason, endAt) =>
+      standDownIncident: (id, reason, endAt, autoEndAt) =>
         set((s) => ({
           incidents: s.incidents.map((inc) => {
             if (inc.id !== id) return inc;
@@ -731,7 +759,8 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
             const staleStamp = endIsStaleStandDownStamp(inc);
             const givenEnd = endAt && !Number.isNaN(Date.parse(endAt)) ? endAt : '';
             const endAuto = !givenEnd && (!inc.incidentEndDatetime || staleStamp);
-            const endedAt = givenEnd || (endAuto ? now : inc.incidentEndDatetime);
+            const autoAt = autoEndAt && !Number.isNaN(Date.parse(autoEndAt)) ? autoEndAt : now;
+            const endedAt = givenEnd || (endAuto ? autoAt : inc.incidentEndDatetime);
             // Standing down closes the incident: archived-but-still-"active"
             // rows are what kept tab badges lit forever. Open ICS assignments
             // are released so the archived org chart reads as concluded (their
@@ -769,7 +798,10 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
           incidents: s.incidents.map((inc) =>
             // Reopen conservatively as Monitoring — the operator escalates to
             // Active if the situation actually warrants it. Closure stamps
-            // clear (the log keeps the stand-down history).
+            // clear (the log keeps the stand-down history), and so does an End
+            // the stand-down stamped by itself: the incident didn't end then,
+            // and the Situation Report and share links would say it had. An
+            // End the operator entered stays.
             inc.id === id
               ? {
                   ...inc,
@@ -777,6 +809,7 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
                   incidentStatus: 'monitoring' as IncidentStatus,
                   closedBy: null,
                   standDownReason: null,
+                  ...(endIsStaleStandDownStamp(inc) ? { incidentEndDatetime: '' } : {}),
                   actionLog: [sysEntry('reopened', 'Incident reopened (status: Monitoring)'), ...inc.actionLog],
                 }
               : inc

@@ -253,6 +253,23 @@ export function roleUsage(config: CrisisTemplatesConfig): Map<string, number> {
 // ── Share page copy ──────────────────────────────────────────────────────────
 
 /**
+ * Whether `itemId` is a line of a checklist block that applies to this type +
+ * property — the only items a share viewer may toggle. Anything else stored
+ * in the incident would come back from shareTemplatesConfig as a "retired"
+ * item WITH its text, so an arbitrary id would both plant a fake entry in the
+ * incident and read out another scope's checklist.
+ */
+export function checklistItemApplies(
+  config: CrisisTemplatesConfig,
+  incidentType: string | null,
+  propertyId: string | null,
+  itemId: string
+): boolean {
+  return config.checklistBlocks.some((b) =>
+    scopeApplies(b.scope, incidentType, propertyId) && b.items.some((i) => i.id === itemId));
+}
+
+/**
  * What a share link's viewer gets: only the blocks that apply to the
  * incident's type + property, editor names removed, plus the text of any
  * checked item / answered question the incident holds state for but no

@@ -127,6 +127,19 @@ export function parseBaseRevision(raw: unknown): Checked<number> {
   return ok(raw);
 }
 
+/**
+ * The `?baseRevision=` of a reset (DELETE): the revision the admin is looking
+ * at, so the reset can't delete a newer save they never saw. Optional — null
+ * (unchecked) when absent, for an editor tab loaded before resets sent it.
+ */
+export function parseBaseRevisionParam(raw: unknown): Checked<number | null> {
+  if (raw === undefined) return ok(null);
+  if (typeof raw !== 'string' || !/^\d{1,15}$/.test(raw)) {
+    return fail('baseRevision must be the revision you are resetting (0 for a built-in default)');
+  }
+  return ok(Number(raw));
+}
+
 // ── Checklist items ──────────────────────────────────────────────────────────
 
 export interface ChecklistCheckContext {

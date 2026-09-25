@@ -12,7 +12,7 @@ import {
   dropIdAt, fieldCls, plural, pointerHalf, useDefaultTemplates, useDirtyFlag, useFocusQueue, useSaveShortcut, useUnitDraft,
   type FooterReset,
 } from './editorUi';
-import { resetChecklistRoles, saveChecklistRoles } from './templatesApi';
+import { resetChecklistRoles, saveChecklistRoles, type TemplatesSaveResult } from './templatesApi';
 
 // ── Checklist roles editor ───────────────────────────────────────────────────
 //
@@ -174,19 +174,33 @@ export function RolesEditorBody({ config }: { config: CrisisTemplatesConfig }) {
   };
 
   const reset = async () => {
+    if (savingRef.current) return;
+    // A newer version than the one this draft started from: settle that
+    // first, as a save would — a reset must not delete a version never seen.
+    if (draft.stale) { announceConflict(); return; }
     const unsaved = dirty ? '\n\nYour unsaved changes will be lost too.' : '';
     const ok = window.confirm(
       'Reset the checklist roles to the built-in ICS positions?\n\nCustom roles are removed and built-in ones get their ' +
       'original codes, titles and colors. If checklist items still use a custom role, the reset is refused.' + unsaved
     );
     if (!ok) return;
+    // Held for the whole reset, so Ctrl+S can't send a save alongside the delete.
+    savingRef.current = true;
     setBusy('Resetting…');
     setServerError(null);
-    const res = await resetChecklistRoles();
+    let res: TemplatesSaveResult;
+    try {
+      res = await resetChecklistRoles(draft.baseRevision);
+    } finally {
+      savingRef.current = false;
+    }
     setBusy(null);
     if (res.ok) {
       draft.replace(res.config.checklistRoles.roles, res.config.checklistRoles.revision);
       setNotice('Reset to the built-in roles');
+    } else if (res.status === 409) {
+      setServerError('Someone else saved the checklist roles in the meantime, so nothing was reset — review their version, then reset again if you still want to.');
+      if (!res.config) void useTemplatesStore.getState().load();
     } else {
       setServerError(res.error);
     }
@@ -500,8 +514,24 @@ function ColorSwatch({ focusKey, value, onChange, label, invalid }: {
     const onDown = (e: PointerEvent) => {
       if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
     };
+    // Esc closes the popover, and only the popover. Document CAPTURE phase:
+    // after a click on the swatch, focus is on the swatch button (a sibling of
+    // the popover) or, in Safari, on the page itself — a handler on the
+    // popover never sees the key, and the admin page's Esc would close the
+    // whole page instead.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.isComposing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(false);
+      buttonRef.current?.focus();
+    };
     document.addEventListener('pointerdown', onDown);
-    return () => document.removeEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKey, true);
+    };
   }, [open]);
 
   const choose = (c: string) => {
@@ -533,15 +563,6 @@ function ColorSwatch({ focusKey, value, onChange, label, invalid }: {
           id={popId}
           role="dialog"
           aria-label={label}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              // Claim Esc so the admin page stays open.
-              e.preventDefault();
-              e.stopPropagation();
-              setOpen(false);
-              buttonRef.current?.focus();
-            }
-          }}
           className="absolute left-0 top-10 z-30 w-52 rounded-lg border border-white/12 bg-ink-800 p-2.5 shadow-panel"
         >
           <div className="grid grid-cols-6 gap-1.5">

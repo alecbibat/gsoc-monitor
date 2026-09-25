@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { classifyDrawClick, CLOSE_PX, DEDUP_PX, discardPrompt, drawKeyAction, minPoints, samePositions } from './drawInput';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  classifyDrawClick, CLOSE_PX, DEDUP_PX, discardPrompt, drawKeyAction, minPoints, samePositions,
+  STRAY_CLICK_MS, STRAY_CLICK_PX, swallowStrayClicks,
+} from './drawInput';
 import type { DrawLayerPoint } from './crisisStore';
 
 // Input rules of the crisis layer draw tool (CrisisDrawController).
@@ -109,5 +112,52 @@ describe('minPoints / samePositions', () => {
     expect(samePositions(tri, tri.map((p) => ({ ...p })))).toBe(true);
     expect(samePositions(tri, [...tri].reverse())).toBe(false); // ⇄ Flip
     expect(samePositions(tri, tri.slice(0, 2))).toBe(false);
+  });
+});
+
+describe('swallowStrayClicks', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  const press = (type: string, x: number, y: number) =>
+    Object.assign(new Event(type, { cancelable: true }), { clientX: x, clientY: y });
+  // What sits behind the swallower (React's root listener, the globe's canvas).
+  const setup = () => {
+    vi.useFakeTimers();
+    const target = new EventTarget();
+    const stop = swallowStrayClicks(target, { x: 100, y: 100 });
+    const reached: string[] = [];
+    for (const type of ['pointerdown', 'mousedown', 'click', 'dblclick', 'touchend']) {
+      target.addEventListener(type, () => reached.push(type));
+    }
+    const send = (e: Event) => { target.dispatchEvent(e); return e.defaultPrevented; };
+    return { stop, reached, send };
+  };
+
+  it("swallows the rest of a double-click on the finishing point, and nothing that isn't", () => {
+    const { reached, send } = setup();
+    expect(send(press('pointerdown', 103, 98))).toBe(true);
+    expect(send(press('mousedown', 103, 98))).toBe(true); // no focus for a field underneath
+    expect(send(press('click', 103, 98))).toBe(true);
+    expect(reached).toEqual([]);
+    // A deliberate click somewhere else goes through.
+    expect(send(press('click', 100 + STRAY_CLICK_PX + 5, 100))).toBe(false);
+    expect(reached).toEqual(['click']);
+  });
+
+  it('stops after the double-click, or after a moment, whichever is first', () => {
+    const a = setup();
+    expect(a.send(press('dblclick', 100, 100))).toBe(true);
+    expect(a.send(press('click', 100, 100))).toBe(false);
+
+    const b = setup();
+    vi.advanceTimersByTime(STRAY_CLICK_MS);
+    expect(b.send(press('click', 100, 100))).toBe(false);
+    expect(b.reached).toEqual(['click']);
+  });
+
+  it('reads a touch position from changedTouches', () => {
+    const { send } = setup();
+    const tap = Object.assign(new Event('touchend', { cancelable: true }), { changedTouches: [{ clientX: 101, clientY: 99 }] });
+    expect(send(tap)).toBe(true);
   });
 });

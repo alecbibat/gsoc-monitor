@@ -83,6 +83,10 @@ describe('crisis-templates routes (no database)', () => {
       .toBe('Invalid scope "nope"');
     expect((await call('DELETE', '/api/crisis-templates/intake-blocks', 'admin')).body.error)
       .toMatch(/scope query parameter is required/);
+    for (const path of ['checklist-blocks?scope=*|*&', 'intake-blocks?scope=*|*&', 'checklist-roles?']) {
+      expect(await call('DELETE', `/api/crisis-templates/${path}baseRevision=-1`, 'admin'))
+        .toEqual({ status: 400, body: { error: 'baseRevision must be the revision you are resetting (0 for a built-in default)' } });
+    }
   });
 });
 

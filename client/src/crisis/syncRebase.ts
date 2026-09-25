@@ -111,6 +111,92 @@ function mergeSets<P>(base: P[], local: P[], remote: P[]): P[] {
   return out;
 }
 
+// ── ICS role tree ────────────────────────────────────────────────────────────
+//
+// Roles merge one element at a time, which can't see the TREE they form. A
+// peer dragging R1 under R2 while this tab dragged R2 under R1 merges into a
+// cycle (R1 takes the peer's move, R2 keeps ours); a peer removing role P
+// while this tab moved C under P leaves C's parent missing. The chart draws
+// from the top-level roles down, so either way those roles and everything
+// under them vanish — for every viewer, once the rebased blob is saved.
+
+type RoleNode = { id: string; parentId?: string | null; isCommandStaff?: Json; order?: Json };
+
+/**
+ * The roles whose placement breaks the tree: a missing parent, or membership
+ * of a cycle. (Roles merely hanging below one are fine once it is fixed.)
+ */
+function brokenRoles(roles: readonly RoleNode[]): { dangling: Set<string>; cyclic: Set<string> } {
+  const byId = new Map(roles.map((r) => [r.id, r]));
+  const dangling = new Set<string>();
+  const cyclic = new Set<string>();
+  const done = new Set<string>();
+  for (const r of roles) {
+    if (r.parentId != null && !byId.has(r.parentId)) dangling.add(r.id);
+    const path: string[] = [];
+    const onPath = new Set<string>();
+    let cur: string | null | undefined = r.id;
+    while (cur != null && byId.has(cur) && !done.has(cur) && !onPath.has(cur)) {
+      path.push(cur);
+      onPath.add(cur);
+      cur = byId.get(cur)!.parentId;
+    }
+    if (cur != null && onPath.has(cur)) for (const id of path.slice(path.indexOf(cur))) cyclic.add(id);
+    for (const id of path) done.add(id);
+  }
+  return { dangling, cyclic };
+}
+
+/**
+ * Make the merged role list a tree again. A role that breaks it gets its
+ * placement (parent, command-staff row, order) back from the peer's copy — the
+ * peer's tree is consistent, and two roles can only form a loop if at least
+ * one of them moved here, so this undoes the local side of the conflict. A
+ * role the peer has no copy of (added here), or that is already placed as the
+ * peer placed it, goes under its nearest ancestor still on the chart (by the
+ * shared base), else to the top level.
+ */
+function repairRoleTree<R extends RoleNode>(base: readonly R[], remote: readonly R[], merged: R[]): R[] {
+  const baseById = new Map(base.map((r) => [r.id, r]));
+  const remoteById = new Map(remote.map((r) => [r.id, r]));
+  const place = (r: R, parentId: string | null, from: RoleNode = r): R =>
+    ({ ...r, parentId, isCommandStaff: parentId === null ? false : from.isCommandStaff, order: from.order });
+  const peerPlaced = (r: R) => {
+    const peer = remoteById.get(r.id);
+    return !peer || ((peer.parentId ?? null) === (r.parentId ?? null) &&
+      eq(peer.isCommandStaff, r.isCommandStaff) && eq(peer.order, r.order));
+  };
+  let out = merged;
+  // Every pass moves at least one role, and a role moves at most three times
+  // (the peer's placement, an ancestor, the top level) — the bound is never
+  // reached on real data; past it, the top level (which can't break the tree)
+  // is the last resort.
+  const passes = 3 * merged.length + 1;
+  for (let pass = 0; pass <= passes; pass++) {
+    const { dangling, cyclic } = brokenRoles(out);
+    const broken = (r: R) => dangling.has(r.id) || cyclic.has(r.id);
+    if (dangling.size === 0 && cyclic.size === 0) return out;
+    if (pass === passes) return out.map((r) => (broken(r) ? place(r, null) : r));
+    // First undo the local side: back to the peer's placement.
+    if (out.some((r) => broken(r) && !peerPlaced(r))) {
+      out = out.map((r) => (broken(r) && !peerPlaced(r) ? place(r, remoteById.get(r.id)!.parentId ?? null, remoteById.get(r.id)) : r));
+      continue;
+    }
+    // Still broken as the peer has it (or added here): a missing parent's
+    // nearest surviving ancestor; a loop (corrupt data) is cut at one role.
+    const ids = new Set(out.map((r) => r.id));
+    const cut = [...cyclic][0];
+    out = out.map((r) => {
+      if (r.id === cut) return place(r, null);
+      if (!dangling.has(r.id)) return r;
+      let anc = r.parentId ?? null;
+      for (let i = 0; anc !== null && !ids.has(anc) && i <= base.length; i++) anc = baseById.get(anc)?.parentId ?? null;
+      return place(r, anc !== null && ids.has(anc) ? anc : null);
+    });
+  }
+  return out;
+}
+
 /**
  * Rebase this tab's unsaved edit (`local`, diffed against `base`, the server
  * state it started from) onto the server's newer `remote`. Keys in `exclude`
@@ -123,10 +209,19 @@ export function rebaseIncident<T extends object>(
   remote: T,
   exclude: readonly string[] = []
 ): T {
-  return mergeObjects(
+  const out = mergeObjects(
     base as Record<string, Json>,
     local as Record<string, Json>,
     remote as Record<string, Json>,
     new Set(exclude)
-  ) as T;
+  );
+  // Roles taken from one side as they are form that side's tree; only a
+  // merge of both can break it.
+  const b = (base as Record<string, Json>).roles;
+  const r = (remote as Record<string, Json>).roles;
+  const m = out.roles;
+  if (m !== r && isKeyedArray(m) && isKeyedArray(r)) {
+    out.roles = repairRoleTree(isKeyedArray(b) ? b : [], r, m);
+  }
+  return out as T;
 }

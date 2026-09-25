@@ -41,6 +41,26 @@ const pending = new Map<string, { timer: ReturnType<typeof setTimeout>; incident
 const blobInflight = new Map<string, number>();
 let resyncTouched: Set<string> | null = null;
 
+// Creates (POSTs) outstanding per id. A PUT must not overtake one: it would
+// find no row and answer 404, which reads as a teammate's delete.
+const createInflight = new Map<string, number>();
+
+// Ids the server is known to have: seen in a GET or an SSE upsert, or saved
+// by a push. Only for these does a 404 (or absence from a resync) mean a
+// teammate deleted the incident — a create that never landed is re-sent.
+const confirmed = new Set<string>();
+
+// Pushes per id, numbered: only the latest one may settle the incident's
+// save state. An older push that lands after a newer one failed must not
+// clear that failure (and report "Saved" for an edit the server never got).
+const pushSeq = new Map<string, number>();
+
+// The last failed push per id: the copy it sent (which never landed) and the
+// server state that copy was made on. A push queued behind it took that copy
+// as its base; if it fails too, its edit really sits on the older base.
+// Cleared once the server's own copy arrives (a newer, real baseline).
+const lastFailed = new Map<string, { sent: string; base: string | undefined }>();
+
 // A failed push rolls its optimistic baseline back (serverState.delete) so the
 // edit is re-sent. The baseline it had BEFORE that push is kept here: it is
 // the server state the unsaved edit was made against, which a peer's upsert
@@ -100,16 +120,29 @@ function dropDeletedIncident(id: string): void {
   if (p) { clearTimeout(p.timer); pending.delete(id); }
   serverState.delete(id);
   failedBase.delete(id);
+  lastFailed.delete(id);
+  confirmed.delete(id);
   clearRetry(id);
   logSync.dropIncident(id);
   useCrisisStore.getState().applyRemoteDelete(id);
 }
 
-function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
-  const url = method === 'POST' ? '/api/incidents' : `/api/incidents/${incident.id}`;
+const bump = (m: Map<string, number>, id: string, by: 1 | -1) => {
+  const n = (m.get(id) ?? 0) + by;
+  if (n > 0) m.set(id, n); else m.delete(id);
+};
+
+/** `keepalive`: the request may outlive the page (tab-close flush; ≤ 64 KiB). */
+function pushIncident(incident: Incident, method: 'POST' | 'PUT', keepalive = false) {
+  const id = incident.id;
+  const url = method === 'POST' ? '/api/incidents' : `/api/incidents/${id}`;
   const isCreate = method === 'POST';
-  const priorBase = serverState.get(incident.id) ?? failedBase.get(incident.id);
-  serverState.set(incident.id, serverCanon(incident)); // optimistic baseline
+  const priorBase = serverState.get(id) ?? failedBase.get(id);
+  const sent = serverCanon(incident);
+  serverState.set(id, sent); // optimistic baseline
+  const seq = (pushSeq.get(id) ?? 0) + 1;
+  pushSeq.set(id, seq);
+  const isLatest = () => pushSeq.get(id) === seq;
   setSync('saving');
   // Updates omit the action log and the checklist map: the server preserves
   // its own copies on blob writes (they travel through their per-entry
@@ -117,10 +150,12 @@ function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
   // Creates keep them — the insert seeds the server with the client's
   // initial state.
   const body = isCreate ? incident : { ...incident, actionLog: undefined, checklists: undefined };
-  resyncTouched?.add(incident.id);
-  blobInflight.set(incident.id, (blobInflight.get(incident.id) ?? 0) + 1);
+  resyncTouched?.add(id);
+  bump(blobInflight, id, 1);
+  if (isCreate) bump(createInflight, id, 1);
   return fetch(url, {
     method,
+    keepalive,
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
     body: JSON.stringify(body),
@@ -128,6 +163,7 @@ function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
     .then(async (res) => {
       if (!res.ok) throw Object.assign(new Error(String(res.status)), { status: res.status });
       noteSaveStatus(res.status);
+      confirmed.add(id);
       if (isCreate) {
         // Baseline the log from the server's RESPONSE, not from what we sent:
         // if this POST hit the upsert path (retry after a lost response, or
@@ -142,12 +178,16 @@ function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
           /* body unavailable — the next SSE echo rebuilds the baseline */
         }
       }
-      failedBase.delete(incident.id);
-      clearRetry(incident.id);
+      // A newer push of this incident owns its save state: still in flight,
+      // or failed — and then its failure (and retry) must stand.
+      if (!isLatest()) return;
+      failedBase.delete(id);
+      lastFailed.delete(id);
+      clearRetry(id);
       // Only clear to "saved" if nothing newer is queued anywhere — and if
       // all that's left is a log write waiting on its retry, say so rather
       // than leaving "Saving…" up until that retry fires.
-      if (!pending.has(incident.id) && retries.size === 0) {
+      if (!pending.has(id) && retries.size === 0) {
         if (!logSync.hasPendingWork()) setSync('saved');
         else if (logSync.hasOnlyFailedWork()) setSync('error');
       }
@@ -157,51 +197,106 @@ function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
       // Signed out: the retry below keeps going, and succeeds once the
       // operator signs in again (any tab), but they have to be told.
       if (status === 401) noteSaveStatus(401);
-      if (method === 'PUT' && status === 404) {
+      if (method === 'PUT' && status === 404 && confirmed.has(id)) {
         // The row is gone: a teammate deleted the incident while this edit
         // was queued. Recreating it would undo their delete.
-        console.warn(`[incident-sync] ${incident.id} was deleted on the server; dropping the local copy`);
-        dropDeletedIncident(incident.id);
+        console.warn(`[incident-sync] ${id} was deleted on the server; dropping the local copy`);
+        dropDeletedIncident(id);
         if (allIdle()) setSync('idle');
+        return;
+      }
+      // What this push's edit was really made on: if the push it was queued
+      // behind failed as well, that one's copy never landed — its base did.
+      const lf = lastFailed.get(id);
+      const madeOn = lf && lf.sent === priorBase ? lf.base : priorBase;
+      lastFailed.set(id, { sent, base: madeOn });
+      if (!isLatest()) {
+        // A newer push carries this one's edit too, and settles the save. If
+        // it already failed, it took this push's copy as its base — but that
+        // never landed either.
+        if (failedBase.get(id) === sent) {
+          if (madeOn !== undefined) failedBase.set(id, madeOn); else failedBase.delete(id);
+        }
+        console.warn('[incident-sync] push failed (superseded):', e);
+        return;
+      }
+      if (method === 'PUT' && status === 404) {
+        // Never confirmed by the server: a create that didn't land, not a
+        // delete. Send it again as a create (the retry re-POSTs without a
+        // failed base).
+        serverState.delete(id);
+        failedBase.delete(id);
+        setSync('error');
+        scheduleRetry(id);
+        console.warn(`[incident-sync] ${id} is not on the server yet; re-creating it`);
         return;
       }
       // Roll the baseline back so the push is re-attempted (by the retry
       // timer, or sooner by the next edit), remembering what the edit was
       // made against so a peer's change meanwhile rebases instead of winning.
-      serverState.delete(incident.id);
-      if (priorBase !== undefined) failedBase.set(incident.id, priorBase);
+      // A peer's upsert that landed while this push was out moved the
+      // baseline on: that is the server state the edit now sits on, not the
+      // one it was sent against.
+      const cur = serverState.get(id);
+      const base = cur !== undefined && cur !== sent ? cur : madeOn;
+      serverState.delete(id);
+      if (base !== undefined) failedBase.set(id, base);
       setSync('error');
       // A body the server rejects as malformed or too large fails the same
       // way every time; retrying it on a timer would only spin. The next edit
       // still re-sends it.
-      if (status !== 400 && status !== 413) scheduleRetry(incident.id);
+      if (status !== 400 && status !== 413) scheduleRetry(id);
       console.warn('[incident-sync] push failed:', e);
     })
     .finally(() => {
-      const n = (blobInflight.get(incident.id) ?? 1) - 1;
-      if (n > 0) blobInflight.set(incident.id, n); else blobInflight.delete(incident.id);
+      bump(blobInflight, id, -1);
+      if (isCreate) bump(createInflight, id, -1);
     });
 }
 
 function scheduleSync(incident: Incident) {
-  const existing = pending.get(incident.id);
+  const id = incident.id;
+  const existing = pending.get(id);
   if (existing) clearTimeout(existing.timer);
   setSync('saving');
   const timer = setTimeout(() => {
-    pending.delete(incident.id);
+    // Its create is still on the way: a PUT could overtake it, find no row
+    // and 404. Wait for the create to settle.
+    if (createInflight.has(id)) { scheduleSync(incident); return; }
+    pending.delete(id);
+    // The create failed meanwhile: never confirmed, so this is still a
+    // create — its retry (or the next edit) re-POSTs the latest copy.
+    if (!serverState.has(id) && !confirmed.has(id) && !failedBase.has(id)) return;
     pushIncident(incident, 'PUT');
   }, 1500);
-  pending.set(incident.id, { timer, incident });
+  pending.set(id, { timer, incident });
+}
+
+/** The store watcher's call for one incident: send it if it differs from the server's copy. */
+function syncChanged(inc: Incident): void {
+  const canon = serverCanon(inc);
+  const known = serverState.get(inc.id);
+  if (known === canon) return; // matches server / just applied from a peer
+  if (known === undefined && !failedBase.has(inc.id)) {
+    pushIncident(inc, 'POST'); // newly created (or a create that never landed)
+  } else {
+    // Changed — debounce the PUT. That includes a confirmed incident whose
+    // last save failed: it must go as a PUT, so one a teammate deleted
+    // meanwhile answers 404 instead of being recreated by the POST's upsert.
+    scheduleSync(inc);
+  }
 }
 
 // Best-effort flush of unsaved edits when the tab is hidden or closing. Uses
 // sendBeacon (a background POST that still carries the auth cookie); the POST
-// route upserts, so it stands in for the pending PUT.
+// route upserts, so it stands in for the pending PUT — except for a confirmed
+// incident whose save failed, which goes as a keepalive PUT (below).
 function flushPending() {
   // The beacon's upsert keeps the server's action log and checklist map, so
   // they are left out — a long incident's log alone overruns the ~64 KiB
-  // beacon quota. The exception is a create still in flight: if that POST
-  // never lands, the beacon's INSERT is what seeds the row.
+  // beacon quota. The exception is a create the server hasn't confirmed (in
+  // flight, or failed): if that POST never lands, the beacon's INSERT is what
+  // seeds the row.
   const beaconBody = (incident: Incident, isNew: boolean) =>
     JSON.stringify(isNew ? incident : { ...incident, actionLog: undefined, checklists: undefined });
   const beacon = (body: string) => {
@@ -212,10 +307,18 @@ function flushPending() {
     }
   };
 
+  // A confirmed incident whose last save failed goes as a PUT, like its
+  // retry — never as the beacon's upsert: a teammate may have deleted it
+  // meanwhile (unseen while this tab was offline), and an upsert would bring
+  // it back. keepalive lets the PUT outlive the page.
+  const failedConfirmed = (id: string) => !serverState.has(id) && failedBase.has(id);
+
   for (const [id, { timer, incident }] of [...pending]) {
     clearTimeout(timer);
     pending.delete(id); // before pushIncident, so its "saved" check sees an empty queue
-    if (beacon(beaconBody(incident, blobInflight.has(id)))) {
+    if (failedConfirmed(id)) {
+      void pushIncident(incident, 'PUT', true);
+    } else if (beacon(beaconBody(incident, !confirmed.has(id)))) {
       resyncTouched?.add(id);
       serverState.set(id, serverCanon(incident));
     } else {
@@ -231,9 +334,151 @@ function flushPending() {
   for (const id of retries.keys()) {
     if (serverState.has(id) || blobInflight.has(id)) continue;
     const latest = useCrisisStore.getState().incidents.find((i) => i.id === id);
-    if (latest) beacon(beaconBody(latest, !failedBase.has(id)));
+    if (!latest) continue;
+    if (failedConfirmed(id)) void pushIncident(latest, 'PUT', true);
+    else beacon(beaconBody(latest, true)); // a create that never landed
   }
 }
+
+/**
+ * Apply a server copy of an incident (a peer's SSE upsert, our own echo, or a
+ * resync row) to the store, keeping whatever this tab hasn't saved yet.
+ */
+function applyUpsert(inc: Incident): void {
+  confirmed.add(inc.id);
+  const remoteLog = Array.isArray(inc.actionLog) ? inc.actionLog : [];
+  const local = useCrisisStore.getState().incidents.find((i) => i.id === inc.id);
+  // The server log wins except for local entries whose push is still in
+  // flight — those keep their local version until their own echo lands.
+  const keep = logSync.keepLocalEntryIds();
+  const mergedLog = mergeActionLogs(remoteLog, local?.actionLog ?? [], keep);
+
+  // Checklists reconcile the same way: server map wins, items with an
+  // in-flight toggle keep their local state. This also catches upserts
+  // where ONLY the checklist changed (a share-link viewer checking an
+  // item) — the blob canon excludes the map, so blobSame stays true.
+  const rawChk = (inc as { checklists?: unknown }).checklists;
+  const remoteChk: ChecklistStateMap =
+    rawChk && typeof rawChk === 'object' && !Array.isArray(rawChk)
+      ? (rawChk as ChecklistStateMap)
+      : {};
+  const mergedChk = mergeChecklists(remoteChk, local?.checklists ?? {}, inflightChecklistIds(inc.id));
+  const chkSame =
+    local !== undefined && stableStringify(mergedChk) === stableStringify(local.checklists ?? {});
+
+  const canon = serverCanon(inc);
+  const localLog = local?.actionLog;
+  // Element-wise compare = identical to comparing the whole-array canon strings
+  // (canon strings are valid JSON values), but reuses the per-entry cache.
+  const logSame =
+    local !== undefined &&
+    Array.isArray(localLog) &&
+    mergedLog.length === localLog.length &&
+    mergedLog.every((e, i) => entryCanon(e) === entryCanon(localLog[i]));
+
+  // A blob edit of ours that the server doesn't have yet — debounced, or
+  // failed and awaiting its retry. Replacing the incident with the peer's
+  // copy would lose it, and ignoring the peer (what this used to do) let
+  // our eventual whole-blob PUT revert whatever they changed. Rebase: keep
+  // their changes and re-apply only ours (syncRebase.ts); the watcher then
+  // re-sends the rebased incident against the new baseline. A queued edit is
+  // based on the current baseline — or, once a failed push has rolled that
+  // back, on the failed push's base.
+  const p = pending.get(inc.id);
+  const unsavedBase = p
+    ? serverState.get(inc.id) ?? failedBase.get(inc.id)
+    : serverState.has(inc.id) ? undefined : failedBase.get(inc.id);
+  if (local && unsavedBase !== undefined) {
+    if (canon === unsavedBase && logSame && chkSame) return; // nothing new from peers
+    const blob = canon === unsavedBase
+      ? local
+      : rebaseIncident(JSON.parse(unsavedBase) as object, local, normalizeIncidentFields(inc), SEPARATELY_SYNCED);
+    serverState.set(inc.id, canon);
+    // A failed save is now re-sent by the watcher (below) against the new
+    // baseline; its own retry would only duplicate that.
+    failedBase.delete(inc.id);
+    lastFailed.delete(inc.id);
+    clearRetry(inc.id);
+    if (serverCanon(blob) === canon) {
+      // The peer's copy already contains our edit (e.g. our own save's
+      // echo): nothing left to send, so drop the queued write — pushing
+      // its older snapshot would now revert the peer.
+      if (p) { clearTimeout(p.timer); pending.delete(inc.id); }
+      if (pending.size === 0 && retries.size === 0 && !logSync.hasPendingWork()) setSync('saved');
+    }
+    logSync.applyRemoteLog(inc.id, remoteLog, keep);
+    // Any remaining difference from `canon` re-schedules the PUT (watcher).
+    useCrisisStore.getState().applyRemoteUpsert({ ...blob, actionLog: mergedLog, checklists: mergedChk });
+    return;
+  }
+
+  const blobSame = serverState.get(inc.id) === canon;
+  if (blobSame && logSame && chkSame) {
+    // Our own echo. After a tab-close beacon (which reports nothing back)
+    // this broadcast is the server's confirmation that the write landed.
+    if (useCrisisStore.getState().syncState === 'saving' && allIdle()) setSync('saved');
+    return;
+  }
+
+  serverState.set(inc.id, canon);
+  lastFailed.delete(inc.id);
+  // The store takes the peer's copy whole: a queued snapshot from before
+  // it must not be PUT afterwards and revert it.
+  if (p) { clearTimeout(p.timer); pending.delete(inc.id); }
+  logSync.applyRemoteLog(inc.id, remoteLog, keep);
+  useCrisisStore.getState().applyRemoteUpsert({ ...inc, actionLog: mergedLog, checklists: mergedChk });
+}
+
+/**
+ * Fold a reconnect's GET snapshot into the store (see resync in the stream
+ * effect). `skip`: ids whose snapshot may predate what this tab already has.
+ * `drop`: forget an incident the server no longer has.
+ */
+function applyResyncSnapshot(incidents: Incident[], skip: (id: string) => boolean, drop: (id: string) => void): void {
+  // A local incident with no baseline and no failed base is a create whose
+  // push failed (rolled back); its retry re-creates it, so the snapshot must
+  // not revert it.
+  const unconfirmed = new Set(
+    useCrisisStore.getState().incidents
+      .filter((i) => !serverState.has(i.id) && !failedBase.has(i.id))
+      .map((i) => i.id)
+  );
+  // Log work that failed offline is rolled back and only re-sent when
+  // logSync's backoff timer fires, so the merge below would drop it. Re-queue
+  // it now (as the watcher would) so it is in keepLocalEntryIds() and
+  // survives the merge; appends are prepended, where the server will put
+  // them too. The incident is still applied rather than skipped: a retried
+  // append the server already has is a no-op with no echo, which would leave
+  // the stale blob in place.
+  logSync.syncLogsFromStore(useCrisisStore.getState().incidents);
+  const seen = new Set<string>();
+  const rows = incidents.filter((inc) => {
+    if (!inc?.id) return false;
+    seen.add(inc.id);
+    return !skip(inc.id) && !unconfirmed.has(inc.id);
+  });
+  // Unsaved edits first: applying any other incident fires the store
+  // watcher, which would queue this one's re-send before its rebase.
+  const unsaved = (inc: Incident) => failedBase.has(inc.id) || pending.has(inc.id);
+  for (const inc of [...rows.filter(unsaved), ...rows.filter((inc) => !unsaved(inc))]) applyUpsert(inc);
+  // Missing from the list: deleted by a teammate — if the server ever had
+  // it. A create that never landed is not a delete.
+  for (const id of [...serverState.keys()]) {
+    if (!seen.has(id) && !skip(id) && confirmed.has(id)) drop(id);
+  }
+  // A confirmed incident whose last save failed has no baseline, so the loop
+  // above can't see it; if the server no longer has it, a teammate deleted it
+  // while this tab was offline.
+  for (const id of [...failedBase.keys()]) {
+    if (!seen.has(id) && !skip(id)) drop(id);
+  }
+}
+
+/** The sync engine's internals, exported for IncidentSync.test.ts only. */
+export const __test = {
+  pushIncident, scheduleSync, syncChanged, applyUpsert, applyResyncSnapshot, flushPending,
+  serverState, failedBase, confirmed, pending, retries,
+};
 
 // Pending auto-publish per incident id. Deliberately NOT cancelled when the
 // operator navigates away: the last edit before "back to list" must still
@@ -364,8 +609,9 @@ export function IncidentSync() {
         const merged: Incident[] = [];
         for (const inc of incidents) {
           const mine = byId.get(inc.id);
-          if (mine) { merged.push(mine); byId.delete(inc.id); continue; }
+          if (mine) { confirmed.add(inc.id); merged.push(mine); byId.delete(inc.id); continue; }
           if (deleted.has(inc.id)) continue;
+          confirmed.add(inc.id);
           serverState.set(inc.id, serverCanon(inc));
           logSync.seedBaseline(inc);
           merged.push(inc);
@@ -401,16 +647,7 @@ export function IncidentSync() {
 
       const nextIds = new Set(next.map((i) => i.id));
 
-      for (const inc of next) {
-        const canon = serverCanon(inc);
-        const known = serverState.get(inc.id);
-        if (known === canon) continue; // matches server / just applied from a peer
-        if (known === undefined) {
-          pushIncident(inc, 'POST'); // newly created
-        } else {
-          scheduleSync(inc); // changed — debounce the PUT
-        }
-      }
+      for (const inc of next) syncChanged(inc);
 
       // Log changes sync separately, per entry, through the append endpoints.
       logSync.syncLogsFromStore(next);
@@ -420,6 +657,7 @@ export function IncidentSync() {
           resyncTouched?.add(id);
           serverState.delete(id);
           failedBase.delete(id);
+          confirmed.delete(id);
           clearRetry(id);
           logSync.dropIncident(id);
           const p = pending.get(id);
@@ -434,6 +672,7 @@ export function IncidentSync() {
               if (res.ok || res.status === 404 || !removed) return;
               console.warn(`[incident-sync] delete of ${id} failed (${res.status}); restoring it`);
               serverState.set(id, serverCanon(removed));
+              confirmed.add(id);
               logSync.seedBaseline(removed);
               if (!useCrisisStore.getState().incidents.some((i) => i.id === id)) {
                 useCrisisStore.getState().applyRemoteUpsert(removed);
@@ -459,81 +698,6 @@ export function IncidentSync() {
     let resyncRetry: ReturnType<typeof setTimeout> | undefined;
     let resyncDelay = 5_000;
 
-    const applyUpsert = (inc: Incident) => {
-      const remoteLog = Array.isArray(inc.actionLog) ? inc.actionLog : [];
-      const local = useCrisisStore.getState().incidents.find((i) => i.id === inc.id);
-      // The server log wins except for local entries whose push is still in
-      // flight — those keep their local version until their own echo lands.
-      const keep = logSync.keepLocalEntryIds();
-      const mergedLog = mergeActionLogs(remoteLog, local?.actionLog ?? [], keep);
-
-      // Checklists reconcile the same way: server map wins, items with an
-      // in-flight toggle keep their local state. This also catches upserts
-      // where ONLY the checklist changed (a share-link viewer checking an
-      // item) — the blob canon excludes the map, so blobSame stays true.
-      const rawChk = (inc as { checklists?: unknown }).checklists;
-      const remoteChk: ChecklistStateMap =
-        rawChk && typeof rawChk === 'object' && !Array.isArray(rawChk)
-          ? (rawChk as ChecklistStateMap)
-          : {};
-      const mergedChk = mergeChecklists(remoteChk, local?.checklists ?? {}, inflightChecklistIds(inc.id));
-      const chkSame =
-        local !== undefined && stableStringify(mergedChk) === stableStringify(local.checklists ?? {});
-
-      const canon = serverCanon(inc);
-      const localLog = local?.actionLog;
-      // Element-wise compare = identical to comparing the whole-array canon strings
-      // (canon strings are valid JSON values), but reuses the per-entry cache.
-      const logSame =
-        local !== undefined &&
-        Array.isArray(localLog) &&
-        mergedLog.length === localLog.length &&
-        mergedLog.every((e, i) => entryCanon(e) === entryCanon(localLog[i]));
-
-      // A blob edit of ours that the server doesn't have yet — debounced, or
-      // failed and awaiting its retry. Replacing the incident with the peer's
-      // copy would lose it, and ignoring the peer (what this used to do) let
-      // our eventual whole-blob PUT revert whatever they changed. Rebase: keep
-      // their changes and re-apply only ours (syncRebase.ts); the watcher then
-      // re-sends the rebased incident against the new baseline.
-      const p = pending.get(inc.id);
-      const unsavedBase = p ? serverState.get(inc.id) : serverState.has(inc.id) ? undefined : failedBase.get(inc.id);
-      if (local && unsavedBase !== undefined) {
-        if (canon === unsavedBase && logSame && chkSame) return; // nothing new from peers
-        const blob = canon === unsavedBase
-          ? local
-          : rebaseIncident(JSON.parse(unsavedBase) as object, local, normalizeIncidentFields(inc), SEPARATELY_SYNCED);
-        serverState.set(inc.id, canon);
-        // A failed save is now re-sent by the watcher (below) against the new
-        // baseline; its own retry would only duplicate that.
-        failedBase.delete(inc.id);
-        clearRetry(inc.id);
-        if (serverCanon(blob) === canon) {
-          // The peer's copy already contains our edit (e.g. our own save's
-          // echo): nothing left to send, so drop the queued write — pushing
-          // its older snapshot would now revert the peer.
-          if (p) { clearTimeout(p.timer); pending.delete(inc.id); }
-          if (pending.size === 0 && retries.size === 0 && !logSync.hasPendingWork()) setSync('saved');
-        }
-        logSync.applyRemoteLog(inc.id, remoteLog, keep);
-        // Any remaining difference from `canon` re-schedules the PUT (watcher).
-        useCrisisStore.getState().applyRemoteUpsert({ ...blob, actionLog: mergedLog, checklists: mergedChk });
-        return;
-      }
-
-      const blobSame = serverState.get(inc.id) === canon;
-      if (blobSame && logSame && chkSame) {
-        // Our own echo. After a tab-close beacon (which reports nothing back)
-        // this broadcast is the server's confirmation that the write landed.
-        if (useCrisisStore.getState().syncState === 'saving' && allIdle()) setSync('saved');
-        return;
-      }
-
-      serverState.set(inc.id, canon);
-      logSync.applyRemoteLog(inc.id, remoteLog, keep);
-      useCrisisStore.getState().applyRemoteUpsert({ ...inc, actionLog: mergedLog, checklists: mergedChk });
-    };
-
     const applyDelete = (id: string) => {
       if (!id) return;
       deletedDuringLoad.current?.add(id);
@@ -546,7 +710,10 @@ export function IncidentSync() {
     // every reconnect re-reads the list and folds it in through the same
     // merge rules. Skips any incident whose snapshot could predate what we
     // already have: touched by an SSE event or local write during the GET,
-    // or with a blob write in flight when it started.
+    // or with a blob write in flight when it started. An unsaved edit (queued,
+    // or failed and awaiting its retry) is NOT skipped: applyUpsert rebases it
+    // onto the snapshot, so its re-send can't revert what peers changed while
+    // this tab was offline.
     const resync = () => {
       clearTimeout(resyncRetry); // a new resync supersedes a scheduled retry
       resyncCtrl?.abort();
@@ -555,8 +722,7 @@ export function IncidentSync() {
       const touched = new Set<string>();
       resyncTouched = touched;
       const busyAtStart = new Set(blobInflight.keys());
-      const skip = (id: string) =>
-        touched.has(id) || busyAtStart.has(id) || pending.has(id) || blobInflight.has(id);
+      const skip = (id: string) => touched.has(id) || busyAtStart.has(id) || blobInflight.has(id);
       let fetched = false; // past the GET: a later throw is bad data, not an outage
       fetch('/api/incidents', { credentials: 'include', signal: ctrl.signal })
         .then((r) => {
@@ -567,35 +733,7 @@ export function IncidentSync() {
           if (ctrl.signal.aborted || disposed) return;
           if (!Array.isArray(incidents)) throw new Error('unexpected body');
           fetched = true;
-          // A local incident with no baseline holds an edit whose push failed
-          // (rolled back); the watcher re-pushes it on the next change, so the
-          // snapshot must not revert it.
-          const unconfirmed = new Set(
-            useCrisisStore.getState().incidents.filter((i) => !serverState.has(i.id)).map((i) => i.id)
-          );
-          // Same for log work: an append or edit that failed offline is rolled
-          // back and only re-sent when logSync's backoff timer fires, so the merge below
-          // would drop it. Re-queue it now (as the watcher would) so it is in
-          // keepLocalEntryIds() and survives the merge; appends are prepended,
-          // where the server will put them too. The incident is still applied
-          // rather than skipped: a retried append the server already has is a
-          // no-op with no echo, which would leave the stale blob in place.
-          logSync.syncLogsFromStore(useCrisisStore.getState().incidents);
-          const seen = new Set<string>();
-          for (const inc of incidents) {
-            if (!inc?.id) continue;
-            seen.add(inc.id);
-            if (!skip(inc.id) && !unconfirmed.has(inc.id)) applyUpsert(inc);
-          }
-          for (const id of [...serverState.keys()]) {
-            if (!seen.has(id) && !skip(id)) applyDelete(id);
-          }
-          // A confirmed incident whose last save failed has no baseline, so
-          // the loop above can't see it; if the server no longer has it, a
-          // teammate deleted it while this tab was offline.
-          for (const id of [...failedBase.keys()]) {
-            if (!seen.has(id) && !skip(id)) applyDelete(id);
-          }
+          applyResyncSnapshot(incidents, skip, applyDelete);
           resyncDelay = 5_000;
         })
         .catch((e) => {

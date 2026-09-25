@@ -10,7 +10,7 @@ import { applyChecklistToggle, cleanActor, invalidToggleReason, type ChecklistIt
 import { broadcastIncident } from './incidentBus';
 import { findIapForScope, sendPdf } from './iap';
 import { loadEffectiveConfig } from '../crisisTemplates/store';
-import { shareTemplatesConfig } from '../crisisTemplates/effective';
+import { checklistItemApplies, shareTemplatesConfig } from '../crisisTemplates/effective';
 
 const router = Router();
 
@@ -418,6 +418,16 @@ router.post('/share/:token/checklist/:itemId', wrap(async (req: Request, res: Re
     // Pre-W4 links were published without an incident id — there is no parent
     // record to write to, so the checklist stays read-only on those.
     res.status(409).json({ error: 'Checklist is read-only on this link' }); return;
+  }
+  // Only the lines the share page shows as live may be toggled from it (its
+  // retired items are read-only). Unlike the signed-in toggle, an id outside
+  // the blocks that apply to the snapshot's type + property is refused: the
+  // templates route below returns the text of any stored id another scope
+  // owns, so it would read out that scope's checklist and plant a fake entry
+  // in the incident.
+  const { incidentType, propertyId } = snapshotScope(row.snapshot);
+  if (!checklistItemApplies(await loadEffectiveConfig(), incidentType, propertyId, itemId)) {
+    res.status(409).json({ error: 'That item is not on this incident\'s current checklist — reload to see the latest' }); return;
   }
 
   const body = req.body as { checked: boolean; by?: unknown };

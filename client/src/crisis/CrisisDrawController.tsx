@@ -8,9 +8,11 @@ import { usePickChooserStore } from '../panels/pickChooserStore';
 import { useMeasureStore } from '../measure/measureStore';
 import { useFuelZoneStore } from '../fuelzone/fuelZoneStore';
 import { addLayerEntities, hideLayerEntity } from './CrisisMapLayer';
-import { classifyDrawClick, discardPrompt, drawKeyAction, minPoints, samePositions } from './drawInput';
+import { classifyDrawClick, discardPrompt, drawKeyAction, minPoints, samePositions, swallowStrayClicks } from './drawInput';
 
 const PREVIEW = Cesium.Color.fromCssColorString('#3ddcff');
+// The preview's rubber band from the last vertex to the cursor.
+const RUBBER_ID = 'crisis-draw-rubber';
 
 function pickLngLat(viewer: Cesium.Viewer, pos: Cesium.Cartesian2): DrawLayerPoint | null {
   const cart = viewer.camera.pickEllipsoid(pos, viewer.scene.globe.ellipsoid);
@@ -42,8 +44,12 @@ function findLayer(layerId: string | null): DrawLayer | undefined {
 //    (its name label may miss the snapshot — glyphs load asynchronously), and
 //    the preview's translucent cursor marker (at the last hover position, not
 //    the click) must not stand in for it;
-//  - the rubber band to the cursor is gone by the time Finish is clicked
-//    (pointerleave clears it — see the handler effect).
+//  - the rubber band to the cursor is not part of the shape, and the pointer
+//    is still on the map when Enter finishes: it is removed for the capture.
+//    It is its own entity with its own (dashed) material, so it sits alone
+//    in its primitive batch — removing it takes that primitive down in this
+//    very render, even mid-rebuild, and leaves the shape's primitives as
+//    they are (they only rebuild when a vertex changes).
 function captureThumbnail(
   viewer: Cesium.Viewer,
   layer: DrawLayer | undefined,
@@ -52,6 +58,7 @@ function captureThumbnail(
 ): string | undefined {
   const restore = layer ? hideLayerEntity(viewer, layer.id) : () => {};
   try {
+    preview?.entities.removeById(RUBBER_ID); // drawing ends with this capture
     if (preview && layer?.geometry === 'point') {
       preview.entities.removeAll();
       addLayerEntities(preview, { ...layer, positions: pts });
@@ -177,17 +184,25 @@ export function CrisisDrawController() {
     const toWindow = (p: DrawLayerPoint) =>
       Cesium.SceneTransforms.worldToWindowCoordinates(v.scene, Cesium.Cartesian3.fromDegrees(p.lon, p.lat));
 
+    // A click that finishes hands the screen straight back to the incident
+    // workspace (endDrawing): the rest of a double-click must not land on it.
+    const finishByClick = (pts: DrawLayerPoint[], at: Cesium.Cartesian2) => {
+      const r = v.scene.canvas.getBoundingClientRect();
+      swallowStrayClicks(window, { x: r.left + at.x, y: r.top + at.y });
+      commit(pts);
+    };
+
     handler.setInputAction((e: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
       if (geomRef.current === 'point') {
         const p = pickLngLat(v, e.position);
-        if (p) commit([p]); // single click places the marker and finishes
+        if (p) finishByClick([p], e.position); // single click places the marker and finishes
         return;
       }
       // pointsRef is current here: React flushes the previous click's update
       // (a discrete event) before the next click's task runs.
       const pts = pointsRef.current;
       const action = classifyDrawClick(geomRef.current, pts, e.position, toWindow);
-      if (action === 'close') { commit(pts); return; }
+      if (action === 'close') { finishByClick(pts, e.position); return; }
       if (action === 'ignore') return;
       const p = pickLngLat(v, e.position);
       if (p) setPoints((prev) => [...prev, p]);
@@ -205,7 +220,7 @@ export function CrisisDrawController() {
     }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
 
     // The cursor leaving the map — typically for the toolbar's Finish button —
-    // drops the rubber band, so it isn't in the thumbnail captured on Finish.
+    // drops the rubber band rather than leave it stretched to the map's edge.
     const onLeave = () => setHoverPt(null);
     v.scene.canvas.addEventListener('pointerleave', onLeave);
 
@@ -219,13 +234,14 @@ export function CrisisDrawController() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewer, activeId]);
 
-  // Draw preview geometry
+  // Draw preview geometry: the shape as placed so far. Built from the vertices
+  // alone, so moving the pointer never rebuilds it (polyline and polygon
+  // geometry is built asynchronously — a thumbnail captured mid-rebuild would
+  // miss it).
   useEffect(() => {
     const ds = dsRef.current;
     if (!ds || !viewer) return;
-    ds.entities.removeAll();
-
-    const chain = hoverPt ? [...points, hoverPt] : points;
+    ds.entities.removeAll(); // the rubber band too: its effect below re-adds it
 
     points.forEach((p, i) => {
       ds.entities.add({
@@ -243,20 +259,8 @@ export function CrisisDrawController() {
       });
     });
 
-    // hover marker for point mode
-    if (geometry === 'point' && hoverPt) {
-      ds.entities.add({
-        position: Cesium.Cartesian3.fromDegrees(hoverPt.lon, hoverPt.lat),
-        point: {
-          pixelSize: 12, color: PREVIEW.withAlpha(0.6),
-          outlineColor: Cesium.Color.WHITE, outlineWidth: 1.5,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        },
-      });
-    }
-
-    if (geometry !== 'point' && chain.length >= 2) {
-      const linePos = chain.map((p) => Cesium.Cartesian3.fromDegrees(p.lon, p.lat));
+    if (geometry !== 'point' && points.length >= 2) {
+      const linePos = points.map((p) => Cesium.Cartesian3.fromDegrees(p.lon, p.lat));
       ds.entities.add({
         polyline: {
           positions: geometry === 'polygon' ? [...linePos, linePos[0]] : linePos,
@@ -270,10 +274,10 @@ export function CrisisDrawController() {
           arcType: Cesium.ArcType.GEODESIC,
         },
       });
-      if (geometry === 'polygon' && chain.length >= 3) {
+      if (geometry === 'polygon' && points.length >= 3) {
         ds.entities.add({
           polygon: {
-            hierarchy: new Cesium.PolygonHierarchy(chain.map((p) => Cesium.Cartesian3.fromDegrees(p.lon, p.lat))),
+            hierarchy: new Cesium.PolygonHierarchy(linePos),
             material: PREVIEW.withAlpha(0.1),
             height: 0,
             arcType: Cesium.ArcType.GEODESIC,
@@ -282,6 +286,41 @@ export function CrisisDrawController() {
       }
     }
 
+    viewer.scene.requestRender();
+  }, [viewer, points, geometry, directional]);
+
+  // The part that follows the pointer: the marker to be placed, or the rubber
+  // band from the last vertex (and back to the first, for an area) to the
+  // cursor. Dashed, and a separate entity, so the thumbnail capture can take
+  // it out (see captureThumbnail).
+  useEffect(() => {
+    const ds = dsRef.current;
+    if (!ds || !viewer) return;
+    ds.entities.removeById(RUBBER_ID);
+    if (hoverPt && geometry === 'point') {
+      ds.entities.add({
+        id: RUBBER_ID,
+        position: Cesium.Cartesian3.fromDegrees(hoverPt.lon, hoverPt.lat),
+        point: {
+          pixelSize: 12, color: PREVIEW.withAlpha(0.6),
+          outlineColor: Cesium.Color.WHITE, outlineWidth: 1.5,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      });
+    } else if (hoverPt && points.length > 0) {
+      const band = [points[points.length - 1], hoverPt];
+      if (geometry === 'polygon' && points.length >= 2) band.push(points[0]);
+      ds.entities.add({
+        id: RUBBER_ID,
+        polyline: {
+          positions: band.map((p) => Cesium.Cartesian3.fromDegrees(p.lon, p.lat)),
+          width: 2,
+          material: new Cesium.PolylineDashMaterialProperty({ color: PREVIEW.withAlpha(0.85), dashLength: 12 }),
+          clampToGround: !directional,
+          arcType: Cesium.ArcType.GEODESIC,
+        },
+      });
+    }
     viewer.scene.requestRender();
   }, [viewer, points, hoverPt, geometry, directional]);
 

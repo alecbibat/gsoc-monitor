@@ -76,7 +76,10 @@ function NewIncidentPicker({ onClose }: { onClose: () => void }) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && firstMatch) {
+            // Only a typed filter picks: with none, the "first match" is an
+            // arbitrary type nothing on screen marks as chosen (and an Enter
+            // held down while opening the picker would create one).
+            if (e.key === 'Enter' && !e.repeat && q && firstMatch) {
               e.preventDefault();
               pick(firstMatch.id);
             }
@@ -361,9 +364,11 @@ const ArchivedCard = memo(function ArchivedCard({
               if (confirm(`Reopen "${incident.incidentName || 'Untitled'}"? It will return to the active incident list.`)) {
                 reopenIncident(incident.id);
                 // Reopening from the list never mounts useAutoPublish for this
-                // incident, so push the transition to the share links here
-                // (mirrors what reopenIncident just stored).
-                publishShareSnapshots({ ...incident, incidentStatus: 'monitoring', archivedAt: null });
+                // incident, so push the transition to the share links here —
+                // exactly what reopenIncident just stored (status, archive and
+                // a stand-down's End stamp cleared).
+                const reopened = useCrisisStore.getState().incidents.find((i) => i.id === incident.id);
+                if (reopened) publishShareSnapshots(reopened);
               }
             }}
             className="rounded border border-accent/25 bg-accent/8 px-3 py-1.5 text-[11px] text-accent/70 transition hover:border-accent/45 hover:text-accent"

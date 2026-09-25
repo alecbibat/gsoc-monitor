@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ChecklistRoleMeta, TemplateScope } from './types';
 import {
   CANONICAL_TYPE_IDS, LIMITS, checkChecklistItems, checkChecklistRoles, checkIntakeGroups,
-  cleanText, describeScope, parseBaseRevision, parseScope, parseScopeParam,
+  cleanText, describeScope, parseBaseRevision, parseBaseRevisionParam, parseScope, parseScopeParam,
 } from './validate';
 
 const ROLES: ChecklistRoleMeta[] = [
@@ -53,6 +53,15 @@ describe('scope parsing', () => {
     expect(errorOf(parseScopeParam(['*|*']))).toMatch(/required/);
     expect(errorOf(parseScopeParam('wildfire'))).toMatch(/Invalid scope/);
     expect(errorOf(parseScopeParam('bogus|*'))).toMatch(/Unknown incident type/);
+  });
+
+  it('parses the optional ?baseRevision= of a reset', () => {
+    expect(parseBaseRevisionParam(undefined)).toEqual({ ok: true, value: null });
+    expect(parseBaseRevisionParam('0')).toEqual({ ok: true, value: 0 });
+    expect(parseBaseRevisionParam('42')).toEqual({ ok: true, value: 42 });
+    for (const bad of ['', '-1', '1.5', '1e3', ' 1', 'x', ['1', '2'], '1234567890123456']) {
+      expect(errorOf(parseBaseRevisionParam(bad))).toMatch(/^baseRevision must be/);
+    }
   });
 
   it('knows the canonical types in taxonomy order', () => {

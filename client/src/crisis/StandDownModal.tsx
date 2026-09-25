@@ -123,9 +123,10 @@ export function StandDownModal({
   // "Incident ended at": the operator's End, or now when End is blank or still
   // the automatic stamp of an earlier stand-down (the incident was reopened
   // since, so it didn't end then). Left untouched, the field follows the live
-  // incident (a peer may set End while this is open), nothing is passed, and
-  // standDownIncident applies that same rule at completion — which keeps the
-  // log's endAuto flag, so a later reopen + stand-down re-stamps it again.
+  // incident (a peer may set End while this is open), no End is passed, and
+  // standDownIncident applies that same rule at completion — stamping the
+  // instant shown here (openedAt) and keeping the log's endAuto flag, so a
+  // later reopen + stand-down re-stamps it again.
   const autoEnd = !incident.incidentEndDatetime || endIsStaleStandDownStamp(incident);
   const [openedAt] = useState(nowForInput);
   const [endDraft, setEndDraft] = useState<string | null>(null); // null until the operator edits it
@@ -172,11 +173,14 @@ export function StandDownModal({
     setBusy(true);
     const now = new Date().toISOString();
     const endAt = endDraft !== null ? fromLocalInput(endDraft) || undefined : undefined;
+    // An automatic End is the instant the field showed (openedAt), in the
+    // snapshot viewers get and in the archived record alike — not whenever
+    // the sequence below happens to finish.
     const finalInc: Incident = {
       ...incident,
       incidentStatus: 'closed',
       archivedAt: now,
-      incidentEndDatetime: endAt ?? (autoEnd ? now : incident.incidentEndDatetime),
+      incidentEndDatetime: endAt ?? (autoEnd ? openedAt : incident.incidentEndDatetime),
     };
     const links = activeLinks;
     const publishTokens = links.map((l) => l.token);
@@ -218,7 +222,7 @@ export function StandDownModal({
       )));
       // 3. Close out the incident itself, whatever happened to the links.
       update(2, { status: 'running' });
-      standDownIncident(incident.id, reason, endAt);
+      standDownIncident(incident.id, reason, endAt, openedAt);
       update(2, { status: 'done' });
       setBusy(false);
     }

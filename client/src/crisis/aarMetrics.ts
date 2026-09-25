@@ -1,4 +1,4 @@
-import { assignmentRoleTitle, entryTypeOf, type ActionLogEntry, type Incident, type PersonnelAssignment } from './crisisStore';
+import { assignmentRoleTitle, chartOrder, entryTypeOf, type ActionLogEntry, type Incident, type PersonnelAssignment } from './crisisStore';
 
 // ── AAR response metrics (Track 6) ───────────────────────────────────────────
 // Pure computations over the incident record — every number here must be
@@ -231,7 +231,11 @@ export function buildSwimlane(inc: Incident): SwimlaneData | null {
       .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
 
   const rows: SwimlaneRow[] = [];
-  for (const role of inc.roles) {
+  // In the order the org chart shows them (a moved role keeps its array
+  // slot); any the chart can't reach (parent missing) follow in array order.
+  const charted = chartOrder(inc.roles).map((o) => o.role);
+  const onChart = new Set(charted.map((r) => r.id));
+  for (const role of [...charted, ...inc.roles.filter((r) => !onChart.has(r.id))]) {
     const bars = barsFor(role.id);
     if (bars.length > 0) {
       rows.push({ roleId: role.id, title: role.title, abbrev: role.abbrev, color: role.color, bars, lanes: packLanes(bars) });

@@ -113,3 +113,47 @@ describe('rebaseIncident', () => {
     expect('liveLayers' in out).toBe(false);
   });
 });
+
+describe('rebaseIncident — ICS role tree', () => {
+  type Role = { id: string; title: string; parentId: string | null; isCommandStaff: boolean; order: number };
+  const role = (id: string, parentId: string | null, order = 0, isCommandStaff = false): Role =>
+    ({ id, title: id.toUpperCase(), parentId, isCommandStaff, order });
+  const tree = (roles: Role[]) => ({ ...base, roles });
+  const parents = (roles: Role[]) => Object.fromEntries(roles.map((r) => [r.id, r.parentId]));
+  const treeBase = tree([role('ic', null), role('x', 'ic', 0), role('y', 'ic', 1), role('r1', 'x'), role('r2', 'y')]);
+  const move = (t: typeof treeBase, id: string, parentId: string | null, order = 0) =>
+    tree(t.roles.map((r) => (r.id === id ? { ...r, parentId, order } : r)));
+
+  it('never merges opposite drags into a cycle: the local move gives way to the peer', () => {
+    const remote = move(treeBase, 'r1', 'r2');   // peer: R1 under R2
+    const local = move(treeBase, 'r2', 'r1');    // this tab: R2 under R1
+    const out = rebaseIncident(treeBase, local, remote).roles;
+    expect(parents(out)).toMatchObject({ r1: 'r2', r2: 'y' }); // the peer's tree
+  });
+
+  it("puts a role moved under one the peer removed back where the peer has it", () => {
+    const remote = tree(treeBase.roles.filter((r) => r.id !== 'r2')); // peer removed R2
+    const local = move(treeBase, 'r1', 'r2');                         // this tab moved R1 under R2
+    const out = rebaseIncident(treeBase, local, remote).roles;
+    expect(out.map((r) => r.id)).not.toContain('r2');
+    expect(parents(out).r1).toBe('x');
+  });
+
+  it("lifts a role added here under a removed parent to the nearest surviving ancestor", () => {
+    const remote = tree(treeBase.roles.filter((r) => r.id !== 'r2'));        // peer removed R2
+    const local = tree([...treeBase.roles, role('new', 'r2', 0, true)]);      // added under R2 here
+    const out = rebaseIncident(treeBase, local, remote).roles;
+    expect(out.find((r) => r.id === 'new')).toMatchObject({ parentId: 'y', isCommandStaff: true });
+    // …or to the top level when nothing above it survived.
+    const remote2 = tree(treeBase.roles.filter((r) => r.id === 'x' || r.id === 'r1'));
+    const local2 = tree([...treeBase.roles, role('new', 'r2', 0, true)]);
+    const out2 = rebaseIncident(treeBase, local2, remote2 as typeof treeBase).roles;
+    expect(out2.find((r) => r.id === 'new')).toMatchObject({ parentId: null, isCommandStaff: false });
+  });
+
+  it('leaves a consistent merge alone', () => {
+    const remote = move(treeBase, 'r1', 'y', 1);
+    const local = move(treeBase, 'r2', 'x', 1);
+    expect(parents(rebaseIncident(treeBase, local, remote).roles)).toEqual({ ic: null, x: 'ic', y: 'ic', r1: 'y', r2: 'x' });
+  });
+});

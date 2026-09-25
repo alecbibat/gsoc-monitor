@@ -8,6 +8,12 @@
 // config the write lands on — two admins saving different scopes that claim
 // the same item id, or one deleting a role while another assigns items to it,
 // serialize instead of both passing their checks.
+//
+// Revisions are drawn from crisis_template_revision_seq (migrate.ts), not
+// counted per row: a reset deletes the row, so "current + 1" would hand the
+// next save of that scope a number an admin still editing the old override
+// holds, and their save would pass the check and overwrite it. From one
+// sequence no number is issued twice; editors only ever compare them.
 
 import type { PoolClient } from 'pg';
 import { pool } from '../db';
@@ -108,12 +114,12 @@ async function writeUnit(kind: OverrideKind, key: string, actor: string | null, 
     } else {
       const { rows: [row] } = await client.query<OverrideRow>(
         `INSERT INTO crisis_template_overrides (kind, scope_key, data, revision, updated_at, updated_by)
-         VALUES ($1, $2, $3, $4, NOW(), $5)
+         VALUES ($1, $2, $3, nextval('crisis_template_revision_seq'), NOW(), $4)
          ON CONFLICT (kind, scope_key) DO UPDATE SET
            data = EXCLUDED.data, revision = EXCLUDED.revision,
            updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by
          RETURNING ${COLUMNS}`,
-        [kind, key, JSON.stringify(decision.data), decision.revision, actor]
+        [kind, key, JSON.stringify(decision.data), actor]
       );
       next = [...others, row];
     }
@@ -132,9 +138,9 @@ export function saveChecklistBlock(scope: TemplateScope, items: unknown, baseRev
     (config, defaults) => decideChecklistSave(config, defaults, scope, items, baseRevision));
 }
 
-export function resetChecklistBlock(scope: TemplateScope) {
+export function resetChecklistBlock(scope: TemplateScope, baseRevision: number | null) {
   return writeUnit('checklist-block', scopeKey(scope), null,
-    (config, defaults) => decideChecklistReset(config, defaults, scope));
+    (config, defaults) => decideChecklistReset(config, defaults, scope, baseRevision));
 }
 
 export function saveIntakeBlock(scope: TemplateScope, groups: unknown, baseRevision: number, actor: string | null) {
@@ -142,9 +148,9 @@ export function saveIntakeBlock(scope: TemplateScope, groups: unknown, baseRevis
     (config, defaults) => decideIntakeSave(config, defaults, scope, groups, baseRevision));
 }
 
-export function resetIntakeBlock(scope: TemplateScope) {
+export function resetIntakeBlock(scope: TemplateScope, baseRevision: number | null) {
   return writeUnit('intake-block', scopeKey(scope), null,
-    (config, defaults) => decideIntakeReset(config, defaults, scope));
+    (config, defaults) => decideIntakeReset(config, defaults, scope, baseRevision));
 }
 
 export function saveChecklistRoles(roles: unknown, baseRevision: number, actor: string | null) {
@@ -152,7 +158,7 @@ export function saveChecklistRoles(roles: unknown, baseRevision: number, actor: 
     (config, defaults) => decideRolesSave(config, defaults, roles, baseRevision));
 }
 
-export function resetChecklistRoles() {
+export function resetChecklistRoles(baseRevision: number | null) {
   return writeUnit('checklist-roles', ROLES_SCOPE_KEY, null,
-    (config, defaults) => decideRolesReset(config, defaults));
+    (config, defaults) => decideRolesReset(config, defaults, baseRevision));
 }

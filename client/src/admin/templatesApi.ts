@@ -114,9 +114,13 @@ export function saveChecklistBlock(
   return write('PUT', '/checklist-blocks', { scope, items, baseRevision });
 }
 
+// Resets carry the revision the admin was looking at, like saves: a newer
+// save by someone else answers 409 instead of being deleted unseen.
+const revisionParam = (baseRevision: number) => `baseRevision=${encodeURIComponent(String(baseRevision))}`;
+
 /** Delete the override: the scope goes back to its built-in default (or away, if it has none). */
-export function resetChecklistBlock(scope: TemplateScope): Promise<TemplatesSaveResult> {
-  return write('DELETE', `/checklist-blocks${scopeQuery(scope)}`);
+export function resetChecklistBlock(scope: TemplateScope, baseRevision: number): Promise<TemplatesSaveResult> {
+  return write('DELETE', `/checklist-blocks${scopeQuery(scope)}&${revisionParam(baseRevision)}`);
 }
 
 export function saveIntakeBlock(
@@ -125,14 +129,14 @@ export function saveIntakeBlock(
   return write('PUT', '/intake-blocks', { scope, groups, baseRevision });
 }
 
-export function resetIntakeBlock(scope: TemplateScope): Promise<TemplatesSaveResult> {
-  return write('DELETE', `/intake-blocks${scopeQuery(scope)}`);
+export function resetIntakeBlock(scope: TemplateScope, baseRevision: number): Promise<TemplatesSaveResult> {
+  return write('DELETE', `/intake-blocks${scopeQuery(scope)}&${revisionParam(baseRevision)}`);
 }
 
 export function saveChecklistRoles(roles: ChecklistRoleMeta[], baseRevision: number): Promise<TemplatesSaveResult> {
   return write('PUT', '/checklist-roles', { roles, baseRevision });
 }
 
-export function resetChecklistRoles(): Promise<TemplatesSaveResult> {
-  return write('DELETE', '/checklist-roles');
+export function resetChecklistRoles(baseRevision: number): Promise<TemplatesSaveResult> {
+  return write('DELETE', `/checklist-roles?${revisionParam(baseRevision)}`);
 }

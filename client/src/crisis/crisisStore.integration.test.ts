@@ -122,10 +122,16 @@ describe('endIsStaleStandDownStamp', () => {
     expect(endIsStaleStandDownStamp(active())).toBe(false); // blank End
 
     st().standDownIncident(id);
+    const stamped = st().incidents.find((i) => i.id === id)!.incidentEndDatetime;
+    expect(stamped).toBeTruthy();
     st().reopenIncident(id);
     const reopened = st().incidents.find((i) => i.id === id)!;
-    expect(reopened.incidentEndDatetime).toBeTruthy();
-    expect(endIsStaleStandDownStamp(reopened)).toBe(true);
+    // Reopen clears its own stamp: the incident didn't end then.
+    expect(reopened.incidentEndDatetime).toBe('');
+    expect(endIsStaleStandDownStamp(reopened)).toBe(false);
+    // One reopened before reopen did that still carries the stamp.
+    const legacy = { ...reopened, incidentEndDatetime: stamped };
+    expect(endIsStaleStandDownStamp(legacy)).toBe(true);
 
     // An End the operator entered is theirs, not a stale stamp.
     const edited = { ...reopened, incidentEndDatetime: '2026-01-01T00:00:00.000Z' };

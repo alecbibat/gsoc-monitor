@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useState, useRef } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useState, useRef, useSyncExternalStore } from 'react';
 import { useCrisisStore, selectActive, type ActionEntryType, type ActionLogEntry } from './crisisStore';
 import { uploadImage } from '../lib/cloudinary';
 import { ImageLightbox, ZoomableImage } from './ImageLightbox';
@@ -61,8 +61,24 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-// An image upload still in progress on this row (the file is kept for Retry).
-type RowUpload = { status: 'uploading' | 'failed'; name: string; file: File };
+// An image upload in progress on a row, or failed (the file is kept for
+// Retry). Held per entry id OUTSIDE the row: switching tab, or the row paging
+// out, unmounts it mid-upload — and a failure must still be there, with
+// Retry, when it mounts again, not vanish into an unmounted component.
+// `seq` identifies the attempt: a cancelled or superseded one never lands.
+type RowUpload = { status: 'uploading' | 'failed'; name: string; file: File; seq: number };
+const rowUploads = new Map<string, RowUpload>();
+const rowUploadListeners = new Set<() => void>();
+let rowUploadSeq = 0;
+function setRowUpload(entryId: string, upload: RowUpload | null) {
+  if (upload) rowUploads.set(entryId, upload);
+  else if (!rowUploads.delete(entryId)) return;
+  for (const l of rowUploadListeners) l();
+}
+function subscribeRowUploads(listener: () => void) {
+  rowUploadListeners.add(listener);
+  return () => { rowUploadListeners.delete(listener); };
+}
 
 const NEXT_TYPE: Record<ActionEntryType, ActionEntryType> = {
   action: 'event',
@@ -105,11 +121,10 @@ const LogRow = memo(function LogRow({
   const uploadBoxRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const descRef = useRef<HTMLTextAreaElement>(null);
-  // Bumped per attach and per removal; stale async completions must not patch the row.
-  const uploadSeq = useRef(0);
-  // Upload progress stays on the row: the store — and so every peer and the
-  // server — only ever sees a finished attachment, never a bare filename.
-  const [upload, setUpload] = useState<RowUpload | null>(null);
+  // Upload progress stays with the row (see rowUploads): the store — and so
+  // every peer and the server — only ever sees a finished attachment, never
+  // a bare filename.
+  const upload = useSyncExternalStore(subscribeRowUploads, () => rowUploads.get(entry.id) ?? null);
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
@@ -145,30 +160,29 @@ const LogRow = memo(function LogRow({
       setNotice('Only images can be attached');
       return;
     }
-    const seq = ++uploadSeq.current;
+    const seq = ++rowUploadSeq;
+    const current = () => rowUploads.get(entry.id)?.seq === seq;
     // The row belongs to the incident open right now; completions must land there
     // even if the operator leaves the incident while the upload is in flight.
     const incidentId = useCrisisStore.getState().activeIncidentId ?? undefined;
     setNotice(null);
-    setUpload({ status: 'uploading', name, file });
+    setRowUpload(entry.id, { status: 'uploading', name, file, seq });
     try {
       const url = await withTimeout(compressImage(file).then(uploadImage), UPLOAD_TIMEOUT_MS);
-      if (uploadSeq.current !== seq) return;
+      if (!current()) return;
       // A focused Cancel ✕ goes with the "Uploading…" state — but focus
       // anywhere else (the operator typing on) must stay where it is.
       if (uploadBoxRef.current?.contains(document.activeElement)) holdFocus();
       updateActionEntry(entry.id, { attachmentName: name, attachmentData: url }, incidentId);
-      setUpload(null);
+      setRowUpload(entry.id, null);
     } catch {
-      if (uploadSeq.current !== seq) return;
-      setUpload({ status: 'failed', name, file });
+      if (!current()) return;
+      setRowUpload(entry.id, { status: 'failed', name, file, seq });
     }
   };
 
-  const cancelUpload = () => {
-    uploadSeq.current++;
-    setUpload(null);
-  };
+  // Supersedes an upload still in flight, so it can't land afterwards.
+  const cancelUpload = () => setRowUpload(entry.id, null);
 
   // Auto-generated entries record state changes; their content is fixed so
   // the audit trail can't be quietly rewritten or removed (the server refuses
@@ -370,6 +384,7 @@ const LogRow = memo(function LogRow({
               // A blank row is a misclick on "+ Action" — no need to ask.
               const blank = !entry.description?.trim() && !entry.attachmentName && !upload;
               if (!blank && !confirm('Delete this log entry? This removes it for everyone.')) return;
+              cancelUpload();
               removeActionEntry(entry.id);
             }}
             className="text-[11px] text-white/20 opacity-0 transition hover:text-red-400/70 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-60"

@@ -3,7 +3,7 @@ import { requireAuth, requireAdmin } from '../middleware/auth';
 import { wrap } from '../asyncWrap';
 import { broadcastTemplates } from './incidentBus';
 import { broadcastShareTemplates } from './crisis';
-import { cleanText, parseBaseRevision, parseScope, parseScopeParam } from '../crisisTemplates/validate';
+import { cleanText, parseBaseRevision, parseBaseRevisionParam, parseScope, parseScopeParam } from '../crisisTemplates/validate';
 import {
   defaultTemplatesConfig, isUndefinedTable, loadEffectiveConfig,
   resetChecklistBlock, resetChecklistRoles, resetIntakeBlock,
@@ -17,8 +17,9 @@ import {
 // admin overrides) and resolves it per incident client-side; admins edit it
 // one unit at a time — a scope's checklist block, a scope's intake block, or
 // the global role list — through Admin → Checklists / Intake / Roles. Each
-// save carries the revision it was based on (409 on a mismatch) and the
-// response is the whole new config, which the editor adopts directly. Other
+// save carries the revision it was based on (409 on a mismatch), as a reset
+// may (?baseRevision=), and the response is the whole new config, which the
+// editor adopts directly. Other
 // editors hear about it on the incidents SSE stream (`templates` event) and
 // refetch. The rules live in crisisTemplates/ (validate, plan, store).
 
@@ -87,11 +88,13 @@ router.put('/checklist-blocks', requireAdmin, wrapWrite(async (req, res) => {
   send(res, await saveChecklistBlock(scope.value, body.items, base.value, actorOf(req)));
 }));
 
-// DELETE /api/crisis-templates/checklist-blocks?scope=<scopeKey> — reset to default.
+// DELETE /api/crisis-templates/checklist-blocks?scope=<scopeKey>[&baseRevision=<n>] — reset to default.
 router.delete('/checklist-blocks', requireAdmin, wrapWrite(async (req, res) => {
   const scope = parseScopeParam(req.query.scope);
   if (!scope.ok) { res.status(400).json({ error: scope.error }); return; }
-  send(res, await resetChecklistBlock(scope.value));
+  const base = parseBaseRevisionParam(req.query.baseRevision);
+  if (!base.ok) { res.status(400).json({ error: base.error }); return; }
+  send(res, await resetChecklistBlock(scope.value, base.value));
 }));
 
 // PUT /api/crisis-templates/intake-blocks — { scope, groups, baseRevision }
@@ -104,11 +107,13 @@ router.put('/intake-blocks', requireAdmin, wrapWrite(async (req, res) => {
   send(res, await saveIntakeBlock(scope.value, body.groups, base.value, actorOf(req)));
 }));
 
-// DELETE /api/crisis-templates/intake-blocks?scope=<scopeKey> — reset to default.
+// DELETE /api/crisis-templates/intake-blocks?scope=<scopeKey>[&baseRevision=<n>] — reset to default.
 router.delete('/intake-blocks', requireAdmin, wrapWrite(async (req, res) => {
   const scope = parseScopeParam(req.query.scope);
   if (!scope.ok) { res.status(400).json({ error: scope.error }); return; }
-  send(res, await resetIntakeBlock(scope.value));
+  const base = parseBaseRevisionParam(req.query.baseRevision);
+  if (!base.ok) { res.status(400).json({ error: base.error }); return; }
+  send(res, await resetIntakeBlock(scope.value, base.value));
 }));
 
 // PUT /api/crisis-templates/checklist-roles — { roles, baseRevision }
@@ -119,9 +124,11 @@ router.put('/checklist-roles', requireAdmin, wrapWrite(async (req, res) => {
   send(res, await saveChecklistRoles(body.roles, base.value, actorOf(req)));
 }));
 
-// DELETE /api/crisis-templates/checklist-roles — reset to default.
-router.delete('/checklist-roles', requireAdmin, wrapWrite(async (_req, res) => {
-  send(res, await resetChecklistRoles());
+// DELETE /api/crisis-templates/checklist-roles[?baseRevision=<n>] — reset to default.
+router.delete('/checklist-roles', requireAdmin, wrapWrite(async (req, res) => {
+  const base = parseBaseRevisionParam(req.query.baseRevision);
+  if (!base.ok) { res.status(400).json({ error: base.error }); return; }
+  send(res, await resetChecklistRoles(base.value));
 }));
 
 export default router;

@@ -10,9 +10,9 @@ import {
 import { scopeAudience, scopeChipLabel, scopeLabel } from '../crisis/templates/scopeLabels';
 import { useTemplatesStore } from '../crisis/templates/templatesStore';
 import {
-  PHASE_ORDER, checklistIssues, checklistSignature, cleanChecklistItems, insertChecklistItem, namedInError,
-  moveChecklistItem, nudgeChecklistItem, phaseItems, removeById, roleItems, splitPastedLines, updateById,
-  withChecklistBlock, type ChecklistDropTarget, type ScopeEntry,
+  PHASE_ORDER, checklistIssues, checklistSignature, cleanChecklistItems, insertBefore, insertChecklistItem, namedInError,
+  moveChecklistItem, nudgeChecklistItem, phaseItems, removeById, roleItems, splitPastedLines, splitRow, updateById,
+  withChecklistBlock, type ChecklistDropTarget, type RowSplit, type ScopeEntry,
 } from './draftOps';
 import {
   AutoTextarea, ConfigGate, ConflictBanner, DragHandle, DropLine, EditPreviewToggle, EditorFooter, EditorHeader,
@@ -21,7 +21,7 @@ import {
 } from './editorUi';
 import { ScopeList } from './ScopeList';
 import { ScopePicker } from './ScopePicker';
-import { resetChecklistBlock, saveChecklistBlock } from './templatesApi';
+import { resetChecklistBlock, saveChecklistBlock, type TemplatesSaveResult } from './templatesApi';
 
 // ── Checklist template editor ────────────────────────────────────────────────
 //
@@ -189,17 +189,20 @@ export function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig 
       else if (next) focusSoon(`item:${next}`, 'start');
       else focusSoon(`add:${it.roleId}:${it.phase}`);
     };
-    const insertLines = (item: ChecklistBlockItem, head: string, lines: string[]) => {
-      // `head` stays in this item; each line becomes a new item below it.
-      const created = lines.map((text) => ({ id: mintTemplateId(), roleId: item.roleId, phase: item.phase, text }));
+    const applySplit = (item: ChecklistBlockItem, split: RowSplit) => {
+      // The item keeps its id (incidents key checked state to it) and
+      // `split.text`; every other line becomes a new item above or below it.
+      const make = (text: string) => ({ id: mintTemplateId(), roleId: item.roleId, phase: item.phase, text });
+      const above = split.above.map(make);
+      const below = split.below.map(make);
       update((list) => {
-        let next = updateById(list, item.id, { text: head });
+        let next = insertBefore(updateById(list, item.id, { text: split.text }), above, item.id);
         let anchor = item.id;
-        for (const c of created) { next = insertChecklistItem(next, c, anchor); anchor = c.id; }
+        for (const c of below) { next = insertChecklistItem(next, c, anchor); anchor = c.id; }
         return next;
       });
-      const last = created[created.length - 1];
-      if (last) focusSoon(`item:${last.id}`, lines.length === 1 ? 'start' : 'end');
+      const last = above[above.length - 1] ?? below[below.length - 1];
+      if (last) focusSoon(`item:${last.id}`, above.length === 0 && below.length === 1 ? 'start' : 'end');
     };
     return {
       setText: (id, text) => update((list) => updateById(list, id, { text })),
@@ -208,9 +211,10 @@ export function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig 
         const el = e.currentTarget;
         const plain = !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
         if (e.key === 'Enter' && plain) {
-          // Split at the caret, like a list in a document: the rest of the line moves down.
+          // Split at the caret, like a list in a document: the rest of the line
+          // moves down — or, at the very start, a new item opens above.
           e.preventDefault();
-          insertLines(item, el.value.slice(0, el.selectionStart), [el.value.slice(el.selectionEnd)]);
+          applySplit(item, splitRow(el.value, el.selectionStart, el.selectionEnd, null));
         } else if (e.key === 'Backspace' && plain && el.value === '') {
           e.preventDefault();
           remove(item.id);
@@ -232,11 +236,7 @@ export function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig 
         if (lines.length < 2) return; // a single line pastes normally
         e.preventDefault();
         const el = e.currentTarget;
-        const before = el.value.slice(0, el.selectionStart);
-        const after = el.value.slice(el.selectionEnd);
-        const rest = lines.slice(1);
-        rest[rest.length - 1] += after;
-        insertLines(item, before + lines[0], rest);
+        applySplit(item, splitRow(el.value, el.selectionStart, el.selectionEnd, lines));
       },
       nudge: (id, dir, refocus) => {
         update((list) => nudgeChecklistItem(list, id, dir));
@@ -333,16 +333,27 @@ export function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig 
   };
 
   const reset = async () => {
+    if (savingRef.current) return;
+    // A newer version than the one this draft started from: settle that
+    // first, as a save would — a reset must not delete a version never seen.
+    if (draft.stale) { announceConflict(); return; }
     const name = scopeLabel(scope, false);
     const unsaved = dirty ? '\n\nYour unsaved changes will be lost too.' : '';
     const message = defaultBlock === null
       ? `Delete the “${name}” checklist scope?\n\nIts ${plural(block?.items.length ?? 0, 'item')} will stop appearing on incidents. Items already checked stay on those incidents' records.${unsaved}`
       : `Reset “${name}” to the built-in default${defaultBlock ? ` (${plural(defaultBlock.items.length, 'item')})` : ''}?\n\nThe customized version is deleted for every incident that uses this scope.${defaultBlock ? '' : ' If the scope has no built-in default, it is removed.'}${unsaved}`;
     if (!window.confirm(message)) return;
+    // Held for the whole reset, so Ctrl+S can't send a save alongside the delete.
+    savingRef.current = true;
     setBusy('Resetting…');
     setServerError(null);
     const savedKey = key;
-    const res = await resetChecklistBlock(scope);
+    let res: TemplatesSaveResult;
+    try {
+      res = await resetChecklistBlock(scope, draft.baseRevision);
+    } finally {
+      savingRef.current = false;
+    }
     setBusy(null);
     if (keyRef.current !== savedKey) return;
     if (res.ok) {
@@ -350,6 +361,9 @@ export function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig 
       draft.replace(b?.items ?? NO_ITEMS, b?.revision ?? 0);
       setOpenRoles(new Set());
       setNotice(b ? 'Reset to the built-in default' : 'Scope deleted');
+    } else if (res.status === 409) {
+      setServerError('Someone else saved this scope in the meantime, so nothing was reset — review their version, then reset again if you still want to.');
+      if (!res.config) void useTemplatesStore.getState().load();
     } else {
       setServerError(res.error);
     }
@@ -558,7 +572,7 @@ export function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig 
               )}
 
               <p className="mt-5 hidden text-[10px] leading-relaxed text-white/25 md:block">
-                Enter adds an item below · Backspace in an empty item removes it · {MOVE_SHORTCUT} moves an item
+                Enter splits the item (at its start: adds one above) · Backspace in an empty item removes it · {MOVE_SHORTCUT} moves an item
                 (also between phases) · paste a list to add one item per line · drag ⠿ to reorder. Empty items are
                 ignored when saving.
               </p>

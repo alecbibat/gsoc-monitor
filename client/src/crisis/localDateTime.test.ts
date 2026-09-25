@@ -50,4 +50,16 @@ describe('localDateTime', () => {
     const iso = nowForInput(new Date(2026, 8, 25, 14, 5, 37, 250));
     expect(iso).toBe(new Date(2026, 8, 25, 14, 5).toISOString());
   });
+
+  it('"now" keeps the instant in the hour a DST fall-back repeats', () => {
+    const tz = process.env.TZ;
+    process.env.TZ = 'America/New_York';
+    try {
+      // 01:30 EDT and 01:30 EST: the same wall time, an hour apart.
+      expect(nowForInput(new Date('2026-11-01T05:30:20Z'))).toBe('2026-11-01T05:30:00.000Z');
+      expect(nowForInput(new Date('2026-11-01T06:30:20Z'))).toBe('2026-11-01T06:30:00.000Z');
+    } finally {
+      if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz;
+    }
+  });
 });

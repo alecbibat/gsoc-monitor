@@ -1,8 +1,8 @@
 import type { DrawGeometry, DrawLayerPoint } from './crisisStore';
 import { isTextEntry } from '../lib/isTextEntry';
 
-// Pure input rules for CrisisDrawController (kept Cesium- and DOM-free so they
-// can be unit-tested).
+// Pure input rules for CrisisDrawController (kept Cesium- and DOM-free — a
+// plain EventTarget at most — so they can be unit-tested).
 
 /** Fewest vertices a finished shape of this geometry needs. */
 export const minPoints = (g: DrawGeometry): number => (g === 'point' ? 1 : g === 'line' ? 2 : 3);
@@ -36,6 +36,48 @@ export function classifyDrawClick(
   if (geometry === 'polygon' && points.length >= 3 && near(points[0], CLOSE_PX)) return 'close';
   if (points.length > 0 && near(points[points.length - 1], DEDUP_PX)) return 'ignore';
   return 'add';
+}
+
+// A click that finishes the shape (closing an area on its first vertex,
+// placing a marker) hands the screen back to the incident workspace at once:
+// React re-renders it before the rest of a double-click — which the toolbar
+// hint invites — or a double-tap arrives.
+export const STRAY_CLICK_MS = 500;
+export const STRAY_CLICK_PX = 24;
+const STRAY_EVENTS = [
+  'pointerdown', 'mousedown', 'touchstart', 'pointerup', 'mouseup', 'touchend', 'click', 'dblclick',
+] as const;
+
+function eventPoint(e: Event): Px | null {
+  const m = e as Partial<MouseEvent>;
+  if (typeof m.clientX === 'number' && typeof m.clientY === 'number') return { x: m.clientX, y: m.clientY };
+  const t = (e as Partial<TouchEvent>).changedTouches?.[0];
+  return t ? { x: t.clientX, y: t.clientY } : null;
+}
+
+/**
+ * Swallow the follow-up presses of a finishing click for a moment: listen at
+ * the window's CAPTURE phase (ahead of React and of Cesium), and stop every
+ * press near `at` (client pixels) until the double-click is over or
+ * `STRAY_CLICK_MS` has passed — so it can't press a button, focus a field or
+ * pick an entity on the globe behind the workspace. A deliberate click
+ * elsewhere passes. Returns a function that stops early.
+ */
+export function swallowStrayClicks(target: EventTarget, at: Px): () => void {
+  const onEvent = (e: Event) => {
+    const p = eventPoint(e);
+    if (!p || Math.hypot(p.x - at.x, p.y - at.y) > STRAY_CLICK_PX) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.type === 'dblclick') stop();
+  };
+  const stop = () => {
+    clearTimeout(timer);
+    for (const type of STRAY_EVENTS) target.removeEventListener(type, onEvent, { capture: true });
+  };
+  const timer = setTimeout(stop, STRAY_CLICK_MS);
+  for (const type of STRAY_EVENTS) target.addEventListener(type, onEvent, { capture: true, passive: false });
+  return stop;
 }
 
 type KeyLike = Pick<KeyboardEvent, 'key' | 'target' | 'defaultPrevented' | 'isComposing' | 'ctrlKey' | 'metaKey' | 'altKey'>;

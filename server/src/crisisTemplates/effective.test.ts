@@ -3,7 +3,7 @@ import {
   DEFAULT_CHECKLIST_BLOCKS, DEFAULT_CHECKLIST_ROLES, DEFAULT_INTAKE_BLOCKS,
 } from '../data/crisisTemplateDefaults';
 import {
-  buildEffectiveConfig, checklistIdOwners, compareScopes, indexDefaults, intakeIdOwners,
+  buildEffectiveConfig, checklistIdOwners, checklistItemApplies, compareScopes, indexDefaults, intakeIdOwners,
   roleUsage, shareTemplatesConfig, type OverrideRow, type TemplateDefaults,
 } from './effective';
 import { scopeKey, type ChecklistRoleMeta, type TemplateScope } from './types';
@@ -174,6 +174,21 @@ describe('shareTemplatesConfig', () => {
     const s = shareTemplatesConfig(c, 'other', null, undefined, null);
     expect(s.retiredChecklistItems).toEqual({});
     expect(s.retiredIntakeQuestions).toEqual({});
+  });
+});
+
+describe('checklistItemApplies', () => {
+  const c = buildEffectiveConfig(IDX, [row('checklist-block', 'flood|glacier', { items: [ci('x-fg')] })]);
+
+  it('accepts only items of the blocks that apply to the type + property', () => {
+    for (const id of ['g-1', 't-flood-1', 'p-glacier-1', 'x-fg']) expect(checklistItemApplies(c, 'flood', 'glacier', id)).toBe(true);
+    // Another type's, another property's, and a type + property block's items
+    // at a different property — all owned by some scope, none applicable.
+    expect(checklistItemApplies(c, 'wildfire', 'glacier', 't-flood-1')).toBe(false);
+    expect(checklistItemApplies(c, 'flood', 'yellowstone', 'p-glacier-1')).toBe(false);
+    expect(checklistItemApplies(c, 'flood', null, 'x-fg')).toBe(false);
+    expect(checklistItemApplies(c, 'flood', 'glacier', 'gone-forever')).toBe(false);
+    expect(checklistItemApplies(c, 'wildfire', null, 'g-1')).toBe(true);
   });
 });
 

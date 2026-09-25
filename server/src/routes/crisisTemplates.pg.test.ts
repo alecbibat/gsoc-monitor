@@ -108,46 +108,64 @@ describe.skipIf(!URL)('crisis templates on Postgres', () => {
       });
       expect(first.status).toBe(200);
       expect(block(first.body.config, 'flood|glacier')).toMatchObject({
-        custom: true, revision: 1, updatedBy: 'Ann Admin', items: [item('x-fg-1', 'Check the McDonald Creek gauge')],
+        custom: true, updatedBy: 'Ann Admin', items: [item('x-fg-1', 'Check the McDonald Creek gauge')],
       });
+      const r1: number = block(first.body.config, 'flood|glacier')!.revision;
+      expect(r1).toBeGreaterThan(0);
       expect(sse.join('')).toMatch(/^event: templates\ndata: \{"at":"[^"]+"\}\n\n$/);
 
       const second = await call('PUT', '/api/crisis-templates/checklist-blocks', {
-        cookie: admin, body: { scope, items: [item('x-fg-1', 'Check the gauge'), item('x-fg-2', 'Stage sandbags')], baseRevision: 1 },
+        cookie: admin, body: { scope, items: [item('x-fg-1', 'Check the gauge'), item('x-fg-2', 'Stage sandbags')], baseRevision: r1 },
       });
-      expect(block(second.body.config, 'flood|glacier')).toMatchObject({ revision: 2 });
+      const r2: number = block(second.body.config, 'flood|glacier')!.revision;
+      expect(r2).toBeGreaterThan(r1);
 
       const stale = await call('PUT', '/api/crisis-templates/checklist-blocks', {
-        cookie: admin, body: { scope, items: [], baseRevision: 1 },
+        cookie: admin, body: { scope, items: [], baseRevision: r1 },
       });
       expect(stale.status).toBe(409);
       expect(stale.body.error).toMatch(/was saved by Ann Admin after you started editing/);
-      expect(block(stale.body.config, 'flood|glacier')).toMatchObject({ revision: 2 });
+      expect(block(stale.body.config, 'flood|glacier')).toMatchObject({ revision: r2 });
 
       // A no-op save changes nothing and broadcasts nothing.
       sse.length = 0;
       const same = await call('PUT', '/api/crisis-templates/checklist-blocks', {
-        cookie: admin, body: { scope, items: [item('x-fg-1', 'Check the gauge'), item('x-fg-2', 'Stage sandbags')], baseRevision: 2 },
+        cookie: admin, body: { scope, items: [item('x-fg-1', 'Check the gauge'), item('x-fg-2', 'Stage sandbags')], baseRevision: r2 },
       });
       expect(same.status).toBe(200);
-      expect(block(same.body.config, 'flood|glacier')).toMatchObject({ revision: 2 });
+      expect(block(same.body.config, 'flood|glacier')).toMatchObject({ revision: r2 });
       expect(sse).toHaveLength(0);
 
-      const reset = await call('DELETE', '/api/crisis-templates/checklist-blocks?scope=flood|glacier', { cookie: admin });
+      // A reset from a stale view can't delete a save it never saw.
+      const staleReset = await call('DELETE', `/api/crisis-templates/checklist-blocks?scope=flood|glacier&baseRevision=${r1}`, { cookie: admin });
+      expect(staleReset.status).toBe(409);
+      expect(staleReset.body.error).toMatch(/was saved by Ann Admin after you started editing — reload that version before resetting/);
+      expect(block(staleReset.body.config, 'flood|glacier')).toMatchObject({ revision: r2 });
+      expect(sse).toHaveLength(0);
+
+      const reset = await call('DELETE', `/api/crisis-templates/checklist-blocks?scope=flood|glacier&baseRevision=${r2}`, { cookie: admin });
       expect(reset.status).toBe(200);
       expect(block(reset.body.config, 'flood|glacier')).toBeUndefined();
       expect(sse).toHaveLength(1);
       const { rows } = await pool.query('SELECT count(*)::int AS n FROM crisis_template_overrides');
       expect(rows[0].n).toBe(0);
 
-      // A fresh override after a reset starts over at revision 1.
+      // A fresh override after a reset never reuses a revision an editor of an
+      // earlier version may still hold, so that editor's save is still a 409.
       const again = await call('PUT', '/api/crisis-templates/checklist-blocks', {
         cookie: admin, body: { scope, items: [item('x-fg-1', 'Again')], baseRevision: 0 },
       });
-      expect(block(again.body.config, 'flood|glacier')).toMatchObject({ revision: 1 });
+      const r3: number = block(again.body.config, 'flood|glacier')!.revision;
+      expect(r3).toBeGreaterThan(r2);
+      for (const base of [r1, r2]) {
+        const late = await call('PUT', '/api/crisis-templates/checklist-blocks', {
+          cookie: admin, body: { scope, items: [item('x-fg-1', 'Late')], baseRevision: base },
+        });
+        expect(late.status).toBe(409);
+      }
       // Saving it empty (no default for this scope) removes the override.
       const emptied = await call('PUT', '/api/crisis-templates/checklist-blocks', {
-        cookie: admin, body: { scope, items: [], baseRevision: 1 },
+        cookie: admin, body: { scope, items: [], baseRevision: r3 },
       });
       expect(block(emptied.body.config, 'flood|glacier')).toBeUndefined();
     });
@@ -190,7 +208,8 @@ describe.skipIf(!URL)('crisis templates on Postgres', () => {
       const custom = { id: 'r-fnb', code: 'F&B', title: 'Food & Beverage Lead', color: '#0EA5E9', reportsTo: 'Logistics', directs: '' };
       const saved = await call('PUT', '/api/crisis-templates/checklist-roles', { cookie: admin, body: { roles: [...roles, custom], baseRevision: 0 } });
       expect(saved.status).toBe(200);
-      expect(saved.body.config.checklistRoles).toMatchObject({ custom: true, revision: 1 });
+      expect(saved.body.config.checklistRoles).toMatchObject({ custom: true });
+      expect(saved.body.config.checklistRoles.revision).toBeGreaterThan(0);
       expect(saved.body.config.checklistRoles.roles.at(-1)).toEqual({ ...custom, color: '#0ea5e9' });
 
       const assigned = await call('PUT', '/api/crisis-templates/checklist-blocks', {
@@ -202,7 +221,10 @@ describe.skipIf(!URL)('crisis templates on Postgres', () => {
       expect(resetRefused.body.error).toMatch(/"Food & Beverage Lead" \(F&B\) is still assigned to 1 checklist item/);
 
       await call('DELETE', '/api/crisis-templates/checklist-blocks?scope=*|sea-island', { cookie: admin });
-      const reset = await call('DELETE', '/api/crisis-templates/checklist-roles', { cookie: admin });
+      const staleReset = await call('DELETE', '/api/crisis-templates/checklist-roles?baseRevision=0', { cookie: admin });
+      expect(staleReset.status).toBe(409);
+      expect(staleReset.body.config.checklistRoles.custom).toBe(true);
+      const reset = await call('DELETE', `/api/crisis-templates/checklist-roles?baseRevision=${saved.body.config.checklistRoles.revision}`, { cookie: admin });
       expect(reset.status).toBe(200);
       expect(reset.body.config.checklistRoles).toMatchObject({ custom: false, revision: 0 });
     });
@@ -213,10 +235,15 @@ describe.skipIf(!URL)('crisis templates on Postgres', () => {
         cookie: admin, body: { scope: { incidentType: 'search-rescue', propertyId: 'rocky-mountain' }, groups, baseRevision: 0 },
       });
       expect(saved.status).toBe(200);
-      const b = saved.body.config.intakeBlocks.find((x: { scope: { propertyId: string } }) => x.scope.propertyId === 'rocky-mountain');
-      expect(b).toMatchObject({ custom: true, revision: 1, groups });
-      const reset = await call('DELETE', '/api/crisis-templates/intake-blocks?scope=search-rescue|rocky-mountain', { cookie: admin });
-      expect(reset.body.config.intakeBlocks.some((x: { scope: { propertyId: string } }) => x.scope.propertyId === 'rocky-mountain')).toBe(false);
+      type Scoped = { scope: { incidentType: string | null; propertyId: string | null } };
+      const find = (c: CrisisTemplatesConfig) =>
+        c.intakeBlocks.find((x: Scoped) => x.scope.incidentType === 'search-rescue' && x.scope.propertyId === 'rocky-mountain');
+      const b = find(saved.body.config)!;
+      expect(b).toMatchObject({ custom: true, groups });
+      expect((await call('DELETE', `/api/crisis-templates/intake-blocks?scope=search-rescue|rocky-mountain&baseRevision=${b.revision + 1}`, { cookie: admin })).status).toBe(409);
+      const reset = await call('DELETE', `/api/crisis-templates/intake-blocks?scope=search-rescue|rocky-mountain&baseRevision=${b.revision}`, { cookie: admin });
+      expect(reset.status).toBe(200);
+      expect(find(reset.body.config)).toBeUndefined();
     });
 
     it('degrades to the defaults when the overrides table is missing', async () => {
@@ -286,6 +313,56 @@ describe.skipIf(!URL)('crisis templates on Postgres', () => {
 
     afterAll(async () => {
       await pool.query('DELETE FROM share_links WHERE token IN ($1, $2)', [token, expired]);
+    });
+  });
+
+  describe('share checklist toggle', () => {
+    const token = '11111111-2222-3333-4444-888888888888';
+    const incidentId = 'crisis-templates-toggle-test';
+    let generalId = '';
+    let foreignId = '';
+
+    beforeAll(async () => {
+      await pool.query('DELETE FROM crisis_template_overrides');
+      await pool.query('DELETE FROM share_links WHERE token = $1', [token]);
+      await pool.query('DELETE FROM incidents WHERE id = $1', [incidentId]);
+      const cfg = (await call('GET', '/api/crisis-templates', { cookie: admin })).body as CrisisTemplatesConfig;
+      generalId = block(cfg, '*|*')!.items[0].id;
+      // A line only a Yellowstone incident shows — the incident is at Glacier.
+      foreignId = block(cfg, '*|yellowstone')!.items[0].id;
+      await pool.query('INSERT INTO incidents (id, data) VALUES ($1, $2)', [incidentId, JSON.stringify({ id: incidentId, checklists: {} })]);
+      await pool.query(
+        `INSERT INTO share_links (token, incident_id, snapshot, expires_at) VALUES ($1, $2, $3, NOW() + interval '1 hour')`,
+        [token, incidentId, JSON.stringify({ incidentName: 'Toggle', incidentType: 'wildfire', locationGroupId: 'glacier', checklists: {} })]
+      );
+    });
+
+    afterAll(async () => {
+      await pool.query('DELETE FROM share_links WHERE token = $1', [token]);
+      await pool.query('DELETE FROM incidents WHERE id = $1', [incidentId]);
+    });
+
+    const toggle = (id: string) =>
+      call('POST', `/api/crisis/share/${token}/checklist/${id}`, { cookie: member, body: { checked: true, by: 'Viewer' } });
+    const stored = async () =>
+      (await pool.query<{ data: { checklists: Record<string, unknown> } }>('SELECT data FROM incidents WHERE id = $1', [incidentId])).rows[0].data.checklists;
+
+    it('toggles a line of the incident\'s own checklist', async () => {
+      const r = await toggle(generalId);
+      expect(r.status).toBe(200);
+      expect(r.body.checklists[generalId]).toMatchObject({ checked: true, by: 'Max Member' });
+      expect(Object.keys(await stored())).toEqual([generalId]);
+    });
+
+    it('refuses another scope\'s line, so it is neither stored nor read back as retired text', async () => {
+      for (const id of [foreignId, 'x-not-a-line']) {
+        const r = await toggle(id);
+        expect(r.status).toBe(409);
+        expect(r.body.error).toMatch(/not on this incident's current checklist/);
+      }
+      expect(Object.keys(await stored())).toEqual([generalId]);
+      const t = await call('GET', `/api/crisis/share/${token}/templates`, { cookie: member });
+      expect(t.body.retiredChecklistItems).toEqual({});
     });
   });
 

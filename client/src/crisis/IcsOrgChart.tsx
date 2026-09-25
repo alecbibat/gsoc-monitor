@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useId, useLay
 import { useShallow } from 'zustand/react/shallow';
 import {
   useCrisisStore, selectActive,
-  DEFAULT_ROLES, roleSiblings, roleSubtreeIds,
+  DEFAULT_ROLES, chartOrder, roleSiblings, roleSubtreeIds,
   activeAssignmentsInSubtree, assignmentRoleTitle, isSamePerson,
   type Incident, type IcsRole, type MoveRoleTarget, type PersonnelAssignment, type PersonnelDetails,
   type PersonnelMember,
@@ -166,25 +166,8 @@ function moveAndAnnounce(roleId: string, target: MoveRoleTarget, announce: (m: s
   if (after && after !== before && top?.system === 'role-moved') announce(top.description);
 }
 
-// Depth-first in the order the chart draws it (command staff, then general
-// staff, each by order) — for the "Reports to" picker. Roles whose parent is
-// missing aren't on the chart and aren't offered.
-export function chartOrder(roles: readonly IcsRole[]): { role: IcsRole; depth: number }[] {
-  const out: { role: IcsRole; depth: number }[] = [];
-  const seen = new Set<string>();
-  const walk = (parentId: string | null, depth: number) => {
-    for (const cmd of [true, false]) {
-      for (const r of roleSiblings(roles, parentId, cmd)) {
-        if (seen.has(r.id)) continue;
-        seen.add(r.id);
-        out.push({ role: r, depth });
-        walk(r.id, depth + 1);
-      }
-    }
-  };
-  walk(null, 0);
-  return out;
-}
+// The "Reports to" picker lists roles in chart order (crisisStore.chartOrder).
+export { chartOrder };
 
 // Whether `ancestorId` sits above `id`. Bounded by the role count so corrupt
 // data with a parent cycle can't spin.

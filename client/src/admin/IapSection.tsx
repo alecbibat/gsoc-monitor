@@ -3,6 +3,7 @@ import { INCIDENT_TYPES } from '../crisis/taxonomy';
 import { GENERAL_SCOPE, sameScope, scopeRank, type TemplateScope } from '../crisis/templates/model';
 import { propertyDef, scopeLabel, scopePropertyLabel, scopeTypeLabel, TEMPLATE_PROPERTIES } from '../crisis/templates/scopeLabels';
 import { useAdminPageStore } from './adminPageStore';
+import { useDirtyFlag } from './editorUi';
 import { ScopePicker } from './ScopePicker';
 
 // ── IAP library ───────────────────────────────────────────────────────────────
@@ -306,6 +307,10 @@ export function IapSection() {
   const [notice, setNotice] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const uploadRef = useRef<HTMLElement>(null);
+  // Leaving mid-upload (Esc, ✕, another section) asks first: the section
+  // would unmount and a failed upload's error would never be shown. A chosen
+  // but not-yet-uploaded file stays unguarded, like the other forms here.
+  useDirtyFlag(busy);
 
   // Status-checked, and only the latest request may land: a JSON error body
   // must not reach setDocs, and a slow early answer must not overwrite a

@@ -78,6 +78,15 @@ export function insertAfter<T extends { id: string }>(list: T[], entry: T, after
   return next;
 }
 
+/** Insert `entries`, in order, right before `beforeId` (unknown = at the end). */
+export function insertBefore<T extends { id: string }>(list: T[], entries: T[], beforeId: string): T[] {
+  if (entries.length === 0) return list;
+  const at = list.findIndex((x) => x.id === beforeId);
+  const next = list.slice();
+  next.splice(at < 0 ? next.length : at, 0, ...entries);
+  return next;
+}
+
 export function removeById<T extends { id: string }>(list: T[], id: string): T[] {
   const next = list.filter((x) => x.id !== id);
   return next.length === list.length ? list : next;
@@ -275,6 +284,15 @@ export function insertQuestion(
   const g = groups.findIndex((x) => x.id === groupId);
   if (g < 0) return groups;
   return withQuestions(groups, g, insertAfter(groups[g].questions, question, afterId));
+}
+
+/** Insert `questions`, in order, right before question `beforeId` of `groupId`. */
+export function insertQuestionsBefore(
+  groups: IntakeBlockGroup[], groupId: string, questions: IntakeBlockQuestion[], beforeId: string
+): IntakeBlockGroup[] {
+  const g = groups.findIndex((x) => x.id === groupId);
+  if (g < 0) return groups;
+  return withQuestions(groups, g, insertBefore(groups[g].questions, questions, beforeId));
 }
 
 export function updateQuestion(groups: IntakeBlockGroup[], qid: string, text: string): IntakeBlockGroup[] {
@@ -495,6 +513,33 @@ export function namedInError(message: string, entries: { id: string; text: strin
     for (const e of entries) if (tidyText(e.text).startsWith(snippet)) out.add(e.id);
   }
   return [...out];
+}
+
+/** A row's text after Enter or a multi-line paste: new rows above it, its own text, new rows below. */
+export interface RowSplit {
+  above: string[];
+  text: string;
+  below: string[];
+}
+
+/**
+ * Enter (`pasted` null) or a multi-line paste (`pasted` = its lines) over the
+ * selection [start, end) of a checklist item or intake question. The row keeps
+ * its id, and incidents key shared state to that id (an item's checked state,
+ * a question's answer) — so the id stays with the row's own text and never
+ * passes to new text. Past the start it splits like a list in a document: the
+ * text before the caret stays, the rest moves down. At the very start of a
+ * row with text, the new rows go ABOVE it instead and the row keeps its text.
+ */
+export function splitRow(value: string, start: number, end: number, pasted: string[] | null): RowSplit {
+  const head = value.slice(0, start);
+  const tail = value.slice(end);
+  if (head === '' && tail !== '') return { above: pasted ?? [''], text: tail, below: [] };
+  const lines = pasted ?? ['', ''];
+  const below = lines.slice(1);
+  if (below.length === 0) return { above: [], text: head + (lines[0] ?? '') + tail, below };
+  below[below.length - 1] += tail;
+  return { above: [], text: head + lines[0], below };
 }
 
 /**

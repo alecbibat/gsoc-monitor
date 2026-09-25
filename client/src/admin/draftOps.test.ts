@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   checklistIssues, checklistSignature, cleanChecklistItems, cleanIntakeGroups, cleanRoles,
-  groupScopeEntries, insertAfter, insertChecklistItem, insertQuestion, intakeIssues, intakeSignature,
+  groupScopeEntries, insertAfter, insertBefore, insertChecklistItem, insertQuestion, insertQuestionsBefore,
+  intakeIssues, intakeSignature,
   mentionedIds, moveBefore, moveChecklistItem, namedInError, moveQuestion, nudge, nudgeChecklistItem, nudgeQuestion,
-  removeById, removeQuestion, roleIssues, roleItems, roleUsage, splitPastedLines, tidyText, updateById,
+  removeById, removeQuestion, roleIssues, roleItems, roleUsage, splitPastedLines, splitRow, tidyText, updateById,
   updateQuestion, withChecklistBlock, withIntakeBlock, type ScopeEntry,
 } from './draftOps';
 import {
@@ -65,6 +66,36 @@ describe('generic list ops', () => {
     expect(updateById(named, 'a', { name: 'A' })).toBe(named);
     expect(updateById(named, 'a', { name: 'B' })[0]).toEqual({ id: 'a', name: 'B' });
     expect(named[0].name).toBe('A'); // never mutates
+  });
+
+  it('insertBefore inserts in order, appends for an unknown anchor, and is a no-op for nothing', () => {
+    expect(ids(insertBefore(list, [{ id: 'x' }, { id: 'y' }], 'b'))).toEqual(['a', 'x', 'y', 'b', 'c']);
+    expect(ids(insertBefore(list, [{ id: 'x' }], 'a'))).toEqual(['x', 'a', 'b', 'c']);
+    expect(ids(insertBefore(list, [{ id: 'x' }], 'zz'))).toEqual(['a', 'b', 'c', 'x']);
+    expect(insertBefore(list, [], 'a')).toBe(list);
+    expect(ids(list)).toEqual(['a', 'b', 'c']); // never mutates
+  });
+});
+
+describe('splitRow (Enter / multi-line paste)', () => {
+  it('splits past the start like a document: the row keeps the text before the caret', () => {
+    expect(splitRow('Evacuate the lodge', 8, 8, null)).toEqual({ above: [], text: 'Evacuate', below: [' the lodge'] });
+    expect(splitRow('Evacuate the lodge', 18, 18, null)).toEqual({ above: [], text: 'Evacuate the lodge', below: [''] });
+    expect(splitRow('ab', 1, 1, ['x', 'y', 'z'])).toEqual({ above: [], text: 'ax', below: ['y', 'zb'] });
+    // An empty row: nothing to keep, so it simply takes the first line.
+    expect(splitRow('', 0, 0, null)).toEqual({ above: [], text: '', below: [''] });
+    expect(splitRow('', 0, 0, ['x', 'y'])).toEqual({ above: [], text: 'x', below: ['y'] });
+  });
+
+  it('at the very start, opens the new rows ABOVE so the row keeps its id and its text', () => {
+    // Incidents key checked state / answers to the row's id: it must stay with "Evacuate the lodge".
+    expect(splitRow('Evacuate the lodge', 0, 0, null)).toEqual({ above: [''], text: 'Evacuate the lodge', below: [] });
+    expect(splitRow('Evacuate the lodge', 0, 0, ['Notify the ranger', 'Close the road']))
+      .toEqual({ above: ['Notify the ranger', 'Close the road'], text: 'Evacuate the lodge', below: [] });
+    // A selection from the start replaces the selected text; the rest stays in the row.
+    expect(splitRow('Old Evacuate', 0, 4, null)).toEqual({ above: [''], text: 'Evacuate', below: [] });
+    // Everything selected: nothing of the row is left to keep, so it splits as before.
+    expect(splitRow('abc', 0, 3, null)).toEqual({ above: [], text: '', below: [''] });
   });
 });
 
@@ -175,6 +206,14 @@ describe('intake groups', () => {
     expect(updateQuestion(groups, 'q3', 'C')).toBe(groups);
     expect(qids(removeQuestion(groups, 'q1'))).toEqual([['q2'], ['q3'], []]);
     expect(groups[0].questions).toHaveLength(2);
+  });
+
+  it('inserts questions before another one in its group', () => {
+    const add = [{ id: 'n1', text: 'X' }, { id: 'n2', text: 'Y' }];
+    expect(qids(insertQuestionsBefore(groups, 'g1', add, 'q1'))).toEqual([['n1', 'n2', 'q1', 'q2'], ['q3'], []]);
+    expect(qids(insertQuestionsBefore(groups, 'g2', add, 'q3'))).toEqual([['q1', 'q2'], ['n1', 'n2', 'q3'], []]);
+    expect(insertQuestionsBefore(groups, 'g1', [], 'q1')).toBe(groups);
+    expect(insertQuestionsBefore(groups, 'nope', add, 'q1')).toBe(groups);
   });
 
   it('moves questions within and between groups', () => {

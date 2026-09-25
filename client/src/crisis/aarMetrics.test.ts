@@ -62,8 +62,10 @@ describe('computeAarMetrics', () => {
     expect(stamped).toBeTruthy();
     expect(computeAarMetrics(active()).durationBasis).toBe('end');
     st.reopenIncident(id);
-    expect(active().incidentEndDatetime).toBe(stamped);
+    expect(active().incidentEndDatetime).toBe(''); // reopen clears its own stamp
     expect(computeAarMetrics(active()).durationBasis).toBe('now');
+    // Reopened before reopen cleared the stamp: it is still there, and still ignored.
+    expect(computeAarMetrics({ ...active(), incidentEndDatetime: stamped }).durationBasis).toBe('now');
     // An End the operator types after reopening counts again.
     st.update({ incidentEndDatetime: new Date(Date.now() - H).toISOString() });
     expect(computeAarMetrics(active()).durationBasis).toBe('end');
@@ -200,6 +202,27 @@ describe('buildSwimlane', () => {
     // A seat transfer stays in one lane.
     expect(lane.rows[0].lanes).toBe(1);
     expect(lane.rows[0].bars.map((b) => b.lane)).toEqual([0, 0]);
+  });
+
+  it('orders rows as the org chart does, not by roles-array position', () => {
+    const base = makeIncident({});
+    // Safety Officer moved to the top level, ahead of IC: only `order` changes.
+    const roles = base.roles.map((r) =>
+      r.id === 'safety' ? { ...r, parentId: null, isCommandStaff: false, order: 0 }
+      : r.id === 'ic' ? { ...r, order: 1 }
+      : r);
+    const inc = {
+      ...base,
+      roles,
+      createdAt: at(0),
+      archivedAt: at(10),
+      assignments: [
+        { id: '1', roleId: 'ops', name: 'Kim', startedAt: at(1) },
+        { id: '2', roleId: 'ic', name: 'Sarah', startedAt: at(1) },
+        { id: '3', roleId: 'safety', name: 'Ana', startedAt: at(1) },
+      ],
+    };
+    expect(buildSwimlane(inc)!.rows.map((r) => r.roleId)).toEqual(['safety', 'ic', 'ops']);
   });
 
   it('stacks concurrent holders of a support role instead of overdrawing them', () => {

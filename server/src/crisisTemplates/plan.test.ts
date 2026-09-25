@@ -30,14 +30,15 @@ const cfg = (...rows: OverrideRow[]) => buildEffectiveConfig(IDX, rows);
 describe('checklist save', () => {
   const flood = S('flood', null);
 
-  it('stores a changed default block as revision 1', () => {
+  it('stores a changed default block (store.ts draws the new revision)', () => {
     const d = decideChecklistSave(cfg(), IDX, flood, [ci('t-flood-1', 'ops', 'Edited')], 0);
-    expect(d).toEqual({ type: 'upsert', revision: 1, data: { items: [ci('t-flood-1', 'ops', 'Edited')] } });
+    expect(d).toEqual({ type: 'upsert', data: { items: [ci('t-flood-1', 'ops', 'Edited')] } });
   });
 
-  it('bumps the revision of an existing override', () => {
+  it('stores a changed override based on its current revision', () => {
     const c = cfg(row('checklist-block', 'flood|*', { items: [ci('x-a', 'ops')] }, 4));
-    expect(decideChecklistSave(c, IDX, flood, [ci('x-a', 'ops'), ci('x-b')], 4)).toMatchObject({ type: 'upsert', revision: 5 });
+    expect(decideChecklistSave(c, IDX, flood, [ci('x-a', 'ops'), ci('x-b')], 4))
+      .toEqual({ type: 'upsert', data: { items: [ci('x-a', 'ops'), ci('x-b')] } });
   });
 
   it('409s on a stale base revision, saying what happened', () => {
@@ -89,7 +90,7 @@ describe('checklist save', () => {
     const c = cfg(row('checklist-block', 'flood|glacier', { items: [ci('x-a')] }, 2));
     expect(decideChecklistSave(c, IDX, fg, [], 2)).toEqual({ type: 'delete' });
     // …but an empty save over a default hides it (a custom empty block).
-    expect(decideChecklistSave(cfg(), IDX, flood, [], 0)).toEqual({ type: 'upsert', revision: 1, data: { items: [] } });
+    expect(decideChecklistSave(cfg(), IDX, flood, [], 0)).toEqual({ type: 'upsert', data: { items: [] } });
   });
 });
 
@@ -100,6 +101,19 @@ describe('checklist reset', () => {
     expect(decideChecklistReset(c, IDX, S('flood', null))).toEqual({ type: 'delete' });
     const extra = cfg(row('checklist-block', 'flood|glacier', { items: [ci('x-a')] }));
     expect(decideChecklistReset(extra, IDX, S('flood', 'glacier'))).toEqual({ type: 'delete' });
+  });
+
+  it('409s a reset quoting an older revision, so it can\'t delete a save it never saw', () => {
+    const c = cfg(row('checklist-block', 'flood|*', { items: [] }, 7));
+    expect(decideChecklistReset(c, IDX, S('flood', null), 3)).toEqual({
+      type: 'reject', status: 409,
+      error: 'The flood checklist was saved by Ann Admin after you started editing — reload that version before resetting',
+    });
+    // Quoted from the default view, while someone else has since customized it.
+    expect(decideChecklistReset(c, IDX, S('flood', null), 0)).toMatchObject({ status: 409 });
+    expect(decideChecklistReset(c, IDX, S('flood', null), 7)).toEqual({ type: 'delete' });
+    // Already back at the default: nothing to do, whatever the reset was based on.
+    expect(decideChecklistReset(cfg(), IDX, S('flood', null), 7)).toEqual({ type: 'noop' });
   });
 
   it('refuses when the default would use a removed role', () => {
@@ -129,9 +143,9 @@ describe('intake save / reset', () => {
   const flood = S('flood', null);
 
   it('stores, bumps, conflicts and validates like checklists', () => {
-    expect(decideIntakeSave(cfg(), IDX, flood, [grp('t-flood', ['t-flood-1', 'x-q'])], 0)).toMatchObject({ type: 'upsert', revision: 1 });
+    expect(decideIntakeSave(cfg(), IDX, flood, [grp('t-flood', ['t-flood-1', 'x-q'])], 0)).toMatchObject({ type: 'upsert' });
     const c = cfg(row('intake-block', 'flood|*', { groups: [grp('x-g', ['x-q'])] }, 6));
-    expect(decideIntakeSave(c, IDX, flood, [grp('x-g', ['x-q', 'x-r'])], 6)).toMatchObject({ type: 'upsert', revision: 7 });
+    expect(decideIntakeSave(c, IDX, flood, [grp('x-g', ['x-q', 'x-r'])], 6)).toMatchObject({ type: 'upsert' });
     expect(decideIntakeSave(c, IDX, flood, [], 5)).toMatchObject({ status: 409, error: expect.stringMatching(/flood intake questions was saved/) });
     expect(decideIntakeSave(cfg(), IDX, flood, [grp('g-caller', ['x-q'])], 0))
       .toMatchObject({ status: 400, error: expect.stringMatching(/"g-caller", which already belongs to a group in the General intake/) });
@@ -149,6 +163,10 @@ describe('intake save / reset', () => {
   it('resets unless the default ids are now taken', () => {
     expect(decideIntakeReset(cfg(), IDX, flood)).toEqual({ type: 'noop' });
     expect(decideIntakeReset(cfg(row('intake-block', 'flood|*', { groups: [] })), IDX, flood)).toEqual({ type: 'delete' });
+    const saved = cfg(row('intake-block', 'flood|*', { groups: [] }, 4));
+    expect(decideIntakeReset(saved, IDX, flood, 4)).toEqual({ type: 'delete' });
+    expect(decideIntakeReset(saved, IDX, flood, 2))
+      .toMatchObject({ status: 409, error: expect.stringMatching(/^The flood intake questions was saved by Ann Admin .* before resetting$/) });
     const c = cfg(
       row('intake-block', 'flood|*', { groups: [] }),
       row('intake-block', '*|glacier', { groups: [grp('x-g', ['t-flood-1'])] }),
@@ -160,7 +178,7 @@ describe('intake save / reset', () => {
 describe('roles save / reset', () => {
   it('stores a changed list and no-ops the default', () => {
     const roles = [role('ic'), role('ops'), role('r-new')];
-    expect(decideRolesSave(cfg(), IDX, roles, 0)).toEqual({ type: 'upsert', revision: 1, data: { roles } });
+    expect(decideRolesSave(cfg(), IDX, roles, 0)).toEqual({ type: 'upsert', data: { roles } });
     expect(decideRolesSave(cfg(), IDX, [role('ic'), role('ops')], 0)).toEqual({ type: 'noop' });
     // Color case alone is not a change.
     expect(decideRolesSave(cfg(), IDX, [role('ic'), { ...role('ops'), color: '#A1B2C3' }], 0)).toEqual({ type: 'noop' });
@@ -178,6 +196,8 @@ describe('roles save / reset', () => {
     expect(decideRolesReset(cfg(), IDX)).toEqual({ type: 'noop' });
     const custom = row('checklist-roles', '*', { roles: [role('ic'), role('ops'), role('r-x')] });
     expect(decideRolesReset(cfg(custom), IDX)).toEqual({ type: 'delete' });
+    expect(decideRolesReset(cfg(custom), IDX, 1)).toEqual({ type: 'delete' });
+    expect(decideRolesReset(cfg(custom), IDX, 0)).toMatchObject({ status: 409, error: expect.stringMatching(/^The checklist role list was saved/) });
     const used = cfg(custom, row('checklist-block', 'flood|*', { items: [ci('x-a', 'r-x')] }));
     expect(decideRolesReset(used, IDX)).toMatchObject({
       status: 400, error: expect.stringMatching(/^Can't reset the checklist roles to the built-in default: "Role r-x" \(R-X\) is still assigned to 1 checklist item/),

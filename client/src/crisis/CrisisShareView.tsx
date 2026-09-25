@@ -869,7 +869,9 @@ export function CrisisShareView({ token }: { token: string }) {
 
   const status = incidentStatusDef(data.incidentStatus);
   const { dot, badge } = status;
-  const roots = data.roles.filter((r) => r.parentId === null);
+  // By order, as the editor's chart draws them: moving a role renumbers
+  // `order` and leaves the array alone.
+  const roots = data.roles.filter((r) => r.parentId === null).sort((a, b) => a.order - b.order);
   // Live layers prescribed by the incident team; drop ids this build no longer
   // knows (snapshots outlive deploys). Array.isArray guards because share
   // snapshots are stored as opaque JSON — a malformed one must not blank the

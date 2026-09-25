@@ -230,6 +230,10 @@ export function TeamSection() {
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              // Esc clears the filter first; the page's own Esc (close) only when empty.
+              if (e.key === 'Escape' && query) { e.preventDefault(); setQuery(''); }
+            }}
             placeholder="Filter by name or email"
             aria-label="Filter team members"
             className="w-full rounded border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] text-white/85 placeholder-white/25 outline-none focus:border-accent/40 sm:w-56"

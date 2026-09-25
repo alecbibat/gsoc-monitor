@@ -21,14 +21,17 @@ export interface ChecklistItemState {
 }
 
 // Item ids come from the crisis templates (e.g. "safety-imm-2",
-// "t-wildfire-ops-imm-1"). A toggle accepts any well-formed id rather than
-// checking it against the incident's resolved template: an incident's map
-// legitimately holds ids its template no longer resolves to (type or property
-// changed, or an admin edited the scope), and unknown ids are harmless (shown
-// at most as retired, text-less). The cap stops an unauthenticated writer
-// from growing the blob without limit; it sits above the most an incident can
-// resolve to (4 applicable scopes × 300 items, crisisTemplates/validate.ts)
-// with room for retired entries.
+// "t-wildfire-ops-imm-1"). The signed-in toggle (routes/incidents.ts) accepts
+// any well-formed id rather than checking it against the incident's resolved
+// template: an incident's map legitimately holds ids its template no longer
+// resolves to (type or property changed, or an admin edited the scope), and
+// those show as retired items. The share-page toggle (routes/crisis.ts) is
+// further limited to the items of the blocks that apply to the incident —
+// its viewer may be anonymous, and a retired id comes back to share viewers
+// with its text. The cap stops an unauthenticated writer from growing the
+// blob without limit; it sits above the most an incident can resolve to (4
+// applicable scopes × 300 items, crisisTemplates/validate.ts) with room for
+// retired entries.
 const ITEM_ID_RE = /^[a-z][a-z0-9-]{0,63}$/;
 const MAX_ITEMS = 1500;
 const MAX_BY_LEN = 60;

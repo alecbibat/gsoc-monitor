@@ -215,7 +215,9 @@ export function CrisisReportModal({ incident: incidentProp, onClose }: Props) {
   }, [onClose]);
 
   const { dot, badge, label: statusLabel } = incidentStatusDef(incident.incidentStatus);
-  const roots = incident.roles.filter((r) => r.parentId === null);
+  // By order, as the editor's chart draws them: moving a role renumbers
+  // `order` and leaves the array alone.
+  const roots = incident.roles.filter((r) => r.parentId === null).sort((a, b) => a.order - b.order);
   const mapLayers = incident.drawLayers.filter((l) => l.positions.length > 0);
 
   const modal = (

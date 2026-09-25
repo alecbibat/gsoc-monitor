@@ -6,9 +6,9 @@ import {
 import { scopeAudience, scopeChipLabel, scopeLabel } from '../crisis/templates/scopeLabels';
 import { useTemplatesStore } from '../crisis/templates/templatesStore';
 import {
-  LIMITS, cleanIntakeGroups, insertAfter, insertQuestion, intakeIssues, intakeSignature,
+  LIMITS, cleanIntakeGroups, insertAfter, insertQuestion, insertQuestionsBefore, intakeIssues, intakeSignature,
   moveBefore, moveQuestion, namedInError, nudge, nudgeQuestion, removeById, removeQuestion, splitPastedLines,
-  tidyText, updateById, updateQuestion, withIntakeBlock, type QuestionDropTarget, type ScopeEntry,
+  splitRow, tidyText, updateById, updateQuestion, withIntakeBlock, type QuestionDropTarget, type RowSplit, type ScopeEntry,
 } from './draftOps';
 import {
   AutoTextarea, ConfigGate, ConflictBanner, DragHandle, DropLine, EditPreviewToggle, EditorFooter, EditorHeader,
@@ -17,7 +17,7 @@ import {
 } from './editorUi';
 import { ScopeList } from './ScopeList';
 import { ScopePicker } from './ScopePicker';
-import { resetIntakeBlock, saveIntakeBlock } from './templatesApi';
+import { resetIntakeBlock, saveIntakeBlock, type TemplatesSaveResult } from './templatesApi';
 
 // ── Intake question editor ───────────────────────────────────────────────────
 //
@@ -127,16 +127,20 @@ export function IntakeEditorBody({ config }: { config: CrisisTemplatesConfig }) 
       const k = o.indexOf(id);
       return k < 0 ? null : o[k + dir] ?? null;
     };
-    const insertLines = (q: IntakeBlockQuestion, groupId: string, head: string, lines: string[]) => {
-      const created = lines.map((text) => ({ id: mintTemplateId(), text }));
+    const applySplit = (q: IntakeBlockQuestion, groupId: string, split: RowSplit) => {
+      // The question keeps its id (incidents key answers to it) and
+      // `split.text`; every other line becomes a new question above or below it.
+      const make = (text: string) => ({ id: mintTemplateId(), text });
+      const above = split.above.map(make);
+      const below = split.below.map(make);
       update((gs) => {
-        let next = updateQuestion(gs, q.id, head);
+        let next = insertQuestionsBefore(updateQuestion(gs, q.id, split.text), groupId, above, q.id);
         let anchor = q.id;
-        for (const c of created) { next = insertQuestion(next, groupId, c, anchor); anchor = c.id; }
+        for (const c of below) { next = insertQuestion(next, groupId, c, anchor); anchor = c.id; }
         return next;
       });
-      const last = created[created.length - 1];
-      if (last) focusSoon(`q:${last.id}`, lines.length === 1 ? 'start' : 'end');
+      const last = above[above.length - 1] ?? below[below.length - 1];
+      if (last) focusSoon(`q:${last.id}`, above.length === 0 && below.length === 1 ? 'start' : 'end');
     };
     const remove = (id: string, groupId: string) => {
       const prev = neighbour(id, -1);
@@ -154,7 +158,7 @@ export function IntakeEditorBody({ config }: { config: CrisisTemplatesConfig }) 
         const plain = !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
         if (e.key === 'Enter' && plain) {
           e.preventDefault();
-          insertLines(q, groupId, el.value.slice(0, el.selectionStart), [el.value.slice(el.selectionEnd)]);
+          applySplit(q, groupId, splitRow(el.value, el.selectionStart, el.selectionEnd, null));
         } else if (e.key === 'Backspace' && plain && el.value === '') {
           e.preventDefault();
           remove(q.id, groupId);
@@ -176,11 +180,7 @@ export function IntakeEditorBody({ config }: { config: CrisisTemplatesConfig }) 
         if (lines.length < 2) return;
         e.preventDefault();
         const el = e.currentTarget;
-        const before = el.value.slice(0, el.selectionStart);
-        const after = el.value.slice(el.selectionEnd);
-        const rest = lines.slice(1);
-        rest[rest.length - 1] += after;
-        insertLines(q, groupId, before + lines[0], rest);
+        applySplit(q, groupId, splitRow(el.value, el.selectionStart, el.selectionEnd, lines));
       },
       nudge: (id, dir, refocus) => {
         update((gs) => nudgeQuestion(gs, id, dir));
@@ -331,6 +331,10 @@ export function IntakeEditorBody({ config }: { config: CrisisTemplatesConfig }) 
   };
 
   const reset = async () => {
+    if (savingRef.current) return;
+    // A newer version than the one this draft started from: settle that
+    // first, as a save would — a reset must not delete a version never seen.
+    if (draft.stale) { announceConflict(); return; }
     const name = scopeLabel(scope, false);
     const unsaved = dirty ? '\n\nYour unsaved changes will be lost too.' : '';
     const savedCount = block?.groups.reduce((n, g) => n + g.questions.length, 0) ?? 0;
@@ -339,16 +343,26 @@ export function IntakeEditorBody({ config }: { config: CrisisTemplatesConfig }) 
       ? `Delete the “${name}” intake scope?\n\nIts ${plural(savedCount, 'question')} will stop appearing on incidents. Answers already given stay on those incidents.${unsaved}`
       : `Reset “${name}” to the built-in default${defaultBlock ? ` (${plural(defaultCount, 'question')})` : ''}?\n\nThe customized version is deleted for every incident that uses this scope.${defaultBlock ? '' : ' If the scope has no built-in default, it is removed.'}${unsaved}`;
     if (!window.confirm(message)) return;
+    // Held for the whole reset, so Ctrl+S can't send a save alongside the delete.
+    savingRef.current = true;
     setBusy('Resetting…');
     setServerError(null);
     const savedKey = key;
-    const res = await resetIntakeBlock(scope);
+    let res: TemplatesSaveResult;
+    try {
+      res = await resetIntakeBlock(scope, draft.baseRevision);
+    } finally {
+      savingRef.current = false;
+    }
     setBusy(null);
     if (keyRef.current !== savedKey) return;
     if (res.ok) {
       const b = res.config.intakeBlocks.find((x) => sameScope(x.scope, scope));
       draft.replace(b?.groups ?? NO_GROUPS, b?.revision ?? 0);
       setNotice(b ? 'Reset to the built-in default' : 'Scope deleted');
+    } else if (res.status === 409) {
+      setServerError('Someone else saved this scope in the meantime, so nothing was reset — review their version, then reset again if you still want to.');
+      if (!res.config) void useTemplatesStore.getState().load();
     } else {
       setServerError(res.error);
     }
@@ -575,7 +589,7 @@ export function IntakeEditorBody({ config }: { config: CrisisTemplatesConfig }) 
               </button>
 
               <p className="mt-5 hidden text-[10px] leading-relaxed text-white/25 md:block">
-                Enter adds a question below · Backspace in an empty question removes it · {MOVE_SHORTCUT} moves a
+                Enter splits the question (at its start: adds one above) · Backspace in an empty question removes it · {MOVE_SHORTCUT} moves a
                 question (also into the next group) · paste a list to add one question per line · drag ⠿ to reorder
                 questions and groups. Numbers here count this scope only — incidents number questions across every
                 scope that applies.
