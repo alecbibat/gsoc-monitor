@@ -30,6 +30,26 @@ export default {
       backdropBlur: {
         xs: '2px',
       },
+      // Tailwind 3 only generates opacity modifiers from this scale (steps of
+      // 5 by default), so the fine steps the UI is written with — white/4,
+      // border-white/8, text-white/22 … — silently produced no CSS at all and
+      // borders fell back to the preflight's light gray. Extend the scale
+      // with every step in use.
+      opacity: {
+        3: '0.03',
+        4: '0.04',
+        6: '0.06',
+        7: '0.07',
+        8: '0.08',
+        12: '0.12',
+        14: '0.14',
+        16: '0.16',
+        18: '0.18',
+        22: '0.22',
+        38: '0.38',
+        72: '0.72',
+        92: '0.92',
+      },
     },
   },
   plugins: [],
