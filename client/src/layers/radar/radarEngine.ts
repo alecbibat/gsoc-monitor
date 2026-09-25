@@ -1,5 +1,5 @@
 import * as Cesium from 'cesium';
-import { addImageryBelowLabels, stackBelowLabels } from '../../cesium/labelOverlay';
+import { addImageryBelowLabels } from '../../cesium/labelOverlay';
 import { blendAlphas, PlaybackClock, type Blend, type PlaybackTiming } from './radarPlayback';
 import { radarPlayhead, setRadarController, type RadarController } from './radarPlayhead';
 import { RadarImageryProvider, type FrameSource } from './rainviewer';
@@ -13,11 +13,13 @@ import type { TimelineFrame } from './radarTimeline';
 // continuous position through the frames and blendAlphas renders it as a
 // coverage-preserving crossfade.
 //
-// The one rule that makes it feel seamless: nothing is ever shown before its
-// tiles are loaded for the current view. The loop plays only the run of
-// loaded frames ending at the newest one — it starts short and grows as
-// older frames arrive — a newly published frame joins once it has loaded,
-// and a palette change builds the new layers underneath before swapping.
+// What makes it feel seamless: the loop only plays through frames whose
+// tiles are loaded for the current view. It plays the run of loaded frames
+// ending at the newest one — starting short and growing as older frames
+// arrive — holds still while the camera moves and until the new view has
+// been checked, a newly published frame joins once it has loaded, and a
+// palette change builds the new layers underneath before swapping. (Only an
+// explicit step or scrub by the user can show a frame that is still loading.)
 
 export interface EngineSettings {
   palette: RadarPaletteId;
@@ -25,13 +27,13 @@ export interface EngineSettings {
   speed: number;
   sigma: number;
   snow: boolean;
-  tileWidth: 512 | 1024;
+  tileWidth: 512 | 1024 | 2048;
   timing: PlaybackTiming;
   autoplay: boolean; // start looping once enough of the loop has loaded
 }
 
 interface Frame {
-  key: string; // frame time — survives RainViewer re-hashing a frame's path
+  key: string; // frame identity: time, path and kind (observed / forecast)
   time: number;
   forecast: boolean;
   source: FrameSource;
@@ -47,9 +49,19 @@ const SETTLE_MS = 220; // pause / step / scrub-release glide
 const ADVANCE_MS = 600; // "now" moving onto a newly published frame
 const READY_CHECK_MS = 150;
 const CAMERA_SETTLE_MS = 350;
+// Motion longer than this (a screensaver orbit, a long flight) is treated as
+// the new normal: the loop keeps playing over whatever is loaded.
+const MAX_MOTION_HOLD_MS = 1500;
 const SWAP_TIMEOUT_MS = 5000;
 const MAX_DT_MS = 100;
 const AUTOPLAY_MIN_FRAMES = 4;
+// Alpha changes redraw the whole globe; a crossfade reads just as smooth at
+// 30 updates a second as at the display's 60-144.
+const MIN_BLEND_REDRAW_MS = 33;
+// A request is cancelled once it has been missing from this many readiness
+// scans (and is at least this old): the tile has left the view.
+const UNWANTED_SCANS = 3;
+const UNWANTED_MIN_AGE_MS = 1000;
 // Typical alpha of a visible echo pixel under our palettes (most echo area is
 // light rain, faded in by the palette): with the layer opacity it sets the
 // crossfade's coverage compensation (see blendAlphas).
@@ -58,8 +70,8 @@ const ECHO_ALPHA = 0.55;
 // doesn't switch shader variants mid-loop; invisible at this strength.
 const PREWARM_ALPHA = 0.002;
 const ALPHA_QUANTUM = 1 / 512;
-// Cesium's ImageryState values: PLACEHOLDER never counts as loaded; FAILED
-// and INVALID count as settled (nothing better is coming).
+// Cesium's ImageryState values: FAILED and INVALID count as settled (nothing
+// better is coming); PLACEHOLDER and anything still loading do not.
 const IMAGERY_FAILED = 5;
 const IMAGERY_INVALID = 6;
 const MERCATOR_LIMIT = Cesium.Math.toRadians(85.05);
@@ -86,6 +98,10 @@ interface SurfaceLike {
   _tileLoadQueueLow?: QuadtreeTileLike[];
 }
 
+function frameKeyOf(t: TimelineFrame): string {
+  return `${t.forecast ? 'f' : 'o'}:${t.time}:${t.frame.path}`;
+}
+
 export class RadarEngine implements RadarController {
   private frames: Frame[] = [];
   private incoming: { frames: Frame[]; since: number } | null = null; // double-buffered rebuild
@@ -102,10 +118,10 @@ export class RadarEngine implements RadarController {
   private live = true; // resting on the newest loaded frame, following new ones
   private scrubbing = false;
   private settle: { from: number; to: number; start: number; ms: number } | null = null;
-  private windowLo = 0;
-  private windowHi = -1;
   private moving = false;
+  private movingSince = 0;
   private settledAt = 0; // when the camera last came to rest
+  private readinessStale = false; // camera moved; the loop waits for a fresh scan
   private dirty = true;
   private lastTick = 0;
   private lastReadyCheck = 0;
@@ -113,6 +129,11 @@ export class RadarEngine implements RadarController {
   private lastVisibleSig = '';
   private lastAlphas: number[] = [];
   private lastBlend: Blend = { from: -1, to: -1, t: 0 };
+  private lastRedraw = 0;
+  private scanCount = 0;
+  private wantedNow = new Set<string>();
+  private wantedPrev = new Set<string>();
+  private wantedOlder = new Set<string>();
   private destroyed = false;
   private readonly unlisten: Array<() => void> = [];
 
@@ -124,23 +145,26 @@ export class RadarEngine implements RadarController {
     this.settings = settings;
     this.autoplayPending = settings.autoplay;
     this.clock = new PlaybackClock(settings.timing);
-    const scene = viewer.scene;
-    this.unlisten.push(scene.preUpdate.addEventListener(() => this.tick()));
-    this.unlisten.push(scene.postRender.addEventListener(() => this.checkReady()));
+    const camera = viewer.scene.camera;
+    this.unlisten.push(viewer.scene.preUpdate.addEventListener(() => this.tick()));
     this.unlisten.push(
-      scene.camera.moveStart.addEventListener(() => {
+      camera.moveStart.addEventListener(() => {
         this.moving = true;
+        this.movingSince = performance.now();
+        this.readinessStale = true;
       })
     );
     this.unlisten.push(
-      scene.camera.moveEnd.addEventListener(() => {
+      camera.moveEnd.addEventListener(() => {
         this.moving = false;
         this.settledAt = performance.now();
         this.kick();
       })
     );
     setRadarController(this);
-    if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__radarEngine = this;
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      (window as unknown as Record<string, unknown>).__radarEngine = this;
+    }
   }
 
   // ── inputs ──────────────────────────────────────────────────────────────
@@ -157,59 +181,63 @@ export class RadarEngine implements RadarController {
     this.kick();
   }
 
-  // Frames to show, oldest → newest. Layers are keyed by frame time, so a
+  // Frames to show, oldest → newest. Layers are keyed by frame, so a
   // manifest refresh only adds the new frame and drops the expired one.
   setTimeline(host: string, timeline: TimelineFrame[]): void {
     if (this.destroyed || this.viewer.isDestroyed()) return;
+    if (
+      host === this.host &&
+      timeline.length === this.frames.length &&
+      timeline.every((t, i) => frameKeyOf(t) === this.frames[i].key)
+    ) {
+      return; // unchanged (a manifest poll with nothing new)
+    }
+    const rebuilding = this.incoming !== null;
     this.discardIncoming();
+    const shownTime = this.frames[this.clock.current().index]?.time ?? null;
+    const settleTime =
+      this.settle && this.frames[Math.round(this.settle.to)] ? this.frames[Math.round(this.settle.to)].time : null;
+    const old = this.frames;
     if (host !== this.host) {
-      this.removeLayers(this.frames);
+      this.removeLayers(old);
       this.frames = [];
       this.host = host;
     }
-    const old = this.frames;
-    const wanted = new Set(timeline.map((t) => String(t.time)));
+
+    const wanted = new Map(timeline.map((t) => [frameKeyOf(t), t]));
     const keep: Frame[] = [];
     const drop: Frame[] = [];
-    for (const f of old) (wanted.has(f.key) ? keep : drop).push(f);
+    for (const f of this.frames) (wanted.has(f.key) ? keep : drop).push(f);
     this.removeLayers(drop);
-
     const have = new Map(keep.map((f) => [f.key, f]));
     const next: Frame[] = [];
     for (const t of timeline) {
-      const existing = have.get(String(t.time));
-      // Re-hashed upstream: keep the loaded layer; new tiles come from the
-      // new path (the old one expires).
-      if (existing && existing.source.path !== t.frame.path) existing.source.path = t.frame.path;
-      next.push(existing ?? this.makeFrame(String(t.time), t));
+      const key = frameKeyOf(t);
+      next.push(have.get(key) ?? this.addFrame(key, t, next, keep));
     }
-    next.sort((a, b) => a.time - b.time);
     this.frames = next;
-    if (next.length !== keep.length || drop.length > 0) {
-      stackBelowLabels(
-        this.viewer,
-        next.map((f) => f.layer)
-      );
-    }
 
-    // Keep the picture where it was in time.
-    const anchor = keep[0];
-    if (anchor && old.length > 0) {
-      const delta = next.indexOf(anchor) - old.indexOf(anchor);
+    if (keep.length === 0) {
+      // Nothing carried over (first load, host change, a long-asleep tab):
+      // start over on "now", fading in once it has loaded.
+      this.clock.reset(next.length, Math.max(0, this.newestObserved()));
+      this.master = 0;
+      this.activeSince = performance.now();
+      this.settle = null;
+      this.live = true;
+    } else {
+      // Keep the picture where it was in time.
+      const at = shownTime === null ? -1 : this.indexNear(shownTime);
+      const delta = at >= 0 ? at - this.clock.current().index : 0;
       this.clock.remap(next.length, delta);
       if (this.settle) {
-        this.settle.from += delta;
-        this.settle.to += delta;
+        const to = settleTime === null ? this.settle.to + delta : this.indexNear(settleTime);
+        this.settle = { ...this.settle, from: this.settle.from + delta, to };
       }
-      this.windowLo = Math.max(0, this.windowLo + delta);
-      this.windowHi = Math.min(next.length - 1, this.windowHi + delta);
-    } else {
-      this.clock.reset(next.length, Math.max(0, this.newestObserved()));
-      this.windowLo = 0;
-      this.windowHi = next.length - 1;
     }
     this.recomputeWindow();
     this.client?.retain(next.map((f) => f.key));
+    if (rebuilding && next.length > 0) this.startRebuild();
     this.lastAlphas = [];
     this.lastRankSig = '';
     this.dirty = true;
@@ -219,15 +247,18 @@ export class RadarEngine implements RadarController {
   updateSettings(next: Partial<EngineSettings>): void {
     const prev = this.settings;
     this.settings = { ...prev, ...next };
-    if (next.timing && next.timing !== prev.timing) this.clock.setTiming(next.timing);
     const rebuild =
       (next.palette !== undefined && next.palette !== prev.palette) ||
-      (next.sigma !== undefined && next.sigma !== prev.sigma) ||
-      (next.snow !== undefined && next.snow !== prev.snow) ||
-      (next.tileWidth !== undefined && next.tileWidth !== prev.tileWidth);
+      (next.snow !== undefined && next.snow !== prev.snow);
     if (rebuild && this.frames.length > 0) this.startRebuild();
     this.dirty = true;
     this.kick();
+  }
+
+  // Re-request every tile (e.g. after the tile host came back from an
+  // outage, so tiles that failed are fetched again).
+  refreshTiles(): void {
+    if (this.frames.length > 0) this.startRebuild();
   }
 
   destroy(): void {
@@ -239,6 +270,10 @@ export class RadarEngine implements RadarController {
     this.frames = [];
     setRadarController(null, this);
     radarPlayhead.reset();
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      const w = window as unknown as Record<string, unknown>;
+      if (w.__radarEngine === this) delete w.__radarEngine;
+    }
   }
 
   // ── commands (timeline, hotkeys) ────────────────────────────────────────
@@ -250,9 +285,13 @@ export class RadarEngine implements RadarController {
     this.scrubbing = false;
     this.settle = null;
     this.live = false;
-    const at = this.clock.current().index;
-    this.clock.seek(Math.min(Math.max(at, this.windowLo), Math.max(this.windowLo, this.windowHi)));
-    this.clock.play();
+    const [lo, hi] = this.clock.window;
+    if (hi > lo) {
+      const at = this.clock.current().index;
+      this.clock.seek(Math.min(Math.max(at, lo), hi));
+      this.clock.play();
+    }
+    // Otherwise tick starts the clock once two frames have loaded.
     this.kick();
   }
 
@@ -260,9 +299,8 @@ export class RadarEngine implements RadarController {
     this.intent = 'pause';
     this.autoplayPending = false;
     if (this.clock.playing) {
-      const cur = this.clock.current();
-      this.clock.seek(cur.position);
-      this.glideTo(cur.index, SETTLE_MS);
+      const index = this.clock.current().index;
+      this.glideTo(index, SETTLE_MS);
     }
     this.kick();
   }
@@ -324,9 +362,30 @@ export class RadarEngine implements RadarController {
     return this.client.probe(f.key, lon, lat);
   }
 
+  // Whether Cesium still wants a tile a request was made for: seen in one of
+  // the recent readiness scans, or too recent to judge.
+  tileWanted(frameKey: string, level: number, x: number, y: number, since: { scan: number; at: number }): boolean {
+    if (this.scanCount < since.scan + UNWANTED_SCANS || performance.now() - since.at < UNWANTED_MIN_AGE_MS) return true;
+    const k = `${frameKey}|${level}/${x}/${y}`;
+    return this.wantedNow.has(k) || this.wantedPrev.has(k) || this.wantedOlder.has(k);
+  }
+
   // ── internals ───────────────────────────────────────────────────────────
 
-  private makeFrame(key: string, t: TimelineFrame): Frame {
+  // Add a frame's layer next to its neighbours in time — just below the next
+  // newer radar layer, or just above the newest — so the stack stays in time
+  // order without moving anything past other layers (labels, precipitation).
+  private addFrame(key: string, t: TimelineFrame, placed: Frame[], existing: Frame[]): Frame {
+    const layers = this.viewer.imageryLayers;
+    const newer = existing.filter((f) => f.time > t.time).sort((a, b) => a.time - b.time)[0];
+    const older = [...placed, ...existing].filter((f) => f.time <= t.time).sort((a, b) => b.time - a.time)[0];
+    let index: number | undefined;
+    if (newer && layers.contains(newer.layer)) index = layers.indexOf(newer.layer);
+    else if (older && layers.contains(older.layer)) index = layers.indexOf(older.layer) + 1;
+    return this.makeFrame(key, t, index);
+  }
+
+  private makeFrame(key: string, t: TimelineFrame, index?: number): Frame {
     if (!this.client) this.client = this.getClient();
     const s = this.settings;
     const source: FrameSource = { path: t.frame.path };
@@ -340,8 +399,13 @@ export class RadarEngine implements RadarController {
       tileWidth: s.tileWidth,
       client: this.client,
       defer: () => this.shouldDefer(key),
+      wanted: (level, x, y, since) => this.tileWanted(key, level, x, y, since),
+      stamp: () => ({ scan: this.scanCount, at: performance.now() }),
     });
-    const layer = addImageryBelowLabels(this.viewer, provider);
+    const layer =
+      index === undefined
+        ? addImageryBelowLabels(this.viewer, provider)
+        : this.viewer.imageryLayers.addImageryProvider(provider, index);
     provider.layer = layer;
     layer.alpha = 0;
     return { key, time: t.time, forecast: t.forecast, source, layer, provider, ready: false };
@@ -352,15 +416,20 @@ export class RadarEngine implements RadarController {
     for (const f of frames) this.viewer.imageryLayers.remove(f.layer, true);
   }
 
-  // Palette / smoothing / snow / tile density changes: build a fresh stack
-  // (the tile worker re-paints from its cache, no network) at alpha 0 and
-  // swap once the frame on screen has loaded in it.
+  // Palette / snow changes: build a fresh stack (the tile worker re-paints
+  // from its cache, no network) at alpha 0, just above the current one, and
+  // swap once the frames the loop plays have loaded in it.
   private startRebuild(): void {
     this.discardIncoming();
-    const frames = this.frames.map((f) =>
-      this.makeFrame(f.key, { frame: { time: f.time, path: f.source.path }, time: f.time, forecast: f.forecast })
-    );
-    stackBelowLabels(this.viewer, [...this.frames.map((f) => f.layer), ...frames.map((f) => f.layer)]);
+    const layers = this.viewer.imageryLayers;
+    const top = this.frames[this.frames.length - 1];
+    let index = top && layers.contains(top.layer) ? layers.indexOf(top.layer) + 1 : undefined;
+    const frames = this.frames.map((f) => {
+      const t: TimelineFrame = { frame: { time: f.time, path: f.source.path }, time: f.time, forecast: f.forecast };
+      const made = this.makeFrame(f.key, t, index);
+      if (index !== undefined) index++;
+      return made;
+    });
     this.incoming = { frames, since: performance.now() };
   }
 
@@ -373,8 +442,11 @@ export class RadarEngine implements RadarController {
   private maybeSwap(now: number): void {
     const inc = this.incoming;
     if (!inc) return;
+    const [lo, hi] = this.clock.window;
     const shown = this.clock.current().index;
-    if (!inc.frames[shown]?.ready && now - inc.since < SWAP_TIMEOUT_MS) return;
+    let ready = inc.frames[shown]?.ready ?? false;
+    for (let i = Math.max(0, lo); ready && i <= hi; i++) ready = inc.frames[i]?.ready ?? false;
+    if (!ready && now - inc.since < SWAP_TIMEOUT_MS) return;
     const old = this.frames;
     this.frames = inc.frames;
     this.incoming = null;
@@ -398,20 +470,42 @@ export class RadarEngine implements RadarController {
     return Math.max(0, newest);
   }
 
+  private indexNear(time: number): number {
+    let best = -1;
+    for (let i = 0; i < this.frames.length; i++) {
+      if (best < 0 || Math.abs(this.frames[i].time - time) < Math.abs(this.frames[best].time - time)) best = i;
+    }
+    return best;
+  }
+
+  // Glide from what is on screen to a frame. Mid-blend between neighbours
+  // the glide starts from the blend; mid-wrap (newest dissolving into the
+  // oldest) there is no in-between frame to glide through, so it cuts.
   private glideTo(index: number, ms: number): void {
-    const from = this.clock.current().position;
+    const cur = this.clock.current();
+    const b = cur.blend;
+    let from: number;
+    if (b.from === b.to || b.t === 0) from = b.from;
+    else if (Math.abs(b.to - b.from) === 1) from = b.from + (b.to - b.from) * b.t;
+    else from = index;
+    if (!this.clock.playing && b.from !== b.to && Math.abs(b.to - b.from) !== 1) from = cur.position;
+    this.clock.seek(from);
     this.settle = Math.abs(from - index) < 1e-6 ? null : { from, to: index, start: performance.now(), ms };
     if (!this.settle) this.clock.seek(index);
     this.live = index === this.liveIndex();
   }
 
+  private isMoving(now: number): boolean {
+    return this.moving && now - this.movingSince < MAX_MOTION_HOLD_MS;
+  }
+
   private shouldDefer(key: string): boolean {
-    // While the camera moves, only the frame on screen loads: tiles for views
+    // While the camera moves, only the frames on screen load: tiles for views
     // the camera is passing through would spend the rate budget on frames
     // nobody sees.
-    if (!this.moving) return false;
-    const shown = this.frames[this.clock.current().index];
-    return !shown || shown.key !== key;
+    if (!this.isMoving(performance.now())) return false;
+    const b = this.clock.current().blend;
+    return this.frames[b.from]?.key !== key && !(b.t > 0 && this.frames[b.to]?.key === key);
   }
 
   private kick(): void {
@@ -431,34 +525,33 @@ export class RadarEngine implements RadarController {
     }
     let lo = hi;
     while (lo > 0 && this.frames[lo - 1].ready) lo--;
-    if (hi < 0) lo = 0;
-    this.windowLo = lo;
-    this.windowHi = hi;
-    this.clock.setWindow(lo, hi);
+    this.clock.setWindow(hi < 0 ? 0 : lo, hi);
   }
 
   // Per-frame readiness: every tile Cesium is drawing — and every tile it is
   // loading to replace them — has this layer's own imagery settled (loaded
   // or permanently failed): not a stretched ancestor, not a placeholder, and
-  // not nothing. Read from the globe after each render, and only once the
-  // camera has settled, so readiness doesn't flicker during refinement.
-  private checkReady(): void {
-    const now = performance.now();
+  // not nothing. Read from the globe's last render, and only once the camera
+  // has settled (or has been moving for a long time), so readiness doesn't
+  // flicker during refinement. The same scan records which tiles Cesium
+  // still wants, for cancelling the rest.
+  private checkReady(now: number): void {
     if (now - this.lastReadyCheck < READY_CHECK_MS) return;
-    this.lastReadyCheck = now;
     const all = this.incoming ? [...this.frames, ...this.incoming.frames] : this.frames;
     if (all.length === 0) return;
-    if (this.moving || now - this.settledAt < CAMERA_SETTLE_MS) return;
+    if (this.isMoving(now) || (!this.moving && now - this.settledAt < CAMERA_SETTLE_MS)) return;
+    this.lastReadyCheck = now;
 
     const surface = (this.viewer.scene.globe as unknown as { _surface?: SurfaceLike })._surface;
     const rendered = surface?._tilesToRender;
     if (!Array.isArray(rendered)) {
-      // Cesium internals changed shape: treat every frame as loaded rather
-      // than stalling the loop forever.
+      // Cesium internals changed shape (radarEngine.test.ts guards this in
+      // CI): treat every frame as loaded rather than stalling the loop.
       if (all.some((f) => !f.ready)) {
         for (const f of all) f.ready = true;
         this.recomputeWindow();
       }
+      this.readinessStale = false;
       return;
     }
     const queued = [
@@ -473,6 +566,7 @@ export class RadarEngine implements RadarController {
     const seen = new Uint8Array(all.length);
     const bad = new Uint8Array(all.length);
     const visible = new Set<string>();
+    const wanted = new Set<string>();
     const shownLayer = this.frames[this.clock.current().index]?.layer;
 
     const scan = (tile: QuadtreeTileLike, drawn: boolean) => {
@@ -487,7 +581,10 @@ export class RadarEngine implements RadarController {
           if (i === undefined) continue;
           seen[i] = 1;
           const li = ti.loadingImagery;
-          if (li && li.state !== IMAGERY_FAILED && li.state !== IMAGERY_INVALID) bad[i] = 1;
+          if (li && li.state !== IMAGERY_FAILED && li.state !== IMAGERY_INVALID) {
+            bad[i] = 1;
+            wanted.add(`${all[i].key}|${li.level}/${li.x}/${li.y}`);
+          }
           if (img.imageryLayer === shownLayer) visible.add(`${img.level}/${img.x}/${img.y}`);
         }
       }
@@ -507,6 +604,11 @@ export class RadarEngine implements RadarController {
     for (const t of rendered) scan(t, true);
     for (const t of queued) scan(t, false);
 
+    this.scanCount++;
+    this.wantedOlder = this.wantedPrev;
+    this.wantedPrev = this.wantedNow;
+    this.wantedNow = wanted;
+
     let changed = false;
     all.forEach((f, i) => {
       const ready = rendered.length > 0 && need[i] > 0 && own[i] === need[i];
@@ -515,6 +617,7 @@ export class RadarEngine implements RadarController {
         changed = true;
       }
     });
+    this.readinessStale = false;
     if (changed) {
       this.recomputeWindow();
       this.kick();
@@ -540,6 +643,8 @@ export class RadarEngine implements RadarController {
     this.lastRankSig = sig;
     const ranks: Record<string, number> = {};
     order.forEach((f, k) => (ranks[f.key] = k));
+    // The rebuild stack loads in the same order as the one it replaces.
+    this.incoming?.frames.forEach((f, i) => (ranks[f.key] = ranks[this.frames[i]?.key] ?? n + i));
     this.client.setRanks(ranks);
   }
 
@@ -548,6 +653,7 @@ export class RadarEngine implements RadarController {
     const now = performance.now();
     const dt = this.lastTick ? Math.min(MAX_DT_MS, now - this.lastTick) : 0;
     this.lastTick = now;
+    this.checkReady(now);
     const n = this.frames.length;
 
     // Layer on/off fade. Fading in waits for the picture to load so the
@@ -563,8 +669,8 @@ export class RadarEngine implements RadarController {
       this.removeLayers(this.frames);
       this.frames = [];
       this.clock.reset(0, 0);
-      this.windowLo = 0;
-      this.windowHi = -1;
+      this.clock.setWindow(0, -1);
+      this.settle = null;
       this.lastAlphas = [];
       this.lastRankSig = '';
       radarPlayhead.reset();
@@ -574,7 +680,11 @@ export class RadarEngine implements RadarController {
     if (n === 0) return;
     this.maybeSwap(now);
 
-    const windowSize = this.windowHi >= this.windowLo ? this.windowHi - this.windowLo + 1 : 0;
+    const [lo, hi] = this.clock.window;
+    const windowSize = hi >= lo ? hi - lo + 1 : 0;
+    // The loop holds while the camera moves and until the new view has been
+    // checked (only the frame on screen loads meanwhile).
+    const holding = this.isMoving(now) || (this.readinessStale && !this.moving);
     // Autoplay once enough of the loop has loaded — opening on the newest
     // frame, then growing as older frames arrive.
     if (
@@ -588,20 +698,21 @@ export class RadarEngine implements RadarController {
       this.autoplayPending = false;
       this.intent = 'play';
       this.live = false;
-      this.clock.seek(this.windowHi);
+      this.clock.seek(hi);
       this.clock.play({ fromHold: true });
     }
     // Playing, but the clock couldn't run yet (too few frames loaded): start
     // it once it can, from the newest frame.
     if (this.intent === 'play' && !this.clock.playing && windowSize >= 2 && !this.scrubbing) {
-      this.clock.seek(this.windowHi);
+      this.clock.seek(hi);
       this.clock.play({ fromHold: true });
     }
-    // Resting on "now": move onto a newly published frame once it has loaded.
+    // Resting on "now": move forward onto a newly published frame once it
+    // has loaded.
     if (this.intent === 'pause' && this.live && !this.scrubbing && !this.settle) {
       const target = this.liveIndex();
       const at = this.clock.current().position;
-      if (target !== at) this.settle = { from: at, to: target, start: now, ms: ADVANCE_MS };
+      if (target > at) this.settle = { from: at, to: target, start: now, ms: ADVANCE_MS };
     }
 
     if (this.settle) {
@@ -613,22 +724,23 @@ export class RadarEngine implements RadarController {
       }
     }
 
-    // The loop holds still while the camera moves (only the frame on screen
-    // loads for the new view) and carries on once the camera settles.
-    const frame =
-      this.clock.playing && !this.moving ? this.clock.tick(dt, this.settings.speed) : this.clock.current();
+    const frame = this.clock.playing && !holding ? this.clock.tick(dt, this.settings.speed) : this.clock.current();
     this.updateRanks(frame.index);
 
     const b = frame.blend;
-    const blendChanged = b.from !== this.lastBlend.from || b.to !== this.lastBlend.to || b.t !== this.lastBlend.t;
-    if (blendChanged || this.master !== masterBefore || this.dirty) {
+    const discrete = b.from !== this.lastBlend.from || b.to !== this.lastBlend.to;
+    const blendMoved = discrete || b.t !== this.lastBlend.t;
+    const due = discrete || now - this.lastRedraw >= MIN_BLEND_REDRAW_MS || b.t === 0 || b.t === 1;
+    if ((blendMoved && due) || this.master !== masterBefore || this.dirty) {
       this.lastBlend = { ...b };
       this.dirty = false;
       const opacity = this.settings.opacity * this.master;
       const alphas = blendAlphas(n, b, opacity, this.settings.opacity * ECHO_ALPHA);
       if (this.clock.playing && this.master > 0 && b.t === 0) {
-        const next = b.from >= this.windowHi ? this.windowLo : b.from + 1;
-        if (next >= 0 && next < n && alphas[next] === 0 && this.frames[next].ready) alphas[next] = PREWARM_ALPHA;
+        const nextIdx = b.from >= hi ? lo : b.from + 1;
+        if (nextIdx >= 0 && nextIdx < n && alphas[nextIdx] === 0 && this.frames[nextIdx].ready) {
+          alphas[nextIdx] = PREWARM_ALPHA;
+        }
       }
       let changed = this.lastAlphas.length !== n;
       for (let i = 0; i < n; i++) {
@@ -639,7 +751,10 @@ export class RadarEngine implements RadarController {
         }
       }
       this.lastAlphas = this.frames.map((f) => f.layer.alpha);
-      if (changed) this.viewer.scene.requestRender();
+      if (changed) {
+        this.lastRedraw = now;
+        this.viewer.scene.requestRender();
+      }
     }
 
     let ready = 0;
@@ -652,11 +767,14 @@ export class RadarEngine implements RadarController {
       position: frame.position,
       index: frame.index,
       playing: this.intent === 'play',
-      buffering: this.intent === 'play' ? !this.clock.playing : this.autoplayPending && this.active,
+      buffering:
+        this.intent === 'play'
+          ? !this.clock.playing || windowSize < 2
+          : this.autoplayPending && this.active && windowSize < Math.min(AUTOPLAY_MIN_FRAMES, n),
       ready,
       total: n,
       readyMask,
-      live: this.intent === 'pause' && this.live && !this.settle,
+      live: this.intent === 'pause' && this.live,
     });
   }
 }

@@ -3,8 +3,8 @@
 // translucent pixels' RGB, and the radar decode matches colours exactly.
 // Inflates with the platform's DecompressionStream (browsers, workers and
 // Node 18+), so it needs no dependency. Handles 8-bit truecolour/grey (with
-// or without alpha) and 1/2/4/8-bit palette/grey; interlaced images throw
-// and the caller falls back to the browser's decoder.
+// or without alpha, and tRNS colour keys) and 1/2/4/8-bit palette/grey;
+// interlaced images throw and the caller falls back to the browser's decoder.
 
 export interface DecodedImage {
   width: number;
@@ -119,6 +119,11 @@ export async function decodePng(bytes: Uint8Array): Promise<DecodedImage> {
     return { width, height, data };
   }
   const maxSample = (1 << bitDepth) - 1;
+  // Grey and RGB images mark one colour transparent through tRNS (16-bit
+  // big-endian samples; at 8 bits only the low byte matters).
+  const keyGrey = colorType === 0 && trns && trns.length >= 2 ? ((trns[0] << 8) | trns[1]) & maxSample : -1;
+  const keyRgb =
+    colorType === 2 && trns && trns.length >= 6 ? [trns[1], trns[3], trns[5]] : null;
   for (let y = 0; y < height; y++) {
     const row = y * stride;
     for (let x = 0; x < width; x++) {
@@ -134,7 +139,7 @@ export async function decodePng(bytes: Uint8Array): Promise<DecodedImage> {
         } else {
           const g = Math.round((sample * 255) / maxSample);
           data[o] = data[o + 1] = data[o + 2] = g;
-          data[o + 3] = 255;
+          data[o + 3] = sample === keyGrey ? 0 : 255;
         }
         continue;
       }
@@ -142,13 +147,14 @@ export async function decodePng(bytes: Uint8Array): Promise<DecodedImage> {
       switch (colorType) {
         case 0:
           data[o] = data[o + 1] = data[o + 2] = lines[i];
-          data[o + 3] = 255;
+          data[o + 3] = lines[i] === keyGrey ? 0 : 255;
           break;
         case 2:
           data[o] = lines[i];
           data[o + 1] = lines[i + 1];
           data[o + 2] = lines[i + 2];
-          data[o + 3] = 255;
+          data[o + 3] =
+            keyRgb && lines[i] === keyRgb[0] && lines[i + 1] === keyRgb[1] && lines[i + 2] === keyRgb[2] ? 0 : 255;
           break;
         case 3: {
           const s = lines[i];

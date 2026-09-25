@@ -178,6 +178,10 @@ export function Sidebar() {
       past: s.past,
       nowcast: s.nowcast,
       coolingDownMs: s.coolingDownMs,
+      tilesFailing: s.tilesFailing,
+      // Changes with every manifest poll, so the status re-renders (and
+      // notices a delayed feed) at least once a minute while the layer is on.
+      manifestAt: s.manifestAt,
     }))
   );
   const precipPeriod = usePrecipStore((s) => s.period);

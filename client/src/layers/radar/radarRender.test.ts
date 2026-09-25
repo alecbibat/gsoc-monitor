@@ -67,14 +67,14 @@ describe('renderRadarTile', () => {
   const lut = paletteLut('classic');
 
   it('returns nothing for a tile without visible echo', () => {
-    expect(renderRadarTile(grid(4, 4, () => NO_ECHO), lut, { sigma: 0.8, flipY: false, snow: true })).toBeNull();
+    expect(renderRadarTile(grid(4, 4, () => NO_ECHO), lut, { sigma: 0.8, snow: true })).toBeNull();
     // Echo below the palette's threshold (clutter) is not visible either.
-    expect(renderRadarTile(grid(4, 4, () => 2), lut, { sigma: 0, flipY: false, snow: true })).toBeNull();
+    expect(renderRadarTile(grid(4, 4, () => 2), lut, { sigma: 0, snow: true })).toBeNull();
   });
 
   it('bleeds edge colour a couple of pixels, then fills with the ramp floor', () => {
     const g = grid(8, 1, (x) => (x === 0 ? 45 : NO_ECHO));
-    const out = renderRadarTile(g, lut, { sigma: 0, flipY: false, snow: true })!;
+    const out = renderRadarTile(g, lut, { sigma: 0, snow: true })!;
     const rgb = (x: number) => Array.from(out.subarray(x * 4, x * 4 + 3));
     expect(out[3]).toBe(255);
     expect(rgb(1)).toEqual(rgb(0)); // bled
@@ -83,20 +83,17 @@ describe('renderRadarTile', () => {
     expect(rgb(6)).toEqual(lut.edgeRgb);
   });
 
-  it('paints echo through the palette and flips rows when asked', () => {
+  it('paints echo through the palette, rows top-down', () => {
     // Top row heavy, rest empty.
     const g = grid(8, 8, (_x, y) => (y === 0 ? 45 : NO_ECHO));
-    const upright = renderRadarTile(g, lut, { sigma: 0, flipY: false, snow: true })!;
-    const flipped = renderRadarTile(g, lut, { sigma: 0, flipY: true, snow: true })!;
-    expect(upright[3]).toBe(255);
-    expect(upright[7 * 8 * 4 + 3]).toBe(0);
-    expect(flipped[3]).toBe(0);
-    expect(flipped[7 * 8 * 4 + 3]).toBe(255);
+    const out = renderRadarTile(g, lut, { sigma: 0, snow: true })!;
+    expect(out[3]).toBe(255);
+    expect(out[7 * 8 * 4 + 3]).toBe(0);
   });
 
   it('smooths in data space: a hard step becomes a graded edge without foreign hues', () => {
     const g = grid(16, 1, (x) => (x < 8 ? 40 : NO_ECHO));
-    const out = renderRadarTile(g, lut, { sigma: 1, flipY: false, snow: true })!;
+    const out = renderRadarTile(g, lut, { sigma: 1, snow: true })!;
     const alphas = Array.from({ length: 16 }, (_, x) => out[x * 4 + 3]);
     // Monotone non-increasing across the edge, with intermediate values.
     for (let x = 1; x < 16; x++) expect(alphas[x]).toBeLessThanOrEqual(alphas[x - 1]);
@@ -105,7 +102,7 @@ describe('renderRadarTile', () => {
 
   it('uses the snow ramp where the source was snow, blended across the boundary', () => {
     const g = grid(24, 1, () => 25, (x) => x >= 12);
-    const out = renderRadarTile(g, lut, { sigma: 0, flipY: false, snow: true })!;
+    const out = renderRadarTile(g, lut, { sigma: 0, snow: true })!;
     const rgb = (x: number) => Array.from(out.subarray(x * 4, x * 4 + 3));
     expect(rgb(0)).not.toEqual(rgb(23));
     expect(rgb(23)[2]).toBeGreaterThan(rgb(23)[1] - 40); // icy, not green
@@ -118,7 +115,7 @@ describe('renderRadarTile', () => {
 
   it('paints snow as rain when snow shading is off', () => {
     const g = grid(2, 1, () => 25, (x) => x === 1);
-    const out = renderRadarTile(g, lut, { sigma: 0, flipY: false, snow: false })!;
+    const out = renderRadarTile(g, lut, { sigma: 0, snow: false })!;
     expect(Array.from(out.subarray(0, 4))).toEqual(Array.from(out.subarray(4, 8)));
   });
 });

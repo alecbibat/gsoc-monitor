@@ -115,10 +115,6 @@ export class PlaybackClock {
 
   constructor(private timing: PlaybackTiming = DEFAULT_TIMING) {}
 
-  get length(): number {
-    return this.n;
-  }
-
   get playing(): boolean {
     return this.phase.kind !== 'rest';
   }
@@ -152,6 +148,11 @@ export class PlaybackClock {
         ph.position = Math.min(Math.max(0, ph.position + delta), max);
         break;
       case 'step':
+        if (ph.from + delta < 0) {
+          // The frame it was leaving expired: carry on from the oldest.
+          this.phase = { kind: 'start', at: 0, elapsed: 0 };
+          break;
+        }
         ph.from = fix(ph.from);
         if (ph.from + 1 > max) this.phase = { kind: 'hold', at: max, elapsed: 0 };
         break;

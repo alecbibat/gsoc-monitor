@@ -25,10 +25,12 @@ interface RadarState {
   past: RadarFrame[];
   nowcast: RadarFrame[];
   generated: number | null; // manifest timestamp (epoch seconds)
+  manifestAt: number; // when a manifest last arrived (epoch ms; 0 = never)
   loading: boolean; // no manifest received yet
   error: string | null; // last fetch failure; frames already loaded stay usable
   // Tile pipeline (runtime)
   coolingDownMs: number; // RainViewer rate-limited us; loading resumes after this
+  tilesFailing: boolean; // tile requests keep failing and nothing has loaded lately
   // Preferences (persisted)
   windowMinutes: RadarWindow;
   opacity: number;
@@ -38,6 +40,7 @@ interface RadarState {
   setManifest: (m: RadarManifest) => void;
   setError: (message: string) => void;
   setCoolingDown: (ms: number) => void;
+  setTilesFailing: (failing: boolean) => void;
   setWindowMinutes: (w: RadarWindow) => void;
   setOpacity: (opacity: number) => void;
   setPalette: (palette: RadarPaletteId) => void;
@@ -58,25 +61,29 @@ export const useRadarStore = create<RadarState>()(
       past: [],
       nowcast: [],
       generated: null,
+      manifestAt: 0,
       loading: true,
       error: null,
       coolingDownMs: 0,
+      tilesFailing: false,
       ...DEFAULT_RADAR_PREFS,
       setManifest: (m) =>
         set((s) =>
           manifestSignature(m.host, m.past, m.nowcast) === manifestSignature(s.host, s.past, s.nowcast)
-            ? { generated: m.generated, loading: false, error: null }
+            ? { generated: m.generated, manifestAt: Date.now(), loading: false, error: null }
             : {
                 host: m.host,
                 past: m.past,
                 nowcast: m.nowcast,
                 generated: m.generated,
+                manifestAt: Date.now(),
                 loading: false,
                 error: null,
               }
         ),
       setError: (error) => set({ error, loading: false }),
       setCoolingDown: (coolingDownMs) => set({ coolingDownMs }),
+      setTilesFailing: (tilesFailing) => set({ tilesFailing }),
       setWindowMinutes: (windowMinutes) => set({ windowMinutes }),
       setOpacity: (opacity) => set({ opacity: clampOpacity(opacity) }),
       setPalette: (palette) => set({ palette }),
@@ -114,13 +121,14 @@ export const useRadarStore = create<RadarState>()(
 
 // One-line status for the sidebar toggle.
 export function radarStatusText(
-  s: Pick<RadarState, 'loading' | 'error' | 'past' | 'nowcast' | 'coolingDownMs'>,
+  s: Pick<RadarState, 'loading' | 'error' | 'past' | 'nowcast' | 'coolingDownMs' | 'tilesFailing'>,
   nowSec: number = Date.now() / 1000
 ): string {
   const latest = s.past[s.past.length - 1];
   if (!latest) return s.error ? 'Radar feed unavailable · retrying' : 'Loading RainViewer frames…';
   const frames = `${s.past.length} frames · latest ${formatClock(latest.time)}`;
   if (s.error) return `Radar feed stale · ${frames}`;
+  if (s.tilesFailing) return `Radar tiles not loading · retrying · ${frames}`;
   if (nowSec - latest.time > STALE_AFTER_SEC) return `Radar feed delayed · ${frames}`;
   if (s.coolingDownMs > 0) {
     return `RainViewer rate limit · resuming in ${Math.ceil(s.coolingDownMs / 1000)} s`;

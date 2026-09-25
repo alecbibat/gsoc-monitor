@@ -4,7 +4,7 @@ import { useLayersStore } from '../../store/layersStore';
 import { api } from '../../api/client';
 import { startVisiblePolling } from '../../lib/poll';
 import { getGpuInfo } from '../../perf/gpuInfo';
-import { prefersReducedMotion } from '../ships/shipMarkers';
+import { prefersReducedMotion } from '../../lib/reducedMotion';
 import { useRadarStore } from './radarStore';
 import { buildTimeline } from './radarTimeline';
 import { RadarEngine, type EngineSettings } from './radarEngine';
@@ -25,8 +25,9 @@ const SMOOTH_SIGMA = 0.8;
 //              of the GPU memory with 13 frames resident); both settle on the
 //              same z7 data when zoomed in, so only mid zooms are softer.
 //   sharp    — screen-resolution tiles; four times the requests and memory.
-//   lite     — standard tiles with stepped frames instead of crossfades, for
-//              weak or software-rendered GPUs.
+//   lite     — tiles one more level coarser (fewer layer passes and textures)
+//              and stepped frames instead of crossfades, for weak or
+//              software-rendered GPUs.
 // A `gsoc-radar-quality` localStorage value overrides the detection.
 type RadarQuality = 'sharp' | 'standard' | 'lite';
 
@@ -41,8 +42,8 @@ function radarQuality(): RadarQuality {
   return gpu.tier === 'low' || gpu.software ? 'lite' : 'standard';
 }
 
-function tileWidthFor(q: RadarQuality): 512 | 1024 {
-  return q === 'sharp' ? 512 : 1024;
+function tileWidthFor(q: RadarQuality): 512 | 1024 | 2048 {
+  return q === 'sharp' ? 512 : q === 'lite' ? 2048 : 1024;
 }
 
 function timingFor(q: RadarQuality): PlaybackTiming {
@@ -62,8 +63,10 @@ export function RadarLayer() {
   const palette = useRadarStore((s) => s.palette);
   const speed = useRadarStore((s) => s.speed);
   const snow = useRadarStore((s) => s.snow);
+  const manifestAt = useRadarStore((s) => s.manifestAt);
   const engineRef = useRef<RadarEngine | null>(null);
   const refetchRef = useRef<() => void>(() => {});
+  const activatedAtRef = useRef(0);
 
   const timeline = useMemo(() => buildTimeline(past, nowcast, windowMinutes), [past, nowcast, windowMinutes]);
 
@@ -114,13 +117,20 @@ export function RadarLayer() {
     };
   }, [viewer]);
 
-  // Surface RainViewer rate-limit back-off in the sidebar status, and refresh
-  // the manifest early if a frame's tiles have expired upstream.
+  // Surface RainViewer rate-limit back-off and failing tiles in the sidebar
+  // status, re-request the tiles left blank once loading recovers, and
+  // refresh the manifest early if a frame's tiles have expired upstream.
   useEffect(() => {
     if (!active) return;
     const client = getRadarTileClient();
     let refetchTimer: ReturnType<typeof setTimeout> | null = null;
-    const offStatus = client.onStatus((st) => useRadarStore.getState().setCoolingDown(st.coolingDownMs));
+    const offStatus = client.onStatus((st) => {
+      const store = useRadarStore.getState();
+      const recovered = store.tilesFailing && !st.failing;
+      store.setCoolingDown(st.coolingDownMs);
+      store.setTilesFailing(st.failing);
+      if (recovered) engineRef.current?.refreshTiles();
+    });
     const offGone = client.onGone(() => {
       if (refetchTimer) return;
       refetchTimer = setTimeout(() => {
@@ -136,12 +146,18 @@ export function RadarLayer() {
   }, [active]);
 
   useEffect(() => {
+    if (active) activatedAtRef.current = Date.now();
+    else useRadarStore.getState().setTilesFailing(false);
     engineRef.current?.setActive(active);
   }, [viewer, active]);
 
   useEffect(() => {
-    if (active && host) engineRef.current?.setTimeline(host, timeline);
-  }, [viewer, active, host, timeline]);
+    if (!active || !host) return;
+    // Switched back on after a while off: wait for this activation's
+    // manifest rather than asking for frames that may have expired upstream.
+    if (manifestAt < activatedAtRef.current && Date.now() - manifestAt > POLL_MS) return;
+    engineRef.current?.setTimeline(host, timeline);
+  }, [viewer, active, host, timeline, manifestAt]);
 
   useEffect(() => {
     engineRef.current?.updateSettings({ opacity, palette, speed, snow });

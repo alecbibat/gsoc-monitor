@@ -2,15 +2,16 @@ import type { RadarPaletteId } from './radarPalettes';
 import { RadarTileService, type ServiceIn, type ServiceOut, type ServiceStatus } from './radarTileService';
 
 // Main-thread side of the radar tile pipeline. Owns the worker (restarting it
-// if it dies; running the same service inline if workers are unavailable),
-// turns tile requests from the imagery providers into promises, cancels work
-// Cesium no longer wants, paces texture hand-off, and relays probe answers,
-// rate-limit status and expired frames.
+// if it goes silent; running the same service inline if workers are
+// unavailable), turns tile requests from the imagery providers into
+// promises, cancels work Cesium no longer wants, paces texture hand-off, and
+// relays probe answers, rate-limit status and expired frames.
 
 type TileImage = ImageData | HTMLCanvasElement;
 
 interface Pending {
   resolve: (img: TileImage) => void;
+  reject: (err: TileCancelled) => void;
   wanted: () => boolean;
   frameKey: string;
   msg: ServiceIn;
@@ -21,11 +22,24 @@ interface Pending {
 // palette switch, a pan back over cached tiles — would stall playback.
 const MAX_SETTLES_PER_FRAME = 4;
 const MAX_WORKER_RESTARTS = 3;
+// A worker holding work that has said nothing for this long gets pinged, and
+// restarted if it doesn't answer (it may have died without an error event).
+const SILENCE_MS = 20_000;
+const PONG_TIMEOUT_MS = 10_000;
+
+// Rejection for a request the view stopped wanting; the provider tells
+// Cesium to treat it as not loaded rather than failed.
+export class TileCancelled extends Error {
+  constructor() {
+    super('radar tile no longer wanted');
+    this.name = 'TileCancelled';
+  }
+}
 
 let blank: HTMLCanvasElement | null = null;
 // A 1×1 transparent tile for "nothing here" (no echo, expired frame, failed
-// decode, cancelled request): tiny on the GPU, and resolved rather than
-// rejected so Cesium doesn't log an imagery error for every empty tile.
+// decode): tiny on the GPU, and resolved rather than rejected so Cesium
+// doesn't log an imagery error for every empty tile.
 function blankTile(): HTMLCanvasElement {
   if (!blank) {
     blank = document.createElement('canvas');
@@ -59,12 +73,17 @@ export class RadarTileClient {
   private ranks = new Map<string, number>();
   private lastRanks: Record<string, number> = {};
   private lastVisible: string[] = [];
+  private recentStarts: number[] = []; // this minute's network requests, to seed a restarted worker
+  private lastHeard = 0;
+  private pingAt = 0;
   private statusListeners = new Set<(s: ServiceStatus) => void>();
   private goneListeners = new Set<(frameKey: string) => void>();
-  status: ServiceStatus = { queued: 0, inFlight: 0, coolingDownMs: 0 };
 
   constructor() {
     this.startWorker();
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => this.send({ type: 'hidden', hidden: document.hidden }));
+    }
   }
 
   private startWorker(): void {
@@ -72,26 +91,36 @@ export class RadarTileClient {
       const worker = new Worker(new URL('./radarWorker.ts', import.meta.url), { type: 'module' });
       this.worker = worker;
       this.workerReady = false;
+      this.lastHeard = performance.now();
+      this.pingAt = 0;
       worker.onmessage = (e: MessageEvent<ServiceOut>) => this.receive(e.data);
       worker.onerror = (e) => {
-        e.preventDefault?.();
-        if (!this.workerReady) {
-          console.warn('[radar] tile worker failed to start; decoding on the main thread', e.message);
-          this.useInline();
-        } else if (this.restarts < MAX_WORKER_RESTARTS) {
-          console.warn('[radar] tile worker crashed; restarting', e.message);
-          this.restarts++;
-          worker.terminate();
-          this.startWorker();
-          this.replay();
-        } else {
-          this.useInline();
+        if (this.workerReady) {
+          // A runtime error inside a working worker isn't fatal: it keeps
+          // its caches and in-flight requests. The watchdog handles a dead one.
+          console.warn('[radar] tile worker error', e.message);
+          return;
         }
+        e.preventDefault?.();
+        console.warn('[radar] tile worker failed to start; decoding on the main thread', e.message);
+        this.useInline();
       };
     } catch (err) {
       console.warn('[radar] tile worker unavailable; decoding on the main thread', err);
       this.useInline();
     }
+  }
+
+  private restartWorker(): void {
+    if (this.restarts >= MAX_WORKER_RESTARTS) {
+      this.useInline();
+      return;
+    }
+    console.warn('[radar] tile worker stopped answering; restarting it');
+    this.restarts++;
+    this.worker?.terminate();
+    this.startWorker();
+    this.replay();
   }
 
   private useInline(): void {
@@ -103,11 +132,17 @@ export class RadarTileClient {
     this.replay();
   }
 
-  // Re-issue everything outstanding to a fresh service.
+  // Re-issue everything outstanding to a fresh service, which inherits this
+  // minute's request count so a restart can't overrun the rate limit.
   private replay(): void {
+    const now = Date.now();
+    this.recentStarts = this.recentStarts.filter((t) => now - t < 60_000);
+    this.send({ type: 'seed', starts: this.recentStarts });
     this.send({ type: 'ranks', ranks: this.lastRanks });
     this.send({ type: 'visible', keys: this.lastVisible });
-    for (const p of this.pending.values()) this.send(p.msg);
+    if (typeof document !== 'undefined') this.send({ type: 'hidden', hidden: document.hidden });
+    const settled = new Set(this.settleQueue.map((s) => s.id));
+    for (const [id, p] of this.pending) if (!settled.has(id)) this.send(p.msg);
   }
 
   private send(msg: ServiceIn): void {
@@ -116,12 +151,19 @@ export class RadarTileClient {
   }
 
   private receive(msg: ServiceOut): void {
+    this.lastHeard = performance.now();
+    this.pingAt = 0;
     switch (msg.type) {
       case 'hello':
         this.workerReady = true;
         return;
+      case 'pong':
+        return;
+      case 'start':
+        this.recentStarts.push(msg.at);
+        if (this.recentStarts.length > 200) this.recentStarts.splice(0, this.recentStarts.length - 200);
+        return;
       case 'status':
-        this.status = msg.status;
         for (const fn of this.statusListeners) fn(msg.status);
         return;
       case 'probe': {
@@ -165,7 +207,7 @@ export class RadarTileClient {
   // Cesium drops imagery for tiles it no longer holds without cancelling the
   // request (Imagery.releaseReference just destroys the object), so poll the
   // providers' "still wanted" checks and give the queue slot — and the rate
-  // budget — to tiles that are.
+  // budget — to tiles that are. Also watches for a silent worker.
   private ensureSweep(): void {
     if (this.sweepTimer) return;
     this.sweepTimer = setInterval(() => {
@@ -173,7 +215,16 @@ export class RadarTileClient {
         if (!p.wanted()) {
           this.pending.delete(id);
           this.send({ type: 'cancel', id });
-          p.resolve(blankTile());
+          p.reject(new TileCancelled());
+        }
+      }
+      this.settleQueue = this.settleQueue.filter((s) => this.pending.has(s.id));
+      if (this.worker && this.pending.size > 0 && !document.hidden) {
+        const now = performance.now();
+        if (this.pingAt && now - this.pingAt > PONG_TIMEOUT_MS) this.restartWorker();
+        else if (!this.pingAt && now - this.lastHeard > SILENCE_MS) {
+          this.pingAt = now;
+          this.send({ type: 'ping' });
         }
       }
       if (this.pending.size === 0 && this.sweepTimer) {
@@ -185,9 +236,9 @@ export class RadarTileClient {
 
   requestTile(args: TileArgs, wanted: () => boolean): Promise<TileImage> {
     const id = this.nextId++;
-    return new Promise<TileImage>((resolve) => {
+    return new Promise<TileImage>((resolve, reject) => {
       const msg: ServiceIn = { type: 'tile', req: { id, ...args } };
-      this.pending.set(id, { resolve, wanted, frameKey: args.frameKey, msg });
+      this.pending.set(id, { resolve, reject, wanted, frameKey: args.frameKey, msg });
       this.send(msg);
       this.ensureSweep();
     });

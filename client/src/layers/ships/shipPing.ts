@@ -1,6 +1,7 @@
 import * as Cesium from 'cesium';
+import { prefersReducedMotion } from '../../lib/reducedMotion';
 import {
-  SHIP_MARKER, pingAlpha, pingScale, prefersReducedMotion, shipPingUri,
+  SHIP_MARKER, pingAlpha, pingScale, shipPingUri,
 } from './shipMarkers';
 
 // Render pacing for the ping. The globe runs in requestRenderMode, so an

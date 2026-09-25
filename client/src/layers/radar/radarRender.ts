@@ -65,11 +65,10 @@ function blur(src: Float32Array, w: number, h: number, sigma: number): Float32Ar
 
 export interface RenderOptions {
   sigma: number; // data-space blur radius in source pixels (0 = none)
-  flipY: boolean; // write rows bottom-up
   snow: boolean; // paint snow in its own ramp (otherwise as rain)
 }
 
-// RGBA for the tile, or null when nothing in it is visible.
+// RGBA for the tile (rows top-down), or null when nothing in it is visible.
 export function renderRadarTile(
   grid: RadarGrid,
   lut: PaletteLut,
@@ -176,17 +175,6 @@ export function renderRadarTile(
     out[i * 4 + 2] = useSnow ? sb : eb;
   }
 
-  if (opts.flipY) {
-    const row = w * 4;
-    const tmp = new Uint8ClampedArray(row);
-    for (let y = 0; y < h >> 1; y++) {
-      const a = y * row;
-      const b = (h - 1 - y) * row;
-      tmp.set(out.subarray(a, a + row));
-      out.copyWithin(a, b, b + row);
-      out.set(tmp, b);
-    }
-  }
   return out;
 }
 

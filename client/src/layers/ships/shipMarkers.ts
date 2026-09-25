@@ -1,4 +1,5 @@
 import * as Cesium from 'cesium';
+import { prefersReducedMotion } from '../../lib/reducedMotion';
 
 /**
  * The ship map marker: a "sonar contact".
@@ -173,23 +174,9 @@ function ringPhase(index: number): number {
 
 /**
  * Some viewers ask for less motion, and a globe of throbbing rings is exactly
- * what that setting is about. Honour it by freezing the rings mid-expansion —
- * the marker keeps its extra presence, it just stops moving.
- *
- * One MediaQueryList, created lazily. Its `.matches` is live, so an OS/browser
- * reduced-motion toggle mid-session is still honoured. This avoids re-parsing
- * the query (and allocating a new MediaQueryList) on every Cesium clock tick,
- * because pingScale/pingAlpha run per ring, per frame.
+ * what that setting is about. Honour it by freezing the rings mid-expansion,
+ * at this phase — the marker keeps its extra presence, it just stops moving.
  */
-let reducedMotionMql: MediaQueryList | null | undefined;
-export const prefersReducedMotion = (): boolean => {
-  if (reducedMotionMql === undefined) {
-    reducedMotionMql =
-      typeof window !== 'undefined' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
-  }
-  return reducedMotionMql?.matches ?? false;
-};
-
 const REST_PHASE = 0.45;
 
 /** Billboard scale for ring `index` right now. Eases out, so it leaps then drifts. */

@@ -2,17 +2,18 @@ import { decodePng, type DecodedImage } from './pngDecode';
 import { decodeRadarRgba, type RadarGrid } from './radarDecode';
 import { paletteLut, type RadarPaletteId } from './radarPalettes';
 import { renderRadarTile, sampleGrid } from './radarRender';
+import { RADAR_MAX_LEVEL } from './radarSource';
 import { TileScheduler, type FetchOutcome, type ScheduledJob } from './radarTileScheduler';
 
 // The radar tile pipeline: fetch (scheduled under RainViewer's rate limit),
-// keep the compressed PNG (memory + Cache Storage, both keyed by frame and
-// tile), decode the served colours back to reflectivity, and paint them
-// through the chosen palette. Plain web APIs only, so the same code runs in
-// the radar worker (normal case) or inline if a worker can't start.
+// keep the compressed PNG (memory + Cache Storage, keyed by frame and tile),
+// decode the served colours back to reflectivity, and paint them through the
+// chosen palette. Plain web APIs only, so the same code runs in the radar
+// worker (normal case) or inline if a worker can't start.
 
 export interface TileRequest {
   id: number;
-  frameKey: string; // frame identity (its time)
+  frameKey: string; // frame identity (its time and path)
   url: string;
   z: number;
   x: number;
@@ -28,20 +29,24 @@ export type ServiceIn =
   | { type: 'ranks'; ranks: Record<string, number> }
   | { type: 'visible'; keys: string[] }
   | { type: 'probe'; id: number; frameKey: string; lon: number; lat: number }
-  | { type: 'retain'; frameKeys: string[] };
+  | { type: 'retain'; frameKeys: string[] }
+  | { type: 'hidden'; hidden: boolean } // page visibility: hold rendering while hidden
+  | { type: 'seed'; starts: number[] } // request starts made by a previous worker this minute
+  | { type: 'ping' };
 
 export interface ServiceStatus {
-  queued: number;
-  inFlight: number;
-  coolingDownMs: number;
+  coolingDownMs: number; // rate-limited: loading resumes after this
+  failing: boolean; // tiles keep failing and nothing has loaded lately
 }
 
 export type ServiceOut =
   | { type: 'hello' }
+  | { type: 'pong' }
+  | { type: 'start'; at: number } // a network request started (for a restarted worker's budget)
   | {
       type: 'tile';
       id: number;
-      empty: boolean; // nothing to draw (no echo): a 1×1 transparent tile will do
+      empty: boolean; // nothing to draw: a 1×1 transparent tile will do
       gone?: boolean; // the frame expired upstream (404/410)
       rgba?: ArrayBuffer; // RGBA, rows top-down (Cesium flips on upload)
       width?: number;
@@ -56,14 +61,21 @@ const CACHE_NAME = 'gsoc-radar-tiles-v1';
 const CACHE_TIME_HEADER = 'x-gsoc-cached-at';
 const CACHE_MAX_AGE_MS = 3 * 3600_000; // frames live ~2 h upstream
 const PNG_BUDGET_BYTES = 48 * 1024 * 1024;
-const GRID_KEEP = 48; // decoded grids kept for the hover readout
-const MAX_FETCH_LEVEL = 7;
+// Decoded grids kept around: tiles re-painted soon (palette switches, the
+// hover readout) skip a PNG decode.
+const GRID_KEEP = 48;
+const FETCH_TIMEOUT_MS = 20_000;
+const FAILING_AFTER_MS = 2 * 60_000; // failures with no success for this long = "failing"
 const BUDGET_CHANNEL = 'gsoc-radar-budget';
 
 let warnedPlaceholder = false;
 
 function tileKey(frameKey: string, z: number, x: number, y: number): string {
-  return `${frameKey}/${z}/${x}/${y}`;
+  return `${frameKey}|${z}/${x}/${y}`;
+}
+
+function frameOfKey(key: string): string {
+  return key.slice(0, key.lastIndexOf('|'));
 }
 
 // Web Mercator tile coordinates (fractional) for a lon/lat at zoom z.
@@ -105,16 +117,12 @@ function parseRetryAfter(value: string | null): number | null {
   return Number.isFinite(at) ? Math.min(60_000, Math.max(1000, at - Date.now())) : null;
 }
 
-interface Waiter {
-  req: TileRequest;
-}
-
 export class RadarTileService {
   private requests = new Map<number, TileRequest>();
   private pngs = new Map<string, Uint8Array>(); // LRU by insertion order
   private pngBytes = 0;
-  private grids = new Map<string, RadarGrid>(); // small LRU, for the probe
-  private loading = new Map<string, Waiter[]>(); // single-flight by tile key
+  private grids = new Map<string, RadarGrid>(); // small LRU
+  private loading = new Map<string, number[]>(); // tile key → waiting request ids (single flight)
   private jobOfKey = new Map<string, number>();
   private jobUrl = new Map<number, { url: string; key: string }>();
   private cache: Promise<Cache | null>;
@@ -125,7 +133,10 @@ export class RadarTileService {
   private nextJob = 1;
   private renderQueue: TileRequest[] = [];
   private rendering = false;
+  private hidden = false;
   private ranks = new Map<string, number>();
+  private lastOk = Date.now();
+  private lastFailure = 0;
 
   constructor(private post: Post) {
     this.cache =
@@ -140,9 +151,19 @@ export class RadarTileService {
       setTimer: (fn, ms) => setTimeout(fn, ms),
       clearTimer: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
       fetchJob: (job) => this.fetchJob(job),
+      shouldRetry: (job) => {
+        const target = this.jobUrl.get(job.id);
+        return !!target && (this.loading.get(target.key)?.length ?? 0) > 0;
+      },
       onResult: (job, outcome) => void this.onFetched(job, outcome),
-      onStart: (at) => this.channel?.postMessage({ start: at }),
-      onCooldown: (until) => this.channel?.postMessage({ cooldown: until }),
+      onStart: (at) => {
+        this.channel?.postMessage({ start: at });
+        this.post({ type: 'start', at });
+      },
+      onCooldown: (until) => {
+        this.channel?.postMessage({ cooldown: until });
+        this.reportStatus();
+      },
     });
     if (typeof BroadcastChannel !== 'undefined') {
       try {
@@ -175,12 +196,22 @@ export class RadarTileService {
           this.scheduler.setVisible(msg.keys);
           break;
         case 'probe':
-          void this.probe(msg.frameKey, msg.lon, msg.lat).then((result) =>
-            this.post({ type: 'probe', id: msg.id, result })
-          );
+          void this.probe(msg.frameKey, msg.lon, msg.lat)
+            .catch(() => null)
+            .then((result) => this.post({ type: 'probe', id: msg.id, result }));
           break;
         case 'retain':
           this.retain(msg.frameKeys);
+          break;
+        case 'hidden':
+          this.hidden = msg.hidden;
+          if (!this.hidden) this.kickRenders();
+          break;
+        case 'seed':
+          for (const at of msg.starts) this.scheduler.noteExternalStart(at);
+          break;
+        case 'ping':
+          this.post({ type: 'pong' });
           break;
       }
     } catch (err) {
@@ -189,7 +220,7 @@ export class RadarTileService {
   }
 
   private requestTile(req: TileRequest): void {
-    if (req.z > MAX_FETCH_LEVEL) {
+    if (req.z > RADAR_MAX_LEVEL) {
       // The provider never asks past z7 (RainViewer's free-tier ceiling);
       // answer anything that slips through with an empty tile, not a fetch
       // for the "zoom level not supported" placeholder.
@@ -204,10 +235,11 @@ export class RadarTileService {
     }
     const waiting = this.loading.get(key);
     if (waiting) {
-      waiting.push({ req });
+      // Already loading (or an in-flight fetch nobody wanted any more): wait for it.
+      waiting.push(req.id);
       return;
     }
-    this.loading.set(key, [{ req }]);
+    this.loading.set(key, [req.id]);
     void this.load(req, key);
   }
 
@@ -218,22 +250,17 @@ export class RadarTileService {
     const key = tileKey(req.frameKey, req.z, req.x, req.y);
     const waiting = this.loading.get(key);
     if (!waiting) return;
-    const rest = waiting.filter((w) => w.req.id !== id);
-    if (rest.length > 0) {
-      this.loading.set(key, rest);
-      return;
-    }
-    // Nobody wants this tile any more: drop its network job unless it is
-    // already in flight (then let it land in the caches).
+    const rest = waiting.filter((w) => w !== id);
+    this.loading.set(key, rest);
+    if (rest.length > 0) return;
+    // Nobody wants this tile any more: drop its network job if it hasn't
+    // started. A load still checking the cache, or a fetch in flight, keeps
+    // its (empty) entry so a re-request joins it instead of fetching twice.
     const job = this.jobOfKey.get(key);
-    if (job === undefined) {
-      this.loading.delete(key); // still checking the local cache
-    } else if (this.scheduler.has(job) && this.scheduler.cancel(job)) {
+    if (job !== undefined && this.scheduler.cancel(job)) {
       this.jobOfKey.delete(key);
       this.jobUrl.delete(job);
       this.loading.delete(key);
-    } else {
-      this.loading.set(key, []);
     }
   }
 
@@ -262,6 +289,7 @@ export class RadarTileService {
       this.loading.delete(key); // cancelled while checking the cache
       return;
     }
+    if (this.jobOfKey.has(key)) return;
     const id = this.nextJob++;
     this.jobOfKey.set(key, id);
     this.jobUrl.set(id, { url: req.url, key }); // before enqueue: it may start at once
@@ -272,45 +300,59 @@ export class RadarTileService {
   private async fetchJob(job: ScheduledJob): Promise<FetchOutcome> {
     const target = this.jobUrl.get(job.id);
     if (!target) return { kind: 'gone' };
-    let res: Response;
+    // A stalled request must not hold a slot for ever: after a 429 the
+    // scheduler restarts with one request in flight.
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), FETCH_TIMEOUT_MS);
     try {
-      res = await fetch(target.url, { mode: 'cors', credentials: 'omit' });
-    } catch (err) {
-      return { kind: 'error', message: String(err) };
-    }
-    if (res.status === 429) return { kind: 'rate-limited', retryAfterMs: parseRetryAfter(res.headers.get('retry-after')) };
-    if (res.status === 404 || res.status === 410) return { kind: 'gone' };
-    if (!res.ok) return { kind: 'error', message: `HTTP ${res.status}` };
-    try {
+      let res: Response;
+      try {
+        res = await fetch(target.url, { mode: 'cors', credentials: 'omit', signal: abort.signal });
+      } catch (err) {
+        const online = typeof navigator === 'undefined' || navigator.onLine !== false;
+        return { kind: 'error', message: String(err), network: online && !abort.signal.aborted };
+      }
+      if (res.status === 429) {
+        return { kind: 'rate-limited', retryAfterMs: parseRetryAfter(res.headers.get('retry-after')) };
+      }
+      if (res.status === 404 || res.status === 410) return { kind: 'gone' };
+      if (!res.ok) {
+        const terminal = res.status >= 400 && res.status < 500 && res.status !== 408;
+        return { kind: 'error', message: `HTTP ${res.status}`, terminal };
+      }
       return { kind: 'ok', bytes: new Uint8Array(await res.arrayBuffer()) };
     } catch (err) {
       return { kind: 'error', message: String(err) };
+    } finally {
+      clearTimeout(timer);
     }
   }
 
   private async onFetched(job: ScheduledJob, outcome: FetchOutcome): Promise<void> {
-    this.reportStatus();
     const target = this.jobUrl.get(job.id);
     this.jobUrl.delete(job.id);
     if (!target) return;
     const { key, url } = target;
-    this.jobOfKey.delete(key);
-    if (outcome.kind === 'gone') {
-      for (const w of this.loading.get(key) ?? []) {
-        if (this.requests.delete(w.req.id)) this.post({ type: 'tile', id: w.req.id, empty: true, gone: true });
-      }
-      this.loading.delete(key);
+    if (this.jobOfKey.get(key) === job.id) this.jobOfKey.delete(key);
+    if (outcome.kind === 'ok') this.lastOk = Date.now();
+    else if (outcome.kind === 'error') {
+      this.lastFailure = Date.now();
+      // "Failing" is judged against the time since the last success.
+      setTimeout(() => this.reportStatus(), FAILING_AFTER_MS + 500);
+    }
+    this.reportStatus();
+
+    if (outcome.kind !== 'ok') {
+      // Gone upstream, or failed for good (the scheduler gave up): draw
+      // nothing rather than keep Cesium waiting on the tile for ever.
+      this.resolveEmpty(key, outcome.kind === 'gone');
       return;
     }
-    if (outcome.kind !== 'ok') return; // the scheduler keeps retrying errors
     const grid = await this.decode(outcome.bytes, url);
     if (!grid) {
       // Not a radar tile (an error page, a truncated body): draw nothing
       // rather than garbage, and don't cache it.
-      for (const w of this.loading.get(key) ?? []) {
-        if (this.requests.delete(w.req.id)) this.post({ type: 'tile', id: w.req.id, empty: true });
-      }
-      this.loading.delete(key);
+      this.resolveEmpty(key, false);
       return;
     }
     this.storePng(key, outcome.bytes, grid);
@@ -329,10 +371,20 @@ export class RadarTileService {
     this.finishLoad(key);
   }
 
+  private resolveEmpty(key: string, gone: boolean): void {
+    for (const id of this.loading.get(key) ?? []) {
+      if (this.requests.delete(id)) this.post({ type: 'tile', id, empty: true, gone });
+    }
+    this.loading.delete(key);
+  }
+
   private finishLoad(key: string): void {
     const waiting = this.loading.get(key) ?? [];
     this.loading.delete(key);
-    for (const w of waiting) if (this.requests.has(w.req.id)) this.queueRender(w.req);
+    for (const id of waiting) {
+      const req = this.requests.get(id);
+      if (req) this.queueRender(req);
+    }
   }
 
   private async decode(bytes: Uint8Array, url: string): Promise<RadarGrid | null> {
@@ -389,48 +441,53 @@ export class RadarTileService {
   }
 
   // Paint queued tiles, most urgent frame first, yielding between tiles so
-  // cancels and new priorities get through.
+  // cancels and new priorities get through. Held while the page is hidden:
+  // nothing would upload them, and each painted tile is a megabyte.
   private queueRender(req: TileRequest): void {
     this.renderQueue.push(req);
-    if (!this.rendering) {
-      this.rendering = true;
-      setTimeout(() => void this.drainRenders(), 0);
-    }
+    this.kickRenders();
+  }
+
+  private kickRenders(): void {
+    if (this.rendering || this.hidden || this.renderQueue.length === 0) return;
+    this.rendering = true;
+    setTimeout(() => void this.drainRenders(), 0);
   }
 
   private async drainRenders(): Promise<void> {
-    while (this.renderQueue.length > 0) {
-      const rank = (r: TileRequest) => this.ranks.get(r.frameKey) ?? 1e6;
-      this.renderQueue.sort((a, b) => rank(a) - rank(b) || a.z - b.z);
-      const req = this.renderQueue.shift()!;
-      if (!this.requests.has(req.id)) continue;
-      const grid = await this.gridFor(tileKey(req.frameKey, req.z, req.x, req.y));
-      if (!this.requests.has(req.id)) continue;
-      this.requests.delete(req.id);
-      if (!grid) {
-        this.post({ type: 'tile', id: req.id, empty: true });
-      } else {
-        const rgba = renderRadarTile(grid, paletteLut(req.palette), {
-          sigma: req.sigma,
-          flipY: false,
-          snow: req.snow,
-        });
-        if (!rgba) this.post({ type: 'tile', id: req.id, empty: true });
-        else {
-          this.post({ type: 'tile', id: req.id, empty: false, rgba: rgba.buffer, width: grid.width, height: grid.height }, [
-            rgba.buffer,
-          ]);
+    try {
+      while (this.renderQueue.length > 0 && !this.hidden) {
+        const rank = (r: TileRequest) => this.ranks.get(r.frameKey) ?? 1e6;
+        this.renderQueue.sort((a, b) => rank(a) - rank(b) || a.z - b.z);
+        const req = this.renderQueue.shift()!;
+        if (!this.requests.has(req.id)) continue;
+        try {
+          const grid = await this.gridFor(tileKey(req.frameKey, req.z, req.x, req.y));
+          if (!this.requests.has(req.id)) continue;
+          this.requests.delete(req.id);
+          const rgba = grid ? renderRadarTile(grid, paletteLut(req.palette), { sigma: req.sigma, snow: req.snow }) : null;
+          if (!grid || !rgba) this.post({ type: 'tile', id: req.id, empty: true });
+          else {
+            this.post({ type: 'tile', id: req.id, empty: false, rgba: rgba.buffer, width: grid.width, height: grid.height }, [
+              rgba.buffer,
+            ]);
+          }
+        } catch (err) {
+          console.warn('[radar] tile render failed', err);
+          if (this.requests.delete(req.id)) this.post({ type: 'tile', id: req.id, empty: true });
         }
+        await new Promise((r) => setTimeout(r, 0));
       }
-      await new Promise((r) => setTimeout(r, 0));
+    } finally {
+      this.rendering = false;
+      this.kickRenders();
     }
-    this.rendering = false;
   }
 
   // Reflectivity under a point on the given frame, from the finest tile this
   // session has loaded there.
   private async probe(frameKey: string, lon: number, lat: number): Promise<{ dbz: number; snow: boolean } | null> {
-    for (let z = MAX_FETCH_LEVEL; z >= 0; z--) {
+    for (let z = RADAR_MAX_LEVEL; z >= 0; z--) {
       const t = lonLatToTile(lon, lat, z);
       const tx = Math.floor(t.x);
       const ty = Math.floor(t.y);
@@ -445,14 +502,13 @@ export class RadarTileService {
 
   private retain(frameKeys: string[]): void {
     const keep = new Set(frameKeys);
-    const frameOf = (k: string) => k.slice(0, k.indexOf('/'));
     for (const [k, b] of this.pngs) {
-      if (!keep.has(frameOf(k))) {
+      if (!keep.has(frameOfKey(k))) {
         this.pngs.delete(k);
         this.pngBytes -= b.length;
       }
     }
-    for (const k of [...this.grids.keys()]) if (!keep.has(frameOf(k))) this.grids.delete(k);
+    for (const k of [...this.grids.keys()]) if (!keep.has(frameOfKey(k))) this.grids.delete(k);
   }
 
   // Drop Cache Storage entries older than any frame RainViewer still serves.
@@ -478,8 +534,10 @@ export class RadarTileService {
     this.statusTimer = setTimeout(() => {
       this.statusTimer = null;
       const s = this.scheduler.stats;
-      const status: ServiceStatus = { queued: s.queued, inFlight: s.inFlight, coolingDownMs: s.coolingDownMs };
-      const sig = `${status.queued > 0}|${status.inFlight > 0}|${Math.ceil(status.coolingDownMs / 5000)}`;
+      const now = Date.now();
+      const failing = this.lastFailure > this.lastOk && now - this.lastOk > FAILING_AFTER_MS;
+      const status: ServiceStatus = { coolingDownMs: s.coolingDownMs, failing };
+      const sig = `${Math.ceil(status.coolingDownMs / 5000)}|${failing}`;
       if (sig !== this.lastStatus) {
         this.lastStatus = sig;
         this.post({ type: 'status', status });
