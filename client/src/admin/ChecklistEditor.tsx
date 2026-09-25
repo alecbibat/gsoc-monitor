@@ -10,7 +10,7 @@ import {
 import { scopeAudience, scopeChipLabel, scopeLabel } from '../crisis/templates/scopeLabels';
 import { useTemplatesStore } from '../crisis/templates/templatesStore';
 import {
-  PHASE_ORDER, checklistIssues, checklistSignature, cleanChecklistItems, insertChecklistItem, mentionedIds,
+  PHASE_ORDER, checklistIssues, checklistSignature, cleanChecklistItems, insertChecklistItem, namedInError,
   moveChecklistItem, nudgeChecklistItem, phaseItems, removeById, roleItems, splitPastedLines, updateById,
   withChecklistBlock, type ChecklistDropTarget, type ScopeEntry,
 } from './draftOps';
@@ -55,7 +55,8 @@ interface ItemHandlers {
   drop: (e: React.DragEvent) => void;
 }
 
-function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig }) {
+/** The editor for a loaded config (exported for render tests). */
+export function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig }) {
   const [scope, selectScope] = useSelectedScope();
   const key = scopeKey(scope);
   const block = useMemo(
@@ -87,6 +88,9 @@ function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [dragging, setDragging] = useState<{ id: string; roleId: string } | null>(null);
   const [dropAt, setDropAt] = useState<ChecklistDropTarget | null>(null);
+  // The role last worked on — the preview opens on it.
+  const [lastRole, setLastRole] = useState<string | null>(null);
+  const focusRole = useCallback((roleId: string) => setLastRole((r) => (r === roleId ? r : roleId)), []);
 
   // Per-scope UI state starts over when the scope changes.
   const [shownKey, setShownKey] = useState(key);
@@ -141,7 +145,7 @@ function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig }) {
   const flagged = useMemo(() => {
     const s = new Set<string>();
     for (const i of issues) if (i.id) s.add(i.id);
-    if (serverError) for (const id of mentionedIds(serverError, items.map((i) => i.id))) s.add(id);
+    if (serverError) for (const id of namedInError(serverError, items)) s.add(id);
     return s;
   }, [issues, serverError, items]);
 
@@ -247,8 +251,10 @@ function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig }) {
       dragEnd: () => { setDragging(null); setDropAt(null); },
       dragOverRow: (e, item) => {
         const d = draggingRef.current;
-        // Only this editor's items, only within the same role (phases may change).
-        if (!d || d.roleId !== item.roleId) return;
+        if (!d) return;
+        // Within the same role only (phases may change): anywhere else the
+        // marker goes away and the drop is refused.
+        if (d.roleId !== item.roleId) { e.stopPropagation(); if (dropRef.current) setDropAt(null); return; }
         e.preventDefault();
         e.stopPropagation();
         e.dataTransfer.dropEffect = 'move';
@@ -262,7 +268,8 @@ function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig }) {
       },
       dragOverPhase: (e, roleId, phase) => {
         const d = draggingRef.current;
-        if (!d || d.roleId !== roleId) return;
+        if (!d) return;
+        if (d.roleId !== roleId) { if (dropRef.current) setDropAt(null); return; }
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
         const cur = dropRef.current;
@@ -285,9 +292,17 @@ function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig }) {
 
   // ── Save / discard / reset ─────────────────────────────────────────────────
 
+  // Someone else saved since this draft started: the banner at the top asks
+  // whose version wins — make sure the admin sees it, wherever they are.
+  const announceConflict = () => {
+    setServerError('Someone else saved this scope while you were editing — choose “Load their version” or “Keep mine” at the top, then save.');
+    rootRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
+
   const savingRef = useRef(false);
   const save = async () => {
     if (savingRef.current || !dirty || issues.length > 0) return;
+    if (draft.stale) { announceConflict(); return; }
     savingRef.current = true;
     setBusy('Saving…');
     setServerError(null);
@@ -301,6 +316,7 @@ function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig }) {
       draft.rebase(b?.items ?? NO_ITEMS, b?.revision ?? 0);
       setNotice(b ? 'Saved' : 'Saved — the scope is empty, so it was removed');
     } else if (res.status === 409) {
+      announceConflict();
       // The conflict banner takes over (the store now holds their version).
       if (!res.config) void useTemplatesStore.getState().load();
     } else {
@@ -320,8 +336,8 @@ function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig }) {
     const name = scopeLabel(scope, false);
     const unsaved = dirty ? '\n\nYour unsaved changes will be lost too.' : '';
     const message = defaultBlock === null
-      ? `Delete the “${name}” checklist scope?\n\nIts ${plural(block?.items.length ?? 0, 'item')} will stop appearing on incidents.${unsaved}`
-      : `Reset “${name}” to the built-in default${defaultBlock ? ` (${plural(defaultBlock.items.length, 'item')})` : ''}?\n\nThe customized version is deleted for every incident that uses this scope.${unsaved}`;
+      ? `Delete the “${name}” checklist scope?\n\nIts ${plural(block?.items.length ?? 0, 'item')} will stop appearing on incidents. Items already checked stay on those incidents' records.${unsaved}`
+      : `Reset “${name}” to the built-in default${defaultBlock ? ` (${plural(defaultBlock.items.length, 'item')})` : ''}?\n\nThe customized version is deleted for every incident that uses this scope.${defaultBlock ? '' : ' If the scope has no built-in default, it is removed.'}${unsaved}`;
     if (!window.confirm(message)) return;
     setBusy('Resetting…');
     setServerError(null);
@@ -382,7 +398,11 @@ function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig }) {
           entries={entries}
           selected={scope}
           noun={['item', 'items']}
-          onSelect={(s) => { if (selectScope(s)) close(); }}
+          onSelect={(s) => {
+            const ok = selectScope(s);
+            if (ok) close();
+            return ok;
+          }}
         />
       )}
     >
@@ -410,9 +430,12 @@ function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig }) {
               what="this scope"
               meta={block}
               onLoadTheirs={() => {
-                if (window.confirm('Replace your draft with their version? Your unsaved changes will be lost.')) draft.discard();
+                if (window.confirm('Replace your draft with their version? Your unsaved changes will be lost.')) {
+                  draft.discard();
+                  setServerError(null);
+                }
               }}
-              onKeepMine={() => draft.rebase(block?.items ?? NO_ITEMS, block?.revision ?? 0)}
+              onKeepMine={() => { draft.rebase(block?.items ?? NO_ITEMS, block?.revision ?? 0); setServerError(null); }}
             />
           )}
 
@@ -452,7 +475,12 @@ function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig }) {
                 )}
               </div>
               {previewTemplate && previewTemplate.roles.length > 0 ? (
-                <ChecklistBoard key={scopeKey(previewScope)} template={previewTemplate} state={NO_STATE} />
+                <ChecklistBoard
+                  key={scopeKey(previewScope)}
+                  template={previewTemplate}
+                  state={NO_STATE}
+                  preferredRoleId={lastRole ?? undefined}
+                />
               ) : (
                 <p className="rounded-lg border border-dashed border-white/10 px-4 py-8 text-center text-[12px] text-white/35">
                   No checklist items for this combination.
@@ -498,6 +526,7 @@ function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig }) {
                     count={byRole.get(r.id) ?? 0}
                     collapsed={collapsed.has(r.id)}
                     onToggle={toggleRole}
+                    onFocusRole={focusRole}
                     onAdd={addItem}
                     flagged={flagged}
                     dragging={dragging}
@@ -556,7 +585,7 @@ function ChecklistEditorBody({ config }: { config: CrisisTemplatesConfig }) {
 
 // ── Role section ─────────────────────────────────────────────────────────────
 
-function RoleSection({ id, role, known, items, count, collapsed, onToggle, onAdd, flagged, dragging, dropAt, h }: {
+function RoleSection({ id, role, known, items, count, collapsed, onToggle, onFocusRole, onAdd, flagged, dragging, dropAt, h }: {
   id: string;
   role: ChecklistRoleMeta;
   known: boolean;
@@ -564,6 +593,7 @@ function RoleSection({ id, role, known, items, count, collapsed, onToggle, onAdd
   count: number;
   collapsed: boolean;
   onToggle: (roleId: string) => void;
+  onFocusRole: (roleId: string) => void;
   onAdd: (roleId: string, phase: ChecklistPhaseId) => void;
   flagged: ReadonlySet<string>;
   dragging: { id: string; roleId: string } | null;
@@ -575,6 +605,7 @@ function RoleSection({ id, role, known, items, count, collapsed, onToggle, onAdd
     <section
       id={id}
       aria-label={`${role.title} checklist items`}
+      onFocusCapture={() => onFocusRole(role.id)}
       className="scroll-mt-4 overflow-hidden rounded-lg border border-white/8 bg-ink-900/60"
       style={{ borderLeft: `3px solid ${role.color}` }}
     >

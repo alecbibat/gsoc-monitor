@@ -414,6 +414,20 @@ export function pointerHalf(e: React.DragEvent, el: HTMLElement): 'before' | 'af
   return e.clientY < r.top + r.height / 2 ? 'before' : 'after';
 }
 
+/**
+ * For a pointer over the gaps of a list (between cards, below the last): the
+ * id of the first child (by its `data-drop-id`) whose middle is below the
+ * pointer, or null for "at the end".
+ */
+export function dropIdAt(container: HTMLElement, clientY: number): string | null {
+  for (const el of Array.from(container.children)) {
+    if (!(el instanceof HTMLElement) || !el.dataset.dropId) continue;
+    const r = el.getBoundingClientRect();
+    if (clientY < r.top + r.height / 2) return el.dataset.dropId;
+  }
+  return null;
+}
+
 export function EditPreviewToggle({ preview, onChange }: { preview: boolean; onChange: (preview: boolean) => void }) {
   const opt = (value: boolean, label: string) => (
     <button
@@ -478,9 +492,11 @@ export function ConflictBanner({ what, meta, onLoadTheirs, onKeepMine }: {
   onLoadTheirs: () => void;
   onKeepMine: () => void;
 }) {
-  const who = meta?.custom
-    ? `${meta.updatedBy ?? 'Another admin'}${meta.updatedAt ? ` saved it ${fmtWhen(meta.updatedAt)}` : ' saved it'}`
-    : 'It was reset to the built-in default';
+  const who = !meta
+    ? 'It was deleted'
+    : meta.custom
+      ? `${meta.updatedBy ?? 'Another admin'} saved it${meta.updatedAt ? ` ${fmtWhen(meta.updatedAt)}` : ''}`
+      : 'It was reset to the built-in default';
   return (
     <div role="alert" className="mb-4 rounded-lg border border-amber-400/35 bg-amber-400/8 px-3.5 py-3">
       <p className="text-[12px] font-medium text-amber-200/90">Someone else saved {what} while you were editing</p>

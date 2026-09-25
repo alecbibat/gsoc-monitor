@@ -16,7 +16,8 @@ export type { ScopeEntry };
 export function ScopeList({ entries, selected, onSelect, noun }: {
   entries: ScopeEntry[];
   selected: TemplateScope;
-  onSelect: (scope: TemplateScope) => void;
+  /** false = the selection was declined (unsaved changes kept). */
+  onSelect: (scope: TemplateScope) => boolean | void;
   /** What `count` counts, singular and plural ("item", "items"). */
   noun: [string, string];
 }) {
@@ -57,12 +58,16 @@ export function ScopeList({ entries, selected, onSelect, noun }: {
 
       {adding && (
         <div className="mb-3 rounded-lg border border-accent/20 bg-accent/5 p-2.5">
-          <ScopePicker value={candidate} onChange={setCandidate} />
+          <ScopePicker value={candidate} onChange={setCandidate} layout="stack" />
           <p className="mt-2 text-[10px] leading-snug text-white/45">{scopeAudience(candidate)}.</p>
           <div className="mt-2 flex gap-2">
             <button
               type="button"
-              onClick={() => { onSelect(candidate); setAdding(false); setFilter(''); }}
+              onClick={() => {
+                if (onSelect(candidate) === false) return;
+                setAdding(false);
+                setFilter('');
+              }}
               className="rounded bg-accent/20 px-3 py-1 text-[11px] font-medium text-accent transition hover:bg-accent/30"
             >
               {candidateExists ? 'Open' : 'Create'}
@@ -131,13 +136,13 @@ export function ScopeList({ entries, selected, onSelect, noun }: {
                       {g.rank === 0 ? 'General' : label}
                     </span>
                     {e.dirty && (
-                      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" title="Unsaved changes" aria-label="unsaved changes" />
+                      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" title="Unsaved changes">
+                        <span className="sr-only">(unsaved changes)</span>
+                      </span>
                     )}
-                    <span
-                      className="shrink-0 text-[10px] tabular-nums text-white/35"
-                      aria-label={plural(e.count, noun[0], noun[1])}
-                    >
+                    <span className="shrink-0 text-[10px] tabular-nums text-white/35">
                       {e.count}
+                      <span className="sr-only"> {e.count === 1 ? noun[0] : noun[1]}</span>
                     </span>
                     <span
                       className={`w-12 shrink-0 rounded px-1 py-px text-center text-[8px] font-bold uppercase tracking-wider ${

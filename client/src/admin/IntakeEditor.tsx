@@ -7,13 +7,13 @@ import { scopeAudience, scopeChipLabel, scopeLabel } from '../crisis/templates/s
 import { useTemplatesStore } from '../crisis/templates/templatesStore';
 import {
   LIMITS, cleanIntakeGroups, insertAfter, insertQuestion, intakeIssues, intakeSignature,
-  mentionedIds, moveBefore, moveQuestion, nudge, nudgeQuestion, removeById, removeQuestion, splitPastedLines,
+  moveBefore, moveQuestion, namedInError, nudge, nudgeQuestion, removeById, removeQuestion, splitPastedLines,
   tidyText, updateById, updateQuestion, withIntakeBlock, type QuestionDropTarget, type ScopeEntry,
 } from './draftOps';
 import {
   AutoTextarea, ConfigGate, ConflictBanner, DragHandle, DropLine, EditPreviewToggle, EditorFooter, EditorHeader,
-  IconButton, MOVE_SHORTCUT, ScopedEditorLayout, fieldCls, plural, pointerHalf, useDefaultTemplates, useDirtyFlag,
-  useFocusQueue, useSaveShortcut, useSelectedScope, useUnitDraft, type FooterReset,
+  IconButton, MOVE_SHORTCUT, ScopedEditorLayout, dropIdAt, fieldCls, plural, pointerHalf, useDefaultTemplates,
+  useDirtyFlag, useFocusQueue, useSaveShortcut, useSelectedScope, useUnitDraft, type FooterReset,
 } from './editorUi';
 import { ScopeList } from './ScopeList';
 import { ScopePicker } from './ScopePicker';
@@ -52,7 +52,8 @@ interface QuestionHandlers {
   drop: (e: React.DragEvent) => void;
 }
 
-function IntakeEditorBody({ config }: { config: CrisisTemplatesConfig }) {
+/** The editor for a loaded config (exported for render tests). */
+export function IntakeEditorBody({ config }: { config: CrisisTemplatesConfig }) {
   const [scope, selectScope] = useSelectedScope();
   const key = scopeKey(scope);
   const block = useMemo(
@@ -109,8 +110,8 @@ function IntakeEditorBody({ config }: { config: CrisisTemplatesConfig }) {
     const s = new Set<string>();
     for (const i of issues) if (i.id) s.add(i.id);
     if (serverError) {
-      const all = groups.flatMap((g) => [g.id, ...g.questions.map((q) => q.id)]);
-      for (const id of mentionedIds(serverError, all)) s.add(id);
+      const all = groups.flatMap((g) => [{ id: g.id, text: g.label }, ...g.questions]);
+      for (const id of namedInError(serverError, all)) s.add(id);
     }
     return s;
   }, [issues, serverError, groups]);
@@ -290,9 +291,17 @@ function IntakeEditorBody({ config }: { config: CrisisTemplatesConfig }) {
 
   // ── Save / discard / reset ─────────────────────────────────────────────────
 
+  // Someone else saved since this draft started: the banner at the top asks
+  // whose version wins — make sure the admin sees it, wherever they are.
+  const announceConflict = () => {
+    setServerError('Someone else saved this scope while you were editing — choose “Load their version” or “Keep mine” at the top, then save.');
+    rootRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
+
   const savingRef = useRef(false);
   const save = async () => {
     if (savingRef.current || !dirty || issues.length > 0) return;
+    if (draft.stale) { announceConflict(); return; }
     savingRef.current = true;
     setBusy('Saving…');
     setServerError(null);
@@ -306,6 +315,7 @@ function IntakeEditorBody({ config }: { config: CrisisTemplatesConfig }) {
       draft.rebase(b?.groups ?? NO_GROUPS, b?.revision ?? 0);
       setNotice(b ? 'Saved' : 'Saved — the scope is empty, so it was removed');
     } else if (res.status === 409) {
+      announceConflict();
       if (!res.config) void useTemplatesStore.getState().load();
     } else {
       setServerError(res.error);
@@ -327,7 +337,7 @@ function IntakeEditorBody({ config }: { config: CrisisTemplatesConfig }) {
     const defaultCount = defaultBlock?.groups.reduce((n, g) => n + g.questions.length, 0) ?? 0;
     const message = defaultBlock === null
       ? `Delete the “${name}” intake scope?\n\nIts ${plural(savedCount, 'question')} will stop appearing on incidents. Answers already given stay on those incidents.${unsaved}`
-      : `Reset “${name}” to the built-in default${defaultBlock ? ` (${plural(defaultCount, 'question')})` : ''}?\n\nThe customized version is deleted for every incident that uses this scope.${unsaved}`;
+      : `Reset “${name}” to the built-in default${defaultBlock ? ` (${plural(defaultCount, 'question')})` : ''}?\n\nThe customized version is deleted for every incident that uses this scope.${defaultBlock ? '' : ' If the scope has no built-in default, it is removed.'}${unsaved}`;
     if (!window.confirm(message)) return;
     setBusy('Resetting…');
     setServerError(null);
@@ -393,7 +403,11 @@ function IntakeEditorBody({ config }: { config: CrisisTemplatesConfig }) {
           entries={entries}
           selected={scope}
           noun={['question', 'questions']}
-          onSelect={(s) => { if (selectScope(s)) close(); }}
+          onSelect={(s) => {
+            const ok = selectScope(s);
+            if (ok) close();
+            return ok;
+          }}
         />
       )}
     >
@@ -421,9 +435,12 @@ function IntakeEditorBody({ config }: { config: CrisisTemplatesConfig }) {
               what="this scope"
               meta={block}
               onLoadTheirs={() => {
-                if (window.confirm('Replace your draft with their version? Your unsaved changes will be lost.')) draft.discard();
+                if (window.confirm('Replace your draft with their version? Your unsaved changes will be lost.')) {
+                  draft.discard();
+                  setServerError(null);
+                }
               }}
-              onKeepMine={() => draft.rebase(block?.groups ?? NO_GROUPS, block?.revision ?? 0)}
+              onKeepMine={() => { draft.rebase(block?.groups ?? NO_GROUPS, block?.revision ?? 0); setServerError(null); }}
             />
           )}
 
@@ -512,11 +529,12 @@ function IntakeEditorBody({ config }: { config: CrisisTemplatesConfig }) {
               <div
                 className="relative space-y-3"
                 onDragOver={(e) => {
-                  // Below the last card: move the group to the end.
+                  // In a gap between cards (or below the last one).
                   if (dragRef.current?.kind !== 'group') return;
                   e.preventDefault();
-                  if (dropRef.current?.kind !== 'group' || dropRef.current.beforeId !== null) {
-                    setDropAt({ kind: 'group', beforeId: null });
+                  const beforeId = dropIdAt(e.currentTarget, e.clientY);
+                  if (dropRef.current?.kind !== 'group' || dropRef.current.beforeId !== beforeId) {
+                    setDropAt({ kind: 'group', beforeId });
                   }
                 }}
                 onDrop={qHandlers.drop}
@@ -623,6 +641,7 @@ function GroupCard({
   return (
     <section
       ref={cardRef}
+      data-drop-id={group.id}
       aria-label={`Group ${index + 1}: ${tidyText(group.label) || 'unnamed'}`}
       onDragOver={onDragOver}
       onDrop={h.drop}

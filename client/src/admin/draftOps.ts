@@ -483,6 +483,21 @@ export function mentionedIds(message: string, ids: Iterable<string>): string[] {
 }
 
 /**
+ * Entries a server validation error points at: by id (duplicate-id errors),
+ * or by the quoted text snippet it names them with — `… ("Evacuate the
+ * lodge…") is empty`, where the snippet is the text's first 40 characters.
+ */
+export function namedInError(message: string, entries: { id: string; text: string }[]): string[] {
+  const out = new Set(mentionedIds(message, entries.map((e) => e.id)));
+  for (const m of message.matchAll(/\("([^"]+)"\)/g)) {
+    const snippet = m[1].replace(/…$/, '').trim();
+    if (!snippet) continue;
+    for (const e of entries) if (tidyText(e.text).startsWith(snippet)) out.add(e.id);
+  }
+  return [...out];
+}
+
+/**
  * Lines of a multi-line paste, list markers stripped ("- ", "• ", "3. ",
  * "[ ] ") — pasting a list from a document turns into one item per line.
  */

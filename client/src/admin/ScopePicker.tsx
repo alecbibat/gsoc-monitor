@@ -18,6 +18,8 @@ export interface ScopePickerProps {
   anyTypeText?: string;
   /** Text of the "any property" option (default "All properties"). */
   anyPropertyText?: string;
+  /** 'stack' keeps the two selects on top of each other (narrow columns). */
+  layout?: 'row' | 'stack';
 }
 
 const selectCls =
@@ -25,7 +27,7 @@ const selectCls =
 
 export function ScopePicker({
   value, onChange, typeLabel = 'Incident type', propertyLabel = 'Property', disabled = false,
-  anyTypeText = 'All incident types', anyPropertyText = 'All properties',
+  anyTypeText = 'All incident types', anyPropertyText = 'All properties', layout = 'row',
 }: ScopePickerProps) {
   const typeId = useId();
   const propId = useId();
@@ -37,7 +39,7 @@ export function ScopePicker({
     ? value.propertyId : null;
 
   return (
-    <div className="grid gap-2 sm:grid-cols-2">
+    <div className={`grid gap-2 ${layout === 'row' ? 'sm:grid-cols-2' : ''}`}>
       <div className="min-w-0">
         <label htmlFor={typeId} className="mb-1 block text-[9px] font-bold uppercase tracking-[0.14em] text-white/35">
           {typeLabel}

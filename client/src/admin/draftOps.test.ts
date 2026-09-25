@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   checklistIssues, checklistSignature, cleanChecklistItems, cleanIntakeGroups, cleanRoles,
   groupScopeEntries, insertAfter, insertChecklistItem, insertQuestion, intakeIssues, intakeSignature,
-  mentionedIds, moveBefore, moveChecklistItem, moveQuestion, nudge, nudgeChecklistItem, nudgeQuestion,
+  mentionedIds, moveBefore, moveChecklistItem, namedInError, moveQuestion, nudge, nudgeChecklistItem, nudgeQuestion,
   removeById, removeQuestion, roleIssues, roleItems, roleUsage, splitPastedLines, tidyText, updateById,
   updateQuestion, withChecklistBlock, withIntakeBlock, type ScopeEntry,
 } from './draftOps';
@@ -285,6 +285,19 @@ describe('misc', () => {
     expect(mentionedIds('Item x-12 has empty text', ['x-1', 'x-12', 'x-2'])).toEqual(['x-12']);
     expect(mentionedIds('Duplicate id "x-1"', ['x-1', 'x-12'])).toEqual(['x-1']);
     expect(mentionedIds('Nothing here', ['x-1'])).toEqual([]);
+  });
+
+  it('finds the entries a server error names by quoted snippet or id', () => {
+    const entries = [
+      { id: 'a', text: 'Evacuate the lodge and account for every guest and employee on the roster' },
+      { id: 'b', text: 'Call the park' },
+      { id: 'c', text: 'Call the county' },
+    ];
+    expect(namedInError('Incident Commander → Immediate, item 2 ("Evacuate the lodge and account for every…") is 600 characters long', entries))
+      .toEqual(['a']);
+    expect(namedInError('Item 3 ("Call the park") is assigned to an unknown role "x"', entries)).toEqual(['b']);
+    expect(namedInError('Item 1 repeats the id "c" of item 4', entries)).toEqual(['c']);
+    expect(namedInError('Something else went wrong', entries)).toEqual([]);
   });
 
   it('splits a pasted list into lines without markers', () => {
