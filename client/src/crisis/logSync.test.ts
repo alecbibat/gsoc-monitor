@@ -121,6 +121,35 @@ describe('logSync retry', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('retries a delete that failed in transit instead of reporting "saved"', async () => {
+    const m = await load();
+    fetchMock.mockImplementationOnce(offline).mockImplementation(ok);
+    seed(m, [], [entry('a', 'logged')])();
+    expect(syncState(m)).toBe('saving');
+    expect(m.logSync.hasPendingWork()).toBe(true); // the DELETE is in flight
+    await vi.advanceTimersByTimeAsync(0);
+    expect(syncState(m)).toBe('error');
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(methods()).toEqual(['DELETE', 'DELETE']);
+    expect(syncState(m)).toBe('saved');
+    expect(m.logSync.hasPendingWork()).toBe(false);
+    // Done: nothing further is sent.
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a delete the server refuses (403)', async () => {
+    const m = await load();
+    fetchMock.mockImplementation(() => status(403));
+    seed(m, [], [entry('a')])();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(syncState(m)).toBe('error');
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(methods()).toEqual(['DELETE']);
+    expect(m.logSync.hasPendingWork()).toBe(false);
+  });
+
   it('clears "Saving…" when a debounced edit finds its entry gone', async () => {
     const m = await load();
     seed(m, [entry('a', 'edited')], [entry('a')])();

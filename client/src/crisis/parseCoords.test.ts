@@ -61,11 +61,37 @@ describe('parseCoords single-space pairs', () => {
     expect(r.points[2]).toEqual({ lat: 34.0412, lon: -118.2285 });
   });
 
-  it('does not split a spaced DMS value into a pair', () => {
-    // Three+ tokens: not a single-space pair, so it must not be misread.
-    const r = parseCoords(`37° 46' 29" N 122° 25' 09" W`);
+  it('splits spaced values at the first value\'s cardinal letter', () => {
+    expectSf(`37° 46${PRIME} 29${DOUBLE_PRIME} N 122° 25${PRIME} 09${DOUBLE_PRIME} W`);
+    const r = parseCoords('37.7749° N 122.4194° W');
+    expect(r.error).toBeNull();
+    expect(r.points).toEqual([{ lat: 37.7749, lon: -122.4194 }]);
+  });
+
+  it('does not split a spaced DMS value with no cardinal to split at', () => {
+    // Six tokens and no N/S/E/W: ambiguous, so reported rather than misread.
+    const r = parseCoords(`37° 46' 29" 122° 25' 09"`);
     expect(r.points).toHaveLength(0);
     expect(r.error).toMatch(/37° 46'/);
+  });
+
+  it('ignores a stray trailing comma on a space-separated pair', () => {
+    const r = parseCoords('37.80 -122.40,\n37.81  -122.41,\n-33.9 18.4,');
+    expect(r.error).toBeNull();
+    expect(r.points).toEqual([
+      { lat: 37.8, lon: -122.4 },
+      { lat: 37.81, lon: -122.41 },
+      { lat: -33.9, lon: 18.4 },
+    ]);
+  });
+
+  it('parses southern/eastern hemisphere pairs', () => {
+    expect(parseCoords('-33.9 18.4').points).toEqual([{ lat: -33.9, lon: 18.4 }]);
+    const r = parseCoords(`33°54${PRIME}S 18°25${PRIME}E`);
+    expect(r.error).toBeNull();
+    expect(r.points[0].lat).toBeCloseTo(-33.9, 6);
+    expect(r.points[0].lon).toBeCloseTo(18 + 25 / 60, 6);
+    expect(parseCoords('-33.9\t18.4').points).toEqual([{ lat: -33.9, lon: 18.4 }]);
   });
 });
 

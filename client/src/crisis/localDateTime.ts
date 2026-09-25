@@ -26,7 +26,11 @@ export function toLocalInput(stored: string | null | undefined): string {
   if (!HAS_ZONE.test(stored)) return stored;
   const d = new Date(stored);
   if (Number.isNaN(d.getTime())) return '';
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  // The input only accepts a 4-digit year. Typing into its year field passes
+  // through "0002", "0020", "0202" — an unpadded "2-03-01T09:30" would be
+  // rejected and blank the field mid-keystroke.
+  const year = String(d.getFullYear()).padStart(4, '0');
+  return `${year}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /** The current minute as a stored instant — what a "Now" button writes. */

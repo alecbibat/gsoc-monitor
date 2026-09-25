@@ -201,6 +201,7 @@ function CoordImportPanel({ layer, onClose }: { layer: DrawLayer; onClose: () =>
         <div className="mt-1.5 space-y-1 rounded border border-white/8 bg-white/3 px-3 py-2">
           {[
             ['Decimal degrees (Google Maps)', '37.7749, -122.4194'],
+            ['Space-separated', '37.7749 -122.4194'],
             ['With cardinal letters', '37.7749° N, 122.4194° W'],
             ['DMS', '37° 46\' 29" N, 122° 25\' 16" W'],
             ['WKT (lon lat order)', 'POLYGON ((-122.4 37.7, -122.3 37.8, ...))'],

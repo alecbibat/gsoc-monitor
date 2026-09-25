@@ -101,6 +101,8 @@ const LogRow = memo(function LogRow({
 }) {
   const updateActionEntry = useCrisisStore((s) => s.updateActionEntry);
   const removeActionEntry = useCrisisStore((s) => s.removeActionEntry);
+  const rowRef = useRef<HTMLTableRowElement>(null);
+  const uploadBoxRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const descRef = useRef<HTMLTextAreaElement>(null);
   // Bumped per attach and per removal; stale async completions must not patch the row.
@@ -118,12 +120,25 @@ const LogRow = memo(function LogRow({
   }, [autoFocus, onAutoFocused]);
 
   // Grow the description with its text (capped by max-h, then it scrolls).
+  // Measure before writing: a row whose text fits its two lines — most rows —
+  // never touches the style, so mounting a long page ("Show all") doesn't
+  // force a table relayout per row.
   useLayoutEffect(() => {
     const el = descRef.current;
     if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight}px`;
+    if (el.style.height) el.style.height = ''; // back to rows={2}, so it can shrink
+    if (el.scrollHeight > el.clientHeight) el.style.height = `${el.scrollHeight}px`;
   }, [entry.description, readOnly]);
+
+  // The focused control is about to unmount (the attachment cell swaps
+  // branches): hand focus to the row first. An element removed while focused
+  // need not fire blur (browsers differ), which would leave the row pinned —
+  // exempt from the filters and the search — long after the operator has
+  // moved on.
+  const holdFocus = () => {
+    const row = rowRef.current;
+    if (row && row !== document.activeElement && row.contains(document.activeElement)) row.focus({ preventScroll: true });
+  };
 
   const attachFile = async (file: File, name = file.name || 'pasted-image.png') => {
     if (!isImageFile(file)) {
@@ -139,6 +154,9 @@ const LogRow = memo(function LogRow({
     try {
       const url = await withTimeout(compressImage(file).then(uploadImage), UPLOAD_TIMEOUT_MS);
       if (uploadSeq.current !== seq) return;
+      // A focused Cancel ✕ goes with the "Uploading…" state — but focus
+      // anywhere else (the operator typing on) must stay where it is.
+      if (uploadBoxRef.current?.contains(document.activeElement)) holdFocus();
       updateActionEntry(entry.id, { attachmentName: name, attachmentData: url }, incidentId);
       setUpload(null);
     } catch {
@@ -160,6 +178,7 @@ const LogRow = memo(function LogRow({
 
   return (
     <tr
+      ref={rowRef}
       className="group border-b border-white/6 align-top outline-none"
       tabIndex={-1}
       onFocus={() => onPin(entry.id)}
@@ -275,7 +294,9 @@ const LogRow = memo(function LogRow({
           onChange={(e) => {
             const file = e.target.files?.[0];
             e.target.value = '';
-            if (file) void attachFile(file);
+            if (!file) return;
+            if (isImageFile(file)) holdFocus(); // "Attach image…" gives way to "Uploading…"
+            void attachFile(file);
           }}
         />
         {entry.attachmentName ? (
@@ -292,6 +313,7 @@ const LogRow = memo(function LogRow({
               <span className="truncate text-[9px] text-accent/80">{entry.attachmentName}</span>
               <button
                 onClick={() => {
+                  holdFocus();
                   // Supersede any upload still in flight so it can't land afterwards.
                   cancelUpload();
                   updateActionEntry(entry.id, { attachmentName: undefined, attachmentData: undefined });
@@ -304,14 +326,14 @@ const LogRow = memo(function LogRow({
             </div>
           </div>
         ) : upload ? (
-          <div className="flex items-center gap-1 text-[9px]" title={upload.name}>
+          <div ref={uploadBoxRef} className="flex items-center gap-1 text-[9px]" title={upload.name}>
             {upload.status === 'uploading' ? (
               <span className="truncate text-white/40">Uploading…</span>
             ) : (<>
               <span className="truncate text-red-400/80">Upload failed</span>
               <span className="text-white/15">—</span>
               <button
-                onClick={() => void attachFile(upload.file, upload.name)}
+                onClick={() => { holdFocus(); void attachFile(upload.file, upload.name); }}
                 className="shrink-0 text-white/45 hover:text-white/70"
               >
                 Retry
@@ -319,7 +341,7 @@ const LogRow = memo(function LogRow({
               <span className="text-white/15">·</span>
             </>)}
             <button
-              onClick={cancelUpload}
+              onClick={() => { holdFocus(); cancelUpload(); }}
               className="shrink-0 text-white/25 hover:text-white/50"
               aria-label={upload.status === 'uploading' ? 'Cancel upload' : 'Discard failed upload'}
             >

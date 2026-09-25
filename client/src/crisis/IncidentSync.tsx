@@ -68,16 +68,41 @@ function scheduleRetry(id: string): void {
     const entry = retries.get(id);
     if (entry) entry.timer = null; // keep the delay for the next backoff step
     const latest = useCrisisStore.getState().incidents.find((i) => i.id === id);
-    // Something else already re-sent it (a new edit, a rebase) or it's gone.
-    if (!latest || serverState.has(id) || pending.has(id) || blobInflight.has(id)) return;
-    // POST upserts and keeps the server's own action log and checklist map.
-    pushIncident(latest, 'POST');
+    // Gone, or already re-sent (a new edit, a rebase): nothing left to retry.
+    // A push still in flight re-arms the retry itself if it fails.
+    if (!latest || serverState.has(id)) { clearRetry(id); return; }
+    if (pending.has(id) || blobInflight.has(id)) return;
+    // An incident the server had confirmed retries with PUT, so one a teammate
+    // deleted meanwhile answers 404 instead of being recreated by an upsert.
+    // Only a create that never landed is re-POSTed.
+    pushIncident(latest, failedBase.has(id) ? 'PUT' : 'POST');
   }, delay);
   retries.set(id, { timer, delay });
 }
 
 const setSync = (s: 'idle' | 'saving' | 'saved' | 'error') =>
   useCrisisStore.getState().setSyncState(s);
+
+/** Nothing left to send anywhere — the only moment "Saved" is truthful. */
+const allIdle = () =>
+  pending.size === 0 && retries.size === 0 && blobInflight.size === 0 && !logSync.hasPendingWork();
+
+/**
+ * Forget an incident a teammate deleted, local unsaved edit included. The
+ * delete wins (as it does for log entries): keeping the edit would have its
+ * next push recreate the incident on the server — without the share links the
+ * delete revoked. serverState is cleared before the store drops it, so the
+ * watcher doesn't answer with a DELETE of its own.
+ */
+function dropDeletedIncident(id: string): void {
+  const p = pending.get(id);
+  if (p) { clearTimeout(p.timer); pending.delete(id); }
+  serverState.delete(id);
+  failedBase.delete(id);
+  clearRetry(id);
+  logSync.dropIncident(id);
+  useCrisisStore.getState().applyRemoteDelete(id);
+}
 
 function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
   const url = method === 'POST' ? '/api/incidents' : `/api/incidents/${incident.id}`;
@@ -100,7 +125,7 @@ function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
     body: JSON.stringify(body),
   })
     .then(async (res) => {
-      if (!res.ok) throw new Error(String(res.status));
+      if (!res.ok) throw Object.assign(new Error(String(res.status)), { status: res.status });
       if (isCreate) {
         // Baseline the log from the server's RESPONSE, not from what we sent:
         // if this POST hit the upsert path (retry after a lost response, or
@@ -117,17 +142,34 @@ function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
       }
       failedBase.delete(incident.id);
       clearRetry(incident.id);
-      // Only clear to "saved" if nothing newer is queued anywhere.
-      if (!pending.has(incident.id) && retries.size === 0 && !logSync.hasPendingWork()) setSync('saved');
+      // Only clear to "saved" if nothing newer is queued anywhere — and if
+      // all that's left is a log write waiting on its retry, say so rather
+      // than leaving "Saving…" up until that retry fires.
+      if (!pending.has(incident.id) && retries.size === 0) {
+        if (!logSync.hasPendingWork()) setSync('saved');
+        else if (logSync.hasOnlyFailedWork()) setSync('error');
+      }
     })
     .catch((e) => {
+      const status = (e as { status?: number }).status;
+      if (method === 'PUT' && status === 404) {
+        // The row is gone: a teammate deleted the incident while this edit
+        // was queued. Recreating it would undo their delete.
+        console.warn(`[incident-sync] ${incident.id} was deleted on the server; dropping the local copy`);
+        dropDeletedIncident(incident.id);
+        if (allIdle()) setSync('idle');
+        return;
+      }
       // Roll the baseline back so the push is re-attempted (by the retry
       // timer, or sooner by the next edit), remembering what the edit was
       // made against so a peer's change meanwhile rebases instead of winning.
       serverState.delete(incident.id);
       if (priorBase !== undefined) failedBase.set(incident.id, priorBase);
       setSync('error');
-      scheduleRetry(incident.id);
+      // A body the server rejects as malformed or too large fails the same
+      // way every time; retrying it on a timer would only spin. The next edit
+      // still re-sends it.
+      if (status !== 400 && status !== 413) scheduleRetry(incident.id);
       console.warn('[incident-sync] push failed:', e);
     })
     .finally(() => {
@@ -151,25 +193,40 @@ function scheduleSync(incident: Incident) {
 // sendBeacon (a background POST that still carries the auth cookie); the POST
 // route upserts, so it stands in for the pending PUT.
 function flushPending() {
+  // The beacon's upsert keeps the server's action log and checklist map, so
+  // they are left out — a long incident's log alone overruns the ~64 KiB
+  // beacon quota. The exception is a create still in flight: if that POST
+  // never lands, the beacon's INSERT is what seeds the row.
+  const beaconBody = (incident: Incident, isNew: boolean) =>
+    JSON.stringify(isNew ? incident : { ...incident, actionLog: undefined, checklists: undefined });
+  const beacon = (body: string) => {
+    try {
+      return navigator.sendBeacon('/api/incidents', new Blob([body], { type: 'application/json' }));
+    } catch {
+      return false;
+    }
+  };
+
   for (const [id, { timer, incident }] of [...pending]) {
     clearTimeout(timer);
     pending.delete(id); // before pushIncident, so its "saved" check sees an empty queue
-    let ok = false;
-    try {
-      const blob = new Blob([JSON.stringify(incident)], { type: 'application/json' });
-      ok = navigator.sendBeacon('/api/incidents', blob);
-    } catch {
-      /* fall through to the regular PUT */
-    }
-    if (ok) {
+    if (beacon(beaconBody(incident, blobInflight.has(id)))) {
       resyncTouched?.add(id);
       serverState.set(id, serverCanon(incident));
     } else {
-      // Beacon refused (e.g. body over the 64 KiB keepalive quota). The page is
+      // Beacon refused (e.g. body over the keepalive quota). The page is
       // usually still alive (tab hidden, not unloading), so send the normal PUT
       // rather than dropping the edit. On a real unload this is best effort.
       void pushIncident(incident, 'PUT');
     }
+  }
+
+  // Saves that already failed and are waiting on their retry timer: send the
+  // latest copy too, or closing the tab loses them.
+  for (const id of retries.keys()) {
+    if (serverState.has(id) || blobInflight.has(id)) continue;
+    const latest = useCrisisStore.getState().incidents.find((i) => i.id === id);
+    if (latest) beacon(beaconBody(latest, !failedBase.has(id)));
   }
 }
 
@@ -177,6 +234,19 @@ function flushPending() {
 // operator navigates away: the last edit before "back to list" must still
 // reach the share links.
 const publishTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+// What each share link was last successfully sent, minus the fields that
+// change on every publish (timestamps) or that the server ignores on PATCH
+// (the checklist map — toggles reach snapshots through their own endpoint).
+// A checklist toggle, a peer's echo or a log-entry round trip re-runs the
+// publish effect in every editor that has the incident open; without this each
+// one re-sent the whole snapshot to every link and bumped the stakeholders'
+// "Last updated" with nothing new to show. Recorded only on success, so a link
+// that failed (or had expired and was renewed) is sent again.
+const lastPublished = new Map<string, string>();
+
+const publicCanon = (inc: Incident) =>
+  stableStringify({ ...extractPublicState(inc), lastUpdated: undefined, publishedAt: undefined, checklists: undefined })!;
 
 function activeShareTokens(inc: Incident): string[] {
   const tokens = (inc.shareLinks ?? []).filter((l) => l.active).map((l) => l.token);
@@ -208,7 +278,8 @@ function useAutoPublish() {
       // incident and respects links deactivated in the meantime.
       const latest = useCrisisStore.getState().incidents.find((i) => i.id === id);
       if (!latest) return;
-      const tokens = activeShareTokens(latest);
+      const canon = publicCanon(latest);
+      const tokens = activeShareTokens(latest).filter((t) => lastPublished.get(t) !== canon);
       if (tokens.length === 0) return;
       const body = JSON.stringify(extractPublicState(latest));
       for (const token of tokens) {
@@ -218,7 +289,8 @@ function useAutoPublish() {
           body,
         })
           .then((res) => {
-            if (!res.ok) console.warn(`[crisis] live update failed (${res.status}) for share ${token}`);
+            if (res.ok) lastPublished.set(token, canon);
+            else console.warn(`[crisis] live update failed (${res.status}) for share ${token}`);
           })
           .catch(console.error);
       }
@@ -250,10 +322,18 @@ export function IncidentSync() {
     if (userId) reloadTemplates();
   }, [userId]);
 
-  // Load all incidents from the server on first auth.
+  // Load all incidents from the server on first auth. A failed load retries
+  // with backoff: the live stream's first 'connected' is deliberately not a
+  // resync, so without this a 503 at page load left the list empty ("Start
+  // your first incident") until the stream happened to drop — hours, maybe —
+  // inviting a duplicate incident mid-response.
   useEffect(() => {
     if (!user || loaded.current) return;
     loaded.current = true;
+    let delay = 5_000;
+    const load = () => {
+    // Re-armed per attempt; SSE upserts that land between attempts are kept
+    // by the merge below (anything already in the store wins).
     deletedDuringLoad.current = new Set();
     fetch('/api/incidents', { credentials: 'include' })
       .then((r) => {
@@ -281,8 +361,16 @@ export function IncidentSync() {
         for (const inc of byId.values()) merged.push(inc); // local-only, in store order
         setIncidents(merged);
       })
-      .catch((e) => console.error('[incident-sync] initial load failed:', e))
+      .catch((e) => {
+        console.error('[incident-sync] initial load failed:', e);
+        // Guarded on the signed-in user rather than effect cleanup: loaded
+        // makes this effect run once, so a cleared timer would never re-arm.
+        setTimeout(() => { if (useAuthStore.getState().user) load(); }, delay);
+        delay = Math.min(delay * 2, 60_000);
+      })
       .finally(() => { deletedDuringLoad.current = null; });
+    };
+    load();
   }, [user, setIncidents]);
 
   // Watch the store and push local changes back to the server.
@@ -294,6 +382,7 @@ export function IncidentSync() {
     const unsub = useCrisisStore.subscribe((state) => {
       const next = state.incidents;
       if (next === lastArr) return; // ignore non-incident state changes (e.g. syncState)
+      const prevArr = lastArr;
       lastArr = next;
 
       const nextIds = new Set(next.map((i) => i.id));
@@ -322,7 +411,20 @@ export function IncidentSync() {
           const p = pending.get(id);
           if (p) { clearTimeout(p.timer); pending.delete(id); }
           deletedDuringLoad.current?.add(id);
+          const removed = prevArr.find((i) => i.id === id);
           fetch(`/api/incidents/${id}`, { method: 'DELETE', credentials: 'include' })
+            .then((res) => {
+              // 404 = already gone. Anything else (403 on an archived incident
+              // for a non-admin, a 5xx) means it still exists on the server:
+              // put it back rather than let this tab alone believe it's gone.
+              if (res.ok || res.status === 404 || !removed) return;
+              console.warn(`[incident-sync] delete of ${id} failed (${res.status}); restoring it`);
+              serverState.set(id, serverCanon(removed));
+              logSync.seedBaseline(removed);
+              if (!useCrisisStore.getState().incidents.some((i) => i.id === id)) {
+                useCrisisStore.getState().applyRemoteUpsert(removed);
+              }
+            })
             .catch(console.error);
         }
       }
@@ -406,7 +508,12 @@ export function IncidentSync() {
       }
 
       const blobSame = serverState.get(inc.id) === canon;
-      if (blobSame && logSame && chkSame) return; // our own echo / no change
+      if (blobSame && logSame && chkSame) {
+        // Our own echo. After a tab-close beacon (which reports nothing back)
+        // this broadcast is the server's confirmation that the write landed.
+        if (useCrisisStore.getState().syncState === 'saving' && allIdle()) setSync('saved');
+        return;
+      }
 
       serverState.set(inc.id, canon);
       logSync.applyRemoteLog(inc.id, remoteLog, keep);
@@ -414,13 +521,11 @@ export function IncidentSync() {
     };
 
     const applyDelete = (id: string) => {
-      if (!id || pending.has(id)) return;
+      if (!id) return;
       deletedDuringLoad.current?.add(id);
-      serverState.delete(id);
-      failedBase.delete(id);
-      clearRetry(id);
-      logSync.dropIncident(id);
-      useCrisisStore.getState().applyRemoteDelete(id);
+      // A pending local edit no longer holds the delete off: its PUT would
+      // 404 and the next push would recreate the incident (dropDeletedIncident).
+      dropDeletedIncident(id);
     };
 
     // Events broadcast while the stream was down are gone (no replay), so
@@ -455,7 +560,7 @@ export function IncidentSync() {
             useCrisisStore.getState().incidents.filter((i) => !serverState.has(i.id)).map((i) => i.id)
           );
           // Same for log work: an append or edit that failed offline is rolled
-          // back and only retried on the next store change, so the merge below
+          // back and only re-sent when logSync's backoff timer fires, so the merge below
           // would drop it. Re-queue it now (as the watcher would) so it is in
           // keepLocalEntryIds() and survives the merge; appends are prepended,
           // where the server will put them too. The incident is still applied
@@ -469,6 +574,12 @@ export function IncidentSync() {
             if (!skip(inc.id) && !unconfirmed.has(inc.id)) applyUpsert(inc);
           }
           for (const id of [...serverState.keys()]) {
+            if (!seen.has(id) && !skip(id)) applyDelete(id);
+          }
+          // A confirmed incident whose last save failed has no baseline, so
+          // the loop above can't see it; if the server no longer has it, a
+          // teammate deleted it while this tab was offline.
+          for (const id of [...failedBase.keys()]) {
             if (!seen.has(id) && !skip(id)) applyDelete(id);
           }
           resyncDelay = 5_000;

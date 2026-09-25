@@ -34,6 +34,13 @@ describe('localDateTime', () => {
     expect(toLocalInput('2026-09-25T12:00:00+00:00')).toBe(toLocalInput('2026-09-25T12:00:00.000Z'));
   });
 
+  it('keeps the year 4 digits while the operator is still typing it', () => {
+    // Year-field keystrokes emit "0002-…", "0020-…", "0202-…" before "2026-…".
+    for (const v of ['0002-03-01T09:30', '0020-03-01T09:30', '0202-03-01T09:30']) {
+      expect(toLocalInput(fromLocalInput(v))).toBe(v);
+    }
+  });
+
   it('never throws on garbage', () => {
     expect(fromLocalInput('not a date')).toBe('');
     expect(toLocalInput('garbageZ')).toBe('');

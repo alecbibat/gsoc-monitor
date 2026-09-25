@@ -28,11 +28,15 @@ import { entryCanon } from './syncCanon';
 //   diff. A rolled-back write is not in any queue, so "nothing in flight"
 //   does not mean "nothing unsent": the failure stays pending until a re-diff
 //   finds nothing left to push.
+// - A DELETE that fails in transit puts the entry's baseline back, so that
+//   re-diff sends it again (the entry is still missing locally). A refusal
+//   (403) is final and is not retried.
 
 const baselines = new Map<string, Map<string, string>>(); // incidentId → entryId → canon
 const inflight = new Set<string>();                       // appends in flight
 const patchInflight = new Set<string>();                  // PATCHes in flight
 const pendingDeletes = new Set<string>();                 // deletes deferred behind an in-flight append
+let deletesInflight = 0;                                  // DELETEs in flight
 const pendingPatches = new Map<string, { incidentId: string; timer: ReturnType<typeof setTimeout> }>();
 const PATCH_DEBOUNCE_MS = 800;
 const RETRY_BASE_MS = 5_000;
@@ -49,11 +53,17 @@ export function registerBlobIdleCheck(fn: () => boolean) {
   blobIdle = fn;
 }
 
-const busy = () => inflight.size > 0 || patchInflight.size > 0 || pendingPatches.size > 0;
+const busy = () =>
+  inflight.size > 0 || patchInflight.size > 0 || pendingPatches.size > 0 || deletesInflight > 0;
 
 /** True while any log write is queued, in flight, or waiting to be retried. */
 export function hasPendingWork(): boolean {
   return busy() || retryTimer !== null;
+}
+
+/** True when the only log work left is a failed write waiting on its retry. */
+export function hasOnlyFailedWork(): boolean {
+  return !busy() && retryTimer !== null;
 }
 
 const resync = () => syncLogsFromStore(useCrisisStore.getState().incidents);
@@ -151,8 +161,9 @@ function postEntry(incidentId: string, entry: ActionLogEntry) {
       // it now so the entry doesn't silently resurrect.
       if (pendingDeletes.has(entry.id)) {
         pendingDeletes.delete(entry.id);
+        const sent = baselines.get(incidentId)?.get(entry.id) ?? entryCanon(entry);
         baselines.get(incidentId)?.delete(entry.id);
-        deleteEntry(incidentId, entry.id);
+        deleteEntry(incidentId, entry.id, sent);
         return;
       }
       resyncEntry(incidentId, entry.id);
@@ -253,19 +264,42 @@ function schedulePatch(incidentId: string, entryId: string) {
   pendingPatches.set(entryId, { incidentId, timer });
 }
 
-function deleteEntry(incidentId: string, entryId: string) {
+/**
+ * `canon` is the entry's baseline before the delete: a transient failure puts
+ * it back, so the retry's re-diff (entry still absent locally) re-sends the
+ * DELETE instead of reporting "saved" while the server keeps the entry.
+ */
+function deleteEntry(incidentId: string, entryId: string, canon: string) {
+  deletesInflight++;
+  let settled = false;
+  const settle = () => { if (!settled) { settled = true; deletesInflight--; } };
+  setSync('saving');
+  const failed = (retry: boolean, why: unknown) => {
+    // Unless a server-confirmed log (SSE upsert) already re-baselined it —
+    // then the entry is back in the store and the delete has yielded.
+    const base = baselines.get(incidentId);
+    if (retry && base && !base.has(entryId)) base.set(entryId, canon);
+    markFailed();
+    console.warn('[log-sync] delete failed:', why);
+  };
   fetch(`/api/incidents/${incidentId}/log/${encodeURIComponent(entryId)}`, {
     method: 'DELETE',
     credentials: 'include',
   })
     .then((res) => {
-      if (!res.ok) throw new Error(String(res.status));
-      quietIfIdle();
+      settle();
+      // 404: the incident itself is gone — nothing left to delete.
+      if (res.ok || res.status === 404) {
+        quietIfIdle();
+        return;
+      }
+      // 403: the server refuses (system entry) — retrying can't change that;
+      // the next broadcast resurfaces the entry locally.
+      failed(res.status !== 403, res.status);
     })
     .catch((err) => {
-      // Server still has the entry; the next broadcast resurfaces it locally.
-      markFailed();
-      console.warn('[log-sync] delete failed:', err);
+      settle();
+      failed(true, err);
     });
 }
 
@@ -308,13 +342,14 @@ export function syncLogsFromStore(incidents: Incident[]) {
         pendingDeletes.add(id);
         continue;
       }
+      const canon = base.get(id)!;
       base.delete(id);
       const p = pendingPatches.get(id);
       if (p) {
         clearTimeout(p.timer);
         pendingPatches.delete(id);
       }
-      deleteEntry(inc.id, id);
+      deleteEntry(inc.id, id, canon);
     }
   }
 }

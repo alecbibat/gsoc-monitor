@@ -259,7 +259,10 @@ export function ZoomableImage({ src, alt, className, wrapperClassName, onOpen, t
   thumbWidth?: number;
 }) {
   const [open, setOpen] = useState(false);
-  const thumb = thumbUrl(src, thumbWidth);
+  // A Cloudinary account with "strict transformations" refuses renditions
+  // it hasn't pre-approved; if the resized URL fails, show the original.
+  const [thumbFailed, setThumbFailed] = useState(false);
+  const thumb = thumbFailed ? src : thumbUrl(src, thumbWidth);
   return (
     <>
       <button
@@ -282,6 +285,7 @@ export function ZoomableImage({ src, alt, className, wrapperClassName, onOpen, t
           draggable={false}
           loading="lazy"
           decoding="async"
+          onError={thumb !== src ? () => setThumbFailed(true) : undefined}
         />
       </button>
       {!onOpen && open && <ImageLightbox src={src} alt={alt} onClose={() => setOpen(false)} />}

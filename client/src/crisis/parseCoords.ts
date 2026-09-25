@@ -6,6 +6,7 @@ import type { DrawLayerPoint } from './crisisStore';
 //   37.7749, -122.4194              ← Google Maps right-click / decimal degrees
 //   37.7749 -122.4194               ← single space (only when the line is exactly two values)
 //   37.7749° N, 122.4194° W        ← with degree symbols and cardinal letters
+//   37.7749° N 122.4194° W         ← single space after a cardinal letter
 //   37° 46' 29.5" N  122° 25' 16" W  ← DMS (degrees/minutes/seconds)
 //   POINT (-122.4194 37.7749)       ← WKT (lon lat order, auto-detected)
 //   LINESTRING (-122.4 37.7, -122.3 37.8)
@@ -90,14 +91,24 @@ function splitLine(line: string, wktMode = false): string[] {
   // Try splitting on comma first (most common: "lat, lon")
   const byComma = line.split(',').map((s) => s.trim()).filter(Boolean);
   if (byComma.length >= 2) return byComma;
+  // At most one comma segment is left: work on it, so a stray trailing or
+  // leading comma ("37.80 -122.40,", pasted from a list) doesn't stick to a value.
+  const rest = byComma[0] ?? '';
   // Fall back to splitting on 2+ spaces or tab
-  const bySpaces = line.split(/\s{2,}|\t/).map((s) => s.trim()).filter(Boolean);
+  const bySpaces = rest.split(/\s{2,}|\t/).map((s) => s.trim()).filter(Boolean);
   if (bySpaces.length >= 2) return bySpaces;
   // Single-space pair ("37.80 -122.40", "37.7749N 122.4194W", GeoHack's
   // "37°46′29″N 122°25′09″W"): split only when that yields exactly two
   // coordinate-looking tokens, so spaced DMS ("37° 46' 29\" N") stays whole.
-  const tokens = line.split(/\s+/).filter(Boolean);
+  const tokens = rest.split(/\s+/).filter(Boolean);
   if (tokens.length === 2 && tokens.every((t) => parseCoordValue(t) !== null)) return tokens;
+  // Spaced values with a single space between them ("37.7749° N 122.4194° W",
+  // "37° 46′ 29″ N 122° 25′ 09″ W"): the first value ends at its cardinal
+  // letter. Only taken when both halves parse as values.
+  const byCardinal = rest.match(/^(.+?[NSEWnsew])\s+(.+)$/);
+  if (byCardinal && parseCoordValue(byCardinal[1]) && parseCoordValue(byCardinal[2])) {
+    return [byCardinal[1], byCardinal[2]];
+  }
   return bySpaces;
 }
 
