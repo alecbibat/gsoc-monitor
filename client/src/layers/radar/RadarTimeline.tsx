@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import { useLayersStore } from '../../store/layersStore';
@@ -22,7 +23,7 @@ import {
   nowIndex,
   type TimelineFrame,
 } from './radarTimeline';
-import { bufferRuns, timelineTicks } from './radarTimelineTicks';
+import { bufferSegments, timelineTicks } from './radarTimelineTicks';
 import { radarKeyFor, runRadarKeyAction, type RadarKeyAction } from './radarKeys';
 import { useRadarPlayhead } from './useRadarPlayhead';
 
@@ -50,11 +51,43 @@ export function frameCaption(current: TimelineFrame, newest: TimelineFrame, stal
   return { kind: 'past', lead: null, text, offset };
 }
 
-export function playButtonLabel(p: { playing: boolean; ready: number; total: number }, busy: boolean): string {
+// The play button's name. Frame counts only go in the tooltip (`detail`): a
+// screen reader re-reads a focused button's name each time it changes, and
+// the count changes with every frame that loads.
+export function playButtonLabel(
+  p: { playing: boolean; ready: number; total: number },
+  busy: boolean,
+  detail = false
+): string {
   let label = p.playing ? 'Pause radar loop' : 'Play radar loop';
-  if (p.total > 0 && p.ready < p.total) label += ` (loading ${p.ready} of ${p.total} frames)`;
+  if (p.total > 0 && p.ready < p.total) label += detail ? ` (loading ${p.ready} of ${p.total} frames)` : ' (loading)';
   if (busy) label += ' · RainViewer busy';
   return label;
+}
+
+// The slider's spoken value: "8:30 PM, −20 min", "8:50 PM, latest frame",
+// "9:10 PM, forecast +20 min".
+export function frameValueText(current: TimelineFrame, newest: TimelineFrame, stale: boolean): string {
+  const caption = frameCaption(current, newest, stale);
+  const clock = formatClock(current.time);
+  if (caption.kind === 'forecast') return `${clock}, forecast ${caption.offset}`;
+  if (caption.kind === 'now' || caption.kind === 'latest') return `${clock}, latest frame`;
+  return `${clock}, ${caption.offset}`;
+}
+
+// Screen readers speak every change of a focused slider's value, which during
+// playback is every frame. So while the loop plays, the announced frame moves
+// at most every ANNOUNCE_EVERY_MS; paused (stepping, scrubbing) it follows
+// every frame.
+export const ANNOUNCE_EVERY_MS = 10_000;
+export interface Announced {
+  index: number;
+  at: number; // ms, when it was last moved
+}
+export function nextAnnounced(prev: Announced | null, index: number, playing: boolean, nowMs: number): Announced {
+  if (prev && prev.index === index) return prev;
+  if (prev && playing && nowMs - prev.at < ANNOUNCE_EVERY_MS) return prev;
+  return { index, at: nowMs };
 }
 
 // Track layout, px from the top of the 47 px track box: bubble 0–16 with its
@@ -62,6 +95,24 @@ export function playButtonLabel(p: { playing: boolean; ready: number; total: num
 // from 37.
 const BUBBLE_OVERHANG_PX = 10; // how far the bubble may hang past the track's ends
 const GHOST_EDGE_PX = 28;
+const GHOST_CHAR_PX = 6; // rough advance of the ghost label's 10 px digits
+const GHOST_PAD_PX = 12;
+const TOUCH_SLOP_PX = 6; // a finger must move this far sideways before it scrubs
+
+// Left edge of the time bubble for a knob at x: centred over it, hanging at
+// most BUBBLE_OVERHANG_PX past either end of the track. Whole pixels, so the
+// text stays crisp.
+export function bubbleLeft(x: number, bubbleW: number, trackW: number): number {
+  return Math.round(Math.min(Math.max(x - bubbleW / 2, -BUBBLE_OVERHANG_PX), trackW - bubbleW + BUBBLE_OVERHANG_PX));
+}
+
+// The hover ghost's label shares the bubble's row, so it's left out (its tick
+// stays) when the two would overlap: over or beside the knob the bubble
+// already says when that is.
+export function ghostLabelClear(ghostL: number, ghostW: number, bubbleL: number, bubbleW: number): boolean {
+  const gap = 4;
+  return ghostL + ghostW + gap <= bubbleL || bubbleL + bubbleW + gap <= ghostL;
+}
 
 const BUBBLE_STYLE: Record<FrameCaption['kind'], string> = {
   now: 'bg-accent text-ink-950',
@@ -91,10 +142,11 @@ function useNowSec(everyMs: number): number {
 }
 
 // Playback scrubber for the radar loop, zoom.earth style: play/pause (its ring
-// shows the loop loading), a track with per-frame ticks, hour labels, a
-// buffer bar of loaded frames and a gliding knob + time bubble, the current
-// frame's time, a jump-to-latest button and the speed. A bare pill — the host
-// positions it (App's bottom-center dock, or the share globe's frame).
+// shows the loop loading), a track with per-frame ticks, time labels, a
+// buffer bar of loaded frames and a gliding knob + time bubble, a jump-to-
+// latest button and, from sm up, the current frame's time and the speed. A
+// bare pill — the host positions it (App's bottom-center dock, or the share
+// globe's frame).
 export function RadarTimeline() {
   const active = useLayersStore((s) => s.active.radar);
   const past = useRadarStore((s) => s.past);
@@ -112,7 +164,8 @@ export function RadarTimeline() {
   return <Scrubber timeline={timeline} />;
 }
 
-function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
+// The pill itself, for a timeline of at least two frames (exported for tests).
+export function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
   const n = timeline.length;
   const head = useRadarPlayhead();
   const speed = useRadarStore((s) => s.speed);
@@ -122,19 +175,24 @@ function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
 
   const trackRef = useRef<HTMLDivElement>(null);
   const knobRef = useRef<HTMLDivElement>(null);
-  const fillRef = useRef<HTMLDivElement>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
   const tailRef = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ id: number; rect: DOMRect } | null>(null);
+  // The pointer pressed on the track. A touch starts out undecided — it may be
+  // a scroll or a tap — and only scrubs once it has moved sideways.
+  const press = useRef<{ id: number; rect: DOMRect; x0: number; y0: number; scrubbing: boolean } | null>(null);
   const nIdx = nowIndex(timeline);
   // Shared with the paint loop, which runs outside React.
   const geo = useRef({ n, restPos: nIdx, trackW: 0, bubbleW: 0, repaint: () => {} });
   const [trackW, setTrackW] = useState(0);
+  const [bubbleW, setBubbleW] = useState(0);
   const [dragging, setDragging] = useState(false);
+  // Whether the phone layout showed the jump button when the drag began: held
+  // for the drag, so the track doesn't resize under the finger.
+  const [dragJump, setDragJump] = useState<boolean | null>(null);
   const [hover, setHover] = useState<number | null>(null);
 
-  // The knob, the progress fill and the time bubble follow the continuous
-  // playhead by writing transforms directly: no React render per frame.
+  // The knob and the time bubble follow the continuous playhead by writing
+  // transforms directly: no React render per frame.
   useLayoutEffect(() => {
     const g = geo.current;
     let last = { frac: -1, w: -1, bw: -1 };
@@ -149,10 +207,8 @@ function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
       if (frac === last.frac && w === last.w && bw === last.bw) return;
       last = { frac, w, bw };
       const x = frac * w;
-      // The bubble and its tail snap to whole pixels so the text stays crisp.
-      const bx = Math.round(Math.min(Math.max(x - bw / 2, -BUBBLE_OVERHANG_PX), w - bw + BUBBLE_OVERHANG_PX));
+      const bx = bubbleLeft(x, bw, w);
       if (knobRef.current) knobRef.current.style.transform = `translate3d(${x}px, 0, 0)`;
-      if (fillRef.current) fillRef.current.style.transform = `scaleX(${frac})`;
       if (bubbleRef.current) bubbleRef.current.style.transform = `translate3d(${bx}px, 0, 0)`;
       if (tailRef.current) tailRef.current.style.transform = `translate3d(${Math.round(x)}px, 0, 0)`;
     };
@@ -179,6 +235,7 @@ function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
       g.trackW = track.clientWidth;
       g.bubbleW = bubble?.offsetWidth ?? 0;
       setTrackW(g.trackW);
+      setBubbleW(g.bubbleW);
       g.repaint();
     };
     measure();
@@ -199,7 +256,7 @@ function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
   // engine settle on a frame rather than stay in scrub mode.
   useEffect(
     () => () => {
-      if (drag.current) radarControl.endScrub();
+      if (press.current?.scrubbing) radarControl.endScrub();
     },
     []
   );
@@ -213,12 +270,31 @@ function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
   const busy = coolingDownMs > 0;
   const loading = head.total > 0 && head.ready < head.total;
   const at = (i: number) => (n > 1 ? (i / (n - 1)) * 100 : 0);
+  // Forecast hatching for a strip starting at frame position i, its stripes
+  // lined up with the track's so neighbouring strips continue them.
+  const hatchFrom = (i: number) => ({
+    backgroundImage: FORECAST_HATCH,
+    backgroundPosition: `${-(at(i) / 100) * trackW}px 0`,
+  });
 
   const ticks = useMemo(() => timelineTicks(timeline.map((t) => t.time), trackW), [timeline, trackW]);
-  const runs = useMemo(
-    () => (head.readyMask.length === n ? bufferRuns(head.readyMask) : []),
-    [head.readyMask, n]
+  const segments = useMemo(
+    () => (head.readyMask.length === n ? bufferSegments(head.readyMask, nIdx) : []),
+    [head.readyMask, n, nIdx]
   );
+
+  // What the slider tells a screen reader (see nextAnnounced).
+  const [announced, setAnnounced] = useState<Announced | null>(null);
+  useEffect(() => {
+    setAnnounced((prev) => nextAnnounced(prev, idx, head.playing, Date.now()));
+  }, [idx, head.playing]);
+  const spoken = announced ? clampIndex(announced.index, n) : idx;
+
+  // On a phone the jump button only takes track room while paused away from
+  // the newest frame, and never changes mid-drag; from sm up its slot is kept
+  // so the track never jumps.
+  const jumpShown = !head.live;
+  const jumpOnPhone = dragJump ?? (jumpShown && !head.playing);
 
   const positionAt = (clientX: number, rect: DOMRect): number => {
     const total = radarPlayhead.get().total > 1 ? radarPlayhead.get().total : n;
@@ -226,25 +302,48 @@ function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
     return frac * (total - 1);
   };
 
-  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0 || drag.current) return;
-    const el = e.currentTarget;
-    const d = { id: e.pointerId, rect: el.getBoundingClientRect() };
-    drag.current = d;
+  const startScrub = (el: HTMLDivElement, clientX: number) => {
+    const p = press.current;
+    if (!p) return;
+    p.scrubbing = true;
     try {
-      el.setPointerCapture(e.pointerId);
+      el.setPointerCapture(p.id);
     } catch {
       // The pointer is already gone; the drag ends on its own.
     }
     setDragging(true);
+    setDragJump(jumpOnPhone);
     setHover(null);
-    radarControl.scrub(positionAt(e.clientX, d.rect));
+    radarControl.scrub(positionAt(clientX, p.rect));
+  };
+
+  const endScrub = () => {
+    setDragging(false);
+    setDragJump(null);
+    radarControl.endScrub();
+  };
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || press.current) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    press.current = { id: e.pointerId, rect, x0: e.clientX, y0: e.clientY, scrubbing: false };
+    // A mouse or pen scrubs from the press; a finger might be starting a
+    // scroll (the track lets vertical pans through), so it waits.
+    if (e.pointerType !== 'touch') startScrub(e.currentTarget, e.clientX);
   };
 
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
-    const d = drag.current;
-    if (d) {
-      if (d.id === e.pointerId) radarControl.scrub(positionAt(e.clientX, d.rect));
+    const p = press.current;
+    if (p) {
+      if (p.id !== e.pointerId) return;
+      if (p.scrubbing) {
+        radarControl.scrub(positionAt(e.clientX, p.rect));
+        return;
+      }
+      const dx = Math.abs(e.clientX - p.x0);
+      const dy = Math.abs(e.clientY - p.y0);
+      if (dx >= TOUCH_SLOP_PX && dx > dy) startScrub(e.currentTarget, e.clientX);
+      else if (dy >= TOUCH_SLOP_PX) press.current = null; // a vertical swipe: not ours
       return;
     }
     if (e.pointerType !== 'mouse') return;
@@ -254,12 +353,24 @@ function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
     setHover((h) => (h === i ? h : i));
   };
 
-  const endDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
-    const d = drag.current;
-    if (!d || d.id !== e.pointerId) return;
-    drag.current = null;
-    setDragging(false);
+  const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const p = press.current;
+    if (!p || p.id !== e.pointerId) return;
+    press.current = null;
+    if (p.scrubbing) {
+      endScrub();
+      return;
+    }
+    // A tap that never moved: seek to the frame under it.
+    radarControl.scrub(positionAt(e.clientX, p.rect));
     radarControl.endScrub();
+  };
+
+  const cancelPress = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const p = press.current;
+    if (!p || p.id !== e.pointerId) return;
+    press.current = null;
+    if (p.scrubbing) endScrub();
   };
 
   // Standard slider keys on the focused track (the page-wide hotkeys skip a
@@ -283,28 +394,34 @@ function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
 
   const cycleSpeed = () => setSpeed(RADAR_SPEEDS[(RADAR_SPEEDS.indexOf(speed) + 1) % RADAR_SPEEDS.length]);
 
+  // The jump button hides once it lands on the newest frame; hand keyboard
+  // focus to the slider first so it isn't dropped onto the page.
+  const jumpToLatest = (e: ReactMouseEvent<HTMLButtonElement>) => {
+    if (document.activeElement === e.currentTarget) trackRef.current?.focus({ preventScroll: true });
+    radarControl.latest();
+  };
+
   const ghost = hover !== null && hover < n && hover !== idx && !dragging ? hover : null;
   const ghostX = ghost !== null ? (at(ghost) / 100) * trackW : 0;
   const ghostAlign = ghostX < GHOST_EDGE_PX ? 'start' : ghostX > trackW - GHOST_EDGE_PX ? 'end' : 'center';
+  const ghostText = ghost !== null ? formatClock(timeline[ghost].time) : '';
+  const ghostW = ghostText.length * GHOST_CHAR_PX + GHOST_PAD_PX;
+  const ghostL = ghostAlign === 'start' ? ghostX : ghostAlign === 'end' ? ghostX - ghostW : ghostX - ghostW / 2;
+  const showGhostLabel =
+    ghost !== null && ghostLabelClear(ghostL, ghostW, bubbleLeft((at(idx) / 100) * trackW, bubbleW, trackW), bubbleW);
 
   const onNewest = caption.kind === 'now' || caption.kind === 'latest';
-  const valueText = current.forecast
-    ? `${formatClock(current.time)}, forecast ${caption.offset}`
-    : onNewest
-      ? `${formatClock(current.time)}, latest frame`
-      : `${formatClock(current.time)}, ${caption.offset}`;
   const staleMin = Math.round((nowSec - newest.time) / 60);
-  const playLabel = playButtonLabel(head, busy);
 
   return (
-    <div className="pointer-events-auto flex w-full max-w-2xl items-center gap-2 rounded-2xl border border-white/10 bg-ink-900/85 px-3 py-2 shadow-panel backdrop-blur-md sm:gap-3">
+    <div className="pointer-events-auto flex w-full max-w-2xl items-center gap-3 rounded-2xl border border-white/10 bg-ink-900/85 px-3 py-2 shadow-panel backdrop-blur-md">
       <PlayButton
         playing={head.playing}
         loading={loading}
         progress={head.total > 0 ? head.ready / head.total : 0}
-        buffering={head.buffering}
         busy={busy}
-        label={playLabel}
+        label={playButtonLabel(head, busy)}
+        title={playButtonLabel(head, busy, true)}
       />
 
       <div
@@ -314,41 +431,34 @@ function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
         aria-label="Radar frame"
         aria-valuemin={0}
         aria-valuemax={n - 1}
-        aria-valuenow={idx}
-        aria-valuetext={valueText}
+        aria-valuenow={spoken}
+        aria-valuetext={frameValueText(timeline[spoken], newest, stale)}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        onLostPointerCapture={endDrag}
+        onPointerUp={onPointerUp}
+        onPointerCancel={cancelPress}
+        onLostPointerCapture={cancelPress}
         onPointerLeave={() => setHover(null)}
         onKeyDown={onKeyDown}
         className="group relative h-[47px] min-w-0 flex-1 cursor-pointer touch-pan-y select-none outline-none"
       >
-        {/* Bar: base, loaded-frame buffer, forecast hatching, progress fill. */}
+        {/* Bar: loaded frames lit (the buffer, filling in from the newest
+            frame as the loop loads), the rest dim; forecast frames hatched. */}
         <div className="pointer-events-none absolute inset-x-0 top-[24px] h-1 overflow-hidden rounded-full bg-white/10">
-          {runs.map(([a, b]) => {
-            const left = at(Math.max(0, a - 0.5));
-            const right = at(Math.min(n - 1, b + 0.5));
-            return (
-              <div
-                key={a}
-                className="absolute inset-y-0 bg-white/15"
-                style={{ left: `${left}%`, width: `${right - left}%` }}
-              />
-            );
-          })}
           {hasForecast && (
-            <div
-              className="absolute inset-y-0 right-0"
-              style={{ left: `${at(nIdx)}%`, backgroundImage: FORECAST_HATCH }}
-            />
+            <div className="absolute inset-y-0 right-0 opacity-40" style={{ left: `${at(nIdx)}%`, ...hatchFrom(nIdx) }} />
           )}
-          <div
-            ref={fillRef}
-            className="absolute inset-0 origin-left bg-accent/80 will-change-transform"
-            style={{ transform: 'scaleX(0)' }}
-          />
+          {segments.map((s) => (
+            <div
+              key={s.from}
+              className={`absolute inset-y-0 ${s.forecast ? '' : 'bg-accent/60'}`}
+              style={{
+                left: `${at(s.from)}%`,
+                width: `${at(s.to) - at(s.from)}%`,
+                ...(s.forecast ? hatchFrom(s.from) : null),
+              }}
+            />
+          ))}
         </div>
 
         {/* Ticks: every frame, taller on the hour; sparse labels below. */}
@@ -363,7 +473,7 @@ function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
             {t.label && (
               <div
                 className={`pointer-events-none absolute top-[37px] whitespace-nowrap text-[9px] leading-none tabular-nums ${
-                  timeline[t.index]?.forecast ? 'text-amber-300/60' : 'text-white/40'
+                  timeline[t.index]?.forecast ? 'text-amber-300/75' : 'text-white/60'
                 }`}
                 style={{ left: `${t.at * 100}%`, transform: ALIGN_SHIFT[t.align] }}
               >
@@ -387,18 +497,20 @@ function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
               className="pointer-events-none absolute top-[19px] hidden h-3.5 w-px -translate-x-1/2 bg-white/45 [@media(hover:hover)]:block"
               style={{ left: `${at(ghost)}%` }}
             />
-            <div
-              className="pointer-events-none absolute top-0 hidden [@media(hover:hover)]:block"
-              style={{ left: `${at(ghost)}%`, transform: ALIGN_SHIFT[ghostAlign] }}
-            >
+            {showGhostLabel && (
               <div
-                className={`flex h-4 items-center whitespace-nowrap rounded bg-ink-950/80 px-1.5 text-[10px] font-medium leading-none tabular-nums ring-1 ring-white/15 ${
-                  timeline[ghost].forecast ? 'text-amber-300/90' : 'text-white/75'
-                }`}
+                className="pointer-events-none absolute top-0 hidden [@media(hover:hover)]:block"
+                style={{ left: `${at(ghost)}%`, transform: ALIGN_SHIFT[ghostAlign] }}
               >
-                {formatClock(timeline[ghost].time)}
+                <div
+                  className={`flex h-4 items-center whitespace-nowrap rounded bg-ink-950/80 px-1.5 text-[10px] font-medium leading-none tabular-nums ring-1 ring-white/15 ${
+                    timeline[ghost].forecast ? 'text-amber-300/90' : 'text-white/75'
+                  }`}
+                >
+                  {ghostText}
+                </div>
               </div>
-            </div>
+            )}
           </>
         )}
 
@@ -431,57 +543,49 @@ function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
         </div>
       </div>
 
-      {/* Readout: fixed minimum width and tabular digits, so it doesn't jitter
-          as the time changes. */}
-      <div className="min-w-[66px] shrink-0 text-right sm:min-w-[88px]">
-        <div className="whitespace-nowrap font-mono text-[13px] font-semibold leading-none tabular-nums text-white sm:text-[15px]">
+      {/* Phones: the bubble carries the time, so there's no readout; only a
+          delayed feed needs saying. */}
+      {stale && !busy && (
+        <div className="shrink-0 sm:hidden">
+          <DelayedChip minutes={staleMin} />
+        </div>
+      )}
+
+      {/* Readout: fixed width and tabular digits, so neither the time nor the
+          status line nudges the track as they change. */}
+      <div className="hidden w-[100px] shrink-0 text-right sm:block">
+        <div className="truncate font-mono text-[15px] font-semibold leading-none tabular-nums text-white">
           {formatClock(current.time)}
         </div>
         <div className="mt-1 flex h-3.5 items-center justify-end gap-1 whitespace-nowrap text-[10px] leading-none">
           {busy ? (
-            <span
-              className="text-amber-300/80"
-              title={`RainViewer is rate-limiting requests — loading resumes in about ${Math.ceil(coolingDownMs / 1000)} s`}
-            >
-              <span className="sm:hidden">Busy</span>
-              <span className="hidden sm:inline">RainViewer busy</span>
-            </span>
+            <span className="truncate text-amber-300/90">RainViewer busy</span>
           ) : (
             <>
-              <span
-                className={`${current.forecast ? 'text-amber-300' : 'text-white/45'} ${stale ? 'hidden sm:inline' : ''}`}
-              >
-                {current.forecast && <span className="hidden sm:inline">Forecast </span>}
-                {onNewest ? 'Latest' : caption.offset}
+              <span className={`min-w-0 truncate ${current.forecast ? 'text-amber-300' : 'text-white/60'}`}>
+                {current.forecast && !stale && 'Forecast '}
+                {onNewest ? caption.lead : caption.offset}
               </span>
-              {stale && (
-                <span
-                  className="rounded bg-amber-400/15 px-1 py-px text-[9px] font-semibold text-amber-300"
-                  title={`The newest radar frame is ${staleMin} min old — RainViewer's feed is running behind`}
-                >
-                  Delayed
-                </span>
-              )}
+              {stale && <DelayedChip minutes={staleMin} />}
             </>
           )}
         </div>
       </div>
 
-      {/* Jump to latest: kept in the layout while hidden so the track doesn't
-          jump as it comes and goes. */}
+      {/* Jump to the newest frame. An icon, not a word: the bubble and the
+          readout already name that frame. */}
       <button
-        onClick={() => radarControl.latest()}
+        onClick={jumpToLatest}
         aria-label="Jump to the latest radar frame"
         title="Jump to the latest radar frame"
-        className={`flex h-7 shrink-0 items-center gap-1 rounded-full bg-accent/10 px-2 text-[11px] font-medium text-accent transition-[opacity,visibility,background-color] duration-200 hover:bg-accent/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent motion-reduce:transition-none sm:px-2.5 ${
-          head.live ? 'invisible opacity-0' : 'visible opacity-100'
+        className={`${jumpOnPhone ? 'grid' : 'hidden'} h-7 w-7 shrink-0 place-items-center rounded-full bg-accent/10 text-accent transition-[opacity,visibility,background-color] duration-200 hover:bg-accent/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent motion-reduce:transition-none sm:grid ${
+          jumpShown ? 'visible opacity-100' : 'invisible opacity-0'
         }`}
       >
         <svg viewBox="0 0 16 16" className="h-3 w-3" fill="currentColor" aria-hidden="true">
           <path d="M3 3.2v9.6L10 8z" />
           <rect x="11" y="3" width="2" height="10" rx="0.6" />
         </svg>
-        <span className="hidden sm:inline">Latest</span>
       </button>
 
       <button
@@ -496,6 +600,36 @@ function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
   );
 }
 
+// "Delayed" chip for a stalled feed. Its explanation is in its accessible name,
+// shows on hover, and toggles on a tap or click (touch has no hover).
+function DelayedChip({ minutes }: { minutes: number }) {
+  const [open, setOpen] = useState(false);
+  const why = `The newest radar frame is ${minutes} min old — RainViewer's feed is running behind.`;
+  return (
+    <span className="group/delay relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') setOpen(false);
+        }}
+        className="rounded bg-amber-400/15 px-1 py-px text-[9px] font-semibold leading-none text-amber-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-300"
+      >
+        Delayed<span className="sr-only">: {why}</span>
+      </button>
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none absolute bottom-full right-0 z-10 mb-2 w-52 whitespace-normal rounded-md bg-ink-950/95 px-2 py-1.5 text-left text-[11px] font-normal leading-snug text-white/85 shadow-panel ring-1 ring-white/10 ${
+          open ? 'block' : 'hidden [@media(hover:hover)]:group-hover/delay:block'
+        }`}
+      >
+        {why}
+      </span>
+    </span>
+  );
+}
+
 // Circumference of the play button's ring (r = 18.5 in a 40 × 40 box).
 const RING_C = 2 * Math.PI * 18.5;
 
@@ -503,33 +637,42 @@ function PlayButton({
   playing,
   loading,
   progress,
-  buffering,
   busy,
   label,
+  title,
 }: {
   playing: boolean;
   loading: boolean;
   progress: number;
-  buffering: boolean;
   busy: boolean;
   label: string;
+  title: string;
 }) {
   return (
     <button
       onClick={() => radarControl.toggle()}
       aria-label={label}
-      title={label}
+      title={title}
       className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full bg-accent/15 text-accent transition hover:bg-accent/25 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent active:scale-95"
     >
-      {/* Loading: the loop's progress as an arc, fading out once complete. */}
+      {/* Loading: the loop's progress as an arc, fading out once complete.
+          Rate-limited: the whole ring dashed amber, whatever has loaded. */}
       <svg
         viewBox="0 0 40 40"
         aria-hidden="true"
         className={`pointer-events-none absolute inset-0 transition-opacity duration-500 motion-reduce:transition-none ${
-          loading ? 'opacity-100' : 'opacity-0'
+          loading || busy ? 'opacity-100' : 'opacity-0'
         }`}
       >
-        <circle cx="20" cy="20" r="18.5" fill="none" strokeWidth="2" className="stroke-white/10" />
+        <circle
+          cx="20"
+          cy="20"
+          r="18.5"
+          fill="none"
+          strokeWidth="2"
+          strokeDasharray={busy ? '2.5 3.3' : undefined}
+          className={busy ? 'stroke-amber-300/70' : 'stroke-white/10'}
+        />
         <circle
           cx="20"
           cy="20"
@@ -540,27 +683,11 @@ function PlayButton({
           strokeDasharray={RING_C}
           strokeDashoffset={RING_C * (1 - Math.min(1, Math.max(0, progress)))}
           transform="rotate(-90 20 20)"
-          className={`transition-[stroke-dashoffset,stroke] duration-300 motion-reduce:transition-none ${
+          className={`transition-[stroke-dashoffset,stroke,opacity] duration-300 motion-reduce:transition-none ${
             busy ? 'stroke-amber-300' : 'stroke-accent'
-          }`}
+          } ${loading && progress > 0 ? 'opacity-100' : 'opacity-0'}`}
         />
       </svg>
-      {/* Buffering with the loop loaded (waiting on a frame after panning).
-          Mounted only while shown, so no animation idles in the background. */}
-      {buffering && !loading && (
-        <svg viewBox="0 0 40 40" aria-hidden="true" className="pointer-events-none absolute inset-0 animate-spin">
-          <circle
-            cx="20"
-            cy="20"
-            r="18.5"
-            fill="none"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeDasharray={`${RING_C * 0.22} ${RING_C}`}
-            className="stroke-accent/70"
-          />
-        </svg>
-      )}
       {playing ? (
         <svg viewBox="0 0 16 16" className="h-4 w-4" fill="currentColor" aria-hidden="true">
           <rect x="3.5" y="2.5" width="3" height="11" rx="0.8" />

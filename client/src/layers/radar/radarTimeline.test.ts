@@ -5,7 +5,6 @@ import {
   clampIndex,
   formatOffset,
   manifestSignature,
-  nextIndex,
   nowIndex,
   windowLabel,
 } from './radarTimeline';
@@ -72,19 +71,12 @@ describe('nowIndex', () => {
   });
 });
 
-describe('clampIndex / nextIndex', () => {
+describe('clampIndex', () => {
   it('clamps into range and floors fractional input', () => {
     expect(clampIndex(-3, 5)).toBe(0);
     expect(clampIndex(9, 5)).toBe(4);
     expect(clampIndex(2.7, 5)).toBe(2);
     expect(clampIndex(3, 0)).toBe(0);
-  });
-
-  it('advances and wraps', () => {
-    expect(nextIndex(0, 5)).toBe(1);
-    expect(nextIndex(4, 5)).toBe(0);
-    expect(nextIndex(9, 5)).toBe(0); // out-of-range input is clamped first
-    expect(nextIndex(0, 0)).toBe(0);
   });
 });
 

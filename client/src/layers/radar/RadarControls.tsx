@@ -10,6 +10,14 @@ const PALETTE_HINT: Record<RadarPaletteId, string> = {
   rainviewer: "RainViewer's own colour scheme",
 };
 
+// What "Colour snow separately" paints snow in, per palette; off, snow is
+// painted in the rain colours like everything else.
+const SNOW_HINT: Record<RadarPaletteId, string> = {
+  classic: 'Paint snow in its own near-white to ice-blue ramp instead of the rain colours',
+  vivid: 'Paint snow in its own near-white to ice-blue ramp instead of the rain colours',
+  rainviewer: "Paint snow in RainViewer's cyan-to-blue snow ramp instead of the rain colours",
+};
+
 const WINDOW_HINT: Record<RadarWindow, string> = {
   30: 'Loop the last 30 minutes',
   60: 'Loop the last hour',
@@ -31,8 +39,8 @@ function Group({ label, className = '', children }: { label: string; className?:
 }
 
 // Sidebar controls under the radar toggle: loop length, playback speed,
-// palette, opacity and snow shading. Playback itself and scrubbing live on the map
-// (RadarTimeline); the colour key is the map legend (RadarLegend).
+// palette, opacity and snow colouring. Playback itself and scrubbing live on
+// the map (RadarTimeline); the colour key is the map legend (RadarLegend).
 export function RadarControls() {
   const windowMinutes = useRadarStore((s) => s.windowMinutes);
   const setWindowMinutes = useRadarStore((s) => s.setWindowMinutes);
@@ -118,14 +126,14 @@ export function RadarControls() {
         </span>
       </label>
 
-      <label className="flex cursor-pointer items-center gap-2" title="Paint snow in white instead of the rain colours">
+      <label className="flex cursor-pointer items-center gap-2" title={SNOW_HINT[palette]}>
         <input
           type="checkbox"
           checked={snow}
           onChange={(e) => setSnow(e.target.checked)}
           className="accent-accent"
         />
-        <span className="text-[11px] text-white/55">Show snow in white</span>
+        <span className="text-[11px] text-white/55">Colour snow separately</span>
       </label>
     </div>
   );

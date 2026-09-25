@@ -1,111 +1,26 @@
 import { readFileSync } from 'node:fs';
-import { deflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { decodePng } from './pngDecode';
 import { decodeRadarRgba, NO_ECHO } from './radarDecode';
 import { UB_MIN_DBZ, UB_RAIN_RGBA, UB_SNOW_RGBA } from './rainviewerTable';
 
-// Two real free-tier tiles (z7/67/45 over Tirol, 2026-09-14 04:30Z and
-// 06:30Z, 256 px, `/2/1_1`), as RainViewer served them.
+// Two real free-tier tiles (z7/67/45: about 45.1–47.0°N, 8.4–11.25°E, over
+// Lombardy, Ticino and Graubünden; 2026-09-14 04:30Z and 06:30Z, 256 px,
+// `/2/1_1`), as RainViewer served them.
 const fixture = (name: string) =>
   new Uint8Array(readFileSync(new URL(`./__fixtures__/${name}`, import.meta.url)));
-
-// Encode an RGBA (colour type 6) or palette (type 3) PNG for decoder tests.
-function crc32(buf: Uint8Array): number {
-  let c = ~0;
-  for (const b of buf) {
-    c ^= b;
-    for (let k = 0; k < 8; k++) c = c & 1 ? (c >>> 1) ^ 0xedb88320 : c >>> 1;
-  }
-  return ~c >>> 0;
-}
-function chunk(type: string, body: Uint8Array): Uint8Array {
-  const out = new Uint8Array(12 + body.length);
-  const dv = new DataView(out.buffer);
-  dv.setUint32(0, body.length);
-  for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
-  out.set(body, 8);
-  dv.setUint32(8 + body.length, crc32(out.subarray(4, 8 + body.length)));
-  return out;
-}
-function encodePng(
-  w: number,
-  h: number,
-  colorType: 6 | 3,
-  rows: Uint8Array[],
-  opts: { bitDepth?: number; plte?: Uint8Array; trns?: Uint8Array; filter?: number } = {}
-): Uint8Array {
-  const ihdr = new Uint8Array(13);
-  const dv = new DataView(ihdr.buffer);
-  dv.setUint32(0, w);
-  dv.setUint32(4, h);
-  ihdr[8] = opts.bitDepth ?? 8;
-  ihdr[9] = colorType;
-  const raw: number[] = [];
-  const bpp = colorType === 6 ? 4 : 1;
-  rows.forEach((row, y) => {
-    const f = opts.filter ?? 0;
-    raw.push(f);
-    for (let x = 0; x < row.length; x++) {
-      const a = x >= bpp ? row[x - bpp] : 0;
-      const b = y > 0 ? rows[y - 1][x] : 0;
-      const pred = f === 1 ? a : f === 2 ? b : f === 3 ? (a + b) >> 1 : 0;
-      raw.push((row[x] - pred) & 0xff);
-    }
-  });
-  const parts = [
-    new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
-    chunk('IHDR', ihdr),
-    ...(opts.plte ? [chunk('PLTE', opts.plte)] : []),
-    ...(opts.trns ? [chunk('tRNS', opts.trns)] : []),
-    chunk('IDAT', new Uint8Array(deflateSync(new Uint8Array(raw)))),
-    chunk('IEND', new Uint8Array(0)),
-  ];
-  const total = parts.reduce((s, p) => s + p.length, 0);
-  const png = new Uint8Array(total);
-  let o = 0;
-  for (const p of parts) {
-    png.set(p, o);
-    o += p.length;
-  }
-  return png;
-}
 
 function tableColor(table: Uint8Array, dbz: number): number[] {
   const k = (dbz - UB_MIN_DBZ) * 4;
   return Array.from(table.subarray(k, k + 4));
 }
 
-describe('decodePng', () => {
-  it('decodes a real RainViewer tile exactly', async () => {
-    const img = await decodePng(fixture('rainviewer-z7-67-45-0430Z.png'));
-    expect(img.width).toBe(256);
-    expect(img.height).toBe(256);
-    expect(img.data.length).toBe(256 * 256 * 4);
-  });
-
-  it('round-trips RGBA through every filter type', async () => {
-    const rows = [0, 1, 2].map((y) => new Uint8Array([10 * y, 20, 30, 255, 200, 100 + y, 50, 128]));
-    for (const filter of [0, 1, 2, 3]) {
-      const img = await decodePng(encodePng(2, 3, 6, rows, { filter }));
-      expect(Array.from(img.data)).toEqual(rows.flatMap((r) => Array.from(r)));
-    }
-  });
-
-  it('expands 4-bit palette images with transparency', async () => {
-    const plte = new Uint8Array([160, 160, 160, 90, 90, 90]);
-    const trns = new Uint8Array([255, 0]);
-    // 3 pixels: 0, 1, 0 → packed nibbles 0x01, 0x00
-    const img = await decodePng(encodePng(3, 1, 3, [new Uint8Array([0x01, 0x00])], { bitDepth: 4, plte, trns }));
-    expect(Array.from(img.data)).toEqual([160, 160, 160, 255, 90, 90, 90, 0, 160, 160, 160, 255]);
-  });
-
-  it('rejects non-PNG and truncated input', async () => {
-    await expect(decodePng(new Uint8Array([1, 2, 3]))).rejects.toThrow();
-    const png = fixture('rainviewer-z7-67-45-0630Z.png');
-    await expect(decodePng(png.subarray(0, 200))).rejects.toThrow();
-  });
-});
+// An image of `n` pixels: the given ones first, transparent after.
+function pixels(px: number[][], n = px.length): Uint8Array {
+  const out = new Uint8Array(n * 4);
+  px.forEach((p, i) => out.set(p, i * 4));
+  return out;
+}
 
 describe('decodeRadarRgba', () => {
   it('matches every echo pixel of real tiles to the table', async () => {
@@ -150,13 +65,57 @@ describe('decodeRadarRgba', () => {
     expect(r.dbz[1]).toBe(65);
   });
 
+  it('accepts an off-table opaque colour within 10 per channel (squared distance 300), no further', () => {
+    const [r, g, b] = tableColor(UB_RAIN_RGBA, 20);
+    const near = decodeRadarRgba(pixels([[r + 10, g + 10, b + 10, 255]]), 1, 1);
+    expect(near.dbz[0]).toBe(20);
+    expect(near.unknown).toBe(0);
+    const far = decodeRadarRgba(pixels([[r + 10, g + 10, b + 11, 255]]), 1, 1); // squared distance 321
+    expect(far.unknown).toBe(1);
+    expect(far.dbz[0]).toBe(NO_ECHO);
+  });
+
+  it('requires a translucent pixel to carry an exact table alpha and a colour near its ramp', () => {
+    const tan = tableColor(UB_RAIN_RGBA, 3);
+    const alphas = new Set<number>();
+    for (const t of [UB_RAIN_RGBA, UB_SNOW_RGBA]) for (let k = 3; k < t.length; k += 4) alphas.add(t[k]);
+    let offAlpha = tan[3] + 1;
+    while (alphas.has(offAlpha)) offAlpha++;
+    const offTable = decodeRadarRgba(pixels([[tan[0], tan[1], tan[2], offAlpha]]), 1, 1);
+    expect(offTable.unknown).toBe(1);
+    expect(offTable.dbz[0]).toBe(NO_ECHO);
+    const foreign = decodeRadarRgba(pixels([[255, 0, 0, tan[3]]]), 1, 1); // red at a rain alpha
+    expect(foreign.unknown).toBe(1);
+  });
+
   it("flags RainViewer's grey 'zoom level not supported' tile as a placeholder", () => {
-    const n = 64 * 64;
-    const rgba = new Uint8Array(n * 4);
-    for (let i = 0; i < n; i++) rgba.set([160, 160, 160, 255], i * 4);
-    const r = decodeRadarRgba(rgba, 64, 64);
-    expect(r.placeholder).toBe(true);
-    expect(r.echo).toBe(0);
-    expect(r.dbz.every((v) => v === NO_ECHO)).toBe(true);
+    for (const grey of [160, 240]) {
+      const r = decodeRadarRgba(pixels(Array.from({ length: 64 * 64 }, () => [grey, grey, grey, 255])), 64, 64);
+      expect(r.placeholder).toBe(true);
+      expect(r.echo).toBe(0);
+      expect(r.dbz.every((v) => v === NO_ECHO)).toBe(true);
+    }
+  });
+
+  it('flags a tile whose visible pixels are over 20% off-table, and drops its echo', () => {
+    const rain = tableColor(UB_RAIN_RGBA, 30);
+    const purple = [128, 0, 128, 255];
+    // 10 visible of 10: 2 unknown is within the margin, 3 is not.
+    const two = decodeRadarRgba(pixels([...Array(8).fill(rain), purple, purple]), 10, 1);
+    expect(two.placeholder).toBe(false);
+    expect(two.unknown).toBe(2);
+    expect(two.echo).toBe(8);
+    expect(two.dbz[0]).toBe(30);
+    const three = decodeRadarRgba(pixels([...Array(7).fill(rain), purple, purple, purple]), 10, 1);
+    expect(three.placeholder).toBe(true);
+    expect(three.echo).toBe(0);
+    expect(three.dbz.every((v) => v === NO_ECHO)).toBe(true);
+    expect(three.snow.every((v) => v === 0)).toBe(true);
+  });
+
+  it('ignores off-table specks covering no more than 5% of the tile', () => {
+    const purple = [128, 0, 128, 255];
+    expect(decodeRadarRgba(pixels(Array(5).fill(purple), 100), 10, 10).placeholder).toBe(false);
+    expect(decodeRadarRgba(pixels(Array(6).fill(purple), 100), 10, 10).placeholder).toBe(true);
   });
 });

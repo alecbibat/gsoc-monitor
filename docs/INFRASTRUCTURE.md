@@ -93,9 +93,19 @@ risk report prints them as lower bounds ("≥N") and says so in its bottom line.
 ### Browser storage (per user, per device)
 
 `localStorage`: `gsoc-layers`, `gsoc-sidebar-sections`, `gsoc-crisis-dock`,
-`gsoc-perf`, `gsoc-news`, `gsoc-wind-unit`, the wind grid cache, `ss-voice`,
-`gsoc-share-name`.
+`gsoc-perf`, `gsoc-news`, `gsoc-wind-unit`, `gsoc-lightning`, the wind grid cache
+(`gsoc-wind-grid`), `gsoc-checklist-role`, `ss-voice`, `gsoc-share-name`; radar
+preferences (loop length, speed, palette, opacity, snow) in `gsoc-radar`, or in
+`gsoc-share-radar` on the share page (as its layer flags go to
+`gsoc-share-view-layers`), so a viewer never rewrites the operator's; and
+`gsoc-radar-quality`, an optional hand-set override of the radar tile quality
+(`sharp` | `standard` | `lite` — see [RainViewer radar tiles](#rainviewer-radar-tiles)).
 `sessionStorage`: Cesium reload guard, share-link view keys, stale-chunk reload latch.
+Cache Storage: `gsoc-radar-tiles-v1` — RainViewer tile PNGs, so reloads don't
+refetch them; entries older than 3 h are pruned (at startup and every 30 min).
+`BroadcastChannel` `gsoc-radar-budget` (messages, not storage): the app's tabs
+tell each other about RainViewer requests and HTTP 429 cool-downs, so the
+80-per-60 s request budget covers the whole browser rather than each tab.
 
 ---
 
@@ -186,12 +196,51 @@ server.arcgisonline.com (dark/light/satellite basemaps) · tile.openstreetmap.or
 opentopomap.org · gibs.earthdata.nasa.gov (NASA MODIS daily true-color) ·
 mapservices.weather.noaa.gov · nhc.noaa.gov · services3/9.arcgis.com ·
 fsapps.nwcg.gov · api.bigdatacloud.net · tile.googleapis.com · ion.cesium.com ·
-api.cloudinary.com. (Time-zone boundaries are a static file built into the client
-bundle — see `scripts/build-timezones.mjs` — so that layer makes no third-party
-request.)
+api.cloudinary.com · tilecache.rainviewer.com (radar tiles, see below).
+(Time-zone boundaries are a static file built into the client bundle — see
+`scripts/build-timezones.mjs` — so that layer makes no third-party request.)
 
 Because these are fetched by the browser, **every client's IP is exposed directly to
 those providers**, and they are unaffected by any server-side caching or rate limiting.
+
+### RainViewer radar tiles
+
+The one browser-direct feed with a hard per-IP rate limit, so the client
+manages it itself (`client/src/layers/radar/`).
+
+- **Free tier** (since January 2026): licensed for personal/educational use,
+  with the "Weather data by RainViewer" credit (shown in the radar legend).
+  Zoom levels up to 7 only — above that the CDN answers HTTP 200 with a grey
+  "Zoom Level Not Supported" image — one fixed palette whatever the colour
+  parameter says, and about 100 requests per IP per minute, then HTTP 429. It
+  currently lists no nowcast frames; if they return, the timeline shows them as
+  forecast frames after "now".
+- **Manifest.** `/api/radar`, cached 60 s on the server; the client polls it
+  every 60 s while the layer is on and the tab is visible.
+- **Zoom cap.** The imagery provider never asks past z7. Closer in, Cesium
+  magnifies the z7 tiles, which already out-resolve the ~1 km composite.
+- **Decode and repaint.** A web worker fetches each tile, decodes the PNG back
+  to reflectivity (dBZ — exact against RainViewer's published colour table),
+  smooths it in data space and repaints it in the chosen palette. A worker
+  that goes silent is restarted; if workers are unavailable, or it has had to
+  restart three times, the same code runs on the page instead.
+- **Rate budget.** At most 80 requests per rolling 60 s and 6 in flight; tiles
+  in view first, then the frame on screen, then newest → oldest. A 429 pauses
+  every request for up to a minute and halves the budget (to no less than 20),
+  which recovers by 8 per clean minute. Tabs share their request starts and
+  cool-downs over the `gsoc-radar-budget` BroadcastChannel, since the limit is
+  per IP.
+- **Caching.** Validated tile PNGs are kept in Cache Storage
+  (`gsoc-radar-tiles-v1`, pruned after 3 h) and a 48 MB in-memory cache, so
+  reloads, palette switches and WebGL context-loss rebuilds don't refetch.
+- **Quality tiers.** `standard` (the default) declares tiles twice their pixel
+  size, so Cesium picks one zoom level coarser than the screen could use — a
+  quarter of the requests and GPU memory; `sharp` uses screen-resolution tiles;
+  `lite`, chosen automatically for low-tier or software-rendered GPUs, goes one
+  level coarser again and steps between frames instead of crossfading (as does
+  the OS "reduce motion" setting, which also turns off autoplay). Setting
+  `localStorage` `gsoc-radar-quality` to `sharp`, `standard` or `lite`
+  overrides the detection.
 
 ---
 

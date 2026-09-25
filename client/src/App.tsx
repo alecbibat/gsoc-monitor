@@ -70,6 +70,8 @@ import { IncidentSync } from './crisis/IncidentSync';
 import { useCrisisStore } from './crisis/crisisStore';
 import { useCrisisMapFrameStore } from './ui/uiStore';
 import { useRiskReportStore } from './riskreport/riskReportStore';
+import { useScreensaverStore } from './screensaver/screensaverStore';
+import { useHoverStore } from './screensaver/hoverStore';
 import { AuthGate } from './auth/AuthGate';
 import { lazyWithReload } from './lib/lazyWithReload';
 
@@ -125,6 +127,31 @@ function GlobeFrame({ viewer, children }: { viewer: Cesium.Viewer | null; childr
     >
       {children}
       <PickChooser bounds={frame ? { width: frame.width, height: frame.height } : undefined} />
+    </div>
+  );
+}
+
+// Height the bottom HUD must clear: the news ticker (which publishes its
+// height, safe-area padding included, as --ticker-h) or, without it, the
+// home-indicator inset.
+const BOTTOM_CLEAR = 'max(var(--ticker-h, 0px), env(safe-area-inset-bottom, 0px))';
+
+// Bottom-center dock: the Earth date bar and the radar scrubber stack here so
+// both can be up at once without overlapping. Centred over the map, so on md+
+// it's inset past the docked sidebar whenever that shows (the Sidebar hides it
+// for the screensaver and hover orbit).
+function BottomDock({ children }: { children: ReactNode }) {
+  const screensaverActive = useScreensaverStore((s) => s.active);
+  const hoverEngaged = useHoverStore((s) => s.active || s.picking);
+  const sidebarDocked = !screensaverActive && !hoverEngaged;
+  return (
+    <div
+      className={`pointer-events-none absolute inset-x-0 z-30 flex flex-col items-center gap-2 px-4 ${
+        sidebarDocked ? 'md:left-72' : ''
+      }`}
+      style={{ bottom: `calc(${BOTTOM_CLEAR} + 12px)` }}
+    >
+      {children}
     </div>
   );
 }
@@ -232,20 +259,23 @@ export default function App() {
         <FuelZoneOverlay />
         <RadarHotkeys />
         {/* Bottom-right HUD stack: legend cards for active layers, then the
-            wind probe readout anchored at the bottom of the stack. Max height
-            keeps the whole stack on-screen (short viewports): the legend list
-            shrinks and scrolls, the readout keeps its natural size. */}
-        <div className="pointer-events-none absolute bottom-24 right-4 z-30 flex max-h-[calc(100%-7rem)] w-[230px] flex-col gap-2">
+            wind probe readout anchored at the bottom of the stack. It sits
+            above the bottom dock and, like it, clears the news ticker. Max
+            height keeps the whole stack on-screen (short viewports): the
+            legend list shrinks and scrolls, the readout keeps its natural
+            size. */}
+        <div
+          className="pointer-events-none absolute right-4 z-30 flex w-[230px] flex-col gap-2"
+          style={{ bottom: `calc(${BOTTOM_CLEAR} + 5.5rem)`, maxHeight: `calc(100% - 6.5rem - ${BOTTOM_CLEAR})` }}
+        >
           <MapLegends />
           <WindReadout />
           <TimeZonesCredit />
         </div>
-        {/* Bottom-center dock: the Earth date bar and the radar scrubber stack
-            here so both can be up at once without overlapping. */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-5 z-30 flex flex-col items-center gap-2 px-4">
+        <BottomDock>
           <EarthTimeBar />
           <RadarTimeline />
-        </div>
+        </BottomDock>
         <HoverOverlay />
         <NewsTicker />
         <CrisisOverlayGate />

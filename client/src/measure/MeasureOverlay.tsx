@@ -116,7 +116,11 @@ export function MeasureOverlay() {
     );
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-6 z-30 flex justify-center px-3">
+    <div
+      className="pointer-events-none absolute inset-x-0 z-30 flex justify-center px-3"
+      // Clear the news ticker (it publishes its height as --ticker-h).
+      style={{ bottom: 'calc(max(var(--ticker-h, 0px), env(safe-area-inset-bottom, 0px)) + 12px)' }}
+    >
       <div className="pointer-events-auto flex flex-col gap-2.5 rounded-xl border border-white/10 bg-ink-900/90 p-3 shadow-panel backdrop-blur-md">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1 rounded-lg bg-black/30 p-0.5">

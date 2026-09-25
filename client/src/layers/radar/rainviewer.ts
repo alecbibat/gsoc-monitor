@@ -81,7 +81,9 @@ export class RadarImageryProvider extends Cesium.UrlTemplateImageryProvider {
       .catch((err: unknown) => {
         // A cancelled request goes back to "not loaded" (Cesium asks again if
         // the tile returns to view) instead of failing for good.
-        if (err instanceof TileCancelled && request) (request as { state: number }).state = Cesium.RequestState.CANCELLED;
+        if (err instanceof TileCancelled && request) {
+          (request as { state: number }).state = Cesium.RequestState.CANCELLED;
+        }
         throw err;
       }) as Promise<Cesium.ImageryTypes>;
   }

@@ -174,6 +174,18 @@ describe('PlaybackClock', () => {
     expect(c.playing).toBe(true);
   });
 
+  it('steps on to newer frames that join the window while it holds', () => {
+    const c = new PlaybackClock(TIMING);
+    c.reset(6, 0);
+    c.play();
+    c.tick(750, 1); // 0 → 1 done, halfway 1 → 2
+    c.setWindow(1, 1); // the view moved: only the frame on screen is loaded
+    expect(c.current().position).toBe(1);
+    c.setWindow(0, 5); // the rest loaded: continue 1 → 2, not a wrap to 0
+    const f = c.tick(250, 1);
+    expect(f.blend).toEqual({ from: 1, to: 2, t: 0.5 });
+  });
+
   it('keeps its phase across a manifest refresh that drops the oldest frame', () => {
     const c = new PlaybackClock(TIMING);
     c.reset(5, 1);
@@ -185,15 +197,13 @@ describe('PlaybackClock', () => {
     expect(f.blend.t).toBeCloseTo(0.6, 6);
   });
 
-  it('pauses on the frame mostly on screen', () => {
+  it('names the frame mostly on screen mid-blend (where a pause lands)', () => {
     const c = new PlaybackClock(TIMING);
     c.reset(5, 0);
     c.play();
-    c.tick(400, 1); // 0.8 of the way to frame 1
-    c.pause();
-    const f = c.current();
-    expect(f.playing).toBe(false);
-    expect(f.position).toBe(1);
+    const f = c.tick(400, 1); // 0.8 of the way to frame 1
+    expect(f.blend.from).toBe(0);
+    expect(f.index).toBe(1);
   });
 
   it('seeks to fractional positions as a blend (scrubbing)', () => {

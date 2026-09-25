@@ -58,7 +58,11 @@ import { useMeasureStore } from '../measure/measureStore';
 useLayersStore.persist.setOptions({ name: 'gsoc-share-view-layers' });
 // Same for the radar preferences (palette, opacity, loop speed): a viewer
 // changing the scrubber's speed must not rewrite the operator's 'gsoc-radar'.
+// The store hydrated from 'gsoc-radar' at import, so re-read it from the share
+// key (defaults when absent) or the operator's palette and loop leak in —
+// synchronous, as localStorage is.
 useRadarStore.persist.setOptions({ name: 'gsoc-share-radar' });
+void useRadarStore.persist.rehydrate();
 
 // Force the layer flags to exactly the given enabled set. Everything else is
 // switched off — including whatever the operator's persisted state hydrated

@@ -113,7 +113,7 @@ export class PlaybackClock {
   private hi = -1;
   private phase: Phase = { kind: 'rest', position: 0 };
 
-  constructor(private timing: PlaybackTiming = DEFAULT_TIMING) {}
+  constructor(private readonly timing: PlaybackTiming = DEFAULT_TIMING) {}
 
   get playing(): boolean {
     return this.phase.kind !== 'rest';
@@ -121,10 +121,6 @@ export class PlaybackClock {
 
   get window(): [number, number] {
     return [this.lo, this.hi];
-  }
-
-  setTiming(timing: PlaybackTiming): void {
-    this.timing = timing;
   }
 
   // Resize the timeline (whole window playable) and rest at `position`.
@@ -184,6 +180,11 @@ export class PlaybackClock {
       (ph.kind === 'wrap' && (!inside(ph.from) || !inside(ph.to)))
     ) {
       this.phase = { kind: 'hold', at: this.hi, elapsed: 0 };
+    } else if (ph.kind === 'hold' && ph.at < this.hi) {
+      // Newer frames joined the window while the loop dwelt on what was its
+      // newest (the view reloading around it): carry on forward to them
+      // rather than wrapping back past them.
+      this.phase = { kind: 'step', from: ph.at, elapsed: 0 };
     }
   }
 
@@ -208,12 +209,6 @@ export class PlaybackClock {
     } else {
       this.phase = { kind: 'step', from: i, elapsed: 0 };
     }
-  }
-
-  // Pause on the frame mostly on screen.
-  pause(): void {
-    if (this.phase.kind === 'rest') return;
-    this.seek(this.current().index);
   }
 
   // Advance by `dtMs` of real time at `speed`.

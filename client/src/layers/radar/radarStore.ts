@@ -12,7 +12,7 @@ export const DEFAULT_RADAR_PREFS = {
   opacity: 0.9,
   palette: 'classic' as RadarPaletteId,
   speed: 1 as RadarSpeed,
-  snow: true, // paint snow in its own (white) ramp
+  snow: true, // paint snow in its own ramp ("Colour snow separately")
 };
 
 // A frame is "stale" when the newest one is this old: RainViewer publishes

@@ -120,7 +120,8 @@ export class RadarTileClient {
     this.restarts++;
     this.worker?.terminate();
     this.startWorker();
-    this.replay();
+    // No worker means it fell back to inline, which has had the replay already.
+    if (this.worker) this.replay();
   }
 
   private useInline(): void {

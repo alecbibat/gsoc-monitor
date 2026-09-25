@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { api } from '../../api/client';
 import { usePanelStore } from '../../panels/panelStore';
 import { useScreensaverStore } from '../../screensaver/screensaverStore';
@@ -25,6 +25,22 @@ const PARK_SEVERITY_DOT: Record<string, string> = {
   critical: '#f87171',
 };
 
+// The ticker's height (safe-area padding included) is published on the root
+// element as --ticker-h, so HUD docked above it (App's bottom dock and legend
+// stack) can clear it. Kept current as it resizes; removed once it's gone.
+export const TICKER_HEIGHT_VAR = '--ticker-h';
+
+export function publishTickerHeight(el: HTMLElement, root: HTMLElement): () => void {
+  const publish = () => root.style.setProperty(TICKER_HEIGHT_VAR, `${el.offsetHeight}px`);
+  publish();
+  const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(publish);
+  ro?.observe(el);
+  return () => {
+    ro?.disconnect();
+    root.style.removeProperty(TICKER_HEIGHT_VAR);
+  };
+}
+
 export function NewsTicker() {
   const items = useNewsStore((s) => s.items);
   const severityFilter = useNewsStore((s) => s.severityFilter);
@@ -47,6 +63,13 @@ export function NewsTicker() {
 
   const inPins = screensaverActive && screensaverMode === 'pins';
   const active = !newsPanelOpen && (!screensaverActive || inPins);
+
+  // A callback ref: the bar mounts and unmounts as the ticker shows and hides.
+  const unpublish = useRef<(() => void) | null>(null);
+  const barRef = useCallback((el: HTMLDivElement | null) => {
+    unpublish.current?.();
+    unpublish.current = el ? publishTickerHeight(el, document.documentElement) : null;
+  }, []);
 
   // Breaking news fetch (active when ticker is visible and mode is breaking).
   useEffect(() => {
@@ -96,6 +119,7 @@ export function NewsTicker() {
 
   return (
     <div
+      ref={barRef}
       className={`fixed bottom-0 left-0 right-0 z-10 ${
         // Inset for the docked sidebar only when it's actually present (desktop,
         // outside the screensaver). During the pins screensaver the sidebar is

@@ -20,7 +20,7 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
       icon: '🌧',
       source: 'RainViewer',
       method:
-        "RainViewer's global radar composite, merged from national weather-service mosaics — a new frame every 10 minutes, looped over the last two hours (plus any short-range nowcast frames). Tiles are decoded back to reflectivity (dBZ) and repainted in the palette you choose, with light echo faded in rather than hard-edged. The free tier stops at zoom level 7; closer in, the overlay is magnified from that level — the ~1 km composite has no finer detail to show — instead of requesting tiles RainViewer won't serve.",
+        "RainViewer's global radar composite, merged from national weather-service mosaics — a new frame every 10 minutes, looped over up to two hours of history (plus any short-range nowcast frames). Tiles are decoded back to reflectivity (dBZ) and repainted in the palette you choose, with light echo faded in rather than hard-edged. The free tier stops at zoom level 7; closer in, the overlay is magnified from that level — the ~1 km composite has no finer detail to show — instead of requesting tiles RainViewer won't serve.",
       trust:
         'Built from official meteorological radar networks (NOAA/NWS NEXRAD in the US) — the same feed many consumer weather apps use.',
       url: 'https://www.rainviewer.com',

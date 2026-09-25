@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bufferRuns, LABEL_MIN_GAP_PX, tickLabel, timelineTicks } from './radarTimelineTicks';
+import { bufferRuns, bufferSegments, LABEL_MIN_GAP_PX, tickLabel, timelineTicks } from './radarTimelineTicks';
 
 // Frame times built from local wall-clock times, so "on the hour" holds in
 // whatever time zone the tests run in.
@@ -32,13 +32,23 @@ describe('timelineTicks', () => {
     for (const t of ticks.filter((x) => x.label)) expect(t.major).toBe(true);
   });
 
-  it('adds half-hour labels only when the track has room to spare', () => {
+  it('adds half-hour labels once they fit', () => {
     expect(labelled(timelineTicks(frames(17, 0, 13), 400))).toEqual([0, 3, 6, 9, 12]);
-    expect(labelled(timelineTicks(frames(17, 0, 13), 260))).toEqual([0, 6, 12]);
+    expect(labelled(timelineTicks(frames(17, 0, 13), 200))).toEqual([0, 3, 6, 9, 12]);
+    expect(labelled(timelineTicks(frames(17, 0, 13), 150))).toEqual([0, 6, 12]);
   });
 
   it('labels every frame of a short loop on a wide track', () => {
     expect(labelled(timelineTicks(frames(17, 10, 4), 400))).toEqual([0, 1, 2, 3]);
+  });
+
+  it('spaces short labels by their width, not a fixed gap', () => {
+    // A 30 min loop on a phone track and a 1 h loop on a desktop one are
+    // labelled frame by frame: "5:10" needs ~30 px, not a sub-hour minimum.
+    expect(labelled(timelineTicks(frames(17, 10, 4), 180))).toEqual([0, 1, 2, 3]);
+    expect(labelled(timelineTicks(frames(17, 0, 7), 430))).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    // …until they would crowd: 30 px per frame falls back to the half-hours.
+    expect(labelled(timelineTicks(frames(17, 0, 7), 180))).toEqual([0, 3, 6]);
   });
 
   it('never packs labels closer than the minimum gap, at any width', () => {
@@ -47,7 +57,7 @@ describe('timelineTicks', () => {
       const xs = timelineTicks(times, w)
         .filter((t) => t.label)
         .map((t) => t.at * w);
-      for (let k = 1; k < xs.length; k++) expect(xs[k] - xs[k - 1]).toBeGreaterThanOrEqual(LABEL_MIN_GAP_PX);
+      for (let k = 1; k < xs.length; k++) expect(xs[k] - xs[k - 1]).toBeGreaterThanOrEqual(LABEL_MIN_GAP_PX - 1e-9);
     }
   });
 
@@ -66,6 +76,19 @@ describe('timelineTicks', () => {
   it('has no hour ticks when no frame falls on the hour', () => {
     const ticks = timelineTicks(frames(17, 10, 4), 400);
     expect(ticks.some((t) => t.major)).toBe(false);
+  });
+
+  it('still labels frames that never land on a whole ten minutes (UTC+5:45 and friends)', () => {
+    // Frames at :05, :15 … local, as RainViewer's 10-minute grid falls in a
+    // :45 time zone. Built from local wall-clock times like the rest, so this
+    // holds whatever zone the tests run in.
+    const times = frames(17, 5, 13); // 5:05 → 7:05 PM
+    const wide = timelineTicks(times, 400);
+    expect(labelled(wide)).toEqual([0, 3, 6, 9, 12]);
+    expect(wide.filter((t) => t.major).map((t) => t.index)).toEqual([0, 6, 12]);
+    expect(wide[3].label).toMatch(/^(5:35|17:35)$/);
+    expect(labelled(timelineTicks(times, 150))).toEqual([0, 6, 12]);
+    expect(labelled(timelineTicks(frames(17, 15, 4), 180))).toEqual([0, 1, 2, 3]);
   });
 });
 
@@ -88,5 +111,27 @@ describe('bufferRuns', () => {
       [4, 6],
       [8, 8],
     ]);
+  });
+});
+
+describe('bufferSegments', () => {
+  it('spans half a frame either side of each loaded run', () => {
+    expect(bufferSegments('', 0)).toEqual([]);
+    expect(bufferSegments('0000', 3)).toEqual([]);
+    expect(bufferSegments('1111', 3)).toEqual([{ from: 0, to: 3, forecast: false }]);
+    expect(bufferSegments('0000000000111', 12)).toEqual([{ from: 9.5, to: 12, forecast: false }]);
+    expect(bufferSegments('1101', 3)).toEqual([
+      { from: 0, to: 1.5, forecast: false },
+      { from: 2.5, to: 3, forecast: false },
+    ]);
+  });
+
+  it('splits runs at the newest observed frame', () => {
+    // Frames 0–3 observed, 4–5 forecast.
+    expect(bufferSegments('011110', 3)).toEqual([
+      { from: 0.5, to: 3, forecast: false },
+      { from: 3, to: 4.5, forecast: true },
+    ]);
+    expect(bufferSegments('000011', 3)).toEqual([{ from: 3.5, to: 5, forecast: true }]);
   });
 });

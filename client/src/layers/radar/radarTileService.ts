@@ -61,8 +61,9 @@ const CACHE_NAME = 'gsoc-radar-tiles-v1';
 const CACHE_TIME_HEADER = 'x-gsoc-cached-at';
 const CACHE_MAX_AGE_MS = 3 * 3600_000; // frames live ~2 h upstream
 const PNG_BUDGET_BYTES = 48 * 1024 * 1024;
-// Decoded grids kept around: tiles re-painted soon (palette switches, the
-// hover readout) skip a PNG decode.
+// Decoded grids kept, least recently used dropped. Every paint and hover
+// probe reads one, so this also sets how much of a loop a palette, snow or
+// smoothing switch repaints without decoding its PNGs again (2 bytes/pixel).
 const GRID_KEEP = 48;
 const FETCH_TIMEOUT_MS = 20_000;
 const FAILING_AFTER_MS = 2 * 60_000; // failures with no success for this long = "failing"
@@ -298,6 +299,15 @@ export class RadarTileService {
   }
 
   private async fetchJob(job: ScheduledJob): Promise<FetchOutcome> {
+    const outcome = await this.fetchOnce(job);
+    // Per attempt, not per finished job: a tile that keeps failing is retried
+    // for ~13 minutes before the scheduler gives up on it.
+    if (outcome.kind === 'ok') this.lastOk = Date.now();
+    else if (outcome.kind === 'error') this.lastFailure = Date.now();
+    return outcome;
+  }
+
+  private async fetchOnce(job: ScheduledJob): Promise<FetchOutcome> {
     const target = this.jobUrl.get(job.id);
     if (!target) return { kind: 'gone' };
     // A stalled request must not hold a slot for ever: after a 429 the
@@ -334,10 +344,9 @@ export class RadarTileService {
     if (!target) return;
     const { key, url } = target;
     if (this.jobOfKey.get(key) === job.id) this.jobOfKey.delete(key);
-    if (outcome.kind === 'ok') this.lastOk = Date.now();
-    else if (outcome.kind === 'error') {
-      this.lastFailure = Date.now();
-      // "Failing" is judged against the time since the last success.
+    if (outcome.kind === 'error') {
+      // Given up on, perhaps with nothing left queued to keep the status
+      // fresh: look again once "failing" can have become true.
       setTimeout(() => this.reportStatus(), FAILING_AFTER_MS + 500);
     }
     this.reportStatus();
@@ -465,12 +474,12 @@ export class RadarTileService {
           const grid = await this.gridFor(tileKey(req.frameKey, req.z, req.x, req.y));
           if (!this.requests.has(req.id)) continue;
           this.requests.delete(req.id);
-          const rgba = grid ? renderRadarTile(grid, paletteLut(req.palette), { sigma: req.sigma, snow: req.snow }) : null;
+          const opts = { sigma: req.sigma, snow: req.snow };
+          const rgba = grid ? renderRadarTile(grid, paletteLut(req.palette), opts) : null;
           if (!grid || !rgba) this.post({ type: 'tile', id: req.id, empty: true });
           else {
-            this.post({ type: 'tile', id: req.id, empty: false, rgba: rgba.buffer, width: grid.width, height: grid.height }, [
-              rgba.buffer,
-            ]);
+            const { width, height } = grid;
+            this.post({ type: 'tile', id: req.id, empty: false, rgba: rgba.buffer, width, height }, [rgba.buffer]);
           }
         } catch (err) {
           console.warn('[radar] tile render failed', err);

@@ -2,7 +2,7 @@ import * as Cesium from 'cesium';
 import { addImageryBelowLabels } from '../../cesium/labelOverlay';
 import { blendAlphas, PlaybackClock, type Blend, type PlaybackTiming } from './radarPlayback';
 import { radarPlayhead, setRadarController, type RadarController } from './radarPlayhead';
-import { RadarImageryProvider, type FrameSource } from './rainviewer';
+import { RadarImageryProvider, type FrameSource, type RequestStamp } from './rainviewer';
 import type { RadarPaletteId } from './radarPalettes';
 import type { RadarTileClient } from './radarTileClient';
 import type { TimelineFrame } from './radarTimeline';
@@ -226,9 +226,11 @@ export class RadarEngine implements RadarController {
       this.settle = null;
       this.live = true;
     } else {
-      // Keep the picture where it was in time.
-      const at = shownTime === null ? -1 : this.indexNear(shownTime);
-      const delta = at >= 0 ? at - this.clock.current().index : 0;
+      // Keep the picture where it was in time. If the frame on screen has
+      // expired, shift with the frames that stayed (the clock then carries
+      // on from the oldest rather than jumping a frame ahead).
+      const at = shownTime === null ? -1 : next.findIndex((f) => f.time === shownTime);
+      const delta = at >= 0 ? at - this.clock.current().index : next.indexOf(keep[0]) - old.indexOf(keep[0]);
       this.clock.remap(next.length, delta);
       if (this.settle) {
         const to = settleTime === null ? this.settle.to + delta : this.indexNear(settleTime);
@@ -237,7 +239,9 @@ export class RadarEngine implements RadarController {
     }
     this.recomputeWindow();
     this.client?.retain(next.map((f) => f.key));
-    if (rebuilding && next.length > 0) this.startRebuild();
+    // A rebuild in progress restarts over the new frame set — unless nothing
+    // was carried over, in which case every layer is already new.
+    if (rebuilding && keep.length > 0 && next.length > 0) this.startRebuild();
     this.lastAlphas = [];
     this.lastRankSig = '';
     this.dirty = true;
@@ -362,15 +366,15 @@ export class RadarEngine implements RadarController {
     return this.client.probe(f.key, lon, lat);
   }
 
+  // ── internals ───────────────────────────────────────────────────────────
+
   // Whether Cesium still wants a tile a request was made for: seen in one of
   // the recent readiness scans, or too recent to judge.
-  tileWanted(frameKey: string, level: number, x: number, y: number, since: { scan: number; at: number }): boolean {
+  private tileWanted(frameKey: string, level: number, x: number, y: number, since: RequestStamp): boolean {
     if (this.scanCount < since.scan + UNWANTED_SCANS || performance.now() - since.at < UNWANTED_MIN_AGE_MS) return true;
     const k = `${frameKey}|${level}/${x}/${y}`;
     return this.wantedNow.has(k) || this.wantedPrev.has(k) || this.wantedOlder.has(k);
   }
-
-  // ── internals ───────────────────────────────────────────────────────────
 
   // Add a frame's layer next to its neighbours in time — just below the next
   // newer radar layer, or just above the newest — so the stack stays in time
@@ -504,8 +508,9 @@ export class RadarEngine implements RadarController {
     // the camera is passing through would spend the rate budget on frames
     // nobody sees.
     if (!this.isMoving(performance.now())) return false;
+    // (Resting on the newest frame reads as a finished blend into it, t = 1.)
     const b = this.clock.current().blend;
-    return this.frames[b.from]?.key !== key && !(b.t > 0 && this.frames[b.to]?.key === key);
+    return !(b.t < 1 && this.frames[b.from]?.key === key) && !(b.t > 0 && this.frames[b.to]?.key === key);
   }
 
   private kick(): void {

@@ -5,7 +5,8 @@ import { UB_MIN_DBZ, UB_MAX_DBZ, UB_RAIN_RGBA, UB_SNOW_RGBA } from './rainviewer
 // on our dark basemaps its blues get darker as rain gets heavier and most of
 // the echo area is a translucent tan clutter band. These ramps keep brightness
 // rising with intensity, fade light echo in with alpha instead of a hard edge,
-// and drop the sub-8 dBZ clutter.
+// and drop the weakest returns (below 8 dBZ in Classic, 6 in Vivid; snow
+// below 2), which are mostly clutter.
 
 export type RadarPaletteId = 'classic' | 'vivid' | 'rainviewer';
 
@@ -23,9 +24,10 @@ export function isRadarPalette(v: unknown): v is RadarPaletteId {
 type Stop = [number, string, number];
 
 const STOPS: Record<Exclude<RadarPaletteId, 'rainviewer'>, Stop[]> = {
-  // The familiar broadcast ramp (green → yellow → red → magenta), with the
-  // greens kept bright instead of darkening toward black as they do in the
-  // served TWC scheme, and light rain as a translucent wash.
+  // The familiar broadcast ramp (green → yellow → red → magenta), with light
+  // rain as a translucent wash of bright green that firms up with intensity
+  // (the served Universal Blue ramp has no greens: its light-to-moderate rain
+  // runs light cyan → navy, sinking into a dark basemap as it strengthens).
   classic: [
     [8, '#5fd65f', 0],
     [12, '#63e063', 0.5],
@@ -184,17 +186,55 @@ export function snowSwatch(id: RadarPaletteId): string {
   return `rgb(${lut[k]}, ${lut[k + 1]}, ${lut[k + 2]})`;
 }
 
-// Plain-language intensity for a reflectivity value (hover readout, legend).
+// One intensity scale for the legend's marks and the hover readout, so a
+// cell the legend calls "Heavy" reads "Heavy rain" under the cursor. Each
+// band runs from its `min` dBZ up to the next band's. Heavy and Extreme
+// start where every palette turns yellow (~35 dBZ) and crimson or pink (~55).
+export interface IntensityBand {
+  min: number;
+  name: string;
+  readout?: string; // readout wording, when not "<name> rain"
+}
+
+export const RAIN_INTENSITY: readonly IntensityBand[] = [
+  { min: -Infinity, name: 'Light' },
+  { min: 20, name: 'Moderate' },
+  { min: 35, name: 'Heavy' },
+  { min: 55, name: 'Extreme', readout: 'Extreme · possible hail' },
+];
+
+// Snow returns weaker echo than rain for the same precipitation rate, so its
+// bands sit lower. The legend has one snow swatch, not a ramp.
+export const SNOW_INTENSITY: readonly IntensityBand[] = [
+  { min: -Infinity, name: 'Light' },
+  { min: 15, name: 'Moderate' },
+  { min: 25, name: 'Heavy' },
+];
+
+export function intensityBand(dbz: number, bands: readonly IntensityBand[] = RAIN_INTENSITY): IntensityBand {
+  let band = bands[0];
+  for (const b of bands) if (dbz >= b.min) band = b;
+  return band;
+}
+
+// The rain bands over the legend's range, clipped to it, with their dBZ
+// span in words ("20–35 dBZ") for titles and screen readers.
+export function legendBands(): Array<{ name: string; from: number; to: number; range: string }> {
+  return RAIN_INTENSITY.map((b, i) => {
+    const next = RAIN_INTENSITY[i + 1]?.min;
+    return {
+      name: b.name,
+      from: Math.max(b.min, LEGEND_MIN_DBZ),
+      to: Math.min(next ?? Infinity, LEGEND_MAX_DBZ),
+      range:
+        next === undefined ? `${b.min} dBZ and above` : b.min === -Infinity ? `below ${next} dBZ` : `${b.min}–${next} dBZ`,
+    };
+  }).filter((b) => b.to > b.from);
+}
+
+// Plain-language intensity for a reflectivity value (hover readout).
 export function intensityLabel(dbz: number, snow: boolean): string {
-  const kind = snow ? 'snow' : 'rain';
-  if (snow) {
-    if (dbz < 15) return 'Light snow';
-    if (dbz < 25) return 'Moderate snow';
-    return 'Heavy snow';
-  }
-  if (dbz < 20) return `Light ${kind}`;
-  if (dbz < 35) return `Moderate ${kind}`;
-  if (dbz < 45) return `Heavy ${kind}`;
-  if (dbz < 55) return 'Intense rain';
-  return 'Extreme · possible hail';
+  if (snow) return `${intensityBand(dbz, SNOW_INTENSITY).name} snow`;
+  const band = intensityBand(dbz);
+  return band.readout ?? `${band.name} rain`;
 }

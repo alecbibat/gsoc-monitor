@@ -7,7 +7,7 @@ export interface PlayheadState {
   position: number; // continuous playhead, in timeline frames
   index: number; // the frame mostly on screen
   playing: boolean;
-  buffering: boolean; // waiting for the next frame's tiles
+  buffering: boolean; // play intent, but waiting for frames to load (diagnostics and tests)
   ready: number; // frames fully loaded for the current view
   total: number; // frames in the loop
   readyMask: string; // per frame, '1' = loaded for the current view (buffer bar)

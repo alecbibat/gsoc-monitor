@@ -48,12 +48,6 @@ export function clampIndex(index: number, length: number): number {
   return Math.min(Math.max(0, Math.floor(index)), length - 1);
 }
 
-// Next playback index, wrapping to the start after the last frame.
-export function nextIndex(index: number, length: number): number {
-  if (length <= 0) return 0;
-  return (clampIndex(index, length) + 1) % length;
-}
-
 // Cheap identity for a manifest, so an unchanged poll doesn't churn the store
 // (and with it the imagery layer stack).
 export function manifestSignature(host: string, past: RadarFrame[], nowcast: RadarFrame[]): string {

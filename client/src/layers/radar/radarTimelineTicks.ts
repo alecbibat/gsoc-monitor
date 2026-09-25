@@ -13,12 +13,11 @@ export interface TimelineTick {
   align: 'start' | 'center' | 'end';
 }
 
-// Label spacing, in minutes. Sub-hour steps only appear when the track has
-// room to spare, so labels stay sparse; narrow tracks fall back to hourly (or
+// Label spacing, in minutes: the finest step whose labels fit wins, so a short
+// loop is labelled frame by frame and narrow tracks fall back to hourly (or
 // coarser).
 const LABEL_STEPS = [10, 30, 60, 120, 180];
-export const LABEL_MIN_GAP_PX = 44; // centre to centre, hour labels
-const SUBHOUR_MIN_GAP_PX = 72; // centre to centre, labels between the hours
+export const LABEL_MIN_GAP_PX = 40; // centre to centre, however short the labels
 const LABEL_PAD_PX = 8; // clear space between neighbouring labels
 const LABEL_CHAR_PX = 5.2; // rough advance of a 9 px tabular label glyph
 const MIN_TICK_GAP_PX = 4; // below this, per-frame ticks become a smear: majors only
@@ -62,6 +61,29 @@ function labelWidth(label: string): number {
   return label.length * LABEL_CHAR_PX;
 }
 
+// Where the frames sit relative to the clock's step boundaries, in minutes.
+// Normally some frame lands on a whole ten minutes (0). In UTC+5:45, +8:45 and
+// +12:45 every frame lands on :05, :15 … instead, so no frame would ever be on
+// the hour or the half-hour: the steps are then counted from the frames' own
+// offset, labelling every k-th frame (5:05, 5:35, 6:05) with the frame just
+// past each hour drawn as the hour tick.
+function gridPhase(minutes: number[], frameStep: number): number {
+  if (minutes.some((m) => m % frameStep === 0)) return 0;
+  const counts = new Map<number, number>();
+  let phase = 0;
+  let most = 0;
+  for (const m of minutes) {
+    const p = m % frameStep;
+    const c = (counts.get(p) ?? 0) + 1;
+    counts.set(p, c);
+    if (c > most) {
+      most = c;
+      phase = p;
+    }
+  }
+  return phase;
+}
+
 // Ticks to draw on a track `widthPx` wide for frames at `times` (epoch
 // seconds, oldest first): one per frame (skipped when they'd crowd), taller on
 // the hour, and labels at the finest step whose neighbours stay at least
@@ -71,13 +93,14 @@ export function timelineTicks(times: number[], widthPx: number): TimelineTick[] 
   if (n < 2 || !(widthPx > 0)) return [];
   const pxPerFrame = widthPx / (n - 1);
   const frameStep = frameStepMinutes(times);
-  const minutes = times.map(minuteOfDay);
+  const raw = times.map(minuteOfDay);
+  const phase = gridPhase(raw, frameStep);
+  const minutes = raw.map((m) => (m - phase + 1440) % 1440);
 
   // Pick the label step.
   let labelled: Map<number, string> = new Map();
   for (const step of LABEL_STEPS) {
     if (step < frameStep) continue;
-    const minGap = step < 60 ? SUBHOUR_MIN_GAP_PX : LABEL_MIN_GAP_PX;
     const picks: Array<{ i: number; label: string; x: number }> = [];
     for (let i = 0; i < n; i++) {
       if (minutes[i] % step === 0) picks.push({ i, label: tickLabel(times[i]), x: i * pxPerFrame });
@@ -86,7 +109,7 @@ export function timelineTicks(times: number[], widthPx: number): TimelineTick[] 
       if (k === 0) return true;
       const q = picks[k - 1];
       const gap = p.x - q.x;
-      return gap >= minGap && gap >= (labelWidth(p.label) + labelWidth(q.label)) / 2 + LABEL_PAD_PX;
+      return gap >= LABEL_MIN_GAP_PX && gap >= (labelWidth(p.label) + labelWidth(q.label)) / 2 + LABEL_PAD_PX;
     });
     if (fits) {
       labelled = new Map(picks.map((p) => [p.i, p.label]));
@@ -112,7 +135,7 @@ export function timelineTicks(times: number[], widthPx: number): TimelineTick[] 
 }
 
 // Runs of loaded frames in a playhead readiness mask ('1' = loaded), as
-// inclusive [first, last] frame indices — drawn as the buffer bar.
+// inclusive [first, last] frame indices.
 export function bufferRuns(mask: string): Array<[number, number]> {
   const runs: Array<[number, number]> = [];
   let start = -1;
@@ -125,4 +148,25 @@ export function bufferRuns(mask: string): Array<[number, number]> {
     }
   }
   return runs;
+}
+
+export interface BufferSegment {
+  from: number; // track position, in (fractional) frames
+  to: number;
+  forecast: boolean;
+}
+
+// The buffer bar's lit segments: each run of loaded frames spans half a frame
+// either side of its frames (so neighbouring runs meet), split at the newest
+// observed frame `nowIdx` so the forecast part can be drawn in its own style.
+export function bufferSegments(mask: string, nowIdx: number): BufferSegment[] {
+  const last = mask.length - 1;
+  const segments: BufferSegment[] = [];
+  for (const [a, b] of bufferRuns(mask)) {
+    const from = Math.max(0, a - 0.5);
+    const to = Math.min(last, b + 0.5);
+    if (from < nowIdx) segments.push({ from, to: Math.min(to, nowIdx), forecast: false });
+    if (to > nowIdx) segments.push({ from: Math.max(from, nowIdx), to, forecast: true });
+  }
+  return segments;
 }

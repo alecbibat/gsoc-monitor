@@ -65,7 +65,11 @@ export function FuelZoneOverlay() {
   const polyReady = mode === 'polygon' && vcount >= 3 && !busy && !error;
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-6 z-30 flex justify-center px-3">
+    <div
+      className="pointer-events-none absolute inset-x-0 z-30 flex justify-center px-3"
+      // Clear the news ticker (it publishes its height as --ticker-h).
+      style={{ bottom: 'calc(max(var(--ticker-h, 0px), env(safe-area-inset-bottom, 0px)) + 12px)' }}
+    >
       <div className="pointer-events-auto flex items-center gap-3 rounded-xl border border-white/10 bg-ink-900/90 px-3.5 py-2.5 shadow-panel backdrop-blur-md">
         <span className="text-base">{mode === 'polygon' ? '⬠' : '🌾'}</span>
         <div className="min-w-[230px] text-[12px]">{hint}</div>

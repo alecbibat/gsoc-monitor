@@ -4,7 +4,7 @@ import { RadarControls } from './RadarControls';
 import { legendGradient } from './radarPalettes';
 
 // Sidebar controls under the radar toggle, rendered with the default prefs
-// (2 hr loop, 1× speed, Classic palette, 90% opacity).
+// (2 hr loop, 1× speed, Classic palette, 90% opacity, snow coloured).
 
 const html = renderToStaticMarkup(<RadarControls />);
 
@@ -37,5 +37,13 @@ describe('RadarControls', () => {
   it('has an opacity slider over the store range, with its value', () => {
     expect(html).toMatch(/<input type="range" min="0.2" max="1" step="0.05"[^>]*value="0.9"/);
     expect(html).toContain('90%');
+  });
+
+  it('offers snow colouring, on by default, described for the palette in use', () => {
+    // Not "in white": RainViewer's snow ramp is cyan-blue, and the recoloured
+    // palettes' runs from near-white to ice blue.
+    expect(html).toMatch(/<label[^>]*title="Paint snow in its own near-white to ice-blue ramp[^"]*"><input type="checkbox"[^>]*checked=""/);
+    expect(html).toContain('>Colour snow separately</span>');
+    expect(html).not.toMatch(/in white/i);
   });
 });
