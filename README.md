@@ -85,7 +85,7 @@ the claims needed — `sub`, `email`, `email_verified`, `name`.
 (see `.env.example`). Set `SSO_ALLOWED_DOMAINS` too.
 
 Accounts are matched to IdP identities **by email, once**. An admin pre-creates
-the account (Admin panel → Team members → *Add member*, no password); the
+the account (Admin → Team members → *Add member*, no password); the
 person's first SSO login attaches their IdP subject to that row and every login
 after matches on the subject instead. Because linking updates the existing row,
 the user's id is stable — nothing they authored gets orphaned when their email
@@ -106,10 +106,39 @@ or name later changes.
 ### Share links
 
 Share links require a signed-in account. The generated link password is **not**
-accepted by default — an admin opens a time-boxed window (Admin panel →
-Share-link access) when SSO is unavailable and a situation report still has to
+accepted by default — an admin opens a time-boxed window (Admin →
+Sign-up & share access) when SSO is unavailable and a situation report still has to
 reach people. It expires on its own (default 12h, max 72h) and every open is
 logged with the viewer's account.
+
+## Crisis response templates
+
+Each incident's **ICS role checklists**, **intake questions** and **Incident
+Action Plan** come from admin-managed templates, layered by scope:
+
+**General** (every incident) → **Incident type** → **Property** → **Type + Property**
+
+An incident of type *Wildfire* at *Grand Canyon* sees the General items, then
+the Wildfire items, then the Grand Canyon items, then anything written for
+that exact combination; each item carries a small chip naming the scope it
+came from. The IAP is the single most specific PDF on file (type + property,
+then type, then property, then the general default).
+
+Admins edit all of this on the **Admin** page (user menu → Admin): Checklists,
+Intake questions, IAP documents and Checklist roles (including the GSOC
+Support role). Built-in defaults ship for every incident type and property
+(`server/src/data/crisisTemplateDefaults/`); an admin's change to a scope is
+stored as an override of that scope (`crisis_template_overrides`) and *Reset to
+default* removes it. Saves carry the revision they were based on, so two
+admins can't silently overwrite each other, and open incidents and share links
+pick up changes live.
+
+Checklist and intake state is keyed by stable item ids. If an incident's type
+or property changes, or an admin removes an item, anything already checked or
+answered stays visible (read-only) under *Earlier checklist items* / *Other
+answers*, so the record an after-action review relies on is never lost. When
+editing defaults in code, append new lines rather than reordering: ids are
+minted from position.
 
 ## Project structure
 

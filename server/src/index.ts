@@ -308,6 +308,19 @@ function main() {
   // Backstop for anything that reaches next(err) — without it Express prints
   // HTML stack traces; with it API consumers get JSON and the process stays up.
   app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    // body-parser's own rejections are the client's fault, not ours: a
+    // malformed JSON body is a 400 and an over-limit one a 413 (an IAP PDF or
+    // a large template save), so the caller can say what actually went wrong.
+    const status = (err as { status?: unknown }).status;
+    const type = (err as { type?: unknown }).type;
+    if (!res.headersSent && type === 'entity.parse.failed') {
+      res.status(400).json({ error: 'Request body is not valid JSON' });
+      return;
+    }
+    if (!res.headersSent && (type === 'entity.too.large' || status === 413)) {
+      res.status(413).json({ error: 'Request body is too large' });
+      return;
+    }
     console.error('[express]', err.message);
     if (!res.headersSent) res.status(500).json({ error: 'Internal error' });
   });
