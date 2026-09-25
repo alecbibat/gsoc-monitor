@@ -77,6 +77,8 @@ export class RadarTileClient {
   private lastHeard = 0;
   private pingAt = 0;
   private statusListeners = new Set<(s: ServiceStatus) => void>();
+  private lastStatus: ServiceStatus | null = null; // replayed to late subscribers
+  private cooldownUntil = 0; // the service's rate-limit cool-down, for a restarted worker
   private goneListeners = new Set<(frameKey: string) => void>();
 
   constructor() {
@@ -133,12 +135,17 @@ export class RadarTileClient {
     this.replay();
   }
 
-  // Re-issue everything outstanding to a fresh service, which inherits this
-  // minute's request count so a restart can't overrun the rate limit.
+  // Re-issue everything outstanding to a fresh service. It inherits this
+  // minute's request starts (this tab's and those relayed from other tabs) and
+  // any cool-down, so a restart can't overrun the rate limit.
   private replay(): void {
     const now = Date.now();
     this.recentStarts = this.recentStarts.filter((t) => now - t < 60_000);
-    this.send({ type: 'seed', starts: this.recentStarts });
+    this.send({
+      type: 'seed',
+      starts: this.recentStarts,
+      cooldownUntil: this.cooldownUntil > now ? this.cooldownUntil : undefined,
+    });
     this.send({ type: 'ranks', ranks: this.lastRanks });
     this.send({ type: 'visible', keys: this.lastVisible });
     if (typeof document !== 'undefined') this.send({ type: 'hidden', hidden: document.hidden });
@@ -165,6 +172,8 @@ export class RadarTileClient {
         if (this.recentStarts.length > 200) this.recentStarts.splice(0, this.recentStarts.length - 200);
         return;
       case 'status':
+        this.lastStatus = msg.status;
+        this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + msg.status.coolingDownMs);
         for (const fn of this.statusListeners) fn(msg.status);
         return;
       case 'probe': {
@@ -272,8 +281,12 @@ export class RadarTileClient {
     });
   }
 
+  // New listeners get the latest status at once: the service only posts
+  // changes, and one may have gone out while nobody was listening (a layer
+  // switched off and on again).
   onStatus(fn: (s: ServiceStatus) => void): () => void {
     this.statusListeners.add(fn);
+    if (this.lastStatus) fn(this.lastStatus);
     return () => this.statusListeners.delete(fn);
   }
 

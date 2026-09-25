@@ -4,6 +4,7 @@ import { usePanelStore } from '../../panels/panelStore';
 import { useScreensaverStore } from '../../screensaver/screensaverStore';
 import { useNewsStore } from './newsStore';
 import { startVisiblePolling } from '../../lib/poll';
+import { publishHeight } from '../../lib/publishHeight';
 
 // A horizontally-scrolling headline ticker pinned to the bottom of the screen.
 // Shown while the Breaking News panel is closed, and kept alive during the pins
@@ -31,14 +32,7 @@ const PARK_SEVERITY_DOT: Record<string, string> = {
 export const TICKER_HEIGHT_VAR = '--ticker-h';
 
 export function publishTickerHeight(el: HTMLElement, root: HTMLElement): () => void {
-  const publish = () => root.style.setProperty(TICKER_HEIGHT_VAR, `${el.offsetHeight}px`);
-  publish();
-  const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(publish);
-  ro?.observe(el);
-  return () => {
-    ro?.disconnect();
-    root.style.removeProperty(TICKER_HEIGHT_VAR);
-  };
+  return publishHeight(el, root, TICKER_HEIGHT_VAR);
 }
 
 export function NewsTicker() {

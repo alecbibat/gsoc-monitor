@@ -116,9 +116,12 @@ describe('bubble and hover ghost', () => {
   it('drops the ghost label only where it would overlap the bubble', () => {
     // Bubble 160–240.
     expect(ghostLabelClear(200, 50, 160, 80)).toBe(false);
-    expect(ghostLabelClear(110, 50, 160, 80)).toBe(false); // ends 4 px short of it
+    expect(ghostLabelClear(110, 50, 160, 80)).toBe(false); // ends flush with it, inside the 4 px gap
+    expect(ghostLabelClear(107, 50, 160, 80)).toBe(false); // 3 px short
+    expect(ghostLabelClear(106, 50, 160, 80)).toBe(true); // exactly 4 px clear
     expect(ghostLabelClear(100, 50, 160, 80)).toBe(true);
-    expect(ghostLabelClear(250, 50, 160, 80)).toBe(true);
+    expect(ghostLabelClear(244, 50, 160, 80)).toBe(true); // 4 px past its right edge
+    expect(ghostLabelClear(243, 50, 160, 80)).toBe(false);
   });
 });
 

@@ -17,7 +17,13 @@ describe('decodePng', () => {
   });
 
   it('round-trips RGBA through every filter type', async () => {
-    const rows = [0, 1, 2].map((y) => new Uint8Array([10 * y, 20, 30, 255, 200, 100 + y, 50, 128]));
+    // Neighbours chosen so Paeth picks left, up and up-left at least once each;
+    // with smoother rows it degenerates to Sub/Up and a broken predictor passes.
+    const rows = [
+      [50, 20, 30, 255, 10, 20, 50, 128],
+      [100, 200, 30, 255, 200, 101, 50, 128],
+      [20, 20, 30, 255, 200, 102, 50, 128],
+    ].map((r) => new Uint8Array(r));
     for (const filter of [0, 1, 2, 3, 4] as const) {
       expect(await rgba(encodePng(2, 3, 6, rows, { filter }))).toEqual(rows.flatMap((r) => Array.from(r)));
     }

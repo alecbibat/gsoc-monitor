@@ -26,6 +26,7 @@ interface RadarState {
   nowcast: RadarFrame[];
   generated: number | null; // manifest timestamp (epoch seconds)
   manifestAt: number; // when a manifest last arrived (epoch ms; 0 = never)
+  polledAt: number; // when the last manifest fetch finished, ok or not (epoch ms)
   loading: boolean; // no manifest received yet
   error: string | null; // last fetch failure; frames already loaded stay usable
   // Tile pipeline (runtime)
@@ -62,6 +63,7 @@ export const useRadarStore = create<RadarState>()(
       nowcast: [],
       generated: null,
       manifestAt: 0,
+      polledAt: 0,
       loading: true,
       error: null,
       coolingDownMs: 0,
@@ -70,18 +72,19 @@ export const useRadarStore = create<RadarState>()(
       setManifest: (m) =>
         set((s) =>
           manifestSignature(m.host, m.past, m.nowcast) === manifestSignature(s.host, s.past, s.nowcast)
-            ? { generated: m.generated, manifestAt: Date.now(), loading: false, error: null }
+            ? { generated: m.generated, manifestAt: Date.now(), polledAt: Date.now(), loading: false, error: null }
             : {
                 host: m.host,
                 past: m.past,
                 nowcast: m.nowcast,
                 generated: m.generated,
                 manifestAt: Date.now(),
+                polledAt: Date.now(),
                 loading: false,
                 error: null,
               }
         ),
-      setError: (error) => set({ error, loading: false }),
+      setError: (error) => set({ error, loading: false, polledAt: Date.now() }),
       setCoolingDown: (coolingDownMs) => set({ coolingDownMs }),
       setTilesFailing: (tilesFailing) => set({ tilesFailing }),
       setWindowMinutes: (windowMinutes) => set({ windowMinutes }),

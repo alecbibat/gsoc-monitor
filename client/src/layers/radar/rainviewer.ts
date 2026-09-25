@@ -7,10 +7,10 @@ import { TileCancelled, type RadarTileClient } from './radarTileClient';
 // ("Weather data by RainViewer", linked) is shown in the radar legend.
 const RADAR_CREDIT = new Cesium.Credit('Weather data by RainViewer', false);
 
-// A frame's current tile path. Mutable: if RainViewer re-hashes a frame
-// between manifests, later requests follow the new path.
+// A frame's tile path, fixed for the life of its layer: a re-hashed frame
+// gets a new key and a fresh layer (frameKeyOf in radarEngine.ts).
 export interface FrameSource {
-  path: string;
+  readonly path: string;
 }
 
 export interface RadarProviderOptions {
@@ -43,8 +43,8 @@ export class RadarImageryProvider extends Cesium.UrlTemplateImageryProvider {
 
   constructor(opts: RadarProviderOptions) {
     super({
-      // Unused for fetching (requestImage below builds URLs from the live
-      // path); Cesium just needs a template.
+      // Unused for fetching (requestImage below builds URLs itself); Cesium
+      // just needs a template.
       url: radarTileUrl(opts.host, opts.source.path, '{z}', '{x}', '{y}'),
       tileWidth: opts.tileWidth,
       tileHeight: opts.tileWidth,

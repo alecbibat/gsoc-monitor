@@ -72,13 +72,16 @@ describe('radar preferences', () => {
       { windowMinutes: '60', speed: '1', opacity: null, snow: 1 },
       null,
     ];
+    // Every preference starts away from its default, so "kept the current
+    // value" can't pass for "fell back to the default".
+    const moved = { windowMinutes: 30, opacity: 0.5, palette: 'vivid', speed: 2, snow: false };
     for (const stored of junk) {
-      await rehydrate({ windowMinutes: 30, palette: 'vivid', snow: false }); // start away from the defaults
+      await rehydrate(moved);
       expect(await rehydrate(stored)).toEqual(DEFAULT_RADAR_PREFS);
     }
     // An entry from another schema version has no migration: defaults, not a crash.
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    await rehydrate({ windowMinutes: 30 });
+    await rehydrate(moved);
     expect(await rehydrate({ windowMinutes: 60 }, 0)).toEqual(DEFAULT_RADAR_PREFS);
   });
 

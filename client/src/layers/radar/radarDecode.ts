@@ -79,8 +79,9 @@ function getTables(): Tables {
 }
 
 // Nearest table colour for an off-table opaque pixel, within a tight
-// tolerance — absorbs small encoder drift without reading foreign imagery
-// (a grey placeholder, a white error page) as echo.
+// tolerance — absorbs small encoder drift without reading off-table imagery
+// (the grey "zoom level not supported" tile) as echo. White is itself a table
+// colour (65+ dBZ), so this does not reject a white image.
 const NEAR_TOLERANCE_SQ = 10 * 10 * 3;
 const nearCache = new Map<number, number | null>();
 function nearestOpaque(t: Tables, r: number, g: number, b: number): number | null {

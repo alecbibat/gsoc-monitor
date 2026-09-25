@@ -56,8 +56,10 @@ const SWAP_TIMEOUT_MS = 5000;
 const MAX_DT_MS = 100;
 const AUTOPLAY_MIN_FRAMES = 4;
 // Alpha changes redraw the whole globe; a crossfade reads just as smooth at
-// 30 updates a second as at the display's 60-144.
-const MIN_BLEND_REDRAW_MS = 33;
+// 30 updates a second as at the display's 60-144. Kept clear of whole frame
+// counts (2 frames at 60 Hz, 4 at 120 are 33.3 ms; 5 at 144 is 34.7 ms) so
+// jitter between frames doesn't push some updates out a frame.
+const MIN_BLEND_REDRAW_MS = 31;
 // A request is cancelled once it has been missing from this many readiness
 // scans (and is at least this old): the tile has left the view.
 const UNWANTED_SCANS = 3;

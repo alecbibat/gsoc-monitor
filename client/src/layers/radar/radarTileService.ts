@@ -31,7 +31,9 @@ export type ServiceIn =
   | { type: 'probe'; id: number; frameKey: string; lon: number; lat: number }
   | { type: 'retain'; frameKeys: string[] }
   | { type: 'hidden'; hidden: boolean } // page visibility: hold rendering while hidden
-  | { type: 'seed'; starts: number[] } // request starts made by a previous worker this minute
+  // What a previous worker's scheduler knew: this minute's request starts (this
+  // tab's and other tabs') and any rate-limit cool-down still running.
+  | { type: 'seed'; starts: number[]; cooldownUntil?: number }
   | { type: 'ping' };
 
 export interface ServiceStatus {
@@ -66,7 +68,7 @@ const PNG_BUDGET_BYTES = 48 * 1024 * 1024;
 // smoothing switch repaints without decoding its PNGs again (2 bytes/pixel).
 const GRID_KEEP = 48;
 const FETCH_TIMEOUT_MS = 20_000;
-const FAILING_AFTER_MS = 2 * 60_000; // failures with no success for this long = "failing"
+const FAILING_AFTER_MS = 2 * 60_000; // failing this long with no success in between = "failing"
 const BUDGET_CHANNEL = 'gsoc-radar-budget';
 
 let warnedPlaceholder = false;
@@ -136,8 +138,7 @@ export class RadarTileService {
   private rendering = false;
   private hidden = false;
   private ranks = new Map<string, number>();
-  private lastOk = Date.now();
-  private lastFailure = 0;
+  private failingSince = 0; // first failed attempt since the last success (0 = none)
 
   constructor(private post: Post) {
     this.cache =
@@ -170,8 +171,15 @@ export class RadarTileService {
       try {
         this.channel = new BroadcastChannel(BUDGET_CHANNEL);
         this.channel.onmessage = (e: MessageEvent<{ start?: number; cooldown?: number }>) => {
-          if (typeof e.data?.start === 'number') this.scheduler.noteExternalStart(e.data.start);
-          if (typeof e.data?.cooldown === 'number') this.scheduler.noteExternalCooldown(e.data.cooldown);
+          if (typeof e.data?.start === 'number') {
+            this.scheduler.noteExternalStart(e.data.start);
+            // Relayed so a restarted worker is seeded with other tabs' starts too.
+            this.post({ type: 'start', at: e.data.start });
+          }
+          if (typeof e.data?.cooldown === 'number') {
+            this.scheduler.noteExternalCooldown(e.data.cooldown);
+            this.reportStatus();
+          }
         };
       } catch {
         this.channel = null;
@@ -210,6 +218,7 @@ export class RadarTileService {
           break;
         case 'seed':
           for (const at of msg.starts) this.scheduler.noteExternalStart(at);
+          if (msg.cooldownUntil) this.scheduler.noteExternalCooldown(msg.cooldownUntil);
           break;
         case 'ping':
           this.post({ type: 'pong' });
@@ -302,8 +311,8 @@ export class RadarTileService {
     const outcome = await this.fetchOnce(job);
     // Per attempt, not per finished job: a tile that keeps failing is retried
     // for ~13 minutes before the scheduler gives up on it.
-    if (outcome.kind === 'ok') this.lastOk = Date.now();
-    else if (outcome.kind === 'error') this.lastFailure = Date.now();
+    if (outcome.kind === 'ok') this.failingSince = 0;
+    else if (outcome.kind === 'error' && !this.failingSince) this.failingSince = Date.now();
     return outcome;
   }
 
@@ -544,7 +553,7 @@ export class RadarTileService {
       this.statusTimer = null;
       const s = this.scheduler.stats;
       const now = Date.now();
-      const failing = this.lastFailure > this.lastOk && now - this.lastOk > FAILING_AFTER_MS;
+      const failing = this.failingSince > 0 && now - this.failingSince > FAILING_AFTER_MS;
       const status: ServiceStatus = { coolingDownMs: s.coolingDownMs, failing };
       const sig = `${Math.ceil(status.coolingDownMs / 5000)}|${failing}`;
       if (sig !== this.lastStatus) {

@@ -288,6 +288,29 @@ describe('RadarTileClient', () => {
     expect(unanswered.value).toBeNull();
   });
 
+  it('gives a listener that subscribes later the latest status at once', () => {
+    const c = new RadarTileClient();
+    const w = FakeWorker.instances[0];
+    const early: unknown[] = [];
+    c.onStatus((s) => early.push(s));
+    expect(early).toEqual([]); // nothing heard yet
+    w.emit({ type: 'status', status: { coolingDownMs: 0, failing: true } });
+    const late: unknown[] = [];
+    c.onStatus((s) => late.push(s)); // a layer switched back on mid-outage
+    expect(late).toEqual([{ coolingDownMs: 0, failing: true }]);
+  });
+
+  it('seeds a restarted worker with the cool-down still running', async () => {
+    const c = new RadarTileClient();
+    const w1 = FakeWorker.instances[0];
+    w1.emit({ type: 'hello' });
+    w1.emit({ type: 'status', status: { coolingDownMs: 45_000, failing: false } });
+    void c.requestTile(args('a'), () => true);
+    await clock.advance(31_000); // silent 20 s, pinged, no answer in 10 s: restarted
+    const w2 = FakeWorker.instances[1];
+    expect(w2.sent('seed')).toEqual([{ type: 'seed', starts: [], cooldownUntil: T0 + 45_000 }]);
+  });
+
   it('relays status, expired frames and page visibility', async () => {
     const c = new RadarTileClient();
     const w = FakeWorker.instances[0];

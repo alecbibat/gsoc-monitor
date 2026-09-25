@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type * as Cesium from 'cesium';
 import { ShareErrorBoundary } from './crisis/ShareErrorBoundary';
 import { CesiumContext } from './cesium/CesiumContext';
@@ -74,6 +74,7 @@ import { useScreensaverStore } from './screensaver/screensaverStore';
 import { useHoverStore } from './screensaver/hoverStore';
 import { AuthGate } from './auth/AuthGate';
 import { lazyWithReload } from './lib/lazyWithReload';
+import { publishHeight } from './lib/publishHeight';
 
 // Detect share link — renders a completely separate read-only view. Lazy so the
 // main bundle doesn't carry the share view or its Leaflet dependency (and the
@@ -135,6 +136,10 @@ function GlobeFrame({ viewer, children }: { viewer: Cesium.Viewer | null; childr
 // height, safe-area padding included, as --ticker-h) or, without it, the
 // home-indicator inset.
 const BOTTOM_CLEAR = 'max(var(--ticker-h, 0px), env(safe-area-inset-bottom, 0px))';
+// The legend stack's lift above that: clear of the bottom dock (which
+// publishes its height as --dock-h; 12px lift + 0.5rem gap), never lower than
+// the scrubber-only layout.
+const LEGEND_LIFT = 'max(5.5rem, var(--dock-h, 0px) + 12px + 0.5rem)';
 
 // Bottom-center dock: the Earth date bar and the radar scrubber stack here so
 // both can be up at once without overlapping. Centred over the map, so on md+
@@ -144,8 +149,14 @@ function BottomDock({ children }: { children: ReactNode }) {
   const screensaverActive = useScreensaverStore((s) => s.active);
   const hoverEngaged = useHoverStore((s) => s.active || s.picking);
   const sidebarDocked = !screensaverActive && !hoverEngaged;
+  const unpublish = useRef<(() => void) | null>(null);
+  const ref = useCallback((el: HTMLDivElement | null) => {
+    unpublish.current?.();
+    unpublish.current = el ? publishHeight(el, document.documentElement, '--dock-h') : null;
+  }, []);
   return (
     <div
+      ref={ref}
       className={`pointer-events-none absolute inset-x-0 z-30 flex flex-col items-center gap-2 px-4 ${
         sidebarDocked ? 'md:left-72' : ''
       }`}
@@ -266,7 +277,10 @@ export default function App() {
             size. */}
         <div
           className="pointer-events-none absolute right-4 z-30 flex w-[230px] flex-col gap-2"
-          style={{ bottom: `calc(${BOTTOM_CLEAR} + 5.5rem)`, maxHeight: `calc(100% - 6.5rem - ${BOTTOM_CLEAR})` }}
+          style={{
+            bottom: `calc(${BOTTOM_CLEAR} + ${LEGEND_LIFT})`,
+            maxHeight: `calc(100% - 1rem - ${LEGEND_LIFT} - ${BOTTOM_CLEAR})`,
+          }}
         >
           <MapLegends />
           <WindReadout />

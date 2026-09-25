@@ -320,6 +320,16 @@ describe('RadarTileService', () => {
     expect(calls.map((c) => c.at)).toEqual([0, 10_000]);
   });
 
+  it("inherits a previous worker's cool-down from 'seed'", async () => {
+    const h = setup();
+    h.svc.handle({ type: 'seed', starts: [], cooldownUntil: T0 + 20_000 });
+    h.svc.handle({ type: 'tile', req: req(1) });
+    await clock.advance(19_999);
+    expect(calls).toEqual([]);
+    await clock.advance(1);
+    expect(calls.map((c) => c.at)).toEqual([20_000]);
+  });
+
   it("answers 'ping' with 'pong'", () => {
     const h = setup();
     h.svc.handle({ type: 'ping' });
@@ -352,6 +362,19 @@ describe('RadarTileService', () => {
     expect(h.statuses().at(-1)).toEqual({ coolingDownMs: 0, failing: false });
   });
 
+  it('times failing from the start of a run of failures, not from the last success', async () => {
+    reply = (url, n) => (n === 1 ? httpStatus(503) : png());
+    const h = setup();
+    h.svc.handle({ type: 'tile', req: req(1) });
+    await clock.until(() => h.tiles().length === 1, 'the first tile');
+    await clock.advance(10 * 60_000); // a quiet stretch: nothing to fetch
+    h.svc.handle({ type: 'tile', req: req(2, { x: 60 }) }); // fails once, then loads
+    await clock.advance(10_000);
+    await clock.until(() => h.tiles().length === 2, 'the second tile');
+    expect(calls).toHaveLength(3);
+    expect(h.statuses().some((s) => s.failing)).toBe(false);
+  });
+
   it('shares request starts and cool-downs with other tabs', async () => {
     const channels: FakeChannel[] = [];
     class FakeChannel {
@@ -370,6 +393,8 @@ describe('RadarTileService', () => {
     const ch = channels[0];
     expect(ch.name).toBe('gsoc-radar-budget');
     for (let i = 0; i < 79; i++) ch.onmessage!({ data: { start: T0 } }); // another tab's minute
+    // Relayed to the main thread, so a restarted worker is seeded with them.
+    expect(h.starts()).toEqual(Array(79).fill(0));
     h.svc.handle({ type: 'tile', req: req(1) });
     await clock.advance(0);
     // Our request, and the 429 it got, go out to the other tabs.

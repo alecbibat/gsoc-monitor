@@ -270,10 +270,13 @@ export function Scrubber({ timeline }: { timeline: TimelineFrame[] }) {
   const busy = coolingDownMs > 0;
   const loading = head.total > 0 && head.ready < head.total;
   const at = (i: number) => (n > 1 ? (i / (n - 1)) * 100 : 0);
-  // Forecast hatching for a strip starting at frame position i, its stripes
-  // lined up with the track's so neighbouring strips continue them.
+  // Forecast hatching for a strip starting at frame position i: one
+  // track-wide tile shifted back to the track's origin, so neighbouring
+  // strips continue the same stripes (a gradient tile would otherwise be each
+  // strip's own size and seam mid-strip).
   const hatchFrom = (i: number) => ({
     backgroundImage: FORECAST_HATCH,
+    backgroundSize: trackW > 0 ? `${trackW}px 100%` : undefined,
     backgroundPosition: `${-(at(i) / 100) * trackW}px 0`,
   });
 

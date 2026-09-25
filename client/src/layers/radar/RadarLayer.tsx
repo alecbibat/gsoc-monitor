@@ -63,7 +63,7 @@ export function RadarLayer() {
   const palette = useRadarStore((s) => s.palette);
   const speed = useRadarStore((s) => s.speed);
   const snow = useRadarStore((s) => s.snow);
-  const manifestAt = useRadarStore((s) => s.manifestAt);
+  const polledAt = useRadarStore((s) => s.polledAt);
   const engineRef = useRef<RadarEngine | null>(null);
   const refetchRef = useRef<() => void>(() => {});
   const activatedAtRef = useRef(0);
@@ -145,19 +145,26 @@ export function RadarLayer() {
     };
   }, [active]);
 
+  // Stamp real (re)activations only, not a viewer rebuild after context loss.
   useEffect(() => {
     if (active) activatedAtRef.current = Date.now();
-    else useRadarStore.getState().setTilesFailing(false);
+  }, [active]);
+
+  useEffect(() => {
+    if (!active) useRadarStore.getState().setTilesFailing(false);
     engineRef.current?.setActive(active);
   }, [viewer, active]);
 
   useEffect(() => {
     if (!active || !host) return;
-    // Switched back on after a while off: wait for this activation's
-    // manifest rather than asking for frames that may have expired upstream.
-    if (manifestAt < activatedAtRef.current && Date.now() - manifestAt > POLL_MS) return;
+    // Switched back on after a while off: wait for this activation's first
+    // manifest fetch rather than asking for frames that may have expired
+    // upstream. If that fetch fails, show the frames we have (expired ones
+    // come back "gone" and prompt a refetch).
+    const { manifestAt } = useRadarStore.getState();
+    if (polledAt < activatedAtRef.current && Date.now() - manifestAt > POLL_MS) return;
     engineRef.current?.setTimeline(host, timeline);
-  }, [viewer, active, host, timeline, manifestAt]);
+  }, [viewer, active, host, timeline, polledAt]);
 
   useEffect(() => {
     engineRef.current?.updateSettings({ opacity, palette, speed, snow });
