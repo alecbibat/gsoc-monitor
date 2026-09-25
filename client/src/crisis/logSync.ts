@@ -1,5 +1,6 @@
 import { useCrisisStore, type ActionLogEntry, type Incident } from './crisisStore';
 import { entryCanon } from './syncCanon';
+import { noteSaveStatus } from './syncHealth';
 
 // ── Action-log sync engine ───────────────────────────────────────────────────
 // The action log does NOT ride the incident blob's last-write-wins PUT: two
@@ -155,6 +156,8 @@ function postEntry(incidentId: string, entry: ActionLogEntry) {
     body: JSON.stringify(entry),
   })
     .then((res) => {
+      // 401 = signed out (the retry keeps going; the operator is told).
+      noteSaveStatus(res.status);
       if (!res.ok) throw new Error(String(res.status));
       inflight.delete(entry.id);
       // A delete clicked while this append was in flight was deferred — honor
@@ -223,6 +226,7 @@ function firePatch(incidentId: string, entryId: string, keepalive = false) {
   })
     .then((res) => {
       patchInflight.delete(entryId);
+      noteSaveStatus(res.status);
       if (res.ok) {
         baselines.get(incidentId)?.set(entryId, sentCanon);
         resyncEntry(incidentId, entryId);
@@ -288,6 +292,7 @@ function deleteEntry(incidentId: string, entryId: string, canon: string) {
   })
     .then((res) => {
       settle();
+      noteSaveStatus(res.status);
       // 404: the incident itself is gone — nothing left to delete.
       if (res.ok || res.status === 404) {
         quietIfIdle();

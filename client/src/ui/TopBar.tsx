@@ -339,6 +339,9 @@ function ScreenshotButton() {
   const capture = () => {
     if (!viewer) return;
     try {
+      // requestRenderMode skips frames nothing asked for — without the
+      // request, render() can leave a blank buffer to copy.
+      viewer.scene.requestRender();
       viewer.render();
       const src = viewer.canvas;
       const c = document.createElement('canvas');

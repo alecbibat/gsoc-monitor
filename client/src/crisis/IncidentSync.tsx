@@ -15,6 +15,7 @@ import * as logSync from './logSync';
 import { inflightChecklistIds, mergeChecklists } from './checklistSync';
 import type { ChecklistStateMap } from './checklistTemplate';
 import { useTemplatesStore } from './templates/templatesStore';
+import { noteSaveStatus, useSyncHealth } from './syncHealth';
 
 // Admin-edited checklist / intake templates: fetched on sign-in, re-fetched
 // when an admin saves (the stream's `templates` event) and after a reconnect
@@ -126,6 +127,7 @@ function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
   })
     .then(async (res) => {
       if (!res.ok) throw Object.assign(new Error(String(res.status)), { status: res.status });
+      noteSaveStatus(res.status);
       if (isCreate) {
         // Baseline the log from the server's RESPONSE, not from what we sent:
         // if this POST hit the upsert path (retry after a lost response, or
@@ -152,6 +154,9 @@ function pushIncident(incident: Incident, method: 'POST' | 'PUT') {
     })
     .catch((e) => {
       const status = (e as { status?: number }).status;
+      // Signed out: the retry below keeps going, and succeeds once the
+      // operator signs in again (any tab), but they have to be told.
+      if (status === 401) noteSaveStatus(401);
       if (method === 'PUT' && status === 404) {
         // The row is gone: a teammate deleted the incident while this edit
         // was queued. Recreating it would undo their delete.
@@ -249,9 +254,13 @@ const publicCanon = (inc: Incident) =>
   stableStringify({ ...extractPublicState(inc), lastUpdated: undefined, publishedAt: undefined, checklists: undefined })!;
 
 function activeShareTokens(inc: Incident): string[] {
-  const tokens = (inc.shareLinks ?? []).filter((l) => l.active).map((l) => l.token);
-  // Legacy fallback: if shareToken set but shareLinks not yet populated
-  if (tokens.length === 0 && inc.shareToken) tokens.push(inc.shareToken);
+  const links = inc.shareLinks ?? [];
+  // Every un-revoked link, whatever this client's clock says about expiry:
+  // the server decides that, and a renewed link must not be skipped here.
+  const tokens = links.filter((l) => l.active).map((l) => l.token);
+  // Legacy fallback: shareToken set but shareLinks never populated. Once any
+  // link exists the legacy token is either among them or was revoked.
+  if (links.length === 0 && inc.shareToken) tokens.push(inc.shareToken);
   return tokens;
 }
 
@@ -331,6 +340,9 @@ export function IncidentSync() {
     if (!user || loaded.current) return;
     loaded.current = true;
     let delay = 5_000;
+    // 'loading' until the first attempt settles; 'error' from a failure until
+    // a retry lands — the list must not read as "no incidents" meanwhile.
+    useSyncHealth.getState().setLoadState('loading');
     const load = () => {
     // Re-armed per attempt; SSE upserts that land between attempts are kept
     // by the merge below (anything already in the store wins).
@@ -360,9 +372,11 @@ export function IncidentSync() {
         }
         for (const inc of byId.values()) merged.push(inc); // local-only, in store order
         setIncidents(merged);
+        useSyncHealth.getState().setLoadState('ready');
       })
       .catch((e) => {
         console.error('[incident-sync] initial load failed:', e);
+        useSyncHealth.getState().setLoadState('error');
         // Guarded on the signed-in user rather than effect cleanup: loaded
         // makes this effect run once, so a cleared timer would never re-arm.
         setTimeout(() => { if (useAuthStore.getState().user) load(); }, delay);
@@ -675,9 +689,14 @@ export function IncidentSync() {
     const onVisibility = () => { if (document.visibilityState === 'hidden') flushAll(); };
     // A save that already FAILED can't be rescued by the flush (the server is
     // what's failing), so ask before the tab closes on it rather than losing
-    // it silently. Debounced edits don't prompt: the flush beacons them.
+    // it silently. Debounced edits don't prompt: the flush beacons them —
+    // unless the sign-in lapsed, when the beacon would be refused too.
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (retries.size === 0 && useCrisisStore.getState().syncState !== 'error') return;
+      if (
+        retries.size === 0 &&
+        useCrisisStore.getState().syncState !== 'error' &&
+        !useSyncHealth.getState().authLapsed
+      ) return;
       e.preventDefault();
       e.returnValue = '';
     };
@@ -690,6 +709,33 @@ export function IncidentSync() {
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [user]);
+
+  // Only a save's 2xx clears the signed-out notice, so a lapse flagged by a
+  // path with no retry of its own (a checklist toggle's 401 is final) — or a
+  // 401 that landed after a newer success — would outlive the operator
+  // signing in again from another tab, and keep the unload prompt armed.
+  // While it is up, re-check the session when this tab regains focus, and
+  // every 30 s.
+  const authLapsed = useSyncHealth((s) => s.authLapsed);
+  useEffect(() => {
+    if (!user || !authLapsed) return;
+    let disposed = false;
+    const probe = () => {
+      fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' })
+        .then((r) => { if (!disposed && r.ok) useSyncHealth.getState().setAuthLapsed(false); })
+        .catch(() => { /* offline: the next probe (or save) tells */ });
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') probe(); };
+    const timer = setInterval(probe, 30_000);
+    window.addEventListener('focus', probe);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+      window.removeEventListener('focus', probe);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [user, authLapsed]);
 
   return null;
 }

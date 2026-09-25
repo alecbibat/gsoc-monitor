@@ -161,3 +161,21 @@ describe('logSync retry', () => {
     expect(syncState(m)).toBe('saved');
   });
 });
+
+describe('logSync sign-in lapse', () => {
+  it('a 401 raises the signed-out notice; the retry that lands clears it', async () => {
+    const m = await load();
+    const { useSyncHealth } = await import('./syncHealth');
+    fetchMock.mockImplementationOnce(() => status(401)).mockImplementation(ok);
+    seed(m, [entry('a')], [])();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useSyncHealth.getState().authLapsed).toBe(true);
+    expect(syncState(m)).toBe('error');
+
+    // Signed in again elsewhere: the retry goes through and the notice clears.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(methods()).toEqual(['POST', 'POST']);
+    expect(useSyncHealth.getState().authLapsed).toBe(false);
+    expect(syncState(m)).toBe('saved');
+  });
+});

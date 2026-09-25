@@ -1,5 +1,15 @@
 import { extractPublicState, type Incident } from './crisisStore';
 
+const PUBLISH_TIMEOUT_MS = 15_000;
+
+// AbortSignal.timeout with a fallback for engines that predate it (pre-2022).
+function timeoutSignal(ms: number): AbortSignal {
+  if (typeof AbortSignal.timeout === 'function') return AbortSignal.timeout(ms);
+  const c = new AbortController();
+  setTimeout(() => c.abort(), ms);
+  return c.signal;
+}
+
 /**
  * Push an incident's current public state to all of its active share links.
  *
@@ -26,9 +36,10 @@ export function publishShareSnapshots(inc: Incident): void {
  * Resolves true when every active link accepted the snapshot.
  */
 export async function publishShareSnapshotsAndWait(inc: Incident): Promise<boolean> {
-  const tokens = (inc.shareLinks ?? []).filter((l) => l.active).map((l) => l.token);
+  const links = inc.shareLinks ?? [];
+  const tokens = links.filter((l) => l.active).map((l) => l.token);
   // Legacy fallback: shareToken set but shareLinks never populated.
-  if (tokens.length === 0 && inc.shareToken) tokens.push(inc.shareToken);
+  if (links.length === 0 && inc.shareToken) tokens.push(inc.shareToken);
   if (tokens.length === 0) return true;
 
   const body = JSON.stringify(extractPublicState(inc));
@@ -38,6 +49,9 @@ export async function publishShareSnapshotsAndWait(inc: Incident): Promise<boole
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body,
+        // A stalled request (satellite, lodge Wi-Fi) must not hold up the
+        // caller forever; it counts as a failed publish.
+        signal: timeoutSignal(PUBLISH_TIMEOUT_MS),
       }).then((res) => {
         if (!res.ok) {
           console.warn(`[crisis] lifecycle publish failed (${res.status}) for share ${token}`);

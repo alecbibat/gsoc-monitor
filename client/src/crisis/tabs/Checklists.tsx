@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { useActiveIncident } from '../crisisStore';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useActiveIncident, type Incident } from '../crisisStore';
 import { useAuthStore } from '../../auth/authStore';
 import { preferredChecklistRole } from '../checklistTemplate';
 import { toggleChecklistItem } from '../checklistSync';
@@ -32,6 +32,14 @@ function rememberRole(roleId: string): void {
   try { localStorage.setItem(ROLE_KEY, roleId); } catch { /* storage unavailable */ }
 }
 
+/** The last toggle that failed for good (already rolled back by checklistSync). */
+interface ToggleFailure {
+  itemId: string;
+  checked: boolean;
+  message: string;
+  retryable: boolean;
+}
+
 export function ChecklistsTab() {
   const inc = useActiveIncident();
   const user = useAuthStore((s) => s.user);
@@ -56,8 +64,36 @@ export function ChecklistsTab() {
     [template, inc?.assignments, user?.name, user?.email]
   );
 
+  // Toggle failures show here, not on the global sync indicator: its "will
+  // retry" is kept by the blob/log engines, while a toggle failure is final
+  // once reported (the flip is already rolled back). Cleared by the next
+  // successful toggle and on switching incidents; a result that lands after
+  // the switch belongs to the other incident and is dropped.
+  const [chkError, setChkError] = useState<ToggleFailure | null>(null);
+  const incId = inc?.id;
+  const incIdRef = useRef(incId);
+  incIdRef.current = incId;
+  useEffect(() => { setChkError(null); }, [incId]);
+
+  const toggle = (target: Incident, itemId: string, checked: boolean) => {
+    void toggleChecklistItem(target, itemId, checked).then((r) => {
+      if (incIdRef.current !== target.id) return;
+      if (r.ok) setChkError(null);
+      else if (!r.superseded) setChkError({ itemId, checked, message: r.message, retryable: r.retryable });
+    });
+  };
+
   if (!inc) return null;
   const frozen = !!inc.archivedAt;
+  const itemText = (itemId: string): string => {
+    for (const role of template?.roles ?? []) {
+      for (const phase of role.phases) {
+        const item = phase.items.find((i) => i.id === itemId);
+        if (item) return item.text;
+      }
+    }
+    return itemId;
+  };
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -77,13 +113,32 @@ export function ChecklistsTab() {
         <EditTemplatesButton section="checklists" incidentType={typeId} propertyId={propertyId} />
       </div>
       <TemplatesLoadState what="checklists" status={status} error={error} hasTemplate={!!template} reload={reload} />
+      {chkError && (
+        <div
+          role="alert"
+          className="mb-3 flex items-start gap-3 rounded border border-red-400/25 bg-red-400/8 px-3 py-2 text-[11px] text-red-300/90"
+        >
+          <p className="min-w-0 flex-1">
+            Couldn’t save “{itemText(chkError.itemId)}” — {chkError.message}
+          </p>
+          {chkError.retryable && !frozen && (
+            <button
+              type="button"
+              onClick={() => toggle(inc, chkError.itemId, chkError.checked)}
+              className="shrink-0 rounded border border-red-300/30 px-2 py-0.5 text-[10px] text-red-200/90 transition hover:border-red-300/60"
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      )}
       {template && (
         <ChecklistBoard
           // Remount per incident so the board re-opens on the viewer's role there.
           key={inc.id}
           template={template}
           state={checklists ?? {}}
-          onToggle={(itemId, checked) => toggleChecklistItem(inc, itemId, checked)}
+          onToggle={(itemId, checked) => toggle(inc, itemId, checked)}
           disabled={frozen}
           preferredRoleId={preferredRoleId}
           onRoleChange={rememberRole}

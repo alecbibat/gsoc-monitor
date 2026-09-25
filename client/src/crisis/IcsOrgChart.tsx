@@ -8,6 +8,7 @@ import {
   type PersonnelMember,
   IC_COLOR, CMD_COLOR, OPS_COLOR, PLAN_COLOR, LOG_COLOR, FIN_COLOR,
 } from './crisisStore';
+import { useEscapeLayer } from './escapeLayers';
 
 // Renders a person's title + clickable phone/email beneath their name. Shared by
 // the personnel pool and the role edit panel so contact info displays uniformly.
@@ -891,8 +892,9 @@ function PersonnelPool() {
     if (adding) nameRef.current?.focus();
   }, [adding]);
 
-  // Esc cancels the form, not the whole crisis workspace (the overlay closes
-  // on any Escape that reaches window).
+  // Esc cancels just the form. Left to reach the overlay's window listener it
+  // would take a different step instead (open layer → leave the field →
+  // incident to list → close; see escapeLayers.ts).
   const handleFormKeyDown = (e: React.KeyboardEvent) => {
     if (e.key !== 'Escape') return;
     e.stopPropagation();
@@ -1194,9 +1196,11 @@ function EditPanel({ roleId, onClose, docked }: {
   const removeHintId = `${poolListId}-remove`;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Esc backs out of the panel, not the whole crisis workspace (the overlay
-    // closes on any Escape that reaches window) — or first out of the
-    // sub-role form, if that's open.
+    // Esc backs out of the sub-role form if that's open, else the panel.
+    // Claimed here so the overlay's window listener doesn't take its own step
+    // (open layer → leave the field → incident to list → close; see
+    // escapeLayers.ts). With focus outside the panel, the chart's Esc layer
+    // closes it instead.
     if (e.key !== 'Escape') return;
     e.stopPropagation();
     if (addingChild) setAddingChild(false);
@@ -1740,6 +1744,9 @@ export function IcsOrgChart() {
   const handleSelect = (id: string) => {
     setSelectedId((prev) => (prev === id ? null : id));
   };
+  // Esc closes the role panel even when focus is on a card (or anywhere else)
+  // outside it — the panel's own keydown handler only sees Esc from inside.
+  useEscapeLayer(!!selectedId, () => setSelectedId(null));
   const handleRemoved = useCallback((id: string) => {
     setSelectedId((prev) => (prev === id ? null : prev));
   }, []);

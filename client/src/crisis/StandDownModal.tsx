@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useCrisisStore, extractPublicState, type Incident, type ShareLink } from './crisisStore';
+import {
+  useCrisisStore, endIsStaleStandDownStamp, extractPublicState, type Incident, type ShareLink,
+} from './crisisStore';
 import { isExpiredLink } from './shareLinkStatus';
+import { fromLocalInput, nowForInput, toLocalInput } from './localDateTime';
 
 // ── Stand-down checklist (roadmap F3) ────────────────────────────────────────
 // Stand-down is an orchestrated sequence, not a status write:
@@ -117,6 +120,19 @@ export function StandDownModal({
   const openAssignments = incident.assignments.filter((a) => !a.endedAt).length;
 
   const [reason, setReason] = useState('');
+  // "Incident ended at": the operator's End, or now when End is blank or still
+  // the automatic stamp of an earlier stand-down (the incident was reopened
+  // since, so it didn't end then). Left untouched, the field follows the live
+  // incident (a peer may set End while this is open), nothing is passed, and
+  // standDownIncident applies that same rule at completion — which keeps the
+  // log's endAuto flag, so a later reopen + stand-down re-stamps it again.
+  const autoEnd = !incident.incidentEndDatetime || endIsStaleStandDownStamp(incident);
+  const [openedAt] = useState(nowForInput);
+  const [endDraft, setEndDraft] = useState<string | null>(null); // null until the operator edits it
+  const endInput = endDraft ?? toLocalInput(autoEnd ? openedAt : incident.incidentEndDatetime);
+  const startInput = toLocalInput(incident.incidentDatetime);
+  const endBeforeStart = !!endInput && !!incident.incidentDatetime &&
+    Date.parse(fromLocalInput(endInput)) < Date.parse(fromLocalInput(startInput));
   const [busy, setBusy] = useState(false);
   const [steps, setSteps] = useState<StepState[] | null>(null);
   const [revokeTotal, setRevokeTotal] = useState(0);
@@ -155,7 +171,13 @@ export function StandDownModal({
     if (busy) return;
     setBusy(true);
     const now = new Date().toISOString();
-    const finalInc: Incident = { ...incident, incidentStatus: 'closed', archivedAt: now };
+    const endAt = endDraft !== null ? fromLocalInput(endDraft) || undefined : undefined;
+    const finalInc: Incident = {
+      ...incident,
+      incidentStatus: 'closed',
+      archivedAt: now,
+      incidentEndDatetime: endAt ?? (autoEnd ? now : incident.incidentEndDatetime),
+    };
     const links = activeLinks;
     const publishTokens = links.map((l) => l.token);
     // Legacy fallback: shareToken set but shareLinks never populated.
@@ -196,7 +218,7 @@ export function StandDownModal({
       )));
       // 3. Close out the incident itself, whatever happened to the links.
       update(2, { status: 'running' });
-      standDownIncident(incident.id, reason);
+      standDownIncident(incident.id, reason, endAt);
       update(2, { status: 'done' });
       setBusy(false);
     }
@@ -254,6 +276,27 @@ export function StandDownModal({
               value={reason}
               onChange={(e) => setReason(e.target.value)}
             />
+            <label
+              htmlFor="stand-down-ended-at"
+              className="mt-3 block text-[10px] font-semibold uppercase tracking-wider text-white/35"
+            >
+              Incident ended at <span className="font-normal normal-case text-white/25">(the report's End and Duration)</span>
+            </label>
+            <input
+              id="stand-down-ended-at"
+              type="datetime-local"
+              className="mt-1.5 w-full rounded border border-white/10 bg-white/6 px-2.5 py-1.5 text-[12px] text-white/85 outline-none focus:border-white/25"
+              value={endInput}
+              min={startInput || undefined}
+              onChange={(e) => setEndDraft(e.target.value)}
+              aria-invalid={endBeforeStart || undefined}
+              aria-describedby={endBeforeStart ? 'stand-down-ended-at-error' : undefined}
+            />
+            {endBeforeStart && (
+              <p id="stand-down-ended-at-error" className="mt-1 text-[10px] text-red-300/85">
+                The end can't be before the incident's start.
+              </p>
+            )}
             <div className="mt-4 flex justify-end gap-2">
               <button
                 onClick={onClose}
@@ -263,7 +306,7 @@ export function StandDownModal({
               </button>
               <button
                 onClick={run}
-                disabled={busy}
+                disabled={busy || endBeforeStart}
                 className="rounded border border-amber-500/40 bg-amber-500/12 px-4 py-1.5 text-[11px] font-semibold text-amber-300 transition hover:border-amber-500/60 hover:bg-amber-500/20 disabled:opacity-40"
               >
                 Stand Down

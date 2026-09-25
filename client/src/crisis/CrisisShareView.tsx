@@ -1187,7 +1187,7 @@ export function CrisisShareView({ token }: { token: string }) {
             </div>
             <Suspense
               fallback={
-                <div className="grid h-[72vh] min-h-[440px] w-full place-items-center rounded-lg border border-white/10 bg-ink-950/60">
+                <div className="grid h-[60vh] min-h-[360px] w-full place-items-center rounded-lg border border-white/10 bg-ink-950/60 sm:h-[72vh] sm:min-h-[440px]">
                   <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-accent" />
                 </div>
               }

@@ -421,6 +421,20 @@ export function assignmentRoleTitle(
   );
 }
 
+/**
+ * True when the incident's End is still the automatic stamp of an earlier
+ * stand-down (its latest 'stood-down' entry recorded endAuto for this very
+ * End). The incident was reopened since, so it didn't end then: a new
+ * stand-down treats that End like a blank one.
+ */
+export function endIsStaleStandDownStamp(inc: Pick<Incident, 'incidentEndDatetime' | 'actionLog'>): boolean {
+  if (!inc.incidentEndDatetime) return false;
+  const lastDown = inc.actionLog
+    .filter((e) => e.system === 'stood-down')
+    .reduce<ActionLogEntry | undefined>((m, e) => (!m || e.timestamp > m.timestamp ? e : m), undefined);
+  return lastDown?.meta?.endAuto === 'true' && lastDown.meta.endedAt === inc.incidentEndDatetime;
+}
+
 const COMPLEXITY_LABEL = (c: ComplexityType | null | undefined) =>
   COMPLEXITY_TYPES.find((t) => t.id === c)?.label ?? 'unset';
 
@@ -714,11 +728,7 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
             // (endAuto): a stamp from an earlier stand-down means the incident
             // was reopened since — it didn't end then — so it is re-stamped
             // like a blank one.
-            const lastDown = inc.actionLog
-              .filter((e) => e.system === 'stood-down')
-              .reduce<ActionLogEntry | undefined>((m, e) => (!m || e.timestamp > m.timestamp ? e : m), undefined);
-            const staleStamp = !!inc.incidentEndDatetime &&
-              lastDown?.meta?.endAuto === 'true' && lastDown.meta.endedAt === inc.incidentEndDatetime;
+            const staleStamp = endIsStaleStandDownStamp(inc);
             const givenEnd = endAt && !Number.isNaN(Date.parse(endAt)) ? endAt : '';
             const endAuto = !givenEnd && (!inc.incidentEndDatetime || staleStamp);
             const endedAt = givenEnd || (endAuto ? now : inc.incidentEndDatetime);
@@ -992,7 +1002,34 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
           return { ...inc, roles: [...inc.roles, ...toAdd] };
         })),
 
-      resetRoles: () => set((s) => patchActiveEditable(s, (inc) => ({ ...inc, roles: DEFAULT_ROLES }))),
+      // Back to the standard chart. Custom roles go, but never the people on
+      // them: the chart refuses a reset while anyone sits in one, yet a peer's
+      // assignment can land after the confirm. Those are released (ended), not
+      // deleted — like removeRole, the assignment is the AAR's staffing record.
+      resetRoles: () =>
+        set((s) => patchActiveEditable(s, (inc) => {
+          const builtin = new Set(DEFAULT_ROLES.map((r) => r.id));
+          const now = new Date().toISOString();
+          let n = 0;
+          const assignments = inc.assignments.map((a) => {
+            if (a.endedAt || builtin.has(a.roleId)) return a;
+            n++;
+            return { ...a, endedAt: now };
+          });
+          return {
+            ...inc,
+            roles: DEFAULT_ROLES,
+            assignments: n ? assignments : inc.assignments,
+            actionLog: [
+              sysEntry(
+                'role-removed',
+                `ICS org chart reset to defaults${n ? ` — ${n} assignment${n === 1 ? '' : 's'} released` : ''}`,
+                { reset: 'true', releasedAssignments: String(n) }
+              ),
+              ...inc.actionLog,
+            ],
+          };
+        })),
 
       assignRole: (roleId, name, details, personnelId) =>
         set((s) => patchActiveEditable(s, (inc) => {
@@ -1227,11 +1264,16 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
         return id;
       },
 
+      // New positions without a new thumbnail drop the old one: it would keep
+      // showing the previous shape until the next capture.
       updateDrawLayer: (id, patch) =>
-        set((s) => patchLayerOwner(s, id, (inc) => ({
-          ...inc,
-          drawLayers: inc.drawLayers.map((l) => (l.id === id ? { ...l, ...patch } : l)),
-        }))),
+        set((s) => patchLayerOwner(s, id, (inc) => {
+          const next = 'positions' in patch && !('thumbnail' in patch) ? { ...patch, thumbnail: undefined } : patch;
+          return {
+            ...inc,
+            drawLayers: inc.drawLayers.map((l) => (l.id === id ? { ...l, ...next } : l)),
+          };
+        })),
 
       removeDrawLayer: (id) =>
         set((s) => ({

@@ -6,6 +6,7 @@ import {
 import { incidentStatusDef, incidentTypeDef } from './taxonomy';
 import { StandDownModal } from './StandDownModal';
 import { DeleteIncidentDialog } from './DeleteIncidentDialog';
+import { SyncIndicator } from './SyncIndicator';
 import { useAuthStore } from '../auth/authStore';
 import { useIsMobile } from '../ui/useIsMobile';
 import {
@@ -375,26 +376,6 @@ function ShareLinksPanel({ readOnly = false }: { readOnly?: boolean }) {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// ── Save-status indicator ──────────────────────────────────────────────────────
-
-function SyncIndicator() {
-  const syncState = useCrisisStore((s) => s.syncState);
-  if (syncState === 'idle') return null;
-
-  const cfg = {
-    saving: { dot: 'bg-amber-400', text: 'text-white/45', label: 'Saving…', pulse: true },
-    saved:  { dot: 'bg-green-500', text: 'text-white/40', label: 'All changes saved', pulse: false },
-    error:  { dot: 'bg-red-500',   text: 'text-red-400/80', label: 'Unsaved — will retry', pulse: true },
-  }[syncState];
-
-  return (
-    <div className="flex items-center gap-1.5 text-[10px]" title={cfg.label} aria-live="polite">
-      <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot} ${cfg.pulse ? 'animate-pulse' : ''}`} />
-      <span className={`hidden sm:inline ${cfg.text}`}>{cfg.label}</span>
     </div>
   );
 }
@@ -822,9 +803,14 @@ function IncidentListShell() {
             <div className="text-[14px] font-semibold text-white/90">Incident Dashboard</div>
           </div>
         </div>
+        {/* The last edit before "back to list" saves (or fails) out here,
+            and a lapsed sign-in must be seen from the list too. */}
+        <div className="ml-auto">
+          <SyncIndicator />
+        </div>
         <button
           onClick={close}
-          className="ml-auto flex items-center gap-1.5 rounded border border-white/12 px-2.5 py-1.5 text-[11px] text-white/50 transition hover:border-white/22 hover:text-white sm:px-3"
+          className="flex items-center gap-1.5 rounded border border-white/12 px-2.5 py-1.5 text-[11px] text-white/50 transition hover:border-white/22 hover:text-white sm:px-3"
           aria-label="Close"
           title="Close the crisis workspace"
         >

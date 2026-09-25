@@ -423,8 +423,9 @@ router.post('/share/:token/checklist/:itemId', wrap(async (req: Request, res: Re
   const body = req.body as { checked: boolean; by?: unknown };
   // A signed-in viewer's account name outranks the self-typed one the share
   // page used to rely on: the toggle lands in the incident's audit trail, and
-  // an attested identity is worth more there than a text box.
-  const by = (gate.via === 'session' ? gate.viewer.name : null) ?? cleanActor(body.by) ?? 'Share viewer';
+  // an attested identity is worth more there than a text box. Both go through
+  // cleanActor: a blank or control-character account name falls through.
+  const by = cleanActor(gate.via === 'session' ? gate.viewer.name : undefined) ?? cleanActor(body.by) ?? 'Share viewer';
   const result = await applyChecklistToggle(row.incident_id, itemId, body.checked, by);
   if (!result.ok) { res.status(result.status).json({ error: result.error }); return; }
   if (result.changed) {

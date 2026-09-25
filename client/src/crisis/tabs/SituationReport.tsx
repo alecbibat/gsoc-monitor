@@ -50,13 +50,19 @@ function FieldRow({ label, children }: { label: string; children: React.ReactNod
   );
 }
 
-function TextInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+function TextInput({ value, onChange, placeholder, autoFocus }: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  autoFocus?: boolean;
+}) {
   return (
     <input
       className="flex-1 rounded border border-white/10 bg-white/10 px-2.5 py-1.5 text-[12px] text-white/85 placeholder-white/30 outline-none transition focus:border-white/25 focus:bg-white/15"
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
+      autoFocus={autoFocus}
     />
   );
 }
@@ -220,7 +226,9 @@ function CoordImportPanel({ layer, onClose }: { layer: DrawLayer; onClose: () =>
 // ── Map Layers section ────────────────────────────────────────────────────────
 
 // Rendered in the crisis workspace's live-map dock (CrisisOverlay's MapDock),
-// directly under the map it edits — sized for that narrow column.
+// directly under the map it edits — sized for that narrow column. Without the
+// dock (phones, or the Map toggle off) it renders under the Situation Report
+// tab instead; only one copy is ever mounted.
 export function MapLayersSection() {
   const inc = useActiveIncident();
   const addDrawLayer    = useCrisisStore((s) => s.addDrawLayer);
@@ -704,7 +712,12 @@ export function SituationReport() {
           <h3 className="mb-2.5 text-[13px] font-bold uppercase tracking-[0.14em] text-white/65">Incident Information</h3>
           <div className="space-y-2.5 rounded-lg border border-white/12 bg-white/8 p-4">
             <FieldRow label="Name">
-              <TextInput value={inc.incidentName} onChange={(v) => update({ incidentName: v })} placeholder="e.g. Maui Wildfire Complex" />
+              <TextInput
+                value={inc.incidentName}
+                onChange={(v) => update({ incidentName: v })}
+                placeholder="e.g. Maui Wildfire Complex"
+                autoFocus={!inc.incidentName}
+              />
             </FieldRow>
 
             {/* Stored as UTC instants so every responder's clock reads the
@@ -816,7 +829,7 @@ export function SituationReport() {
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/65">ICS / NIMS Organizational Structure</h3>
             <span className="text-[11px] text-white/40">
-              {isArchived ? 'Frozen — final structure at stand-down' : 'Click any role to assign personnel or edit'}
+              {isArchived ? 'Frozen — final structure at stand-down' : 'Click a role to edit · drag to reorganize'}
             </span>
           </div>
           <div className="rounded-lg border border-white/8 bg-ink-950/60 px-6 py-5">
@@ -829,7 +842,8 @@ export function SituationReport() {
       <ActionLog />
 
       {/* Share-map live layers. The drawn-layer toolkit (Map Layers) lives in
-          the workspace's live-map dock, next to the map it edits. */}
+          the workspace's live-map dock, next to the map it edits — or, without
+          the dock (phones / Map toggled off), under this tab (CrisisOverlay). */}
       <fieldset disabled={isArchived} className="m-0 min-w-0 border-0 p-0">
         <LiveLayersSection />
       </fieldset>

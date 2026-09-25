@@ -9,6 +9,7 @@ import { useAuthStore } from '../auth/authStore';
 import { CrisisReportModal } from './CrisisReportModal';
 import { DeleteIncidentDialog } from './DeleteIncidentDialog';
 import { hasLiveShare, shareLinkHealth, useNow } from './shareLinkStatus';
+import { useSyncHealth } from './syncHealth';
 import {
   aarProgress, fmtAgo, incidentPropertyLabel, lastActivityAt, localDateKey, staffedCount,
 } from './incidentSummary';
@@ -435,6 +436,13 @@ export function IncidentList() {
 
   const activeCount = active.filter((i) => i.incidentStatus === 'active').length;
 
+  // Until the initial load lands (it retries with backoff), an empty list
+  // means "not loaded", not "no incidents" — inviting the operator to start
+  // one would invite a duplicate. New Incident stays available regardless.
+  const loadState = useSyncHealth((s) => s.loadState);
+  const notLoaded = loadState !== 'ready' && incidents.length === 0;
+  const notLoadedText = loadState === 'error' ? 'Can’t reach the server — retrying…' : 'Loading incidents…';
+
   return (
     <div className="mx-auto max-w-5xl">
       {/* Active section header */}
@@ -442,9 +450,11 @@ export function IncidentList() {
         <div>
           <h2 className="text-[16px] font-semibold text-white/90">Incidents</h2>
           <p className="mt-0.5 text-[11px] text-white/40">
-            {active.length === 0
-              ? 'No active incidents'
-              : `${active.length} total · ${activeCount} active`}
+            {notLoaded
+              ? notLoadedText
+              : active.length === 0
+                ? 'No active incidents'
+                : `${active.length} total · ${activeCount} active`}
           </p>
         </div>
         <button
@@ -460,7 +470,22 @@ export function IncidentList() {
       </div>
 
       {/* Active grid */}
-      {active.length === 0 ? (
+      {notLoaded ? (
+        <div
+          role="status"
+          className="flex w-full flex-col items-center justify-center rounded-xl border border-dashed border-white/15 bg-white/3 py-16 text-center"
+        >
+          {loadState === 'error' ? (
+            <p className="text-[13px] font-medium text-amber-300/80">{notLoadedText}</p>
+          ) : (
+            <>
+              <div className="mb-3 h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-accent" />
+              <p className="text-[13px] font-medium text-white/60">{notLoadedText}</p>
+            </>
+          )}
+          <p className="mt-1 text-[11px] text-white/30">Existing incidents appear here once the server answers</p>
+        </div>
+      ) : active.length === 0 ? (
         <button
           onClick={() => setPickerOpen(true)}
           className="flex w-full flex-col items-center justify-center rounded-xl border border-dashed border-white/15 bg-white/3 py-16 text-center transition hover:border-white/30 hover:bg-white/5"

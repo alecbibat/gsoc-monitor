@@ -1,5 +1,6 @@
 import { useCrisisStore, type Incident } from './crisisStore';
 import { foldChecklistResponse, isChecklistStateMap, type ChecklistStateMap } from './checklistTemplate';
+import { noteSaveStatus } from './syncHealth';
 
 // ── Checklist toggle sync (editor side) ──────────────────────────────────────
 //
@@ -85,6 +86,8 @@ async function postToggle(incidentId: string, itemId: string, checked: boolean):
   } catch {
     return { ok: false, status: null, error: null };
   }
+  // A 401 also raises the app-wide "signed out" notice (syncHealth.ts).
+  noteSaveStatus(res.status);
   const body = (await res.json().catch(() => null)) as { checklists?: unknown; error?: unknown } | null;
   if (res.ok && body && isChecklistStateMap(body.checklists)) return { ok: true, checklists: body.checklists };
   return {
