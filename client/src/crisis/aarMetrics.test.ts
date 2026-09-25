@@ -31,6 +31,44 @@ describe('computeAarMetrics', () => {
     expect(computeAarMetrics(inc).durationMs).toBe(10 * H);
   });
 
+  it('measures to the End time when one is set, not the later stand-down', () => {
+    // Ended at +6h, stood down the next shift at +30h.
+    const inc = makeIncident({ createdAt: at(0), incidentDatetime: at(0), incidentEndDatetime: at(6), archivedAt: at(30) });
+    const m = computeAarMetrics(inc);
+    expect(m.durationMs).toBe(6 * H);
+    expect(m.durationBasis).toBe('end');
+  });
+
+  it('ignores an End earlier than the start (a typo, not a span)', () => {
+    const inc = makeIncident({ createdAt: at(0), incidentDatetime: at(5), incidentEndDatetime: at(1), archivedAt: at(9) });
+    const m = computeAarMetrics(inc);
+    expect(m.durationMs).toBe(4 * H);
+    expect(m.durationBasis).toBe('stand-down');
+  });
+
+  it('measures an open incident with no End to now', () => {
+    const inc = makeIncident({ incidentDatetime: new Date(Date.now() - 2 * H).toISOString(), incidentEndDatetime: '' });
+    const m = computeAarMetrics(inc);
+    expect(m.durationBasis).toBe('now');
+    expect(Math.abs(m.durationMs - 2 * H)).toBeLessThan(60_000);
+  });
+
+  it('ignores an End that stand-down stamped once the incident is reopened', () => {
+    const st = useCrisisStore.getState();
+    const id = st.createIncident();
+    st.update({ incidentDatetime: new Date(Date.now() - 3 * H).toISOString() });
+    st.standDownIncident(id);
+    const stamped = active().incidentEndDatetime;
+    expect(stamped).toBeTruthy();
+    expect(computeAarMetrics(active()).durationBasis).toBe('end');
+    st.reopenIncident(id);
+    expect(active().incidentEndDatetime).toBe(stamped);
+    expect(computeAarMetrics(active()).durationBasis).toBe('now');
+    // An End the operator types after reopening counts again.
+    st.update({ incidentEndDatetime: new Date(Date.now() - H).toISOString() });
+    expect(computeAarMetrics(active()).durationBasis).toBe('end');
+  });
+
   it('derives time-to-active from the earliest to-active transition', () => {
     const inc = makeIncident({
       createdAt: at(0),
@@ -159,6 +197,43 @@ describe('buildSwimlane', () => {
     expect(lane.rows[0].bars[1].open).toBe(true);
     expect(lane.rows[0].bars[1].endMs).toBe(lane.t1);
     expect(lane.t1).toBe(Date.parse(at(10)));
+    // A seat transfer stays in one lane.
+    expect(lane.rows[0].lanes).toBe(1);
+    expect(lane.rows[0].bars.map((b) => b.lane)).toEqual([0, 0]);
+  });
+
+  it('stacks concurrent holders of a support role instead of overdrawing them', () => {
+    const inc = makeIncident({
+      createdAt: at(0),
+      archivedAt: at(10),
+      assignments: [
+        { id: '1', roleId: 'gsoc-support', name: 'Ana', startedAt: at(1), endedAt: at(6) },
+        { id: '2', roleId: 'gsoc-support', name: 'Ben', startedAt: at(2), endedAt: at(8) },
+        { id: '3', roleId: 'gsoc-support', name: 'Cy', startedAt: at(6), endedAt: at(9) }, // reuses Ana's lane
+      ],
+    });
+    const row = buildSwimlane(inc)!.rows.find((r) => r.roleId === 'gsoc-support')!;
+    expect(row.lanes).toBe(2);
+    expect(row.bars.map((b) => [b.name, b.lane])).toEqual([['Ana', 0], ['Ben', 1], ['Cy', 0]]);
+  });
+
+  it('keeps holders of a since-removed role, titled from the log', () => {
+    const inc = makeIncident({
+      createdAt: at(0),
+      archivedAt: at(10),
+      assignments: [
+        { id: '1', roleId: 'ic', name: 'Sarah', startedAt: at(1), endedAt: at(9) },
+        { id: '2', roleId: 'custom-gone', name: 'Kim', startedAt: at(2), endedAt: at(4) },
+      ],
+    });
+    inc.actionLog = [
+      { id: 'l', timestamp: at(2), description: '', entryType: 'event', system: 'assignment', meta: { roleId: 'custom-gone', roleTitle: 'Staging Area Manager', name: 'Kim' } },
+      ...inc.actionLog,
+    ];
+    const rows = buildSwimlane(inc)!.rows;
+    expect(rows.map((r) => r.roleId)).toEqual(['ic', 'custom-gone']);
+    expect(rows[1]).toMatchObject({ title: 'Staging Area Manager', removed: true, lanes: 1 });
+    expect(rows[1].bars[0].name).toBe('Kim');
   });
 });
 

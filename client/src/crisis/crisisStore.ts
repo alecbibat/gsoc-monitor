@@ -529,7 +529,8 @@ interface CrisisState {
   openIncident: (id: string) => void;
   backToList: () => void;
   removeIncident: (id: string) => void;
-  standDownIncident: (id: string, reason?: string) => void;
+  /** endAt: when the incident actually ended (ISO) — defaults to its End field, else now. */
+  standDownIncident: (id: string, reason?: string, endAt?: string) => void;
   reopenIncident: (id: string) => void;
 
   // Active-incident field updates
@@ -700,12 +701,27 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
               : s.activeDrawLayerId,
         })),
 
-      standDownIncident: (id, reason) =>
+      standDownIncident: (id, reason, endAt) =>
         set((s) => ({
           incidents: s.incidents.map((inc) => {
             if (inc.id !== id) return inc;
             const now = new Date().toISOString();
             const openAssignments = inc.assignments.filter((a) => !a.endedAt);
+            // The End time is where the AAR's Duration stops, and an archived
+            // record is frozen, so it must not be left blank: an explicit
+            // endAt wins, then an End the operator entered, else the
+            // stand-down time. The log entry records whether End was STAMPED
+            // (endAuto): a stamp from an earlier stand-down means the incident
+            // was reopened since — it didn't end then — so it is re-stamped
+            // like a blank one.
+            const lastDown = inc.actionLog
+              .filter((e) => e.system === 'stood-down')
+              .reduce<ActionLogEntry | undefined>((m, e) => (!m || e.timestamp > m.timestamp ? e : m), undefined);
+            const staleStamp = !!inc.incidentEndDatetime &&
+              lastDown?.meta?.endAuto === 'true' && lastDown.meta.endedAt === inc.incidentEndDatetime;
+            const givenEnd = endAt && !Number.isNaN(Date.parse(endAt)) ? endAt : '';
+            const endAuto = !givenEnd && (!inc.incidentEndDatetime || staleStamp);
+            const endedAt = givenEnd || (endAuto ? now : inc.incidentEndDatetime);
             // Standing down closes the incident: archived-but-still-"active"
             // rows are what kept tab badges lit forever. Open ICS assignments
             // are released so the archived org chart reads as concluded (their
@@ -713,6 +729,7 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
             return {
               ...inc,
               archivedAt: now,
+              incidentEndDatetime: endedAt,
               incidentStatus: 'closed' as IncidentStatus,
               closedBy: currentActor() ?? null,
               standDownReason: reason?.trim() || null,
@@ -724,6 +741,8 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
                   {
                     ...(reason?.trim() ? { reason: reason.trim() } : {}),
                     releasedAssignments: String(openAssignments.length),
+                    endedAt,
+                    ...(endAuto ? { endAuto: 'true' } : {}),
                   }
                 ),
                 ...inc.actionLog,

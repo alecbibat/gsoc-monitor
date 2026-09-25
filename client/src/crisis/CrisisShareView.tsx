@@ -457,6 +457,34 @@ function TemplatesLoading({ what }: { what: string }) {
   );
 }
 
+/**
+ * The signed-in viewer's account name, once the link is open. The toggle
+ * route attributes a signed-in viewer's checks to their ACCOUNT, whatever the
+ * name box says, so the box only means something to break-glass (link
+ * password) viewers, who have no session. null = no session, or not known yet
+ * (offline) — the box stays, which is harmless: the server still stamps the
+ * account when there is one. Trimmed and bounded like the server's cleanActor.
+ */
+function useShareAccountName(unlocked: boolean): string | null {
+  const [name, setName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!unlocked) return;
+    let cancelled = false;
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then((r) => (r.ok ? (r.json() as Promise<unknown>) : null))
+      .then((me) => {
+        if (cancelled) return;
+        const raw = me && typeof me === 'object' ? (me as { name?: unknown }).name : undefined;
+        // eslint-disable-next-line no-control-regex
+        const clean = typeof raw === 'string' ? raw.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60) : '';
+        setName(clean || null);
+      })
+      .catch(() => { /* offline: keep the name box */ });
+    return () => { cancelled = true; };
+  }, [unlocked]);
+  return name;
+}
+
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 export function CrisisShareView({ token }: { token: string }) {
@@ -511,9 +539,12 @@ export function CrisisShareView({ token }: { token: string }) {
   const [pendingChk, setPendingChk] = useState<ChecklistStateMap>({});
   const [chkError, setChkError] = useState<string | null>(null);
   // Optional attribution for this viewer's toggles, remembered per browser.
+  // Only asked of break-glass viewers — a signed-in one's checks carry their
+  // account name (useShareAccountName).
   const [viewerName, setViewerName] = useState(() => {
     try { return localStorage.getItem('gsoc-share-name') ?? ''; } catch { return ''; }
   });
+  const accountName = useShareAccountName(unlocked);
 
   // Once the globe has mounted, keep it mounted even if a live prescription
   // update empties the layer/pin lists — swapping a viewer down to the flat
@@ -764,7 +795,7 @@ export function CrisisShareView({ token }: { token: string }) {
   // token-gated toggle endpoint; the response (and the SSE fanout) carry the
   // server-stamped authoritative map.
   const toggleChecklist = (itemId: string, checked: boolean) => {
-    const name = viewerName.trim();
+    const name = accountName ?? viewerName.trim();
     const optimistic: ChecklistItemState = {
       checked,
       at: new Date().toISOString(),
@@ -1297,16 +1328,23 @@ export function CrisisShareView({ token }: { token: string }) {
           <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
             <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">ICS Role Checklists</h2>
             <span className="text-[11px] text-white/35">Live for everyone on this link · each check is timestamped</span>
-            <label className="ml-auto flex items-center gap-1.5 text-[10px] text-white/40">
-              Your name
-              <input
-                value={viewerName}
-                onChange={(e) => saveViewerName(e.target.value)}
-                placeholder="for the record"
-                maxLength={60}
-                className="w-32 rounded border border-white/12 bg-white/8 px-2 py-1 text-[11px] text-white/80 placeholder-white/25 outline-none transition focus:border-white/25"
-              />
-            </label>
+            {accountName ? (
+              <span className="ml-auto text-[10px] text-white/40">
+                Checks are recorded as <span className="text-white/70">{accountName}</span> (your account)
+              </span>
+            ) : (
+              <label className="ml-auto flex items-center gap-1.5 text-[10px] text-white/40">
+                Your name
+                <input
+                  value={viewerName}
+                  onChange={(e) => saveViewerName(e.target.value)}
+                  placeholder="for the record"
+                  maxLength={60}
+                  autoComplete="name"
+                  className="w-32 rounded border border-white/12 bg-white/8 px-2 py-1 text-[11px] text-white/80 placeholder-white/25 outline-none transition focus:border-white/25"
+                />
+              </label>
+            )}
           </div>
           {chkError && (
             <p className="mb-3 rounded border border-red-400/25 bg-red-400/8 px-3 py-2 text-[11px] text-red-300/90">
@@ -1320,7 +1358,11 @@ export function CrisisShareView({ token }: { token: string }) {
               state={effectiveChecklists}
               onToggle={toggleChecklist}
               retired={retiredChk}
-              footnote={viewerName.trim() ? `Checks are recorded as ${viewerName.trim()}` : 'Add your name above to attribute your checks (optional)'}
+              footnote={
+                accountName ? undefined
+                : viewerName.trim() ? `Checks are recorded as ${viewerName.trim()}`
+                : 'Add your name above to attribute your checks (optional)'
+              }
             />
           ) : tpl.key === tplKey && tpl.error ? (
             <TemplatesUnavailable what="checklists" message={tpl.error} onRetry={retryTemplates} />

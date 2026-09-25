@@ -15,6 +15,10 @@ import { isShipGroupId, type IncidentVessel } from './incidentShips';
 import { resetCamera } from '../cesium/flyTo';
 import { addLayerEntities, drawSignature, layerIdFromEntity } from './CrisisMapLayer';
 import { measureLayer } from './layerMeasure';
+import {
+  drawnExtentRect, openingFrame, pinsView, REGIONAL_PIN_HEIGHT_M, REGIONAL_SPAN_DEG, type DegRect,
+} from './shareFraming';
+import { mapToolOwnsCursor } from '../cesium/cursorOwner';
 import { shareLiveLayerLabel, type ShareLiveLayerId } from './shareLiveLayers';
 import { LAYER_LEGENDS } from '../layers/layerLegends';
 import type { DrawLayer } from './crisisStore';
@@ -69,33 +73,27 @@ function applyShareLayerFlags(enabled: ShareLiveLayerId[]) {
   }));
 }
 
-// Frame the combined extent of the visible drawn layers; falls back to the
-// shared home view when nothing is drawn. Used for the initial open and the
-// Reset control.
-function frameDrawnExtent(viewer: Cesium.Viewer, layers: DrawLayer[], fly = false): void {
-  const pts = layers.filter((l) => l.visible).flatMap((l) => l.positions);
-  if (pts.length === 0) { if (fly) resetCamera(viewer); return; }
-  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
-  for (const p of pts) {
-    w = Math.min(w, p.lon); e = Math.max(e, p.lon);
-    s = Math.min(s, p.lat); n = Math.max(n, p.lat);
-  }
-  const padLon = Math.max((e - w) * 0.4, 0.4);
-  const padLat = Math.max((n - s) * 0.4, 0.4);
-  const destination = Cesium.Rectangle.fromDegrees(
-    Math.max(-180, w - padLon), Math.max(-90, s - padLat),
-    Math.min(180, e + padLon), Math.min(90, n + padLat)
-  );
+function frameRect(viewer: Cesium.Viewer, r: DegRect, fly: boolean): void {
+  const destination = Cesium.Rectangle.fromDegrees(r.west, r.south, r.east, r.north);
   if (fly) viewer.camera.flyTo({ destination, duration: 1.4 });
   else viewer.camera.setView({ destination });
 }
 
+// Frame the combined extent of the visible drawn layers; falls back to the
+// shared home view when nothing is drawn. Used by the Zoom to Incident
+// fallback.
+function frameDrawnExtent(viewer: Cesium.Viewer, layers: DrawLayer[], fly = false): void {
+  const rect = drawnExtentRect(layers);
+  if (rect) frameRect(viewer, rect, fly);
+  else if (fly) resetCamera(viewer);
+}
+
 // Incident draw layers (perimeters, staging areas, …) on the share globe,
-// reusing the exact entity styling the operator app uses.
+// reusing the exact entity styling the operator app uses. (The opening camera
+// is CrisisShareGlobe's job — see its opening-frame effect.)
 function ShareDrawLayers({ layers }: { layers: DrawLayer[] }) {
   const viewer = useCesiumViewer();
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
-  const fittedRef = useRef(false);
   const layersRef = useRef(layers);
   layersRef.current = layers;
   const sig = drawSignature(layers);
@@ -105,9 +103,6 @@ function ShareDrawLayers({ layers }: { layers: DrawLayer[] }) {
     const ds = new Cesium.CustomDataSource('crisis-share-layers');
     dsRef.current = ds;
     viewer.dataSources.add(ds);
-    // A replacement viewer (WebGL context-loss rebuild) starts back at the
-    // default home view — let the extent fit below run again for it.
-    fittedRef.current = false;
     return () => {
       viewer.dataSources.remove(ds, true);
       dsRef.current = null;
@@ -121,13 +116,6 @@ function ShareDrawLayers({ layers }: { layers: DrawLayer[] }) {
     const visible = layersRef.current.filter((l) => l.visible && l.positions.length > 0);
     visible.forEach((layer) => addLayerEntities(ds, layer));
     viewer.scene.requestRender();
-
-    // Open on the combined extent of the drawings — once, the first time any
-    // exist, so later snapshot updates never yank the viewer's camera around.
-    if (fittedRef.current) return;
-    if (visible.flatMap((l) => l.positions).length === 0) return;
-    fittedRef.current = true;
-    frameDrawnExtent(viewer, visible);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewer, sig]);
 
@@ -156,9 +144,9 @@ function ShareLayerInspector({
     if (!viewer) return;
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
     handler.setInputAction((e: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
-      // The measure tool owns the cursor while it's running; a click there is
-      // a vertex, not an inspection.
-      if (useMeasureStore.getState().active) return;
+      // A map tool (the measure tool, here) owns the cursor while it's
+      // running; a click there is a vertex, not an inspection.
+      if (mapToolOwnsCursor()) return;
       const hit = viewer.scene.pick(e.position);
       const layerId = layerIdFromEntity((hit?.id as Cesium.Entity | undefined)?.id);
       const layer = layerId ? layersRef.current.find((l) => l.id === layerId) : null;
@@ -400,22 +388,12 @@ function ShareShipsLayer({ vessels }: { vessels: IncidentVessel[] }) {
 }
 
 // Fly to the centre of a set of property pins, zoomed to fit their spread.
-function zoomToPins(viewer: Cesium.Viewer, groups: LocationGroup[]): void {
-  const locs = groups.flatMap((g) => g.locations);
-  if (locs.length === 0) return;
-  const avgLat = locs.reduce((s, l) => s + l.lat, 0) / locs.length;
-  const avgLon = locs.reduce((s, l) => s + l.lon, 0) / locs.length;
-  // Height from the pins' spread: metres per degree ≈ 111 km, longitude scaled
-  // by cos(lat). Clamped so a single-site group still gets a useful close-up.
-  const latSpanM = (Math.max(...locs.map((l) => l.lat)) - Math.min(...locs.map((l) => l.lat))) * 111_000;
-  const lonSpanM =
-    (Math.max(...locs.map((l) => l.lon)) - Math.min(...locs.map((l) => l.lon))) *
-    111_000 * Math.cos((avgLat * Math.PI) / 180);
-  const height = Math.min(2_500_000, Math.max(80_000, Math.hypot(latSpanM, lonSpanM) * 2.2));
-  viewer.camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees(avgLon, avgLat, height),
-    duration: 1.6,
-  });
+function zoomToPins(viewer: Cesium.Viewer, groups: LocationGroup[], minHeightM?: number, fly = true): void {
+  const view = pinsView(groups, minHeightM);
+  if (!view) return;
+  const destination = Cesium.Cartesian3.fromDegrees(view.lon, view.lat, view.height);
+  if (fly) viewer.camera.flyTo({ destination, duration: 1.6 });
+  else viewer.camera.setView({ destination });
 }
 
 /** A drawn layer the viewer tapped, with the click point inside the map frame. */
@@ -451,7 +429,15 @@ export function CrisisShareGlobe({
   vessels, shipGroup,
 }: Props) {
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
-  const [controlsOpen, setControlsOpen] = useState(true);
+  // Most share-link viewers are on phones, where the open panel would cover
+  // most of the map (and the incident) — start it collapsed there (the same
+  // breakpoint as useIsMobile). The header still expands it.
+  const [controlsOpen, setControlsOpen] = useState(
+    () =>
+      typeof window === 'undefined' ||
+      typeof window.matchMedia !== 'function' ||
+      !window.matchMedia('(max-width: 767px)').matches
+  );
   const basemap = useLayersStore((s) => s.basemap);
   const setBasemap = useLayersStore((s) => s.setBasemap);
   // Measuring is a viewer-side tool: nothing it draws is published, and it
@@ -495,20 +481,38 @@ export function CrisisShareGlobe({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig]);
 
-  // Open framed on the vessels when they are the whole map: drawn layers claim
-  // the initial camera when they exist (ShareDrawLayers fits them once), and a
-  // vessels-only incident would otherwise open on the default home view with
-  // its ships somewhere off-screen. Runs once, when the first position lands,
-  // so later fixes never yank a viewer's camera around.
-  const shipsFramedRef = useRef(false);
+  // Where the camera opens (and where Reset returns it): the drawn incident
+  // area, else the incident's property pins, else its vessels — see
+  // openingFrame. Otherwise the viewer would open on the default 14,000 km
+  // home view, the property an unlabelled dot, and have to find Zoom to
+  // Incident in the controls. With the hurricanes feed prescribed the frame is
+  // kept regional, so a storm near the incident stays in view.
+  const regional = liveLayers.includes('hurricanes');
+  const frameIncident = (layers: DrawLayer[], fly: boolean): boolean => {
+    if (!viewer) return false;
+    const target = openingFrame(
+      { drawLayers: layers, pinGroups, primaryGroupId, shipGroup },
+      regional ? REGIONAL_SPAN_DEG : undefined
+    );
+    if (!target) return false;
+    if (target.kind === 'drawn') frameRect(viewer, target.rect, fly);
+    else zoomToPins(viewer, target.groups, regional ? REGIONAL_PIN_HEIGHT_M : undefined, fly);
+    return true;
+  };
+
+  // Once per viewer — a WebGL context-loss rebuild starts back at the home
+  // view, so a replacement viewer is framed again — and as soon as there is
+  // something to frame (a fleet incident waits for its first vessel position;
+  // drawings can arrive with a live update). After that, snapshot updates and
+  // new fixes never yank the viewer's camera around.
+  const framedViewerRef = useRef<Cesium.Viewer | null>(null);
+  const hasDrawn = drawLayers.some((l) => l.visible && l.positions.length > 0);
+  const pinSig = pinGroups.map((g) => g.id).join(',');
   useEffect(() => {
-    if (!viewer || shipsFramedRef.current || !shipGroup) return;
-    if (pinGroups.length > 0) return;
-    if (drawLayers.some((l) => l.visible && l.positions.length > 0)) return;
-    shipsFramedRef.current = true;
-    zoomToPins(viewer, [shipGroup]);
+    if (!viewer || framedViewerRef.current === viewer) return;
+    if (frameIncident(drawLayers, false)) framedViewerRef.current = viewer;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewer, shipGroup]);
+  }, [viewer, hasDrawn, pinSig, primaryGroupId, shipGroup !== null]);
 
   const handleZoomToIncident = () => {
     if (!viewer) return;
@@ -526,9 +530,9 @@ export function CrisisShareGlobe({
   const handleReset = () => {
     onResetLayers();
     useLayersStore.getState().setBasemap('dark');
-    // drawLayers may carry viewer-side hides; Reset restores them all, so
-    // frame everything the incident team has visible.
-    if (viewer) frameDrawnExtent(viewer, drawLayers.map((l) => ({ ...l, visible: true })), true);
+    // Back to the opening view. drawLayers may carry viewer-side hides; Reset
+    // restores them all, so frame everything the incident team has visible.
+    if (viewer && !frameIncident(drawLayers.map((l) => ({ ...l, visible: true })), true)) resetCamera(viewer);
   };
 
   return (
@@ -536,7 +540,7 @@ export function CrisisShareGlobe({
       <CesiumContext.Provider value={viewer}>
       <div
         ref={frameRef}
-        className="relative h-[72vh] min-h-[440px] w-full overflow-hidden rounded-lg border border-white/10"
+        className="relative h-[60vh] min-h-[360px] w-full overflow-hidden rounded-lg border border-white/10 sm:h-[72vh] sm:min-h-[440px]"
         // The non-none transform makes this box the containing block for
         // position:fixed descendants (hurricane tooltip, pick chooser), so
         // their canvas-based coordinates line up with the embedded globe
@@ -578,13 +582,15 @@ export function CrisisShareGlobe({
           {/* Compact map controls: map style + camera shortcuts. Layer on/off
               toggles live below the frame (legend chips + the Map Layers
               list); property pins are prescribed by the incident team. */}
-          <div className="absolute right-3 top-3 z-20 w-56 overflow-hidden rounded-lg border border-white/15 bg-ink-900/95 shadow-2xl backdrop-blur-sm">
+          <div className="absolute right-3 top-3 z-20 w-56 max-w-[calc(100%-1.5rem)] overflow-hidden rounded-lg border border-white/15 bg-ink-900/95 shadow-2xl backdrop-blur-sm">
             <button
+              type="button"
               onClick={() => setControlsOpen((v) => !v)}
+              aria-expanded={controlsOpen}
               className="flex w-full items-center justify-between px-3 py-2 text-left"
             >
               <span className="text-[11px] font-bold uppercase tracking-wider text-white/70">Map Controls</span>
-              <span className="text-[11px] text-white/40">{controlsOpen ? '▾' : '▸'}</span>
+              <span className="text-[11px] text-white/40" aria-hidden="true">{controlsOpen ? '▾' : '▸'}</span>
             </button>
             {controlsOpen && (
               <div className="space-y-2.5 border-t border-white/10 px-3 py-2.5">

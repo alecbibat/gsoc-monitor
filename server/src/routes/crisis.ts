@@ -213,32 +213,37 @@ router.post('/publish', requireAuth, wrap(async (req: Request, res: Response) =>
 // PATCH /api/crisis/share/:token — push updated snapshot, notify SSE clients
 router.patch('/share/:token', requireAuth, wrap(async (req: Request, res: Response) => {
   const { token } = req.params;
-  const { rows: [row] } = await pool.query(
-    `SELECT snapshot FROM share_links WHERE token = $1 AND ${LIVE}`,
-    [token]
-  );
-  if (!row) { res.status(404).json({ error: 'Not found' }); return; }
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+    res.status(400).json({ error: 'Body must be a JSON object' }); return;
+  }
 
   // The checklist map is owned by the per-item toggle endpoints (which update
   // every live snapshot themselves): a viewer's check must not be clobbered by
   // the editor's next debounced auto-publish carrying a stale copy. The one
   // exception is a snapshot that has no map yet (link published before the
   // feature) — the first PATCH seeds it.
-  const prevChecklists = (row.snapshot as { checklists?: unknown })?.checklists;
-  const merged = {
-    ...(row.snapshot as object),
-    ...req.body,
-    ...(prevChecklists !== undefined ? { checklists: prevChecklists } : {}),
-    lastUpdated: new Date().toISOString(),
-  };
-  // Snapshots can be MB-scale; stringify once and reuse for the UPDATE + SSE.
-  const json = JSON.stringify(merged);
-  await pool.query(
-    'UPDATE share_links SET snapshot = $1 WHERE token = $2',
-    [json, token]
+  //
+  // ONE statement, merged in the database — never read, merge in JS, write
+  // back: a toggle's fanout (updateShareChecklists) landing between the read
+  // and the write was overwritten by the map this request had read, and
+  // viewers saw the item uncheck. Under READ COMMITTED an UPDATE that meets a
+  // concurrent write to its row re-evaluates SET against the NEWEST version,
+  // so `snapshot->'checklists'` here is always the latest map.
+  const { rows: [row] } = await pool.query<{ json: string }>(
+    `UPDATE share_links
+        SET snapshot = (snapshot || $1::jsonb) || CASE
+              WHEN snapshot ? 'checklists'
+                THEN jsonb_build_object('checklists', snapshot->'checklists', 'lastUpdated', $3::text)
+              ELSE jsonb_build_object('lastUpdated', $3::text)
+            END
+      WHERE token = $2 AND ${LIVE}
+      RETURNING snapshot::text AS json`,
+    [JSON.stringify(req.body), token, new Date().toISOString()]
   );
+  if (!row) { res.status(404).json({ error: 'Not found' }); return; }
 
-  const payload = `event: update\ndata: ${json}\n\n`;
+  // Snapshots can be MB-scale: the stored text goes straight to the viewers.
+  const payload = `event: update\ndata: ${row.json}\n\n`;
   sseClients.get(token)?.forEach((client) => {
     try { client.write(payload); } catch { /* disconnected */ }
   });
@@ -353,23 +358,49 @@ router.delete('/share/:token', requireAuth, wrap(async (req: Request, res: Respo
  * it out to connected viewers. Toggles bypass the editor's auto-publish (which
  * only runs while an editor has the incident open), so the toggle endpoints
  * call this directly.
+ *
+ * Runs under the incident row's lock (the same one applyChecklistToggle
+ * takes) and fans out the map as the row holds it NOW, not the caller's copy:
+ * two toggles' fanouts used to be able to finish out of order and leave the
+ * older map on the share page. `checklists` is only the fallback for an
+ * incident row that is gone. Each snapshot is merged in one UPDATE (see the
+ * PATCH route), so a concurrent auto-publish can't be overwritten either.
  */
 export async function updateShareChecklists(
   incidentId: string,
   checklists: Record<string, ChecklistItemState>
 ): Promise<void> {
-  const { rows } = await pool.query<{ token: string; snapshot: Record<string, unknown> }>(
-    `SELECT token, snapshot FROM share_links WHERE incident_id = $1 AND ${LIVE}`,
-    [incidentId]
-  );
-  const lastUpdated = new Date().toISOString();
-  for (const { token, snapshot } of rows) {
-    const json = JSON.stringify({ ...(snapshot as object), checklists, lastUpdated });
-    await pool.query('UPDATE share_links SET snapshot = $1 WHERE token = $2', [json, token]);
-    const payload = `event: update\ndata: ${json}\n\n`;
-    sseClients.get(token)?.forEach((client) => {
-      try { client.write(payload); } catch { /* disconnected */ }
-    });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [inc] } = await client.query<{ checklists: unknown }>(
+      `SELECT data->'checklists' AS checklists FROM incidents WHERE id = $1 FOR UPDATE`,
+      [incidentId]
+    );
+    const current = inc?.checklists;
+    const map = current && typeof current === 'object' && !Array.isArray(current) ? current : checklists;
+    const { rows } = await client.query<{ token: string; json: string }>(
+      `UPDATE share_links
+          SET snapshot = snapshot || jsonb_build_object('checklists', $2::jsonb, 'lastUpdated', $3::text)
+        WHERE incident_id = $1 AND ${LIVE}
+        RETURNING token, snapshot::text AS json`,
+      [incidentId, JSON.stringify(map), new Date().toISOString()]
+    );
+    // Pushed while the lock still orders fanouts, so viewers get them in the
+    // order they were written. Nothing untrue can reach them if the COMMIT
+    // then fails: the map was read from the (committed) incident row.
+    for (const { token, json } of rows) {
+      const payload = `event: update\ndata: ${json}\n\n`;
+      sseClients.get(token)?.forEach((c) => {
+        try { c.write(payload); } catch { /* disconnected */ }
+      });
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => { /* connection already gone */ });
+    throw err;
+  } finally {
+    client.release();
   }
 }
 

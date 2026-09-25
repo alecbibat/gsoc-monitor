@@ -12,7 +12,10 @@ import { SHIP_GROUP_NAME, incidentShips, isShipGroupId } from './incidentShips';
 import { measureLayer } from './layerMeasure';
 import { usePrintStyles } from '../lib/printStyles';
 import { lazyWithReload } from '../lib/lazyWithReload';
-import { CorrectiveActions, FourQuestions, IcsSwimlane, ResponseMetrics, RosterTable } from './AarSections';
+import {
+  ChecklistRecord, CorrectiveActions, FourQuestions, IcsSwimlane, IntakeRecord, ResponseMetrics, RosterTable,
+} from './AarSections';
+import { SyncIndicator } from './SyncIndicator';
 
 // Lazy so Leaflet (used only by this printable report and the share view)
 // stays out of the main bundle.
@@ -225,6 +228,9 @@ export function CrisisReportModal({ incident: incidentProp, onClose }: Props) {
           <p className="text-[15px] font-semibold text-white/85">{incident.incidentName || 'Untitled Incident'}</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          {/* This report covers the incident header's indicator, and from the
+              archive list there is none — the AAR "autosaves", so show it here. */}
+          <SyncIndicator />
           <button
             onClick={() => window.print()}
             className="flex items-center gap-1.5 rounded border border-accent/30 bg-accent/8 px-3 py-1.5 text-[11px] text-accent transition hover:border-accent/50 hover:bg-accent/18"
@@ -334,6 +340,9 @@ export function CrisisReportModal({ incident: incidentProp, onClose }: Props) {
         {/* Response metrics — every number computed from the captured record */}
         <ResponseMetrics incident={incident} />
 
+        {/* What the first caller reported (answered intake questions) */}
+        <IntakeRecord incident={incident} />
+
         {/* Org chart */}
         {roots.length > 0 && (
           <div>
@@ -352,6 +361,9 @@ export function CrisisReportModal({ incident: incidentProp, onClose }: Props) {
             dropped every ended assignment) */}
         <IcsSwimlane incident={incident} />
         <RosterTable incident={incident} />
+
+        {/* When each ICS checklist task was done, and by whom */}
+        <ChecklistRecord incident={incident} />
 
         {/* The four-question AAR + corrective actions — post-incident editable */}
         <FourQuestions incident={incident} />

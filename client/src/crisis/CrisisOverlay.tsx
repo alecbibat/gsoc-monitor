@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   useCrisisStore, useActiveIncident, extractPublicState, type CrisisTab,
 } from './crisisStore';
 import { incidentStatusDef, incidentTypeDef } from './taxonomy';
 import { StandDownModal } from './StandDownModal';
+import { DeleteIncidentDialog } from './DeleteIncidentDialog';
 import { useAuthStore } from '../auth/authStore';
 import { useIsMobile } from '../ui/useIsMobile';
 import {
@@ -18,6 +19,15 @@ import { ChecklistsTab } from './tabs/Checklists';
 import { IapTab } from './tabs/Iap';
 import { IncidentList } from './IncidentList';
 import { CrisisReportModal } from './CrisisReportModal';
+import { checklistProgress } from './checklistTemplate';
+import { answeredCount } from './intakeTemplate';
+import { useResolvedChecklist, useResolvedIntake } from './templates/templatesStore';
+import { useEnsureTemplatesLoaded } from './templates/editorTabChrome';
+import {
+  fmtExpiry, fmtRemaining, isExpiredLink, shareLinkHealth, EXPIRY_WARN_MS, useNow,
+} from './shareLinkStatus';
+import { incidentExtent } from './incidentSummary';
+import { dismissTopEscapeLayer, isTextEntry, useEscapeLayer } from './escapeLayers';
 
 const TABS: { id: CrisisTab; label: string }[] = [
   { id: 'situation-report', label: 'Situation Report' },
@@ -26,19 +36,14 @@ const TABS: { id: CrisisTab; label: string }[] = [
   { id: 'iap', label: 'IAP' },
 ];
 
-// "expires in 51h" / "expires in 40m" / "expired"
-function fmtExpiry(iso: string): string {
-  const ms = new Date(iso).getTime() - Date.now();
-  if (Number.isNaN(ms)) return '';
-  if (ms <= 0) return 'expired';
-  const h = Math.floor(ms / 3600_000);
-  if (h >= 1) return `expires in ${h}h`;
-  return `expires in ${Math.max(1, Math.round(ms / 60_000))}m`;
-}
-
 // ── Share links panel ─────────────────────────────────────────────────────────
 
-function ShareLinksPanel() {
+// readOnly: the incident is archived. Links still open on it (a revoke that
+// failed at stand-down, or one opened before the archive) must stay
+// revocable. Revoking a leaked link is why share-link actions bypass the
+// archive freeze in the store. Creating and renewing are not offered, since
+// neither makes sense on a concluded incident.
+function ShareLinksPanel({ readOnly = false }: { readOnly?: boolean }) {
   const inc = useActiveIncident();
   const addShareLink = useCrisisStore((s) => s.addShareLink);
   const deactivateShareLink = useCrisisStore((s) => s.deactivateShareLink);
@@ -53,9 +58,36 @@ function ShareLinksPanel() {
   const [access, setAccess] = useState<Record<string, { count: number; viewers: number; lastAt: string | null }>>({});
   // Tokens with a revoke in flight, so a double-click can't log it twice.
   const revokingRef = useRef<Set<string>>(new Set());
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  // Re-render every minute so the button's expiry state flips on an idle
+  // incident; each render reads the clock itself.
+  useNow(60_000);
+  const now = Date.now();
 
   const shareLinks = inc?.shareLinks ?? [];
-  const activeLinks = shareLinks.filter((l) => l.active);
+  const openLinks = shareLinks.filter((l) => l.active);
+  const health = shareLinkHealth(shareLinks, now);
+
+  // Esc closes the dropdown before it steps out of the incident, and focus
+  // returns to the button if it was inside the dropdown.
+  useEscapeLayer(open, () => {
+    const hadFocus = wrapRef.current?.contains(document.activeElement) ?? false;
+    setOpen(false);
+    if (hadFocus) buttonRef.current?.focus();
+  });
+
+  // So does a tap or click anywhere outside it. A dropdown left open behind
+  // other work is how it ends up covering the next thing.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [open]);
 
   useEffect(() => {
     if (!open || shareLinks.length === 0) return;
@@ -116,6 +148,7 @@ function ShareLinksPanel() {
 
   const handleRenew = async (token: string) => {
     const incId = inc?.id;
+    setError(null);
     try {
       const res = await fetch(`/api/crisis/share/${token}/renew`, { method: 'POST', credentials: 'include' });
       if (!res.ok) throw new Error(String(res.status));
@@ -123,6 +156,7 @@ function ShareLinksPanel() {
       renewShareLink(token, expiresAt, incId);
     } catch (err) {
       console.warn('[crisis] renew failed', err);
+      setError(`Could not renew link (${err instanceof Error ? err.message : 'network error'}) — viewers lose access at expiry; try again.`);
     }
   };
 
@@ -162,22 +196,59 @@ function ShareLinksPanel() {
     });
   };
 
+  // Button state. Green = viewers are getting live updates. Amber = a link
+  // needs attention: it lapsed (viewers see the "expired" page, and edits no
+  // longer reach them) or lapses within EXPIRY_WARN_MS. On an archived
+  // incident, any link still open should be revoked.
+  const { live, expired, expiringInMs } = health;
+  const warn = readOnly ? openLinks.length > 0 : expired > 0 || expiringInMs !== null;
+  const tone = warn ? 'warn' : live > 0 ? 'live' : 'idle';
+  const buttonTitle = readOnly
+    ? `${openLinks.length} link${openLinks.length === 1 ? '' : 's'} still open on this archived incident. Revoke them here.`
+    : expired > 0
+      ? `${expired} link${expired === 1 ? ' has' : 's have'} expired. Viewers see an "expired" page and get no updates. Open to renew.`
+      : expiringInMs !== null
+        ? `A link expires in ${fmtRemaining(expiringInMs)}. Open to renew.`
+        : live > 0
+          ? `${live} live link${live === 1 ? '' : 's'}. Viewers get every update.`
+          : 'Create a password-protected link for stakeholders';
+
   return (
-    <div className="relative">
+    // Below md the dropdown anchors to the header's action row instead (not
+    // md:relative), so it can't run off the left edge of a narrow screen.
+    <div ref={wrapRef} className="md:relative">
       <button
+        ref={buttonRef}
         onClick={() => setOpen((v) => !v)}
-        className={`flex items-center gap-1.5 rounded border px-3 py-1.5 text-[11px] transition ${
-          activeLinks.length > 0
-            ? 'border-green-500/30 bg-green-500/8 text-green-400/80 hover:border-green-500/50 hover:text-green-400'
-            : 'border-white/12 text-white/50 hover:border-white/22 hover:text-white'
+        aria-expanded={open}
+        title={buttonTitle}
+        className={`flex items-center gap-1.5 whitespace-nowrap rounded border px-2.5 py-1.5 text-[11px] transition sm:px-3 ${
+          tone === 'warn'
+            ? 'border-amber-500/40 bg-amber-500/10 text-amber-300/85 hover:border-amber-500/60 hover:text-amber-200'
+            : tone === 'live'
+              ? 'border-green-500/30 bg-green-500/8 text-green-400/80 hover:border-green-500/50 hover:text-green-400'
+              : 'border-white/12 text-white/50 hover:border-white/22 hover:text-white'
         }`}
       >
-        {activeLinks.length > 0 && (
-          <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
-        )}
-        Share Links
-        {activeLinks.length > 0 && (
-          <span className="rounded bg-green-500/20 px-1 text-[9px] text-green-400">{activeLinks.length}</span>
+        {tone === 'live' && <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />}
+        {tone === 'warn' && <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />}
+        <span className="hidden sm:inline">Share Links</span>
+        <span className="sm:hidden">Share</span>
+        {readOnly ? (
+          openLinks.length > 0 && (
+            <span className="rounded bg-amber-500/20 px-1 text-[9px] text-amber-300">{openLinks.length} open</span>
+          )
+        ) : (
+          <>
+            {live > 0 && (
+              <span className="rounded bg-green-500/20 px-1 text-[9px] text-green-400">{live}</span>
+            )}
+            {expired > 0 ? (
+              <span className="rounded bg-amber-500/20 px-1 text-[9px] text-amber-300">{expired} expired · renew</span>
+            ) : expiringInMs !== null && (
+              <span className="rounded bg-amber-500/20 px-1 text-[9px] text-amber-300">expires {fmtRemaining(expiringInMs)}</span>
+            )}
+          </>
         )}
       </button>
 
@@ -185,7 +256,7 @@ function ShareLinksPanel() {
         <div className="absolute right-0 top-full z-50 mt-1.5 w-96 max-w-[calc(100vw-2rem)] rounded-lg border border-white/15 bg-ink-900 shadow-2xl">
           <div className="border-b border-white/10 px-3.5 py-2.5 flex items-center justify-between">
             <span className="text-[11px] font-bold uppercase tracking-wider text-white/70">Share Links</span>
-            <button onClick={() => setOpen(false)} className="text-white/40 hover:text-white/80 text-[12px]">✕</button>
+            <button onClick={() => setOpen(false)} aria-label="Close share links" className="text-white/40 hover:text-white/80 text-[12px]">✕</button>
           </div>
 
           <div className="max-h-72 overflow-y-auto">
@@ -195,27 +266,31 @@ function ShareLinksPanel() {
               </p>
             ) : (
               <div className="divide-y divide-white/10">
-                {[...shareLinks].reverse().map((link) => (
+                {[...shareLinks].reverse().map((link) => {
+                  const lapsed = isExpiredLink(link, now);
+                  return (
                   <div key={link.token} className={`px-3.5 py-2.5 ${link.active ? '' : 'opacity-40'}`}>
                     <div className="flex items-center gap-1.5 mb-1">
-                      <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${link.active ? 'bg-green-500' : 'bg-white/20'}`} />
+                      <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${!link.active ? 'bg-white/20' : lapsed ? 'bg-amber-400' : 'bg-green-500'}`} />
                       <span className="text-[11px] text-white/60">
                         {link.label && <span className="font-semibold text-white/80">{link.label} · </span>}
-                        {link.active ? 'Active' : 'Revoked'} · {new Date(link.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        {!link.active ? 'Revoked' : lapsed ? <span className="text-amber-300/90">Expired</span> : 'Active'} · {new Date(link.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                       </span>
                       {link.active && link.expiresAt && (
                         <span
-                          className={`ml-auto flex items-center gap-1 text-[10px] ${new Date(link.expiresAt).getTime() - Date.now() < 12 * 3600_000 ? 'text-amber-300/80' : 'text-white/35'}`}
+                          className={`ml-auto flex items-center gap-1 text-[10px] ${new Date(link.expiresAt).getTime() - now < EXPIRY_WARN_MS ? 'text-amber-300/80' : 'text-white/35'}`}
                           title={`Expires ${new Date(link.expiresAt).toLocaleString()}`}
                         >
-                          {fmtExpiry(link.expiresAt)}
-                          <button
-                            onClick={() => handleRenew(link.token)}
-                            className="rounded border border-white/15 px-1.5 py-0.5 text-[9px] text-white/50 transition hover:border-white/30 hover:text-white/80"
-                            title="Extend by 72 hours"
-                          >
-                            Renew
-                          </button>
+                          {fmtExpiry(link.expiresAt, now)}
+                          {!readOnly && (
+                            <button
+                              onClick={() => handleRenew(link.token)}
+                              className="rounded border border-white/15 px-1.5 py-0.5 text-[9px] text-white/50 transition hover:border-white/30 hover:text-white/80"
+                              title={lapsed ? 'Reopen this link to its viewers for another 72 hours' : 'Extend by 72 hours'}
+                            >
+                              Renew
+                            </button>
+                          )}
                         </span>
                       )}
                     </div>
@@ -263,33 +338,38 @@ function ShareLinksPanel() {
                       </div>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
 
           <div className="border-t border-white/10 px-3.5 py-2.5">
-            <div className="mb-1.5 flex items-center gap-1.5">
-              <input
-                className="min-w-0 flex-1 rounded border border-white/10 bg-white/8 px-2 py-1.5 text-[11px] text-white/80 placeholder-white/30 outline-none focus:border-white/25"
-                placeholder="Audience label (optional) — e.g. Executives"
-                value={label}
-                maxLength={80}
-                onChange={(e) => setLabel(e.target.value)}
-              />
-              <button
-                onClick={handleCreate}
-                disabled={publishing}
-                className="shrink-0 rounded bg-accent/15 px-3 py-1.5 text-[12px] font-medium text-accent transition hover:bg-accent/25 disabled:opacity-40"
-              >
-                {publishing ? 'Creating…' : '+ Create link'}
-              </button>
-            </div>
+            {!readOnly && (
+              <div className="mb-1.5 flex items-center gap-1.5">
+                <input
+                  className="min-w-0 flex-1 rounded border border-white/10 bg-white/8 px-2 py-1.5 text-[11px] text-white/80 placeholder-white/30 outline-none focus:border-white/25"
+                  placeholder="Audience label (optional) — e.g. Executives"
+                  value={label}
+                  maxLength={80}
+                  onChange={(e) => setLabel(e.target.value)}
+                />
+                <button
+                  onClick={handleCreate}
+                  disabled={publishing}
+                  className="shrink-0 rounded bg-accent/15 px-3 py-1.5 text-[12px] font-medium text-accent transition hover:bg-accent/25 disabled:opacity-40"
+                >
+                  {publishing ? 'Creating…' : '+ Create link'}
+                </button>
+              </div>
+            )}
             {error ? (
-              <p className="text-center text-[10px] text-red-400/80">{error}</p>
+              <p className="text-center text-[10px] text-red-400/80" role="alert">{error}</p>
             ) : (
               <p className="text-center text-[10px] text-white/40">
-                Viewers need the link password · links expire after 72 h unless renewed
+                {readOnly
+                  ? 'Archived incident: open links serve the closed snapshot until revoked'
+                  : 'Viewers need the link password · links expire after 72 h unless renewed'}
               </p>
             )}
           </div>
@@ -320,6 +400,11 @@ function SyncIndicator() {
 }
 
 // ── Live-map dock ─────────────────────────────────────────────────────────────
+
+// The incident the dock last auto-framed. Module-level, not a ref: the dock
+// unmounts for every draw session (drawing closes the workspace) and must not
+// re-frame on the way back. The list view clears it, so the next open frames.
+let framedIncidentId: string | null = null;
 
 // The right-hand column of the crisis workspace. Its map window is
 // deliberately transparent and pointer-events-none: the overlay root lets
@@ -370,24 +455,31 @@ function MapDock({ isArchived }: { isArchived: boolean }) {
     window.addEventListener('pointerup', up);
   };
 
-  const drawnLayers = (inc?.drawLayers ?? []).filter((l) => l.visible && l.positions.length > 0);
+  // The property's own locations count, not just drawn layers, so an
+  // incident can be framed from the moment its property is set.
+  const extent = inc ? incidentExtent(inc) : null;
 
   const zoomToIncident = () => {
-    if (!viewer || drawnLayers.length === 0) return;
-    let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
-    for (const layer of drawnLayers) {
-      for (const p of layer.positions) {
-        if (p.lon < w) w = p.lon;
-        if (p.lon > e) e = p.lon;
-        if (p.lat < s) s = p.lat;
-        if (p.lat > n) n = p.lat;
-      }
-    }
+    if (!viewer || viewer.isDestroyed() || !extent) return;
+    const { west: w, south: s, east: e, north: n } = extent;
     // Pad the extent so a single point still frames as a sensible area.
     const padLon = Math.max(0.05, (e - w) * 0.2);
     const padLat = Math.max(0.05, (n - s) * 0.2);
     flyToBoundingBox(viewer, w - padLon, s - padLat, e + padLon, n + padLat);
   };
+
+  // Frame the incident once each time it is opened from the list. Otherwise
+  // the dock shows wherever the shared globe was last left, often another
+  // continent. Later edits never move the operator's camera, and neither does
+  // coming back from a draw session (the dock remounts then; see
+  // framedIncidentId). The frames let the globe settle into the dock's rect.
+  const hasExtent = extent !== null;
+  useEffect(() => {
+    if (!viewer || !inc || !hasExtent || framedIncidentId === inc.id) return;
+    framedIncidentId = inc.id;
+    requestAnimationFrame(() => requestAnimationFrame(zoomToIncident));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewer, inc?.id, hasExtent]);
 
   return (
     <aside
@@ -411,9 +503,9 @@ function MapDock({ isArchived }: { isArchived: boolean }) {
         <span className="truncate text-[9px] text-white/35">Drawn layers · live feeds</span>
         <button
           onClick={zoomToIncident}
-          disabled={drawnLayers.length === 0}
+          disabled={!extent}
           className="ml-auto shrink-0 rounded border border-white/12 px-2 py-1 text-[9px] text-white/45 transition hover:border-white/25 hover:text-white/70 disabled:opacity-30"
-          title="Frame the incident's drawn layers"
+          title={extent ? "Frame the incident's property and drawn layers" : 'Set the property or draw a layer to frame the incident'}
         >
           Zoom to incident
         </button>
@@ -435,6 +527,23 @@ function MapDock({ isArchived }: { isArchived: boolean }) {
 
 // ── Incident detail (full-screen workspace with a docked live map) ────────────
 
+// Progress for the Intake / Checklists tab labels, from the same resolved
+// templates the tabs render. Not shown until the templates have loaded.
+type TabCount = { done: number; total: number; noun: string };
+
+function TabCountBadge({ count }: { count: TabCount }) {
+  const complete = count.done >= count.total;
+  return (
+    <span
+      className={`ml-1.5 rounded px-1 py-px text-[10px] tabular-nums ${complete ? 'bg-green-500/15 text-green-400/80' : 'bg-white/8 text-white/45'}`}
+      title={`${count.done} of ${count.total} ${count.noun}`}
+    >
+      <span className="sr-only">, {count.done} of {count.total} {count.noun}</span>
+      <span aria-hidden="true">{count.done}/{count.total}</span>
+    </span>
+  );
+}
+
 function IncidentDetail() {
   const close            = useCrisisStore((s) => s.close);
   const backToList       = useCrisisStore((s) => s.backToList);
@@ -446,14 +555,40 @@ function IncidentDetail() {
   const user             = useAuthStore((s) => s.user);
   const [showReport, setShowReport] = useState(false);
   const [showStandDown, setShowStandDown] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
   const isMobile = useIsMobile();
   const dockCollapsed = useCrisisDockStore((s) => s.collapsed);
   const setDockCollapsed = useCrisisDockStore((s) => s.setCollapsed);
   const showDock = !isMobile && !dockCollapsed;
 
+  // Tab progress. Normalized type, as the tabs resolve it: a retired type id
+  // must count like its successor does.
+  const typeId = inc ? incidentTypeDef(inc.incidentType).id : null;
+  const propertyId = inc?.locationGroupId ?? null;
+  const checklist = useResolvedChecklist(typeId, propertyId);
+  const intake = useResolvedIntake(typeId, propertyId);
+  useEnsureTemplatesLoaded(checklist.status, checklist.reload);
+  const checklistTpl = checklist.template;
+  const intakeTpl = intake.template;
+  const checklistState = inc?.checklists;
+  const intakeAnswers = inc?.intake;
+  const tabCounts = useMemo(() => {
+    const counts: Partial<Record<CrisisTab, TabCount>> = {};
+    if (checklistTpl) {
+      const p = checklistProgress(checklistTpl, checklistState ?? {});
+      if (p.total > 0) counts.checklists = { done: p.done, total: p.total, noun: 'checklist items done' };
+    }
+    if (intakeTpl) {
+      const total = intakeTpl.groups.reduce((n, g) => n + g.questions.length, 0);
+      if (total > 0) counts.intake = { done: answeredCount(intakeTpl, intakeAnswers ?? {}), total, noun: 'intake questions answered' };
+    }
+    return counts;
+  }, [checklistTpl, checklistState, intakeTpl, intakeAnswers]);
+
   if (!inc) return null;
   const isArchived = !!inc.archivedAt;
   const canDelete  = !isArchived || user?.role === 'admin';
+  const hasOpenLinks = (inc.shareLinks ?? []).some((l) => l.active);
   const { dot, badge, label: statusLabel } = incidentStatusDef(inc.incidentStatus);
   const td = incidentTypeDef(inc.incidentType);
 
@@ -461,24 +596,29 @@ function IncidentDetail() {
     <>
     <div className="pointer-events-none fixed inset-0 z-[2000] flex flex-col">
       {/* Header spans the whole workspace. Surfaces are solid: this is a full
-          takeover, and translucent inks let the HUD underneath ghost through. */}
-      <header className="pointer-events-auto flex shrink-0 items-center gap-3 border-b border-white/10 bg-ink-900 px-5 py-3">
+          takeover, and translucent inks let the HUD underneath ghost through.
+          Below md it wraps rather than squeezes: the actions drop to a second
+          row and the name keeps its width. From md up (where the map dock is,
+          whose frame tracks this header's height) it stays one row. */}
+      <header className="pointer-events-auto flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-white/10 bg-ink-900 px-3 py-2.5 sm:px-5 sm:py-3 md:flex-nowrap">
           <button
             onClick={backToList}
             className="flex items-center gap-1 rounded border border-white/10 px-2.5 py-1.5 text-[11px] text-white/45 transition hover:border-white/22 hover:text-white"
             title="All incidents"
+            aria-label="All incidents"
           >
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="15 18 9 12 15 6" />
             </svg>
-            Incidents
+            <span className="hidden sm:inline">Incidents</span>
           </button>
 
           {/* flex-1 + min-w-0 so long names/types truncate instead of pushing
-              into (or under) the action buttons on the right. The incident
-              type lives in the eyebrow line — a chip here kept colliding with
-              its neighbors at narrow widths. */}
-          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+              into (or under) the action buttons on the right; the basis is
+              what makes the actions wrap before the name is squeezed out. The
+              incident type lives in the eyebrow line — a chip here kept
+              colliding with its neighbors at narrow widths. */}
+          <div className="flex min-w-0 flex-1 basis-44 items-center gap-2.5">
             <div className="relative flex h-2.5 w-2.5 shrink-0">
               {inc.incidentStatus === 'active' && !isArchived && (
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-70" style={{ background: dot }} />
@@ -503,23 +643,27 @@ function IncidentDetail() {
             )}
           </div>
 
-          <div className="ml-auto flex items-center gap-2">
+          {/* relative: below md the Share Links dropdown anchors here. */}
+          <div className="relative ml-auto flex items-center gap-2">
             <SyncIndicator />
-            {!isArchived && <ShareLinksPanel />}
+            {(!isArchived || hasOpenLinks) && <ShareLinksPanel readOnly={isArchived} />}
 
             {/* Stand-down or reopen depending on archive state */}
             {isArchived ? (
               <>
                 <button
                   onClick={() => setShowReport(true)}
-                  className="flex items-center gap-1.5 rounded border border-white/10 px-3 py-1.5 text-[11px] text-white/40 transition hover:border-white/22 hover:text-white/70"
+                  className="flex items-center gap-1.5 whitespace-nowrap rounded border border-white/10 px-3 py-1.5 text-[11px] text-white/40 transition hover:border-white/22 hover:text-white/70"
+                  title="After-action review and PDF report"
                 >
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="6 9 6 2 18 2 18 9" />
-                    <path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2" />
-                    <rect x="6" y="14" width="12" height="8" />
+                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="8" y1="13" x2="16" y2="13" />
+                    <line x1="8" y1="17" x2="13" y2="17" />
                   </svg>
-                  PDF Report
+                  <span className="sm:hidden">AAR</span>
+                  <span className="hidden sm:inline">After-Action Review</span>
                 </button>
                 <button
                   onClick={() => {
@@ -527,28 +671,26 @@ function IncidentDetail() {
                       reopen(inc.id);
                     }
                   }}
-                  className="rounded border border-accent/25 bg-accent/8 px-3 py-1.5 text-[11px] text-accent/70 transition hover:border-accent/45 hover:text-accent"
+                  className="whitespace-nowrap rounded border border-accent/25 bg-accent/8 px-3 py-1.5 text-[11px] text-accent/70 transition hover:border-accent/45 hover:text-accent"
                 >
-                  Reopen Incident
+                  Reopen<span className="hidden sm:inline"> Incident</span>
                 </button>
               </>
             ) : (
               <button
                 onClick={() => setShowStandDown(true)}
-                className="rounded border border-amber-500/25 bg-amber-500/8 px-3 py-1.5 text-[11px] text-amber-300/60 transition hover:border-amber-500/40 hover:text-amber-300/90"
+                className="whitespace-nowrap rounded border border-amber-500/25 bg-amber-500/8 px-3 py-1.5 text-[11px] text-amber-300/60 transition hover:border-amber-500/40 hover:text-amber-300/90"
               >
                 Stand Down
               </button>
             )}
 
+            {/* Phones delete from the incident list, where the card's Delete
+                stays visible, so the header keeps room for the name. */}
             {canDelete && (
               <button
-                onClick={() => {
-                  if (confirm(`Delete incident "${inc.incidentName || 'Untitled'}"?`)) {
-                    removeIncident(inc.id);
-                  }
-                }}
-                className="rounded border border-white/8 px-3 py-1.5 text-[11px] text-white/30 transition hover:border-red-500/30 hover:text-red-400/70"
+                onClick={() => setShowDelete(true)}
+                className="hidden rounded border border-white/8 px-3 py-1.5 text-[11px] text-white/30 transition hover:border-red-500/30 hover:text-red-400/70 sm:inline-flex"
               >
                 Delete
               </button>
@@ -562,7 +704,7 @@ function IncidentDetail() {
                     ? 'border-white/12 text-white/50 hover:border-white/22 hover:text-white'
                     : 'border-accent/30 bg-accent/8 text-accent/80 hover:border-accent/50 hover:text-accent'
                 }`}
-                title={dockCollapsed ? 'Show the live-map dock' : 'Hide the map — full-width workspace'}
+                title={dockCollapsed ? 'Show the live-map dock' : 'Hide the map — full-width workspace (map layers move under the Situation Report)'}
                 aria-pressed={!dockCollapsed}
               >
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -575,13 +717,14 @@ function IncidentDetail() {
             )}
             <button
               onClick={close}
-              className="flex items-center gap-1.5 rounded border border-white/12 px-3 py-1.5 text-[11px] text-white/50 transition hover:border-white/22 hover:text-white"
+              className="flex items-center gap-1.5 rounded border border-white/12 px-2.5 py-1.5 text-[11px] text-white/50 transition hover:border-white/22 hover:text-white sm:px-3"
               aria-label="Close"
+              title="Close the crisis workspace"
             >
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
                 <path d="M6 6L18 18M6 18L18 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
               </svg>
-              Esc
+              <span className="hidden sm:inline">Esc</span>
             </button>
           </div>
       </header>
@@ -589,34 +732,46 @@ function IncidentDetail() {
       <div className="flex min-h-0 flex-1">
         {/* Primary workspace: tabs + tab content */}
         <div className="pointer-events-auto flex min-w-0 flex-1 flex-col bg-ink-950 pb-safe">
-          {/* Tabs */}
-          <div className="flex shrink-0 gap-1 border-b border-white/8 bg-ink-900/40 px-5 py-2">
+          {/* Tabs. Scroll sideways rather than clip on narrow screens. */}
+          <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-white/8 bg-ink-900/40 px-3 py-2 sm:px-5" aria-label="Incident sections">
             {TABS.map((tab) => (
               <button
                 key={tab.id}
+                aria-current={activeTab === tab.id ? 'true' : undefined}
                 onClick={() => setTab(tab.id)}
-                className={`rounded-md px-3.5 py-1.5 text-[12px] font-medium transition ${
+                className={`flex shrink-0 items-center whitespace-nowrap rounded-md px-3.5 py-1.5 text-[12px] font-medium transition ${
                   activeTab === tab.id ? 'bg-accent/15 text-accent' : 'text-white/40 hover:text-white/65'
                 }`}
               >
                 {tab.label}
+                {tabCounts[tab.id] && <TabCountBadge count={tabCounts[tab.id]!} />}
               </button>
             ))}
             {/* /20, not /18: slash opacities outside Tailwind's scale don't
-                generate, and the un-styled text renders bright instead of faint. */}
+                generate, and the un-styled text renders bright instead of faint.
+                Hidden on phones, where tab width is scarce. */}
             {['Resource Tracker', 'Comms Log'].map((label) => (
-              <button key={label} disabled className="cursor-not-allowed rounded-md px-3.5 py-1.5 text-[12px] font-medium text-white/20" title="Coming soon">
+              <button key={label} disabled className="hidden shrink-0 cursor-not-allowed whitespace-nowrap rounded-md px-3.5 py-1.5 text-[12px] font-medium text-white/20 sm:block" title="Coming soon">
                 {label}
               </button>
             ))}
-          </div>
+          </nav>
 
           {/* Content */}
-          <main className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+          <main className="min-h-0 flex-1 overflow-y-auto px-3 py-5 sm:px-5">
             {activeTab === 'situation-report' && <SituationReport />}
             {activeTab === 'intake' && <IntakeTab />}
             {activeTab === 'checklists' && <ChecklistsTab />}
             {activeTab === 'iap' && <IapTab />}
+            {/* The drawn-layer toolkit normally sits in the map dock. Without
+                the dock (phones, or the Map toggle off) it lives here instead,
+                so layers can always be created, drawn, hidden and deleted.
+                Only one copy is ever mounted. Same archived freeze as the dock's. */}
+            {!showDock && activeTab === 'situation-report' && (
+              <fieldset disabled={isArchived} className="m-0 mt-6 min-w-0 border-0 p-0">
+                <MapLayersSection />
+              </fieldset>
+            )}
           </main>
         </div>
 
@@ -629,7 +784,20 @@ function IncidentDetail() {
       <CrisisReportModal incident={inc} onClose={() => setShowReport(false)} />
     )}
     {showStandDown && (
-      <StandDownModal incident={inc} onClose={() => setShowStandDown(false)} />
+      <StandDownModal
+        incident={inc}
+        onClose={() => setShowStandDown(false)}
+        // Stays on the now-archived incident, whose header hosts the review.
+        onOpenReport={() => { setShowStandDown(false); setShowReport(true); }}
+      />
+    )}
+    {showDelete && (
+      <DeleteIncidentDialog
+        incident={inc}
+        requirePhrase={!isArchived}
+        onClose={() => setShowDelete(false)}
+        onConfirm={() => { setShowDelete(false); removeIncident(inc.id); }}
+      />
     )}
     </>
   );
@@ -639,9 +807,10 @@ function IncidentDetail() {
 
 function IncidentListShell() {
   const close = useCrisisStore((s) => s.close);
+  useEffect(() => { framedIncidentId = null; }, []);
   return (
     <div className="fixed inset-0 z-[2000] flex flex-col bg-ink-950">
-      <header className="flex shrink-0 items-center gap-4 border-b border-white/10 bg-ink-900 px-6 py-3.5">
+      <header className="flex shrink-0 items-center gap-4 border-b border-white/10 bg-ink-900 px-4 py-3.5 sm:px-6">
         <div className="flex items-center gap-2.5">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
@@ -655,16 +824,17 @@ function IncidentListShell() {
         </div>
         <button
           onClick={close}
-          className="ml-auto flex items-center gap-1.5 rounded border border-white/12 px-3 py-1.5 text-[11px] text-white/50 transition hover:border-white/22 hover:text-white"
+          className="ml-auto flex items-center gap-1.5 rounded border border-white/12 px-2.5 py-1.5 text-[11px] text-white/50 transition hover:border-white/22 hover:text-white sm:px-3"
           aria-label="Close"
+          title="Close the crisis workspace"
         >
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
             <path d="M6 6L18 18M6 18L18 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>
-          Esc
+          <span className="hidden sm:inline">Esc</span>
         </button>
       </header>
-      <main className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+      <main className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6">
         <IncidentList />
       </main>
     </div>
@@ -677,15 +847,30 @@ function IncidentListShell() {
 // overlay is lazy-loaded and only mounted while open — see App.tsx.
 export function CrisisOverlay() {
   const open  = useCrisisStore((s) => s.open);
-  const close = useCrisisStore((s) => s.close);
   const activeIncidentId = useCrisisStore((s) => s.activeIncidentId);
 
+  // Esc steps back one level at a time. It never tears the whole workspace
+  // down from inside a field or popover (see escapeLayers.ts for the order).
+  // Window BUBBLE phase on purpose: the modals' capture listeners, React
+  // handlers that preventDefault(), and the admin page (which stops every key
+  // at the document) all get the press first.
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
+      if (dismissTopEscapeLayer()) return;
+      const focused = document.activeElement;
+      if (isTextEntry(focused)) {
+        focused.blur();
+        return;
+      }
+      const s = useCrisisStore.getState();
+      if (s.activeIncidentId) s.backToList();
+      else s.close();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, close]);
+  }, [open]);
 
   if (!open) return null;
 

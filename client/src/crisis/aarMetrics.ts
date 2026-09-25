@@ -1,13 +1,21 @@
-import { entryTypeOf, type ActionLogEntry, type Incident, type PersonnelAssignment } from './crisisStore';
+import { assignmentRoleTitle, entryTypeOf, type ActionLogEntry, type Incident, type PersonnelAssignment } from './crisisStore';
 
 // ── AAR response metrics (Track 6) ───────────────────────────────────────────
 // Pure computations over the incident record — every number here must be
 // derivable from data the incident actually captured (the W3 log and the
 // assignment history); nothing is estimated.
 
+/** What the Duration was measured to — the stat card says so. */
+export type DurationBasis = 'end' | 'stand-down' | 'now';
+
 export interface AarMetrics {
-  /** Operational span: incident start (or creation) → stand-down (or now). */
+  /**
+   * Operational span: incident start (or creation) → the incident's End time
+   * (entered by the operator, or stamped by stand-down when left blank), else
+   * stand-down, else now.
+   */
   durationMs: number;
+  durationBasis: DurationBasis;
   /** Creation → first transition to Active during the FIRST activation run
    * (transitions after a stand-down are re-activations, not this metric).
    * null when the incident began life Active (the store's creation default)
@@ -33,10 +41,34 @@ const ts = (iso: string | undefined | null): number | null => {
   return Number.isNaN(t) ? null : t;
 };
 
+/**
+ * An End time a stand-down stamped by itself (the operator left it blank) on
+ * an incident that has been reopened since: it did not end then. The stamp is
+ * recorded on the stood-down log entry (standDownIncident), and the next
+ * stand-down re-stamps it.
+ */
+function isReopenedAutoEnd(inc: Incident): boolean {
+  if (inc.archivedAt || !inc.incidentEndDatetime) return false;
+  let latest: ActionLogEntry | undefined;
+  for (const e of inc.actionLog) {
+    if (e.system === 'stood-down' && (!latest || (ts(e.timestamp) ?? 0) > (ts(latest.timestamp) ?? 0))) latest = e;
+  }
+  return latest?.meta?.endAuto === 'true' && latest.meta.endedAt === inc.incidentEndDatetime;
+}
+
 export function computeAarMetrics(inc: Incident): AarMetrics {
   const created = ts(inc.createdAt) ?? Date.now();
   const start = ts(inc.incidentDatetime) ?? created;
-  const end = ts(inc.archivedAt) ?? Date.now();
+  // Measured to the incident's own End when it has one: operators often stand
+  // an incident down hours after it actually ended (next shift, after the
+  // paperwork), so stand-down time alone inflates the headline figure. An End
+  // before the start is a typo, not a span — fall back rather than show 0m.
+  const entered = isReopenedAutoEnd(inc) ? null : ts(inc.incidentEndDatetime);
+  const archived = ts(inc.archivedAt);
+  const [end, durationBasis]: [number, DurationBasis] =
+    entered !== null && entered >= start ? [entered, 'end']
+    : archived !== null ? [archived, 'stand-down']
+    : [Date.now(), 'now'];
   const durationMs = Math.max(0, end - start);
 
   // Time to Active — FIRST activation run only. Incidents are created Active
@@ -94,6 +126,7 @@ export function computeAarMetrics(inc: Incident): AarMetrics {
 
   return {
     durationMs,
+    durationBasis,
     timeToActiveMs,
     activeAtCreation,
     personnelCount: names.size,
@@ -122,6 +155,8 @@ export interface SwimlaneBar {
   startMs: number;
   endMs: number;      // clamped to the lane window
   open: boolean;      // still assigned at window end
+  /** Sub-lane within the row: 0 unless another holder overlapped this span. */
+  lane: number;
 }
 
 export interface SwimlaneRow {
@@ -130,6 +165,10 @@ export interface SwimlaneRow {
   abbrev?: string;
   color: string;
   bars: SwimlaneBar[];
+  /** Sub-lanes the row needs: the most holders the role had at one time (≥ 1). */
+  lanes: number;
+  /** The role has since been removed from the org chart; its assignments remain the record. */
+  removed?: boolean;
 }
 
 export interface SwimlaneData {
@@ -138,10 +177,31 @@ export interface SwimlaneData {
   rows: SwimlaneRow[];
 }
 
+/** Removed roles have no color of their own any more — draw them neutral. */
+const REMOVED_ROLE_COLOR = '#94a3b8';
+
+/**
+ * Pack a row's bars (sorted by start) into sub-lanes, greedily: each bar takes
+ * the first lane that is free by its start, else opens a new one. A seat
+ * transfer (one holder ends as the next starts) stays in one lane; concurrent
+ * holders — support roles keep several at once — stack instead of drawing
+ * over each other. Returns the lane count.
+ */
+function packLanes(bars: SwimlaneBar[]): number {
+  const laneEnds: number[] = [];
+  for (const b of bars) {
+    let lane = laneEnds.findIndex((end) => end <= b.startMs);
+    if (lane === -1) { lane = laneEnds.length; laneEnds.push(b.endMs); } else laneEnds[lane] = b.endMs;
+    b.lane = lane;
+  }
+  return Math.max(1, laneEnds.length);
+}
+
 /**
  * The ICS progression: one row per role that was ever staffed, bars for each
  * assignment span. Row order follows the incident's own role list (which is
- * authored hierarchically: IC, command staff, then general staff).
+ * authored hierarchically: IC, command staff, then general staff); roles since
+ * removed from the org chart follow, so their holders stay on the record.
  */
 export function buildSwimlane(inc: Incident): SwimlaneData | null {
   if (inc.assignments.length === 0) return null;
@@ -154,10 +214,9 @@ export function buildSwimlane(inc: Incident): SwimlaneData | null {
   const archived = ts(inc.archivedAt);
   const t1 = Math.max(archived ?? Date.now(), ...ends, t0 + 60_000);
 
-  const rows: SwimlaneRow[] = [];
-  for (const role of inc.roles) {
-    const bars = inc.assignments
-      .filter((a) => a.roleId === role.id)
+  const barsFor = (roleId: string): SwimlaneBar[] =>
+    inc.assignments
+      .filter((a) => a.roleId === roleId)
       .map((a) => {
         const s = ts(a.startedAt) ?? t0;
         const e = ts(a.endedAt);
@@ -166,12 +225,30 @@ export function buildSwimlane(inc: Incident): SwimlaneData | null {
           startMs: Math.max(t0, Math.min(s, t1)),
           endMs: e === null ? t1 : Math.max(t0, Math.min(e, t1)),
           open: e === null,
+          lane: 0,
         };
       })
-      .sort((a, b) => a.startMs - b.startMs);
+      .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+
+  const rows: SwimlaneRow[] = [];
+  for (const role of inc.roles) {
+    const bars = barsFor(role.id);
     if (bars.length > 0) {
-      rows.push({ roleId: role.id, title: role.title, abbrev: role.abbrev, color: role.color, bars });
+      rows.push({ roleId: role.id, title: role.title, abbrev: role.abbrev, color: role.color, bars, lanes: packLanes(bars) });
     }
+  }
+  const live = new Set(inc.roles.map((r) => r.id));
+  const removedIds = [...new Set(inc.assignments.map((a) => a.roleId))].filter((id) => !live.has(id));
+  for (const roleId of removedIds) {
+    const bars = barsFor(roleId);
+    rows.push({
+      roleId,
+      title: assignmentRoleTitle(inc, roleId) ?? 'Removed role',
+      color: REMOVED_ROLE_COLOR,
+      bars,
+      lanes: packLanes(bars),
+      removed: true,
+    });
   }
   return rows.length > 0 ? { t0, t1, rows } : null;
 }
