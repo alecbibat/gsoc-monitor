@@ -21,11 +21,15 @@ function polyfillWithResolvers(): void {
   };
 }
 
+// The LEGACY build, main bundle and worker: pdf.js 6 calls brand-new built-ins
+// (Map/WeakMap.prototype.getOrInsertComputed) that current Safari and
+// pre-2026 Chromium don't have, and the modern build doesn't polyfill them —
+// every page rendered blank there. The legacy build bundles those polyfills.
 async function loadPdfjs() {
   polyfillWithResolvers();
   const [pdfjs, worker] = await Promise.all([
-    import('pdfjs-dist'),
-    import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
+    import('pdfjs-dist/legacy/build/pdf.mjs'),
+    import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'),
   ]);
   pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
   return pdfjs;

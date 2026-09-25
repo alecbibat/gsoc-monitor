@@ -194,8 +194,11 @@ export function useSaveShortcut(onSave: () => void) {
         ref.current();
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // Document CAPTURE phase: the admin page stops every keydown at the
+    // document's bubble phase (so typing never reaches the map's window-level
+    // shortcuts), which means a window listener here would never fire.
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
   }, []);
 }
 
