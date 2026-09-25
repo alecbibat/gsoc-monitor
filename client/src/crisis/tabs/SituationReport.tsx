@@ -7,6 +7,7 @@ import { INCIDENT_CATEGORIES, INCIDENT_STATUSES, incidentTypesInCategory } from 
 import { IcsOrgChart } from '../IcsOrgChart';
 import { ActionLog } from '../ActionLog';
 import { parseCoords } from '../parseCoords';
+import { fromLocalInput, nowForInput, toLocalInput } from '../localDateTime';
 import { SHARE_LIVE_LAYER_GROUPS, isShareLiveLayerId } from '../shareLiveLayers';
 import { measureLayer } from '../layerMeasure';
 import { LOCATION_GROUPS } from '../../layers/locations/locations';
@@ -60,6 +61,19 @@ function TextInput({ value, onChange, placeholder }: { value: string; onChange: 
   );
 }
 
+function NowButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Set to the current time"
+      className="shrink-0 self-center rounded border border-white/12 px-2 py-1 text-[9px] uppercase tracking-wider text-white/40 transition hover:border-white/25 hover:text-white/70"
+    >
+      Now
+    </button>
+  );
+}
+
 // ── Coord import panel ────────────────────────────────────────────────────────
 
 const COORD_HINT: Record<DrawGeometry, string> = {
@@ -74,25 +88,38 @@ const COORD_EXAMPLE: Record<DrawGeometry, string> = {
   point:   '34.0522, -118.2437',
 };
 
+// Fewest vertices that still make the shape — fewer would render as nothing
+// (or a degenerate sliver) on the map.
+const COORD_MIN_POINTS: Record<DrawGeometry, number> = { polygon: 3, line: 2, point: 1 };
+
 function CoordImportPanel({ layer, onClose }: { layer: DrawLayer; onClose: () => void }) {
   const updateDrawLayer = useCrisisStore((s) => s.updateDrawLayer);
   const [raw, setRaw] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // Some lines parsed and some didn't: the points are usable, but the operator
+  // must see that vertices were dropped before applying them.
+  const [warning, setWarning] = useState<string | null>(null);
   const [preview, setPreview] = useState<number | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => { taRef.current?.focus(); }, []);
 
   const geom = layer.geometry;
+  const minPoints = COORD_MIN_POINTS[geom];
 
   const handleChange = (v: string) => {
     setRaw(v);
     setError(null);
+    setWarning(null);
     setPreview(null);
     if (!v.trim()) return;
     const result = parseCoords(v);
-    if (result.points.length > 0) setPreview(result.points.length);
-    if (result.error && result.points.length === 0) setError(result.error);
+    if (result.points.length > 0) {
+      setPreview(result.points.length);
+      setWarning(result.error);
+    } else {
+      setError(result.error);
+    }
   };
 
   const handleApply = () => {
@@ -101,6 +128,14 @@ function CoordImportPanel({ layer, onClose }: { layer: DrawLayer; onClose: () =>
       setError(result.error ?? 'No valid coordinates found.');
       return;
     }
+    if (result.points.length < minPoints) {
+      setError(`${geom === 'polygon' ? 'An area' : 'A line'} needs at least ${minPoints} points — only ${result.points.length} parsed.`);
+      return;
+    }
+    if (
+      layer.positions.length > 0 &&
+      !confirm(`Replace the ${layer.positions.length} existing point${layer.positions.length === 1 ? '' : 's'} on "${layer.name}"?`)
+    ) return;
     const pts = geom === 'point' ? [result.points[0]] : result.points;
     updateDrawLayer(layer.id, { positions: pts });
     onClose();
@@ -132,12 +167,16 @@ function CoordImportPanel({ layer, onClose }: { layer: DrawLayer; onClose: () =>
         spellCheck={false}
       />
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {preview !== null && !error && (
-          <span className="text-[9px] text-accent-ok">
+          <span className={`text-[9px] ${preview < minPoints ? 'text-accent-warn' : 'text-accent-ok'}`}>
             ✓ {preview} point{preview !== 1 ? 's' : ''} parsed
             {geom === 'point' && preview > 1 ? ' — first point will be used' : ''}
+            {preview < minPoints ? ` — needs at least ${minPoints}` : ''}
           </span>
+        )}
+        {warning && !error && (
+          <span className="text-[9px] text-accent-warn">{warning}</span>
         )}
         {error && (
           <span className="text-[9px] text-red-400/80">{error}</span>
@@ -667,23 +706,27 @@ export function SituationReport() {
               <TextInput value={inc.incidentName} onChange={(v) => update({ incidentName: v })} placeholder="e.g. Maui Wildfire Complex" />
             </FieldRow>
 
+            {/* Stored as UTC instants so every responder's clock reads the
+                same moment; the input shows local wall time (localDateTime.ts). */}
             <FieldRow label="Start">
               <input
                 type="datetime-local"
-                className="flex-1 rounded border border-white/10 bg-white/10 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25 focus:bg-white/15"
-                value={inc.incidentDatetime}
-                onChange={(e) => update({ incidentDatetime: e.target.value })}
+                className="min-w-0 flex-1 rounded border border-white/10 bg-white/10 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25 focus:bg-white/15"
+                value={toLocalInput(inc.incidentDatetime)}
+                onChange={(e) => update({ incidentDatetime: fromLocalInput(e.target.value) })}
               />
+              <NowButton onClick={() => update({ incidentDatetime: nowForInput() })} />
             </FieldRow>
 
             <FieldRow label="End">
               <input
                 type="datetime-local"
-                className="flex-1 rounded border border-white/10 bg-white/10 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25 focus:bg-white/15"
-                value={inc.incidentEndDatetime ?? ''}
-                min={inc.incidentDatetime || undefined}
-                onChange={(e) => update({ incidentEndDatetime: e.target.value })}
+                className="min-w-0 flex-1 rounded border border-white/10 bg-white/10 px-2.5 py-1.5 text-[12px] text-white/85 outline-none transition focus:border-white/25 focus:bg-white/15"
+                value={toLocalInput(inc.incidentEndDatetime)}
+                min={toLocalInput(inc.incidentDatetime) || undefined}
+                onChange={(e) => update({ incidentEndDatetime: fromLocalInput(e.target.value) })}
               />
+              <NowButton onClick={() => update({ incidentEndDatetime: nowForInput() })} />
             </FieldRow>
 
             <FieldRow label="Location">

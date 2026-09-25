@@ -252,6 +252,28 @@ export function resolveIntake(
   };
 }
 
+/**
+ * The distinct scopes that actually contributed to a resolved template, in
+ * resolution order — what the tabs summarize as "General + 🔥 Wildfire +
+ * 🏔 Grand Canyon". A scope with no content for this incident is left out.
+ */
+export function contributingScopes(scopes: Iterable<TemplateScope | undefined>): TemplateScope[] {
+  const byKey = new Map<string, TemplateScope>();
+  for (const s of scopes) if (s && !byKey.has(scopeKey(s))) byKey.set(scopeKey(s), s);
+  return [...byKey.values()]
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => scopeRank(a.s) - scopeRank(b.s) || a.i - b.i)
+    .map(({ s }) => s);
+}
+
+export function checklistScopes(template: ChecklistTemplate): TemplateScope[] {
+  return contributingScopes(template.roles.flatMap((r) => r.phases.flatMap((p) => p.items.map((i) => i.scope))));
+}
+
+export function intakeScopes(template: IntakeTemplate): TemplateScope[] {
+  return contributingScopes(template.groups.map((g) => g.scope));
+}
+
 // ── Retired entries (state that outlived its template) ───────────────────────
 
 export interface RetiredChecklistEntry {
@@ -339,19 +361,51 @@ export function mintTemplateId(prefix = 'x'): string {
   return `${prefix}-${s}`;
 }
 
-/** Type guard for a config arriving over the wire (share route: untrusted-ish JSON). */
+// ── Wire guard ───────────────────────────────────────────────────────────────
+
+const isObj = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === 'object' && !Array.isArray(v);
+const isStr = (v: unknown): v is string => typeof v === 'string';
+const isOptStr = (v: unknown) => v === undefined || v === null || typeof v === 'string';
+
+function isScope(v: unknown): v is TemplateScope {
+  return isObj(v) &&
+    (v.incidentType === null || isStr(v.incidentType)) &&
+    (v.propertyId === null || isStr(v.propertyId));
+}
+
+function isRoleMeta(v: unknown): boolean {
+  return isObj(v) && isStr(v.id) && isStr(v.code) && isStr(v.title) && isStr(v.color) &&
+    isOptStr(v.reportsTo) && isOptStr(v.directs);
+}
+
+function isChecklistItem(v: unknown): boolean {
+  return isObj(v) && isStr(v.id) && isStr(v.roleId) && isStr(v.phase) && isStr(v.text);
+}
+
+function isIntakeGroup(v: unknown): boolean {
+  return isObj(v) && isStr(v.id) && isStr(v.label) && Array.isArray(v.questions) &&
+    v.questions.every((q) => isObj(q) && isStr(q.id) && isStr(q.text));
+}
+
+/**
+ * Type guard for a config arriving over the wire. The share route's answer is
+ * untrusted-ish JSON rendered straight into the page, so every field the
+ * resolver and the boards read is checked — one malformed item must fail the
+ * guard (the caller shows a retry), not crash the page mid-render.
+ */
 export function isCrisisTemplatesConfig(v: unknown): v is CrisisTemplatesConfig {
-  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
-  const c = v as Record<string, unknown>;
-  const roles = (c.checklistRoles as { roles?: unknown } | undefined)?.roles;
-  return Array.isArray(roles) &&
-    roles.every((r) => !!r && typeof r === 'object' && typeof (r as ChecklistRoleMeta).id === 'string') &&
-    Array.isArray(c.checklistBlocks) &&
-    (c.checklistBlocks as unknown[]).every((b) =>
-      !!b && typeof b === 'object' && Array.isArray((b as ChecklistBlock).items) &&
-      !!(b as ChecklistBlock).scope && typeof (b as ChecklistBlock).scope === 'object') &&
-    Array.isArray(c.intakeBlocks) &&
-    (c.intakeBlocks as unknown[]).every((b) =>
-      !!b && typeof b === 'object' && Array.isArray((b as IntakeBlock).groups) &&
-      !!(b as IntakeBlock).scope && typeof (b as IntakeBlock).scope === 'object');
+  if (!isObj(v)) return false;
+  const roles = isObj(v.checklistRoles) ? v.checklistRoles.roles : undefined;
+  const retiredChk = v.retiredChecklistItems;
+  const retiredIntake = v.retiredIntakeQuestions;
+  return Array.isArray(roles) && roles.every(isRoleMeta) &&
+    Array.isArray(v.checklistBlocks) &&
+    v.checklistBlocks.every((b) => isObj(b) && isScope(b.scope) && Array.isArray(b.items) && b.items.every(isChecklistItem)) &&
+    Array.isArray(v.intakeBlocks) &&
+    v.intakeBlocks.every((b) => isObj(b) && isScope(b.scope) && Array.isArray(b.groups) && b.groups.every(isIntakeGroup)) &&
+    (retiredChk === undefined || (isObj(retiredChk) &&
+      Object.values(retiredChk).every((r) => isObj(r) && isStr(r.text) && isOptStr(r.roleId)))) &&
+    (retiredIntake === undefined || (isObj(retiredIntake) &&
+      Object.values(retiredIntake).every((r) => isObj(r) && isStr(r.text) && isOptStr(r.groupLabel))));
 }

@@ -8,7 +8,9 @@ import { wrap } from '../asyncWrap';
 import { normalizeIncidentTypeId } from '../incidentTaxonomy';
 import { applyChecklistToggle, cleanActor, invalidToggleReason, type ChecklistItemState } from '../checklist';
 import { broadcastIncident } from './incidentBus';
-import { findIapForType, sendPdf } from './iap';
+import { findIapForScope, sendPdf } from './iap';
+import { loadEffectiveConfig } from '../crisisTemplates/store';
+import { shareTemplatesConfig } from '../crisisTemplates/effective';
 
 const router = Router();
 
@@ -129,6 +131,48 @@ function gonePayload(row: {
   };
 }
 
+interface ShareRow {
+  incident_id: string | null;
+  snapshot: Record<string, unknown>;
+  password_hash: string | null;
+  active: boolean;
+  expires_at: Date | null;
+  revoked_at: Date | null;
+  live: boolean;
+}
+
+/**
+ * The viewer-side read gate every share read path shares: load the link,
+ * check the viewer (session or break-glass key), refuse a dead link with the
+ * closure payload. Answers 404 / 401 / 410 itself and returns null; otherwise
+ * the live row and how the viewer got in.
+ */
+async function openLiveShare(
+  req: Request, res: Response, token: string
+): Promise<{ row: ShareRow; gate: Extract<ShareGateResult, { ok: true }> } | null> {
+  const { rows: [row] } = await withPasswordColumn(() => pool.query<ShareRow>(
+    `SELECT incident_id, snapshot, password_hash, active, expires_at, revoked_at,
+            (${LIVE}) AS live
+     FROM share_links WHERE token = $1`,
+    [token]
+  ));
+  if (!row) { res.status(404).json({ error: 'Not found' }); return null; }
+  const gate = await gateShare(req, row.password_hash);
+  if (!gate.ok) { denyShare(res, gate); return null; }
+  if (!row.live) { res.status(410).json(gonePayload(row)); return null; }
+  return { row, gate };
+}
+
+/** The incident type (normalized) and property a share snapshot resolves templates / the IAP for. */
+function snapshotScope(snapshot: Record<string, unknown> | null): { incidentType: string; propertyId: string | null } {
+  const rawType = snapshot?.incidentType;
+  const rawProp = snapshot?.locationGroupId;
+  return {
+    incidentType: normalizeIncidentTypeId(typeof rawType === 'string' ? rawType : null),
+    propertyId: typeof rawProp === 'string' && rawProp ? rawProp : null,
+  };
+}
+
 // POST /api/crisis/publish — create a new share link, returns token + url
 router.post('/publish', requireAuth, wrap(async (req: Request, res: Response) => {
   const snapshot = req.body;
@@ -207,18 +251,10 @@ router.patch('/share/:token', requireAuth, wrap(async (req: Request, res: Respon
 // or expired link answers 410 with a closure summary — an exec opening the
 // link the morning after stand-down gets an answer, not a broken page.
 router.get('/share/:token', wrap(async (req: Request, res: Response) => {
-  const { rows: [row] } = await withPasswordColumn(() => pool.query(
-    `SELECT snapshot, password_hash, active, expires_at, revoked_at,
-            (${LIVE}) AS live
-     FROM share_links WHERE token = $1`,
-    [req.params.token]
-  ));
-  if (!row) { res.status(404).json({ error: 'Not found' }); return; }
-  const gate = await gateShare(req, row.password_hash);
-  if (!gate.ok) { denyShare(res, gate); return; }
-  if (!row.live) { res.status(410).json(gonePayload(row)); return; }
-  logShareAccess(req.params.token, req, gate);
-  res.json(row.snapshot);
+  const open = await openLiveShare(req, res, req.params.token);
+  if (!open) return;
+  logShareAccess(req.params.token, req, open.gate);
+  res.json(open.row.snapshot);
 }, 'crisis'));
 
 // GET /api/crisis/share/:token/access — editor-side access stats. Now that
@@ -344,16 +380,9 @@ router.post('/share/:token/checklist/:itemId', wrap(async (req: Request, res: Re
   const { token, itemId } = req.params;
   const invalid = invalidToggleReason(itemId, req.body);
   if (invalid) { res.status(400).json({ error: invalid }); return; }
-  const { rows: [row] } = await withPasswordColumn(() => pool.query(
-    `SELECT incident_id, snapshot, password_hash, active, expires_at, revoked_at,
-            (${LIVE}) AS live
-     FROM share_links WHERE token = $1`,
-    [token]
-  ));
-  if (!row) { res.status(404).json({ error: 'Not found' }); return; }
-  const gate = await gateShare(req, row.password_hash);
-  if (!gate.ok) { denyShare(res, gate); return; }
-  if (!row.live) { res.status(410).json(gonePayload(row)); return; }
+  const open = await openLiveShare(req, res, token);
+  if (!open) return;
+  const { row, gate } = open;
   if (!row.incident_id) {
     // Pre-W4 links were published without an incident id — there is no parent
     // record to write to, so the checklist stays read-only on those.
@@ -377,25 +406,49 @@ router.post('/share/:token/checklist/:itemId', wrap(async (req: Request, res: Re
   res.json({ checklists: result.checklists });
 }, 'crisis'));
 
-// GET /api/crisis/share/:token/iap — the Incident Action Plan PDF for this
-// incident's type (fallback: the general default document). Same gate as the
-// snapshot; 404 with { noIap: true } when nothing is uploaded.
+// GET /api/crisis/share/:token/iap — the Incident Action Plan PDF that best
+// fits this incident (type + property, then type, then property, then the
+// general default — iap.ts). Same gate as the snapshot; 404 with
+// { noIap: true } when nothing applies.
 router.get('/share/:token/iap', wrap(async (req: Request, res: Response) => {
-  const { rows: [row] } = await withPasswordColumn(() => pool.query(
-    `SELECT snapshot, password_hash, active, expires_at, revoked_at,
-            (${LIVE}) AS live
-     FROM share_links WHERE token = $1`,
-    [req.params.token]
-  ));
-  if (!row) { res.status(404).json({ error: 'Not found' }); return; }
-  const gate = await gateShare(req, row.password_hash);
-  if (!gate.ok) { denyShare(res, gate); return; }
-  if (!row.live) { res.status(410).json(gonePayload(row)); return; }
-  const rawType = (row.snapshot as { incidentType?: unknown })?.incidentType;
-  const doc = await findIapForType(normalizeIncidentTypeId(typeof rawType === 'string' ? rawType : null));
-  if (!doc) { res.status(404).json({ error: 'No IAP uploaded for this incident type', noIap: true }); return; }
+  const open = await openLiveShare(req, res, req.params.token);
+  if (!open) return;
+  const { incidentType, propertyId } = snapshotScope(open.row.snapshot);
+  const doc = await findIapForScope(incidentType, propertyId);
+  if (!doc) { res.status(404).json({ error: 'No IAP uploaded for this incident', noIap: true }); return; }
   sendPdf(res, doc.name, doc.content, doc.updated_at);
 }, 'crisis'));
+
+// GET /api/crisis/share/:token/templates — the checklist / intake templates
+// this incident resolves to, for the share page's Checklists and Intake tabs.
+// Same gate as the snapshot. Only the blocks that apply to the snapshot's
+// type + property are sent (a viewer has no business reading every scope's
+// content, nor the names of the admins who edited them), plus the text of
+// any state the incident holds for lines it no longer resolves to — so that
+// record stays readable on the share page too.
+router.get('/share/:token/templates', wrap(async (req: Request, res: Response) => {
+  const open = await openLiveShare(req, res, req.params.token);
+  if (!open) return;
+  const snap = open.row.snapshot ?? {};
+  const { incidentType, propertyId } = snapshotScope(snap);
+  const config = await loadEffectiveConfig();
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(shareTemplatesConfig(config, incidentType, propertyId, snap.checklists, snap.intake));
+}, 'crisis'));
+
+/**
+ * An admin changed the templates: tell every connected share viewer, so an
+ * open share page can refetch its checklist / intake (`templates` event; no
+ * payload — each viewer's own fetch goes through its gate).
+ */
+export function broadcastShareTemplates(): void {
+  const payload = `event: templates\ndata: ${JSON.stringify({ at: new Date().toISOString() })}\n\n`;
+  for (const clients of sseClients.values()) {
+    for (const client of clients) {
+      try { client.write(payload); } catch { /* disconnected */ }
+    }
+  }
+}
 
 // GET /api/crisis/share/:token/events — SSE stream for live updates (no account
 // needed, but password-protected links require the ?k= view key)

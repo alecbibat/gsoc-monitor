@@ -23,30 +23,44 @@ interface TemplatesState {
   config: CrisisTemplatesConfig | null;
   status: TemplatesStatus;
   error: string | null;
-  /** Fetch the effective config; concurrent calls share one request. */
+  /** Fetch the effective config; calls during a fetch coalesce into one follow-up. */
   load: () => Promise<void>;
   /** Adopt a config the server just returned (admin saves). */
   setConfig: (config: CrisisTemplatesConfig) => void;
 }
 
+// One request at a time. A load() asked for while one is running queues ONE
+// follow-up instead of sharing it: the running GET may have been answered
+// before the save that prompted the new call (two quick admin saves, or a
+// `templates` event landing mid-reconnect), and sharing it would strand the
+// editor on the older config until the next event.
 let inflight: Promise<void> | null = null;
+let followUp: Promise<void> | null = null;
+// Bumped by setConfig: a GET that started before an admin's save response was
+// adopted must not overwrite it with what may be the pre-save config (the
+// save's `templates` event triggers a fresh load anyway).
+let generation = 0;
 
-export const useTemplatesStore = create<TemplatesState>((set) => ({
-  config: null,
-  status: 'idle',
-  error: null,
+function describeLoadError(status: number): string {
+  if (status === 401) return 'Your session has expired — sign in again';
+  if (status === 403) return 'Not permitted to read the templates';
+  if (status >= 500) return `Server error (${status}) — try again shortly`;
+  return `HTTP ${status}`;
+}
 
-  load: () => {
-    if (inflight) return inflight;
+export const useTemplatesStore = create<TemplatesState>((set) => {
+  const start = (): Promise<void> => {
+    const gen = generation;
     set((s) => ({ status: s.config ? s.status : 'loading' }));
-    inflight = fetch('/api/crisis-templates', { credentials: 'include' })
+    inflight = fetch('/api/crisis-templates', { credentials: 'include', cache: 'no-cache' })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(describeLoadError(res.status));
         const body: unknown = await res.json();
-        if (!isCrisisTemplatesConfig(body)) throw new Error('unexpected response');
-        set({ config: body, status: 'ready', error: null });
+        if (!isCrisisTemplatesConfig(body)) throw new Error('Unexpected response from the server');
+        if (gen === generation) set({ config: body, status: 'ready', error: null });
       })
       .catch((err: unknown) => {
+        if (gen !== generation) return; // superseded by a save's config
         // Keep the last good config: a reload failing mid-incident must not
         // blank the checklist an operator is working from.
         const msg = err instanceof Error ? err.message : String(err);
@@ -55,10 +69,31 @@ export const useTemplatesStore = create<TemplatesState>((set) => ({
       })
       .finally(() => { inflight = null; });
     return inflight;
-  },
+  };
 
-  setConfig: (config) => set({ config, status: 'ready', error: null }),
-}));
+  return {
+    config: null,
+    status: 'idle',
+    error: null,
+
+    load: () => {
+      if (!inflight) return start();
+      if (!followUp) {
+        followUp = inflight.then(() => {
+          followUp = null;
+          // A caller may have started a fresh load in the gap — join it.
+          return inflight ?? start();
+        });
+      }
+      return followUp;
+    },
+
+    setConfig: (config) => {
+      generation += 1;
+      set({ config, status: 'ready', error: null });
+    },
+  };
+});
 
 export const useCrisisTemplates = () => useTemplatesStore((s) => s.config);
 

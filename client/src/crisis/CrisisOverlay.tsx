@@ -15,6 +15,7 @@ import { flyToBoundingBox } from '../cesium/flyTo';
 import { SituationReport, MapLayersSection } from './tabs/SituationReport';
 import { IntakeTab } from './tabs/Intake';
 import { ChecklistsTab } from './tabs/Checklists';
+import { IapTab } from './tabs/Iap';
 import { IncidentList } from './IncidentList';
 import { CrisisReportModal } from './CrisisReportModal';
 
@@ -22,6 +23,7 @@ const TABS: { id: CrisisTab; label: string }[] = [
   { id: 'situation-report', label: 'Situation Report' },
   { id: 'intake', label: 'Intake' },
   { id: 'checklists', label: 'Checklists' },
+  { id: 'iap', label: 'IAP' },
 ];
 
 // "expires in 51h" / "expires in 40m" / "expired"
@@ -614,6 +616,7 @@ function IncidentDetail() {
             {activeTab === 'situation-report' && <SituationReport />}
             {activeTab === 'intake' && <IntakeTab />}
             {activeTab === 'checklists' && <ChecklistsTab />}
+            {activeTab === 'iap' && <IapTab />}
           </main>
         </div>
 

@@ -57,3 +57,8 @@ export function scopeAudience(s: TemplateScope): string {
     default: return `Only ${scopeTypeLabel(s.incidentType!, false)} incidents at ${scopePropertyLabel(s.propertyId!, false)}`;
   }
 }
+
+/** Compact name for chips and summaries: "General", "🔥 Wildfire", "🔥 Wildfire · 🏔 Grand Canyon". */
+export function scopeChipLabel(s: TemplateScope, withIcon = true): string {
+  return scopeRank(s) === 0 ? 'General' : scopeLabel(s, withIcon);
+}

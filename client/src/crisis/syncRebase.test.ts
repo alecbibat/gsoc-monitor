@@ -27,8 +27,8 @@ describe('rebaseIncident', () => {
   });
 
   it('merges the intake answer map key by key', () => {
-    const local = { ...base, intake: { ...base.intake, 'g-what-2': 'Near the ridge trail' } };
-    const remote = { ...base, intake: { ...base.intake, 'g-life-1': 'No injuries' } };
+    const local: typeof base = { ...base, intake: { ...base.intake, 'g-what-2': 'Near the ridge trail' } };
+    const remote: typeof base = { ...base, intake: { ...base.intake, 'g-life-1': 'No injuries' } };
     expect(rebaseIncident(base, local, remote).intake).toEqual({
       'g-what-1': 'Smoke seen from lodge',
       'g-what-2': 'Near the ridge trail',
@@ -38,8 +38,8 @@ describe('rebaseIncident', () => {
 
   it('honors a local clear of an answer the peer did not touch', () => {
     const { 'g-what-1': _gone, ...cleared } = base.intake;
-    const local = { ...base, intake: cleared };
-    const remote = { ...base, intake: { ...base.intake, 'g-life-1': 'No injuries' } };
+    const local: typeof base = { ...base, intake: cleared };
+    const remote: typeof base = { ...base, intake: { ...base.intake, 'g-life-1': 'No injuries' } };
     expect(rebaseIncident(base, local, remote).intake).toEqual({ 'g-life-1': 'No injuries' });
   });
 

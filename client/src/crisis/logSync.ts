@@ -24,6 +24,10 @@ import { entryCanon } from './syncCanon';
 // - A PATCH that 404s means a peer deleted the entry: the edit yields
 //   deterministically (delete wins) — mark the entry synced so nothing
 //   re-appends it; the next broadcast drops it from the local store.
+// - A failure arms ONE backoff timer (5 s doubling to 60 s) that re-runs the
+//   diff. A rolled-back write is not in any queue, so "nothing in flight"
+//   does not mean "nothing unsent": the failure stays pending until a re-diff
+//   finds nothing left to push.
 
 const baselines = new Map<string, Map<string, string>>(); // incidentId → entryId → canon
 const inflight = new Set<string>();                       // appends in flight
@@ -31,6 +35,10 @@ const patchInflight = new Set<string>();                  // PATCHes in flight
 const pendingDeletes = new Set<string>();                 // deletes deferred behind an in-flight append
 const pendingPatches = new Map<string, { incidentId: string; timer: ReturnType<typeof setTimeout> }>();
 const PATCH_DEBOUNCE_MS = 800;
+const RETRY_BASE_MS = 5_000;
+const RETRY_MAX_MS = 60_000;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let retryDelay = RETRY_BASE_MS;
 
 const setSync = (s: 'saving' | 'saved' | 'error') => useCrisisStore.getState().setSyncState(s);
 
@@ -41,13 +49,42 @@ export function registerBlobIdleCheck(fn: () => boolean) {
   blobIdle = fn;
 }
 
-/** True while any log write is queued or in flight. */
+const busy = () => inflight.size > 0 || patchInflight.size > 0 || pendingPatches.size > 0;
+
+/** True while any log write is queued, in flight, or waiting to be retried. */
 export function hasPendingWork(): boolean {
-  return inflight.size > 0 || patchInflight.size > 0 || pendingPatches.size > 0;
+  return busy() || retryTimer !== null;
+}
+
+const resync = () => syncLogsFromStore(useCrisisStore.getState().incidents);
+
+// The indicator says "Unsaved — will retry"; this is the retry. Failures
+// land here, and only one timer is ever armed.
+function markFailed() {
+  setSync('error');
+  if (retryTimer !== null) return;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS);
+    resync();
+    quietIfIdle(); // nothing re-queued → nothing was left to push
+  }, retryDelay);
 }
 
 const quietIfIdle = () => {
-  if (!hasPendingWork() && blobIdle()) setSync('saved');
+  if (busy()) return;
+  if (retryTimer !== null) {
+    // The queue drained with a failure still armed (another write landed, or
+    // the watcher already re-sent it): re-diff now rather than sit on
+    // "Unsaved" until the timer. Anything still unsent goes out again; if
+    // nothing does, the failure has been made good.
+    clearTimeout(retryTimer);
+    retryTimer = null;
+    resync();
+    if (busy()) return;
+  }
+  retryDelay = RETRY_BASE_MS;
+  if (blobIdle()) setSync('saved');
 };
 
 /**
@@ -127,7 +164,7 @@ function postEntry(incidentId: string, entry: ActionLogEntry) {
       // Roll the baseline back so the next store change retries the append
       // (safe: POST is idempotent by entry id).
       baselines.get(incidentId)?.delete(entry.id);
-      setSync('error');
+      markFailed();
       console.warn('[log-sync] append failed:', err);
     });
 }
@@ -158,7 +195,12 @@ function patchBody(entry: ActionLogEntry) {
 function firePatch(incidentId: string, entryId: string, keepalive = false) {
   const inc = useCrisisStore.getState().incidents.find((i) => i.id === incidentId);
   const entry = inc?.actionLog.find((e) => e.id === entryId);
-  if (!entry) return;
+  if (!entry) {
+    // Removed while the edit waited out its debounce: nothing to send, but
+    // this timer may have been the last thing holding "Saving…".
+    quietIfIdle();
+    return;
+  }
   const sentCanon = entryCanon(entry);
   patchInflight.add(entryId);
   fetch(`/api/incidents/${incidentId}/log/${encodeURIComponent(entryId)}`, {
@@ -182,16 +224,17 @@ function firePatch(incidentId: string, entryId: string, keepalive = false) {
         // removes it from the local store.
         baselines.get(incidentId)?.set(entryId, sentCanon);
         console.warn('[log-sync] edit target was deleted by a peer; keeping the delete');
+        quietIfIdle();
         return;
       }
       // Transient failure: leave the baseline at its pre-edit value, so the
-      // next store change re-schedules another PATCH (never a POST).
-      setSync('error');
+      // retry (or the next store change) re-schedules another PATCH (never a POST).
+      markFailed();
       console.warn('[log-sync] edit failed:', res.status);
     })
     .catch((err) => {
       patchInflight.delete(entryId);
-      setSync('error');
+      markFailed();
       console.warn('[log-sync] edit failed:', err);
     });
 }
@@ -221,7 +264,7 @@ function deleteEntry(incidentId: string, entryId: string) {
     })
     .catch((err) => {
       // Server still has the entry; the next broadcast resurfaces it locally.
-      setSync('error');
+      markFailed();
       console.warn('[log-sync] delete failed:', err);
     });
 }

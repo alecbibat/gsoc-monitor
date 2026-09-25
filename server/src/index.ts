@@ -30,6 +30,7 @@ import fireOutlookRouter from './routes/fireOutlook';
 import jtwcRouter from './routes/jtwc';
 import outagesRouter, { initOutagesStream } from './routes/outages';
 import crisisRouter from './routes/crisis';
+import crisisTemplatesRouter from './routes/crisisTemplates';
 import authRouter from './routes/auth';
 import ssoRouter from './routes/sso';
 import adminRouter from './routes/admin';
@@ -114,6 +115,9 @@ function main() {
   // IAP uploads arrive as base64 JSON from the admin panel (15 MB PDF cap
   // -> ~20 MB encoded).
   app.use('/api/iap', express.json({ limit: '25mb', inflate: false }));
+  // Admin template saves: an intake block at its validation limits (40 groups
+  // × 80 questions × 500 chars) is ~1.7 MB of JSON — past the 1 MB default.
+  app.use('/api/crisis-templates', express.json({ limit: '2mb', inflate: false }));
   app.use(express.json({ limit: '1mb', inflate: false }));
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
@@ -130,6 +134,9 @@ function main() {
 
   // Incident Action Plan document library (auth/admin applied per-route)
   app.use('/api/iap', iapRouter);
+
+  // Crisis templates: checklists / intake / checklist roles (auth/admin per-route)
+  app.use('/api/crisis-templates', crisisTemplatesRouter);
 
   // Team-shared OSINT watchlist CRUD (requireAuth applied inside router)
   app.use('/api/watchlist', watchlistRouter);

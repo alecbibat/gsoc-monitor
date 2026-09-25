@@ -4,6 +4,7 @@ import type { DrawLayerPoint } from './crisisStore';
 //
 // Accepted formats (one pair per line, or semicolon-separated):
 //   37.7749, -122.4194              ← Google Maps right-click / decimal degrees
+//   37.7749 -122.4194               ← single space (only when the line is exactly two values)
 //   37.7749° N, 122.4194° W        ← with degree symbols and cardinal letters
 //   37° 46' 29.5" N  122° 25' 16" W  ← DMS (degrees/minutes/seconds)
 //   POINT (-122.4194 37.7749)       ← WKT (lon lat order, auto-detected)
@@ -90,7 +91,14 @@ function splitLine(line: string, wktMode = false): string[] {
   const byComma = line.split(',').map((s) => s.trim()).filter(Boolean);
   if (byComma.length >= 2) return byComma;
   // Fall back to splitting on 2+ spaces or tab
-  return line.split(/\s{2,}|\t/).map((s) => s.trim()).filter(Boolean);
+  const bySpaces = line.split(/\s{2,}|\t/).map((s) => s.trim()).filter(Boolean);
+  if (bySpaces.length >= 2) return bySpaces;
+  // Single-space pair ("37.80 -122.40", "37.7749N 122.4194W", GeoHack's
+  // "37°46′29″N 122°25′09″W"): split only when that yields exactly two
+  // coordinate-looking tokens, so spaced DMS ("37° 46' 29\" N") stays whole.
+  const tokens = line.split(/\s+/).filter(Boolean);
+  if (tokens.length === 2 && tokens.every((t) => parseCoordValue(t) !== null)) return tokens;
+  return bySpaces;
 }
 
 // Detect WKT and extract raw coordinate text from it.
@@ -139,7 +147,9 @@ export function parseCoords(raw: string): ParseResult {
   for (const line of lines) {
     const segs = splitLine(line, !!wkt);
     if (segs.length < 2) {
-      // Could be a single "37.7749" token — skip
+      // A lone value, or a pair we couldn't split — report it rather than
+      // silently drawing a shape with a vertex missing.
+      errors.push(`Could not parse: "${line}"`);
       continue;
     }
 

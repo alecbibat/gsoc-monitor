@@ -12,7 +12,7 @@ import { useAuthStore } from '../auth/authStore';
 // source of truth for ids, labels, colors and lifecycle). Re-exported here so
 // existing importers keep working.
 export type { IncidentStatus, IncidentType } from './taxonomy';
-export type CrisisTab = 'situation-report' | 'checklists' | 'intake';
+export type CrisisTab = 'situation-report' | 'checklists' | 'intake' | 'iap';
 export type ActionEntryType = 'action' | 'event' | 'info';
 
 // Live save status, surfaced in the incident header. Transient UI state only —

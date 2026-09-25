@@ -1,49 +1,96 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CHECKLIST_PHASES, CHECKLIST_TEMPLATES, checklistTemplateFor,
-  foldChecklistResponse, isChecklistStateMap, roleProgress,
+  CHECKLIST_PHASES, checklistProgress, foldChecklistResponse, isChecklistStateMap,
+  preferredChecklistRole, roleProgress,
+  type ChecklistRoleDef, type ChecklistTemplate,
 } from './checklistTemplate';
 
-const tpl = CHECKLIST_TEMPLATES.default;
+// Content lives server-side now (admin-edited templates); these tests run on a
+// small hand-built template of the shape resolveChecklist produces.
+const role = (id: string, items: Record<'immediate' | 'ongoing' | 'demob', string[]>): ChecklistRoleDef => ({
+  id, code: id.toUpperCase(), title: id, color: '#ffffff', reportsTo: 'IC', directs: '—',
+  phases: CHECKLIST_PHASES
+    .map((p) => ({ id: p.id, items: items[p.id].map((id) => ({ id, text: `do ${id}` })) }))
+    .filter((p) => p.items.length > 0),
+});
 
-describe('checklist template', () => {
-  it('covers the full command & general staff, section chiefs included', () => {
-    expect(tpl.roles.map((r) => r.id)).toEqual([
-      'ic', 'safety', 'pio', 'liaison', 'ops', 'planning', 'logistics', 'finance',
-    ]);
-  });
+const tpl: ChecklistTemplate = {
+  id: 'resolved:wildfire|*',
+  title: 'ICS Role Checklists',
+  source: 'test',
+  roles: [
+    role('ic', { immediate: ['ic-1', 'ic-2'], ongoing: ['ic-3'], demob: [] }),
+    role('gsoc-support', { immediate: ['g-1'], ongoing: [], demob: ['g-2'] }),
+    role('safety', { immediate: [], ongoing: ['s-1'], demob: [] }),
+  ],
+};
 
-  it('gives every role all three phases, each with items', () => {
-    for (const role of tpl.roles) {
-      expect(role.phases.map((p) => p.id)).toEqual(CHECKLIST_PHASES.map((p) => p.id));
-      for (const ph of role.phases) expect(ph.items.length).toBeGreaterThan(0);
-    }
-  });
+const T0 = '2026-08-19T00:00:00.000Z';
 
-  it('mints globally-unique, server-acceptable item ids', () => {
-    const ids = tpl.roles.flatMap((r) => r.phases.flatMap((p) => p.items.map((i) => i.id)));
-    expect(new Set(ids).size).toBe(ids.length);
-    // Must satisfy the server's toggle-route id pattern (checklist.ts).
-    for (const id of ids) expect(id).toMatch(/^[a-z][a-z0-9-]{0,63}$/);
-  });
-
-  it('falls back to the default template for unmapped incident types', () => {
-    expect(checklistTemplateFor('wildfire')).toBe(tpl);
-    expect(checklistTemplateFor('not-a-type')).toBe(tpl);
+describe('checklist phases', () => {
+  it('orders immediate → ongoing → demob', () => {
+    expect(CHECKLIST_PHASES.map((p) => p.id)).toEqual(['immediate', 'ongoing', 'demob']);
   });
 });
 
 describe('roleProgress', () => {
   it('counts only checked items, ignoring unchecked-state entries', () => {
-    const role = tpl.roles[0];
-    const first = role.phases[0].items[0].id;
-    const second = role.phases[0].items[1].id;
-    const total = role.phases.reduce((n, p) => n + p.items.length, 0);
-    expect(roleProgress(role, {})).toEqual({ done: 0, total });
-    expect(roleProgress(role, {
-      [first]: { checked: true, at: '2026-08-19T00:00:00.000Z' },
-      [second]: { checked: false, at: '2026-08-19T00:01:00.000Z' },
-    })).toEqual({ done: 1, total });
+    const ic = tpl.roles[0];
+    expect(roleProgress(ic, {})).toEqual({ done: 0, total: 3 });
+    expect(roleProgress(ic, {
+      'ic-1': { checked: true, at: T0 },
+      'ic-2': { checked: false, at: T0 },
+      'not-in-role': { checked: true, at: T0 },
+    })).toEqual({ done: 1, total: 3 });
+  });
+});
+
+describe('checklistProgress', () => {
+  it('totals every role and counts the fully-done ones', () => {
+    expect(checklistProgress(tpl, {})).toEqual({ done: 0, total: 6, rolesDone: 0 });
+    expect(checklistProgress(tpl, {
+      'g-1': { checked: true, at: T0 },
+      'g-2': { checked: true, at: T0 },
+      'ic-1': { checked: true, at: T0 },
+      's-1': { checked: false, at: T0 },
+    })).toEqual({ done: 3, total: 6, rolesDone: 1 });
+  });
+
+  it('is zero for an empty template', () => {
+    expect(checklistProgress({ ...tpl, roles: [] }, {})).toEqual({ done: 0, total: 0, rolesDone: 0 });
+  });
+});
+
+describe('preferredChecklistRole', () => {
+  const assignments = [
+    { roleId: 'safety', name: 'Former Holder', endedAt: T0 },
+    { roleId: 'ops', name: 'Alex Rivera' }, // org-chart role with no checklist here
+    { roleId: 'gsoc-support', name: 'Alex Rivera', email: 'alex@example.com' },
+  ];
+
+  it("opens on the viewer's active assignment, matched by name case-insensitively", () => {
+    expect(preferredChecklistRole(tpl, { assignments, userName: '  alex rivera ' })).toBe('gsoc-support');
+  });
+
+  it('matches by email when the display names differ', () => {
+    expect(preferredChecklistRole(tpl, { assignments, userName: 'A. Rivera', userEmail: 'ALEX@example.com' }))
+      .toBe('gsoc-support');
+  });
+
+  it('ignores ended assignments and roles the template lacks', () => {
+    expect(preferredChecklistRole(tpl, { assignments, userName: 'Former Holder' })).toBeUndefined();
+    expect(preferredChecklistRole(tpl, { assignments: [{ roleId: 'ops', name: 'Sam' }], userName: 'Sam' }))
+      .toBeUndefined();
+  });
+
+  it('falls back to the remembered role, then to nothing', () => {
+    expect(preferredChecklistRole(tpl, { assignments, userName: 'Nobody', remembered: 'safety' })).toBe('safety');
+    expect(preferredChecklistRole(tpl, { remembered: 'finance' })).toBeUndefined();
+    expect(preferredChecklistRole(tpl, {})).toBeUndefined();
+  });
+
+  it('never matches an empty name against an unnamed assignment', () => {
+    expect(preferredChecklistRole(tpl, { assignments: [{ roleId: 'ic', name: '' }], userName: '' })).toBeUndefined();
   });
 });
 
