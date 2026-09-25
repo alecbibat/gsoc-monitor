@@ -25,7 +25,7 @@ export const FIRE_INFRA_TYPE_CHECKLISTS: Record<string, ChecklistBlockItem[]> = 
     'gsoc-support': {
       immediate: [
         'Confirm the alarm with the monitoring company (time received, zone, device, any sprinkler waterflow signal) and log it.',
-        'Check the Wildfires & fire perimeters layer to rule out a wildland origin, and the Wind layer to tell the GM which buildings and assembly points are downwind.',
+        'Check Wildfires (NASA FIRMS) and Named Fires (NIFC) to rule out a wildland origin, and Wind to tell the GM which buildings and assembly points are downwind.',
         'Send Ops the room-by-room occupancy list for the affected building, by floor, to reconcile against the sweep and assembly-point headcounts.',
       ],
       ongoing: [
@@ -217,7 +217,7 @@ export const FIRE_INFRA_TYPE_CHECKLISTS: Record<string, ChecklistBlockItem[]> = 
       ongoing: [
         'Log walk-in cooler and freezer temperatures on a schedule, keep doors shut, and discard TCS food per the food code (above 41°F for over 4 hours).',
         'Check electronic door locks, access control, and room safes; post staff on exterior doors if access control fails.',
-        'Check water pressure and hot water where wells, booster pumps, or lift stations need power; start the Water System plan if service fails.',
+        'Check water pressure and hot water where wells, booster pumps, or lift stations need power; alert the IC at once if water service fails.',
       ],
       demob: [
         'Restore loads in stages, then check elevators, HVAC, kitchen equipment, and alarm panels before reopening areas to guests.',
@@ -259,7 +259,7 @@ export const FIRE_INFRA_TYPE_CHECKLISTS: Record<string, ChecklistBlockItem[]> = 
       immediate: [
         "Find the water provider's or health department's notice (zones, issue time, reason) via alerts and OSINT/news, and log it.",
         'Check which other company properties share the water system or notice area and alert those GMs.',
-        'If flooding, freezing, or a storm is the cause, watch River Gauges, NWS alerts, and radar for continuing threats to wells, pumps, and treatment.',
+        'If flooding, freezing, or a storm is the cause, watch Rivers & Floods, NWS Alerts, and radar for continuing threats to wells, pumps, and treatment.',
       ],
       ongoing: [
         "Track sampling results and the health department's lift criteria, and log when the notice is expected to be lifted.",
@@ -327,7 +327,7 @@ export const FIRE_INFRA_TYPE_CHECKLISTS: Record<string, ChecklistBlockItem[]> = 
   'it-comms': checklistItems('t-it-comms', {
     ic: {
       immediate: [
-        'Rule out a cyberattack (ransom note, many systems failing at once, unusual logins); if one is suspected, switch to the Cyber Incident plan.',
+        'Rule out a cyberattack (ransom note, many systems failing at once, unusual logins); if one is suspected, have GSOC change the type to Cyber Incident.',
       ],
       ongoing: [
         "Decide which services run manually and which are suspended (check-in, charging, tours, reservations) based on IT's restoration estimate.",
@@ -418,7 +418,7 @@ export const FIRE_INFRA_TYPE_CHECKLISTS: Record<string, ChecklistBlockItem[]> = 
         'If CCTV or access control is affected, alert property security to add patrols and staff key doors until it is restored.',
       ],
       demob: [
-        'Resume use of restored systems and share links only after IT confirms they are clean, and note that confirmation in the log.',
+        'Move incident coordination back to regular email and chat only after IT confirms they are clean, and note that confirmation in the log.',
       ],
     },
     safety: {
@@ -499,7 +499,7 @@ export const FIRE_INFRA_TYPE_INTAKE: Record<string, IntakeBlockGroup[]> = {
     ]),
     intakeGroup('t-hazmat-exposure', 'Exposure & Protective Actions', [
       'Has anyone been exposed or reported symptoms (coughing, burning eyes, dizziness, nausea)? How many, and where are they now?',
-      'Has shelter-in-place or evacuation been ordered, and by whom (property, fire department, emergency management)?',
+      'Who ordered the protective action (property, fire department, emergency management), and are HVAC and air intakes shut off where people shelter?',
       'Is a Safety Data Sheet (SDS) available for the material?',
       'Has any material reached drains, waterways, or soil?',
     ]),

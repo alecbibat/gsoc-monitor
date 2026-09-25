@@ -23,8 +23,8 @@ const WILDFIRE = checklistItems('t-wildfire', {
   },
   'gsoc-support': {
     immediate: [
-      'Turn on Named Fires (NIFC), Wildfires (FIRMS), Wind and NWS Alerts at the property; log distance and bearing to the nearest fire edge.',
-      'Pop out the property in Property Watch, widen the radius to cover its evacuation routes, and report each new hotspot or Red Flag Warning.',
+      'Turn on Named Fires (NIFC), Wildfires (NASA FIRMS), Wind and NWS Alerts at the property; log distance and bearing to the nearest fire edge.',
+      'Open the property in Property Watch, widen the radius to cover its evacuation routes, and report each new hotspot or Red Flag Warning.',
     ],
     ongoing: [
       'Report perimeter growth, acreage, containment and distance to the property to the IC at every perimeter update.',
@@ -86,7 +86,7 @@ const WILDFIRE = checklistItems('t-wildfire', {
   },
   finance: {
     ongoing: [
-      'Track relocation lodging, transport and refund costs under a dedicated wildfire cost code for insurance and business-interruption claims.',
+      'Log the start and end time of each evacuation order and road closure affecting the property; civil-authority business-interruption claims rely on them.',
     ],
   },
 });
@@ -96,11 +96,11 @@ const WILDFIRE_INTAKE = [
     "What is the fire's name (if known), its distance and direction from the property, and which way is it moving?",
     'Is an evacuation order or warning (Ready / Set / Go) in effect for the property or its access roads? Issued by which agency?',
     'Are flames, embers or heavy smoke visible from the property? What are the current wind speed and direction?',
-    'Which access and evacuation routes are open, closed or threatened?',
+    'Which evacuation routes out of the property are open, closed, or threatened by fire or smoke?',
   ]),
   intakeGroup('t-wildfire-occupancy', 'Occupancy & Evacuation Needs', [
-    'How many guests, staff and employee-housing residents are on site, and how many have no vehicle of their own?',
-    'Are there guests or staff with respiratory, mobility or medical needs that affect evacuation?',
+    'How many people on site (guests, staff, employee-housing residents) have no vehicle of their own to evacuate in?',
+    'Does anyone with a respiratory condition need to leave early because of smoke, before any evacuation order?',
     'Is power, water, phone or internet service affected, including any planned utility safety shutoff?',
   ]),
 ];
@@ -179,7 +179,7 @@ const HURRICANE = checklistItems('t-hurricane', {
       'Photograph and video every building, interior and major equipment before landfall to document pre-storm condition for insurers.',
     ],
     ongoing: [
-      'Open a named-storm cost code and track preparation, evacuation, refunds and repairs separately for the named-storm deductible.',
+      'Track preparation, evacuation, refund and repair costs separately so they can be claimed against the named-storm deductible.',
     ],
   },
 });
@@ -192,7 +192,7 @@ const HURRICANE_INTAKE = [
     'What storm-surge height is forecast, and are any buildings, roads or causeways below that level?',
   ]),
   intakeGroup('t-hurricane-readiness', 'Readiness & Occupancy', [
-    'How many guests and staff are on site now, and how many arrivals, tours or sailings are due in the next 72 hours?',
+    'How many arrivals, tours or sailings are due in the next 72 hours, and how many staff would stay for a ride-out?',
     'Which preparations (shutters, barriers, generator fuel, supplies) are complete and which are outstanding?',
     'Which ships, tour groups or traveling guests are on or near the forecast track?',
   ]),
@@ -263,7 +263,7 @@ const SEVERE_WEATHER = checklistItems('t-severe-weather', {
   },
   finance: {
     demob: [
-      'Document hail, wind and water damage with dated photos and contractor estimates before repairs begin.',
+      'Get contractor estimates for hail, wind and water damage and confirm with the broker whether a wind/hail deductible applies before repairs begin.',
     ],
   },
 });
@@ -346,7 +346,7 @@ const WINTER_STORM = checklistItems('t-winter-storm', {
   },
   finance: {
     ongoing: [
-      'Track snow-removal overtime, holdover staff costs and comped rooms and meals for stranded guests under a winter-storm cost code.',
+      'Track snow-removal overtime, holdover staff costs and comped rooms and meals for stranded guests under the incident cost code.',
     ],
   },
 });

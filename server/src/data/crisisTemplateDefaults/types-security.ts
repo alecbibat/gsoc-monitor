@@ -106,7 +106,7 @@ const VIOLENCE_THREAT_INTAKE = [
   ]),
   intakeGroup('t-violence-threat-response', 'Police Response & Protective Actions', [
     'Are police on scene or en route? Which agency, and is there a case or incident number yet?',
-    'Has a lockdown, Run-Hide-Fight announcement, or evacuation been made? For which areas?',
+    'Has a Run-Hide-Fight or lockdown message reached guests and staff, and by what means (PA, mass notification, radio, room phones)?',
     'For a phoned, written or online threat: what were the exact words, when was it received, and how was it delivered?',
   ]),
 ];
@@ -126,7 +126,7 @@ const SUSPICIOUS_ACTIVITY = checklistItems('t-suspicious-activity', {
   'gsoc-support': {
     immediate: [
       'Track the person, vehicle or item on live and recorded CCTV; export clips and stills with camera IDs and timestamps.',
-      'Search the Intel Feed, News and Property Watch for similar reports near the property or at other company sites in the past 30 days.',
+      'Search the Intel Feed (Crime, Scanner), News and past incidents in the tool for similar reports near the property or other company sites in the last 30 days.',
       'For a drone or low aircraft, log time, direction, altitude and operator location, and check Flights for aircraft near the property.',
     ],
     ongoing: [
@@ -140,7 +140,7 @@ const SUSPICIOUS_ACTIVITY = checklistItems('t-suspicious-activity', {
   safety: {
     immediate: [
       'Do not touch, move or cover a suspicious item; switch off radios and cell phones near it and use landlines or runners instead.',
-      'Clear people from an unattended item per the DHS bomb-threat standoff chart (suitcase: 150 ft minimum, 1,850 ft outdoors) until police direct.',
+      'Clear people per the DHS bomb-threat standoff chart (suitcase-size: evacuate at least 150 ft; shelter indoors or move beyond 1,850 ft) until police direct.',
     ],
   },
   pio: {
@@ -293,7 +293,7 @@ const CIVIL_UNREST = checklistItems('t-civil-unrest', {
     ongoing: [
       'Track curfews, travel-advisory and embassy-alert changes, and road, airport, rail and port closures; pass each to tour directors and ship ops.',
       'Watch social media for calls to target the company, its brands or properties, or for planned actions at its locations.',
-      'Check in with each tour director, and use Ships (AIS) for each ship, in the area on a set cadence; log location and headcount.',
+      'Plot each tour group\'s hotel and route and each ship\'s berth (Ships (AIS)) against protest sites and closures; warn any group or ship the unrest nears.',
     ],
     demob: [
       'Keep watching for follow-on protests (verdicts, funerals, elections, anniversaries) in the region before closing the incident.',
@@ -320,7 +320,7 @@ const CIVIL_UNREST = checklistItems('t-civil-unrest', {
       'Contact local police or the event commander for expected crowd size, march route, road closures and curfew enforcement.',
     ],
     ongoing: [
-      "For groups abroad, enroll travelers in the embassy's traveler program (e.g., STEP) and stay in contact with local ground operators and hotels.",
+      "For groups abroad, urge travelers to enroll in their government's alert program (e.g., the U.S. STEP) and stay in contact with ground operators and hotels.",
     ],
   },
   ops: {

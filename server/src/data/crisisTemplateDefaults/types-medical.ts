@@ -460,12 +460,16 @@ const PUBLIC_HEALTH = checklistItems('t-public-health', {
   },
   ops: {
     immediate: [
-      'Start a case log: onset date and time, symptoms, room, meals and activities in the prior 72 hours, and guest or staff status.',
       'Ask ill guests to stay in their rooms, and provide room-service meals, fluids and a way to request a medical consult.',
       'Switch buffets and self-service stations to staff-served and remove shared items (condiments, fruit bowls, pens) from public areas.',
     ],
     ongoing: [
       'Put ill-guest rooms on a separate cleaning protocol: dedicated staff, sealed linen bags, and full disinfection at checkout.',
+    ],
+  },
+  planning: {
+    immediate: [
+      'Start a case log: onset date and time, symptoms, room, meals and activities in the prior 72 hours, and guest or staff status.',
     ],
   },
   logistics: {

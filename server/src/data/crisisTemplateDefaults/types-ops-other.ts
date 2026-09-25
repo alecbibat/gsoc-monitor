@@ -138,7 +138,7 @@ const MARITIME = checklistItems('t-maritime', {
   },
   safety: {
     immediate: [
-      'For a security threat or piracy, confirm the Ship Security Officer has set the security level and the Company Security Officer is informed.',
+      'For a security threat or piracy, confirm the Ship Security Officer has the ship security plan running and the Company Security Officer is informed.',
     ],
   },
   pio: {

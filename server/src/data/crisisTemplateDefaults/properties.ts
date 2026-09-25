@@ -29,7 +29,7 @@ const GLACIER = checklistItems('p-glacier', {
   'gsoc-support': {
     immediate: [
       'Log Going-to-the-Sun Road, Many Glacier Road, US-2 and US-89 status from park road reports and NWS Alerts; flag closures on evacuation routes.',
-      'Turn on Wildfires (NASA FIRMS), Named Fires, Smoke and Lightning for the park; west-side lodges sit in dense forest with one road out.',
+      'Turn on Wildfires (NASA FIRMS), Named Fires, Smoke and Lightning for the park; Lake McDonald and Apgar sit in dense forest with few routes out.',
     ],
     ongoing: [
       'Keep a status board for each developed area (Many Glacier, Swiftcurrent, Lake McDonald, Apgar, Cedar Creek) with occupancy and road access.',
@@ -85,12 +85,12 @@ const DEATH_VALLEY = checklistItems('p-death-valley', {
   ic: {
     immediate: [
       'Plan for long EMS response and transport times; request air ambulance early and confirm heat or wind limits on flights.',
-      'In summer, treat loss of power or air conditioning at the Inn, Ranch or employee housing as a life-safety event and decide on relocation within the hour.',
+      'In summer, treat loss of power or air conditioning at the Inn, Ranch or employee housing as a life-safety event; decide on cooling or relocation at once.',
     ],
   },
   'gsoc-support': {
     immediate: [
-      'Log the current Furnace Creek temperature, forecast high and any NWS Excessive Heat, Flash Flood or High Wind warnings for the park.',
+      'Log the current Furnace Creek temperature, forecast high and any NWS Extreme Heat, Flash Flood or High Wind warnings for the park.',
       'Watch Precipitation Radar over the surrounding mountains; flash floods reach Furnace Creek washes and close CA-190 without local rain.',
     ],
     ongoing: [
@@ -255,7 +255,7 @@ const CORPORATE = checklistItems('p-corporate', {
 const CORPORATE_INTAKE = [
   intakeGroup('p-corporate', 'Corporate Office', [
     'Which office: Greenwood Village (headquarters) or Flagstaff?',
-    'How many employees, visitors and contractors are in the building, and are all accounted for?',
+    'How many visitors are signed in, and has floor-warden accountability at the assembly point been completed?',
     'Has building management or the landlord been notified, and what do they report (alarms, elevators, access control)?',
     'Are critical corporate systems affected: IT/network, phones, reservations support, payroll, or GSOC?',
     'Should employees work remotely, and for how long?',
@@ -337,7 +337,7 @@ const YELLOWSTONE = checklistItems('p-yellowstone', {
   safety: {
     immediate: [
       'Keep evacuees, staging areas and vehicles off hydrothermal ground; the crust can be thin over scalding water.',
-      'When staging people outdoors, keep at least 25 yards from bison and elk and 100 yards from bears and wolves.',
+      'Check outdoor assembly and staging areas for bison, elk or bears before sending people there, and name an indoor alternate; bison often bed in developed areas.',
     ],
   },
   pio: {
@@ -371,7 +371,7 @@ const YELLOWSTONE_INTAKE = [
     'Which area: Mammoth, Old Faithful, Canyon, Lake, Grant, Roosevelt, a campground (e.g., Madison), Gardiner, or a park road?',
     'Has Yellowstone NP dispatch been notified, and are rangers on scene or en route?',
     'Which park roads and entrances are open between the site and the nearest hospital or staging area?',
-    'How many guests, campers and employees (including dormitory residents) are in the affected area?',
+    'Are campers or employee-dormitory residents in the affected area, and how many?',
     'Are hydrothermal ground, wildlife, or snow and seasonal road closures complicating access or evacuation?',
   ]),
 ];
@@ -647,7 +647,7 @@ const VERMONT = checklistItems('p-vermont', {
   },
   liaison: {
     immediate: [
-      'Abroad, contact the local ground operator and, for US citizens in serious trouble, the nearest US embassy or consulate.',
+      "Abroad, contact the local ground operator and, for a rider in serious trouble, the nearest embassy or consulate of the rider's country.",
     ],
   },
   ops: {
@@ -696,12 +696,12 @@ const SEA_ISLAND = checklistItems('p-sea-island', {
       'Check Hurricanes and NWS Alerts (tropical, coastal flood, rip current) for the Glynn County coast; log arrival time of tropical-storm-force winds.',
     ],
     ongoing: [
-      'Watch Rivers & Floods tide gauges, Power Outages and county re-entry status after a storm and relay each change to the IC.',
+      'Watch NWS coastal flood warnings, Power Outages and county re-entry status after a storm and relay each change to the IC.',
     ],
   },
   safety: {
     immediate: [
-      'Clear beaches, pools and golf courses at the first lightning or rip current warning and set beach warning flags accordingly.',
+      'Clear beaches, pools and golf courses at the first lightning, keep swimmers out during rip current warnings, and set beach flags to match.',
     ],
   },
   pio: {
@@ -740,7 +740,7 @@ const SEA_ISLAND_INTAKE = [
     'Are the Sea Island causeway and the F.J. Torras Causeway open, and is an evacuation order in effect for Glynn County?',
     'Is anyone on the beach, in the water, or on the golf courses right now?',
     'What are the current tide, wind, and surf or rip current conditions?',
-    'How many guests, members and staff are on the island?',
+    'How many guests, members and cottage residents are on the island and would need to leave over the causeways?',
   ]),
 ];
 
@@ -758,7 +758,7 @@ const COG_RAILWAY = checklistItems('p-cog-railway', {
       'Watch Lightning and Precipitation Radar over the summit and alert operations before storm cells reach the peak.',
     ],
     ongoing: [
-      'Watch NWS Flash Flood Warnings and Rivers & Floods for Manitou Springs and Ruxton Creek; burn-scar flash floods can reach the depot.',
+      'Watch NWS Flash Flood Warnings and Precipitation Radar over Ruxton Creek and Manitou Springs; heavy rain upslope can flood the canyon and the depot.',
     ],
   },
   safety: {
@@ -785,7 +785,7 @@ const COG_RAILWAY = checklistItems('p-cog-railway', {
   },
   finance: {
     ongoing: [
-      'Track refunds for cancelled trips and alternate-transport costs separately from response costs.',
+      'Record cancelled departures and refunded tickets by train and date, and the cost of any highway shuttles used to bring passengers down.',
     ],
   },
 });
@@ -805,7 +805,7 @@ const COG_RAILWAY_INTAKE = [
 const ROCKY_MOUNTAIN = checklistItems('p-rocky-mountain', {
   'gsoc-support': {
     immediate: [
-      'Log Trail Ridge Road status (seasonal or weather closure) and whether staff at the Alpine Visitor Center concession can get down safely.',
+      'Log Trail Ridge Road status (seasonal or weather closure) and whether company staff at sites along it, such as the Alpine Visitor Center, can get down.',
     ],
     ongoing: [
       'Watch Lightning and Precipitation Radar over Trail Ridge Road; afternoon storms put people above treeline at risk, so alert the site early.',
@@ -824,12 +824,12 @@ const ROCKY_MOUNTAIN = checklistItems('p-rocky-mountain', {
   },
   liaison: {
     immediate: [
-      'Notify Rocky Mountain NP dispatch for in-park incidents, and Larimer County Sheriff and Estes Valley fire for incidents at the Estes Park offices.',
+      'Notify Rocky Mountain NP dispatch for in-park incidents; for the Estes Park offices, Estes Park police or the Larimer County Sheriff and Estes Valley Fire.',
     ],
   },
   ops: {
     immediate: [
-      'Account for employees at the park concession and offices, including seasonal staff and anyone in employee housing.',
+      'Account for employees at the offices and any in-park sites, including seasonal staff and anyone in employee housing.',
     ],
   },
   planning: {
@@ -839,15 +839,15 @@ const ROCKY_MOUNTAIN = checklistItems('p-rocky-mountain', {
   },
   logistics: {
     immediate: [
-      'Confirm radio or satellite-phone backup for the Trail Ridge Road site, where cell coverage is poor.',
+      'Confirm radio or satellite-phone backup for staff working along Trail Ridge Road, where cell coverage is poor.',
     ],
   },
 });
 
 const ROCKY_MOUNTAIN_INTAKE = [
   intakeGroup('p-rocky-mountain', 'Rocky Mountain National Park', [
-    'Where is the incident: the Estes Park offices, the Trail Ridge Road / Alpine Visitor Center concession, or elsewhere in the park?',
-    'Have Rocky Mountain NP dispatch (in the park) or Larimer County (Estes Park) been notified?',
+    'Where is the incident: the Estes Park offices, a site along Trail Ridge Road (e.g., the Alpine Visitor Center), or elsewhere in the park?',
+    'Have Rocky Mountain NP dispatch (in the park) or local police / Larimer County Sheriff (Estes Park) been notified?',
     'Is Trail Ridge Road open, and are the Beaver Meadows, Fall River and Grand Lake entrances open?',
     'How many guests and employees are at the site, and is anyone above treeline?',
     'What are current conditions: lightning, wind, snow or smoke?',
@@ -901,7 +901,7 @@ const WINDSTAR_SHIPS = checklistItems('p-windstar-ships', {
   },
   finance: {
     ongoing: [
-      'Track guest onboard credits, refunds and future-cruise credits for itinerary changes separately from response costs.',
+      'Record onboard and future-cruise credits issued for itinerary changes by ship and voyage, and confirm the compensation offer with guest services.',
     ],
   },
 });
@@ -909,9 +909,9 @@ const WINDSTAR_SHIPS = checklistItems('p-windstar-ships', {
 const WINDSTAR_SHIPS_INTAKE = [
   intakeGroup('p-windstar-ships', 'Windstar Ships', [
     'Which ship(s) are involved, and what are the current position, last port and next port?',
-    'How many guests and crew are aboard, and are any ashore on excursions or leave?',
-    'Has the Master reported to the DPA, and what is the ship\'s current alert or security level?',
-    'What are conditions at sea and at the next port (weather, port status, local unrest)?',
+    'Are any guests or crew ashore on shore excursions or leave? How many, and where?',
+    'Has the Master reported the incident to the DPA, and what is the ship\'s current security (ISPS) level?',
+    'Can the ship still call at its next port (port open, weather, strikes, unrest, health restrictions)? If not, what is the alternate?',
     'Does the ship need shoreside support: medical, port agent, provisioning, or an itinerary change?',
   ]),
 ];
