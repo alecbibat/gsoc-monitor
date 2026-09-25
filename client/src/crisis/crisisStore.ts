@@ -69,6 +69,7 @@ export type SystemEventKind =
   | 'assignment-ended'
   | 'role-added'
   | 'role-removed'
+  | 'role-moved'
   | 'share-created'
   | 'share-revoked'
   | 'stood-down'
@@ -336,6 +337,48 @@ function sysEntry(
   };
 }
 
+/**
+ * Where moveRole puts a role: under `parentId` (null = top level), in front of
+ * `beforeRoleId` within its new sibling group — absent, null or not in that
+ * group means at the end. `isCommandStaff` picks the row; see moveRole for the
+ * default.
+ */
+export interface MoveRoleTarget {
+  parentId: string | null;
+  beforeRoleId?: string | null;
+  isCommandStaff?: boolean;
+}
+
+/** A role's id plus the ids of everything beneath it. */
+export function roleSubtreeIds(roles: readonly IcsRole[], rootId: string): Set<string> {
+  // Breadth-first over parent links. The set doubles as the visited guard, so
+  // corrupt data with a parent cycle can't spin forever.
+  const ids = new Set<string>([rootId]);
+  const queue = [rootId];
+  while (queue.length) {
+    const pid = queue.shift()!;
+    for (const r of roles) {
+      if (r.parentId === pid && !ids.has(r.id)) {
+        ids.add(r.id);
+        queue.push(r.id);
+      }
+    }
+  }
+  return ids;
+}
+
+/**
+ * The ordered row a role sits in: same parent AND same command-staff flag.
+ * The chart draws a parent's advisory command staff and its general staff as
+ * separate rows, so each row numbers its own `order` from 0. The sort is
+ * stable on ties (older data can repeat an order), matching the chart's.
+ */
+export function roleSiblings(roles: readonly IcsRole[], parentId: string | null, isCommandStaff: boolean): IcsRole[] {
+  return roles
+    .filter((r) => r.parentId === parentId && !!r.isCommandStaff === isCommandStaff)
+    .sort((a, b) => a.order - b.order);
+}
+
 const COMPLEXITY_LABEL = (c: ComplexityType | null | undefined) =>
   COMPLEXITY_TYPES.find((t) => t.id === c)?.label ?? 'unset';
 
@@ -458,6 +501,7 @@ interface CrisisState {
   addRole: (role: Omit<IcsRole, 'id' | 'builtin'>) => void;
   updateRole: (id: string, patch: Partial<Omit<IcsRole, 'id' | 'builtin'>>) => void;
   removeRole: (id: string) => void;
+  moveRole: (roleId: string, target: MoveRoleTarget) => void;
   restoreBuiltinRole: (roleId: string) => void;
   resetRoles: () => void;
 
@@ -767,6 +811,84 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
                 `ICS role removed: ${title}${subCount > 0 ? ` (and ${subCount} sub-role${subCount === 1 ? '' : 's'})` : ''}`,
                 { roleTitle: title, subRoles: String(subCount) }
               ),
+              ...inc.actionLog,
+            ],
+          };
+        })),
+
+      // Re-parent and/or reorder one role (its subtree travels with it).
+      // Assignments are keyed by role id, so whoever holds the role keeps it.
+      moveRole: (roleId, target) =>
+        set((s) => patchActiveEditable(s, (inc) => {
+          const role = inc.roles.find((r) => r.id === roleId);
+          if (!role || target.beforeRoleId === roleId) return inc;
+          const toParent = target.parentId;
+          // No cycles: a role can't report to itself, to anything beneath it,
+          // or to a role that doesn't exist (it would vanish from the chart).
+          if (
+            toParent !== null &&
+            (roleSubtreeIds(inc.roles, roleId).has(toParent) || !inc.roles.some((r) => r.id === toParent))
+          ) {
+            return inc;
+          }
+          const fromParent = role.parentId;
+          const fromCmd = !!role.isCommandStaff;
+          // Command staff is the advisory row directly beneath a parent, so a
+          // top-level role is never in it. Otherwise, absent an explicit
+          // choice, a role keeps its row while it stays with its parent and
+          // joins general staff under a new one.
+          const toCmd = toParent === null
+            ? false
+            : target.isCommandStaff ?? (toParent === fromParent ? fromCmd : false);
+          const sameRow = toParent === fromParent && toCmd === fromCmd;
+
+          const oldRow = roleSiblings(inc.roles, fromParent, fromCmd);
+          const dest = roleSiblings(inc.roles, toParent, toCmd).filter((r) => r.id !== roleId);
+          const at = target.beforeRoleId ? dest.findIndex((r) => r.id === target.beforeRoleId) : -1;
+          const nextRow = at < 0 ? [...dest, role] : [...dest.slice(0, at), role, ...dest.slice(at)];
+          if (sameRow && nextRow.every((r, i) => r.id === oldRow[i]?.id)) return inc;
+
+          // Renumber densely: the destination row, and the row it left.
+          // Untouched roles keep their object identity so selectors skip them.
+          const next = new Map<string, Pick<IcsRole, 'parentId' | 'isCommandStaff' | 'order'>>();
+          if (!sameRow) {
+            oldRow.filter((r) => r.id !== roleId).forEach((r, i) =>
+              next.set(r.id, { parentId: r.parentId, isCommandStaff: r.isCommandStaff, order: i }));
+          }
+          nextRow.forEach((r, i) =>
+            next.set(r.id, r.id === roleId
+              ? { parentId: toParent, isCommandStaff: toCmd, order: i }
+              : { parentId: r.parentId, isCommandStaff: r.isCommandStaff, order: i }));
+          const roles = inc.roles.map((r) => {
+            const p = next.get(r.id);
+            return !p || (p.order === r.order && p.parentId === r.parentId && p.isCommandStaff === r.isCommandStaff)
+              ? r
+              : { ...r, ...p };
+          });
+
+          const titleOf = (id: string | null) =>
+            id === null ? 'top level' : inc.roles.find((r) => r.id === id)?.title ?? 'role';
+          const where = (id: string | null) => (id === null ? 'at top level' : `under ${titleOf(id)}`);
+          const position = nextRow.findIndex((r) => r.id === roleId) + 1;
+          const description = sameRow
+            ? `ICS role reordered: ${role.title} (${position} of ${nextRow.length}, ${where(toParent)})`
+            : toParent === fromParent
+              ? `ICS role moved: ${role.title} → ${toCmd ? 'command staff' : 'general staff'} ${where(toParent)}`
+              : `ICS role moved: ${role.title} → ${toParent === null ? 'top level' : where(toParent)}${toCmd ? ' (command staff)' : ''}`;
+          return {
+            ...inc,
+            roles,
+            actionLog: [
+              sysEntry('role-moved', description, {
+                roleId,
+                roleTitle: role.title,
+                fromParent: titleOf(fromParent),
+                toParent: titleOf(toParent),
+                fromParentId: fromParent ?? '',
+                toParentId: toParent ?? '',
+                position: String(position),
+                ...(toCmd ? { commandStaff: 'true' } : {}),
+              }),
               ...inc.actionLog,
             ],
           };
