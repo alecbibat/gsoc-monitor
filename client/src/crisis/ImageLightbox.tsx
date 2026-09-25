@@ -230,8 +230,21 @@ export function ImageLightbox({ src, alt, onClose }: {
   );
 }
 
-// Thumbnail that opens the image in the lightbox when clicked.
-export function ZoomableImage({ src, alt, className, wrapperClassName, onOpen }: {
+const CLOUDINARY_UPLOAD = /^(https:\/\/res\.cloudinary\.com\/[^/]+\/image\/upload\/)(.+)$/;
+
+/**
+ * A `w`-px-wide rendition of a Cloudinary upload (attachments are stored at up
+ * to 1200px), via a delivery transformation inserted after /upload/. data:
+ * URLs (legacy base64 attachments) and any other URL pass through unchanged.
+ */
+export function thumbUrl(src: string, w: number): string {
+  const m = CLOUDINARY_UPLOAD.exec(src);
+  return m ? `${m[1]}c_limit,w_${w},q_auto,f_auto/${m[2]}` : src;
+}
+
+// Thumbnail that opens the image in the lightbox when clicked. The inline
+// <img> loads a thumbnail rendition; the lightbox gets the original `src`.
+export function ZoomableImage({ src, alt, className, wrapperClassName, onOpen, thumbWidth = 360 }: {
   src: string;
   alt?: string;
   className?: string;
@@ -242,8 +255,14 @@ export function ZoomableImage({ src, alt, className, wrapperClassName, onOpen }:
   // viewer — paginated lists hoist the lightbox above their rows so a row
   // sliding out of the visible window doesn't unmount an open viewer.
   onOpen?: () => void;
+  /** CSS-px width of the inline rendition (2× is offered to HiDPI screens). */
+  thumbWidth?: number;
 }) {
   const [open, setOpen] = useState(false);
+  // A Cloudinary account with "strict transformations" refuses renditions
+  // it hasn't pre-approved; if the resized URL fails, show the original.
+  const [thumbFailed, setThumbFailed] = useState(false);
+  const thumb = thumbFailed ? src : thumbUrl(src, thumbWidth);
   return (
     <>
       <button
@@ -256,7 +275,18 @@ export function ZoomableImage({ src, alt, className, wrapperClassName, onOpen }:
         title="Click to enlarge"
         className={`block max-w-full cursor-zoom-in ${wrapperClassName ?? ''}`}
       >
-        <img src={src} alt={alt} className={className} draggable={false} />
+        <img
+          src={thumb}
+          // Only for resizable (Cloudinary) sources — a data: URL would just
+          // be repeated in the attribute.
+          srcSet={thumb !== src ? `${thumb} 1x, ${thumbUrl(src, thumbWidth * 2)} 2x` : undefined}
+          alt={alt}
+          className={className}
+          draggable={false}
+          loading="lazy"
+          decoding="async"
+          onError={thumb !== src ? () => setThumbFailed(true) : undefined}
+        />
       </button>
       {!onOpen && open && <ImageLightbox src={src} alt={alt} onClose={() => setOpen(false)} />}
     </>

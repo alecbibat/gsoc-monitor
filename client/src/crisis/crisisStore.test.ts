@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { entryTypeOf, extractPublicState, selectActiveCrisisCount, useCrisisStore, type ActionLogEntry, type Incident } from './crisisStore';
+import {
+  entryTypeOf, extractPublicState, roleSiblings, roleSubtreeIds, selectActiveCrisisCount, useCrisisStore,
+  type ActionLogEntry, type Incident,
+} from './crisisStore';
 
 // The store is a module singleton — reset between tests.
 beforeEach(() => {
@@ -202,6 +205,161 @@ describe('system log events', () => {
     expect(active().actionLog[0].system).toBe('share-created');
     st.deactivateShareLink('tok-1');
     expect(active().actionLog[0].system).toBe('share-revoked');
+  });
+});
+
+describe('moveRole', () => {
+  const role = (id: string) => active().roles.find((r) => r.id === id)!;
+  // A row's ids in display order, plus its order values (dense after a move).
+  const row = (parentId: string | null, cmd = false) => roleSiblings(active().roles, parentId, cmd).map((r) => r.id);
+  const orders = (parentId: string | null, cmd = false) => roleSiblings(active().roles, parentId, cmd).map((r) => r.order);
+
+  it('collects a role and everything beneath it', () => {
+    useCrisisStore.getState().createIncident();
+    expect([...roleSubtreeIds(active().roles, 'ops')].sort()).toEqual(['ops', 'ops-branch', 'ops-division']);
+    expect(roleSubtreeIds(active().roles, 'ic').size).toBe(active().roles.length);
+  });
+
+  it('refuses to move a role under itself or its own subtree', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    const before = active();
+    st.moveRole('ops', { parentId: 'ops' });
+    st.moveRole('ops', { parentId: 'ops-division' });
+    st.moveRole('ic', { parentId: 'plan-docs' });
+    st.moveRole('ops', { parentId: 'no-such-role' });
+    st.moveRole('no-such-role', { parentId: 'ic' });
+    st.moveRole('ops', { parentId: 'ic', beforeRoleId: 'ops' });
+    expect(active()).toBe(before);
+  });
+
+  it('reorders within a row and renumbers it densely', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    st.moveRole('plan-demob', { parentId: 'planning', beforeRoleId: 'plan-resources' });
+    expect(row('planning')).toEqual(['plan-demob', 'plan-resources', 'plan-situation', 'plan-docs']);
+    expect(orders('planning')).toEqual([0, 1, 2, 3]);
+    const [entry] = active().actionLog;
+    expect(entry.system).toBe('role-moved');
+    expect(entry.description).toBe('ICS role reordered: Demob. Unit Leader (1 of 4, under Planning Section Chief)');
+
+    // No beforeRoleId (or one outside the row) = to the end.
+    st.moveRole('plan-demob', { parentId: 'planning', beforeRoleId: 'fin-time' });
+    expect(row('planning')).toEqual(['plan-resources', 'plan-situation', 'plan-docs', 'plan-demob']);
+  });
+
+  it('stays quiet when the move changes nothing', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    const before = active();
+    st.moveRole('plan-demob', { parentId: 'planning' });                       // already last
+    st.moveRole('plan-docs', { parentId: 'planning', beforeRoleId: 'plan-demob' }); // already there
+    st.moveRole('ic', { parentId: null });                                     // the only root
+    expect(active()).toBe(before);
+  });
+
+  it('moves across parents, renumbering both rows and carrying the subtree', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    st.moveRole('fin-proc', { parentId: 'logistics', beforeRoleId: 'log-service' });
+    expect(row('logistics')).toEqual(['log-support', 'fin-proc', 'log-service']);
+    expect(orders('logistics')).toEqual([0, 1, 2]);
+    expect(row('finance')).toEqual(['fin-time', 'fin-comp', 'fin-cost']);
+    expect(orders('finance')).toEqual([0, 1, 2]);
+
+    // A section with children: its sub-roles still hang off it afterwards.
+    st.moveRole('ops', { parentId: 'planning' });
+    expect(role('ops').parentId).toBe('planning');
+    expect(row('ops')).toEqual(['ops-branch', 'ops-division']);
+    expect(row('ic')).toEqual(['planning', 'logistics', 'finance']);
+    expect(orders('ic')).toEqual([0, 1, 2]);
+  });
+
+  it('keeps the command-staff row when staying put, and defaults to general staff elsewhere', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    // Same parent, no flag given: stays advisory.
+    st.moveRole('liaison', { parentId: 'ic', beforeRoleId: 'safety' });
+    expect(row('ic', true)).toEqual(['liaison', 'safety', 'pio']);
+    expect(row('ic')).toEqual(['ops', 'planning', 'logistics', 'finance']);
+
+    // New parent, no flag given: general staff.
+    st.moveRole('safety', { parentId: 'ops' });
+    expect(role('safety').isCommandStaff).toBe(false);
+    expect(row('ops')).toEqual(['ops-branch', 'ops-division', 'safety']);
+    expect(orders('ic', true)).toEqual([0, 1]);
+
+    // An explicit flag wins: into the IC's command-staff row, at the end.
+    st.moveRole('plan-docs', { parentId: 'ic', isCommandStaff: true });
+    expect(role('plan-docs').isCommandStaff).toBe(true);
+    expect(row('ic', true)).toEqual(['liaison', 'pio', 'plan-docs']);
+    expect(active().actionLog[0].description).toBe('ICS role moved: Documentation Unit Leader → under Incident Commander (command staff)');
+
+    // Flipping rows under the same parent.
+    st.moveRole('liaison', { parentId: 'ic', isCommandStaff: false });
+    expect(row('ic')).toEqual(['ops', 'planning', 'logistics', 'finance', 'liaison']);
+    expect(active().actionLog[0].description).toBe('ICS role moved: Liaison Officer → general staff under Incident Commander');
+
+    // Top level is never command staff, whatever the caller asks for.
+    st.moveRole('pio', { parentId: null, isCommandStaff: true });
+    expect(role('pio').isCommandStaff).toBe(false);
+    expect(row(null)).toEqual(['ic', 'pio']);
+  });
+
+  it('logs the move with parents in the meta', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    st.moveRole('safety', { parentId: 'ops' });
+    const [entry] = active().actionLog;
+    expect(entry.system).toBe('role-moved');
+    expect(entry.entryType).toBe('event');
+    expect(entryTypeOf(entry)).toBe('system');
+    expect(entry.description).toBe('ICS role moved: Safety Officer → under Operations Section Chief');
+    expect(entry.meta).toEqual({
+      roleId: 'safety',
+      roleTitle: 'Safety Officer',
+      fromParent: 'Incident Commander',
+      toParent: 'Operations Section Chief',
+      fromParentId: 'ic',
+      toParentId: 'ops',
+      position: '3',
+    });
+
+    st.moveRole('safety', { parentId: null, beforeRoleId: 'ic' });
+    expect(row(null)).toEqual(['safety', 'ic']);
+    expect(active().actionLog[0].description).toBe('ICS role moved: Safety Officer → top level');
+    expect(active().actionLog[0].meta).toMatchObject({ fromParent: 'Operations Section Chief', toParent: 'top level', toParentId: '' });
+  });
+
+  it('leaves assignments alone — the holder moves with the role', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    st.assignRole('safety', 'Ana Ruiz');
+    const assignments = active().assignments;
+    st.moveRole('safety', { parentId: 'ops' });
+    expect(active().assignments).toBe(assignments);
+    expect(active().roles.find((r) => r.id === 'safety')!.parentId).toBe('ops');
+  });
+
+  it('keeps untouched roles referentially identical', () => {
+    const st = useCrisisStore.getState();
+    st.createIncident();
+    const before = active().roles;
+    st.moveRole('fin-cost', { parentId: 'finance', beforeRoleId: 'fin-time' });
+    const after = active().roles;
+    for (const id of ['ic', 'ops', 'planning', 'plan-docs', 'log-support']) {
+      expect(after.find((r) => r.id === id)).toBe(before.find((r) => r.id === id));
+    }
+  });
+
+  it('is a no-op on archived incidents', () => {
+    const st = useCrisisStore.getState();
+    const id = st.createIncident();
+    st.standDownIncident(id, 'done');
+    st.openIncident(id);
+    const before = active();
+    st.moveRole('safety', { parentId: 'ops' });
+    expect(active()).toBe(before);
   });
 });
 

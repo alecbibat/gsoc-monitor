@@ -7,9 +7,7 @@ import { api } from '../../api/client';
 import type { RiverGauge } from '../../types';
 import { useRiversStatus } from './riversStore';
 import { CAT, catLabel, catSev, FILTER_MIN_SEV } from './riverMeta';
-import { useMeasureStore } from '../../measure/measureStore';
-import { useFuelZoneStore } from '../../fuelzone/fuelZoneStore';
-import { useHoverStore } from '../../screensaver/hoverStore';
+import { mapToolOwnsCursor } from '../../cesium/cursorOwner';
 
 // NWPS observations refresh ~hourly; the server caches, so a 15-min client poll
 // keeps the national field current cheaply.
@@ -91,15 +89,10 @@ export function RiversLayer() {
     // non-entity point picks).
     const handler = new Cesium.ScreenSpaceEventHandler(v.scene.canvas);
     handler.setInputAction((e: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
-      // Defer to the cursor-owning draw tools (same guards as the globe's own
+      // Defer to the cursor-owning map tools (same guard as the globe's own
       // click handler) so a click meant for measuring/drawing doesn't also pop
       // a gauge panel.
-      if (
-        useMeasureStore.getState().active ||
-        useFuelZoneStore.getState().active ||
-        useHoverStore.getState().picking
-      )
-        return;
+      if (mapToolOwnsCursor()) return;
       const picked = v.scene.pick(e.position) as { id?: RiverPointId } | undefined;
       const g = picked?.id?.__river ? picked.id.gauge : null;
       if (!g) return;

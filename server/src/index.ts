@@ -30,6 +30,7 @@ import fireOutlookRouter from './routes/fireOutlook';
 import jtwcRouter from './routes/jtwc';
 import outagesRouter, { initOutagesStream } from './routes/outages';
 import crisisRouter from './routes/crisis';
+import crisisTemplatesRouter from './routes/crisisTemplates';
 import authRouter from './routes/auth';
 import ssoRouter from './routes/sso';
 import adminRouter from './routes/admin';
@@ -114,6 +115,9 @@ function main() {
   // IAP uploads arrive as base64 JSON from the admin panel (15 MB PDF cap
   // -> ~20 MB encoded).
   app.use('/api/iap', express.json({ limit: '25mb', inflate: false }));
+  // Admin template saves: an intake block at its validation limits (40 groups
+  // × 80 questions × 500 chars) is ~1.7 MB of JSON — past the 1 MB default.
+  app.use('/api/crisis-templates', express.json({ limit: '2mb', inflate: false }));
   app.use(express.json({ limit: '1mb', inflate: false }));
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
@@ -130,6 +134,9 @@ function main() {
 
   // Incident Action Plan document library (auth/admin applied per-route)
   app.use('/api/iap', iapRouter);
+
+  // Crisis templates: checklists / intake / checklist roles (auth/admin per-route)
+  app.use('/api/crisis-templates', crisisTemplatesRouter);
 
   // Team-shared OSINT watchlist CRUD (requireAuth applied inside router)
   app.use('/api/watchlist', watchlistRouter);
@@ -301,6 +308,19 @@ function main() {
   // Backstop for anything that reaches next(err) — without it Express prints
   // HTML stack traces; with it API consumers get JSON and the process stays up.
   app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    // body-parser's own rejections are the client's fault, not ours: a
+    // malformed JSON body is a 400 and an over-limit one a 413 (an IAP PDF or
+    // a large template save), so the caller can say what actually went wrong.
+    const status = (err as { status?: unknown }).status;
+    const type = (err as { type?: unknown }).type;
+    if (!res.headersSent && type === 'entity.parse.failed') {
+      res.status(400).json({ error: 'Request body is not valid JSON' });
+      return;
+    }
+    if (!res.headersSent && (type === 'entity.too.large' || status === 413)) {
+      res.status(413).json({ error: 'Request body is too large' });
+      return;
+    }
     console.error('[express]', err.message);
     if (!res.headersSent) res.status(500).json({ error: 'Internal error' });
   });

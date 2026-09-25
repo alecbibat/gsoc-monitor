@@ -2,8 +2,10 @@ import * as Cesium from 'cesium';
 import { useEffect, useMemo, useRef } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { useCrisisStore, type DrawLayer } from './crisisStore';
+import { mapToolOwnsCursor } from '../cesium/cursorOwner';
 
 const ENTITY_PREFIX = 'crisis-layer-';
+const DATA_SOURCE_NAME = 'crisis-layers';
 
 /**
  * The drawn layer a picked Cesium entity belongs to, or null when the pick
@@ -122,6 +124,31 @@ export function addLayerEntities(ds: Cesium.CustomDataSource, layer: DrawLayer) 
   });
 }
 
+/**
+ * Hide a layer's committed shape on the operator globe (every copy of it —
+ * there is one per viewer), returning a function that shows it again.
+ *
+ * The draw controller wraps its synchronous thumbnail capture in this: during
+ * a Redraw the old shape is still on the map, and the snapshot must show only
+ * the new one. Entity `show` is applied synchronously on the next
+ * viewer.render() (a per-instance show attribute on the already-built geometry
+ * batch; labels and points are rebuilt every update), unlike new geometry,
+ * which is built asynchronously.
+ */
+export function hideLayerEntity(viewer: Cesium.Viewer, layerId: string): () => void {
+  const hidden: Cesium.Entity[] = [];
+  for (const ds of viewer.dataSources.getByName(DATA_SOURCE_NAME)) {
+    const ent = ds.entities.getById(`${ENTITY_PREFIX}${layerId}`);
+    if (ent && ent.show) {
+      ent.show = false;
+      hidden.push(ent);
+    }
+  }
+  return () => {
+    for (const ent of hidden) ent.show = true;
+  };
+}
+
 export function CrisisMapLayer() {
   const viewer = useCesiumViewer();
   const incidents = useCrisisStore((s) => s.incidents);
@@ -131,7 +158,7 @@ export function CrisisMapLayer() {
   // Data source lifecycle
   useEffect(() => {
     if (!viewer) return;
-    const ds = new Cesium.CustomDataSource('crisis-layers');
+    const ds = new Cesium.CustomDataSource(DATA_SOURCE_NAME);
     dsRef.current = ds;
     viewer.dataSources.add(ds);
     return () => {
@@ -175,7 +202,9 @@ export function CrisisMapLayer() {
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
     handler.setInputAction((e: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
       const st = useCrisisStore.getState();
-      if (st.open || st.activeDrawLayerId) return; // not while editing or drawing
+      // Not while the workspace is open, nor while a map tool (crisis drawing,
+      // measure, fuel zone, hover picking) owns the click.
+      if (st.open || mapToolOwnsCursor()) return;
       const picked = viewer.scene.pick(e.position);
       const layerId = layerIdFromEntity((picked?.id as Cesium.Entity | undefined)?.id);
       if (layerId) {

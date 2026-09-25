@@ -7,9 +7,7 @@ import { getPanelData } from './entityPanelLink';
 import { useLayersStore } from '../store/layersStore';
 import { usePanelStore } from '../panels/panelStore';
 import { usePickChooserStore, type PanelOpenData } from '../panels/pickChooserStore';
-import { useMeasureStore } from '../measure/measureStore';
-import { useFuelZoneStore } from '../fuelzone/fuelZoneStore';
-import { useHoverStore } from '../screensaver/hoverStore';
+import { mapToolOwnsCursor } from './cursorOwner';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { QUALITY_SETTINGS } from '../perf/perfStore';
 import { getGpuInfo, describeGpu } from '../perf/gpuInfo';
@@ -254,13 +252,10 @@ export function CesiumGlobe({ children, onReady }: Props) {
 
     v.screenSpaceEventHandler.setInputAction(
       (click: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
-        // While the measure tool owns the cursor, don't open entity panels.
-        if (useMeasureStore.getState().active) return;
-        // Same for the fuel-zone draw tool.
-        if (useFuelZoneStore.getState().active) return;
-        // While hover mode is waiting for an orbit center, the HoverController
-        // consumes the click — don't also open a panel.
-        if (useHoverStore.getState().picking) return;
+        // While a map tool owns the cursor (measure, fuel zone, hover-center
+        // picking, crisis layer drawing) the click is theirs — don't also open
+        // an entity panel or the pick chooser.
+        if (mapToolOwnsCursor()) return;
 
         // drillPick (not pick) so overlapping features — e.g. several stacked
         // NWS alerts — all surface. Dedupe by panel id, keeping topmost order.

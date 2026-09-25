@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import {
   clearSsoErrorParam, fetchAuthConfig, login, readSsoError, startSso,
   FALLBACK_AUTH_CONFIG, type AuthConfig,
@@ -18,10 +18,19 @@ import { TYPE_STYLES, TimelineView, LogShowMore, DEFAULT_LOG_LIMIT, entryTypeOf 
 // the def lookups normalize them (contained → recovery, chemical → HazMat, …).
 import { incidentStatusDef, incidentTypeDef } from './taxonomy';
 import {
-  checklistTemplateFor, foldChecklistResponse, isChecklistStateMap,
+  foldChecklistResponse, isChecklistStateMap,
   type ChecklistItemState, type ChecklistStateMap,
 } from './checklistTemplate';
-import { intakeTemplateFor, isIntakeAnswers, answeredCount } from './intakeTemplate';
+import { isIntakeAnswers, answeredCount, type IntakeAnswers } from './intakeTemplate';
+// Templates: the pure model only. The editor's templatesStore (and any admin
+// code) must stay out of this bundle — the share page fetches its own
+// scope-filtered config through the share token instead.
+import {
+  checklistScopes, isCrisisTemplatesConfig, resolveChecklist, resolveIntake,
+  retiredChecklistEntries, retiredIntakeEntries, type CrisisTemplatesConfig,
+} from './templates/model';
+import { scopePropertyLabel } from './templates/scopeLabels';
+import { ScopeSummary } from './templates/ScopeChips';
 import { ChecklistBoard } from './ChecklistBoard';
 import { IntakeTable } from './IntakeTable';
 import { PdfViewer } from './PdfViewer';
@@ -407,6 +416,75 @@ function LastUpdated({ iso, closed }: { iso: string; closed: boolean }) {
   );
 }
 
+// ── Checklist / intake templates ─────────────────────────────────────────────
+
+/** The scope-filtered template config for `key` (`type|property`), or why it failed. */
+interface ShareTemplatesState {
+  key: string | null;
+  config: CrisisTemplatesConfig | null;
+  error: string | null;
+}
+
+function shareTemplatesError(status: number): string {
+  if (status === 401) return 'Access to this report changed — reload the page to sign in again.';
+  if (status === 404) return 'They aren’t available for this link.';
+  if (status === 410) return 'This link has been closed by the incident team.';
+  if (status >= 500) return 'The server had a problem loading them.';
+  return `Unexpected response (HTTP ${status}).`;
+}
+
+function TemplatesUnavailable({ what, message, onRetry }: { what: string; message: string; onRetry: () => void }) {
+  return (
+    <div role="alert" className="rounded-lg border border-white/10 bg-white/4 px-4 py-5 text-center">
+      <p className="text-[12px] text-white/60">Couldn’t load the {what}.</p>
+      <p className="mt-1 text-[11px] text-white/35">{message}</p>
+      <button
+        onClick={onRetry}
+        className="mt-3 rounded border border-white/20 bg-white/8 px-3 py-1.5 text-[11px] text-white/75 transition hover:border-white/35"
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+
+function TemplatesLoading({ what }: { what: string }) {
+  return (
+    <div role="status" className="flex items-center justify-center gap-2.5 rounded-lg border border-white/8 bg-white/4 px-4 py-8 text-[12px] text-white/40">
+      <span aria-hidden className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-accent" />
+      Loading {what}…
+    </div>
+  );
+}
+
+/**
+ * The signed-in viewer's account name, once the link is open. The toggle
+ * route attributes a signed-in viewer's checks to their ACCOUNT, whatever the
+ * name box says, so the box only means something to break-glass (link
+ * password) viewers, who have no session. null = no session, or not known yet
+ * (offline) — the box stays, which is harmless: the server still stamps the
+ * account when there is one. Trimmed and bounded like the server's cleanActor.
+ */
+function useShareAccountName(unlocked: boolean): string | null {
+  const [name, setName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!unlocked) return;
+    let cancelled = false;
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then((r) => (r.ok ? (r.json() as Promise<unknown>) : null))
+      .then((me) => {
+        if (cancelled) return;
+        const raw = me && typeof me === 'object' ? (me as { name?: unknown }).name : undefined;
+        // eslint-disable-next-line no-control-regex
+        const clean = typeof raw === 'string' ? raw.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60) : '';
+        setName(clean || null);
+      })
+      .catch(() => { /* offline: keep the name box */ });
+    return () => { cancelled = true; };
+  }, [unlocked]);
+  return name;
+}
+
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 export function CrisisShareView({ token }: { token: string }) {
@@ -461,9 +539,12 @@ export function CrisisShareView({ token }: { token: string }) {
   const [pendingChk, setPendingChk] = useState<ChecklistStateMap>({});
   const [chkError, setChkError] = useState<string | null>(null);
   // Optional attribution for this viewer's toggles, remembered per browser.
+  // Only asked of break-glass viewers — a signed-in one's checks carry their
+  // account name (useShareAccountName).
   const [viewerName, setViewerName] = useState(() => {
     try { return localStorage.getItem('gsoc-share-name') ?? ''; } catch { return ''; }
   });
+  const accountName = useShareAccountName(unlocked);
 
   // Once the globe has mounted, keep it mounted even if a live prescription
   // update empties the layer/pin lists — swapping a viewer down to the flat
@@ -550,6 +631,9 @@ export function CrisisShareView({ token }: { token: string }) {
     let retry: ReturnType<typeof setTimeout> | undefined;
     es.addEventListener('connected', (e) => setData(JSON.parse((e as MessageEvent).data) as CrisisPublicState));
     es.addEventListener('update',    (e) => setData(JSON.parse((e as MessageEvent).data) as CrisisPublicState));
+    // An admin changed a checklist / intake template: refetch this link's copy
+    // now rather than at the next periodic refresh.
+    es.addEventListener('templates', () => setTplNonce((n) => n + 1));
     es.addEventListener('revoked',   () => {
       es.close();
       // Refetch to pick up the closure payload (410) so the viewer lands on
@@ -585,6 +669,102 @@ export function CrisisShareView({ token }: { token: string }) {
     return () => { disposed = true; clearTimeout(retry); es.close(); };
   }, [token, viewKey, unlocked, sseNonce]);
 
+  // ── Checklist / intake templates ──
+  // Checklists, intake and IAP key off the NORMALIZED type id (snapshots
+  // outlive deploys and can carry retired ids) plus the incident's property.
+  // The server answers with only the template blocks that apply to them, plus
+  // text for any checked item / answer outside those blocks, through the same
+  // gate as the snapshot. Refetched when the type or property changes, when
+  // the snapshot references ids the config doesn't know (an admin added an
+  // item and someone checked it), and — at most every few minutes — as live
+  // updates arrive, so template edits reach links that stay open for days.
+  const tplTypeId = data ? incidentTypeDef(data.incidentType).id : null;
+  const tplPropertyId = data && typeof data.locationGroupId === 'string' && data.locationGroupId
+    ? data.locationGroupId
+    : null;
+  const tplKey = tplTypeId === null ? null : `${tplTypeId}|${tplPropertyId ?? '*'}`;
+  const [tpl, setTpl] = useState<ShareTemplatesState>({ key: null, config: null, error: null });
+  const [tplNonce, setTplNonce] = useState(0);
+  const tplAttemptAt = useRef(0);
+  const retryTemplates = () => setTplNonce((n) => n + 1);
+
+  useEffect(() => {
+    if (!unlocked || tplKey === null) return;
+    let cancelled = false;
+    tplAttemptAt.current = Date.now();
+    // Another scope's config would resolve the wrong lists: drop it (loading
+    // state). A refresh of the same scope keeps the current one on screen.
+    setTpl((prev) => (prev.key === tplKey ? { ...prev, error: null } : { key: tplKey, config: null, error: null }));
+    const qs = viewKey ? `?k=${viewKey}` : '';
+    fetch(`/api/crisis/share/${token}/templates${qs}`, { cache: 'no-store' })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(shareTemplatesError(r.status));
+        const body: unknown = await r.json().catch(() => null);
+        if (!isCrisisTemplatesConfig(body)) throw new Error('The server sent an unexpected response.');
+        if (!cancelled) setTpl({ key: tplKey, config: body, error: null });
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        const message = e instanceof TypeError
+          ? 'Network error — check your connection.'
+          : e instanceof Error ? e.message : String(e);
+        console.warn('[share] templates load failed:', message);
+        setTpl((prev) => ({ key: tplKey, config: prev.key === tplKey ? prev.config : null, error: message }));
+      });
+    return () => { cancelled = true; };
+  }, [token, viewKey, unlocked, tplKey, tplNonce]);
+
+  const tplConfig = tpl.key === tplKey ? tpl.config : null;
+  const rawChecklists = data?.checklists;
+  const shareChecklists = useMemo<ChecklistStateMap>(
+    () => (isChecklistStateMap(rawChecklists) ? rawChecklists : {}),
+    [rawChecklists]
+  );
+  const effectiveChecklists = useMemo<ChecklistStateMap>(
+    () => ({ ...shareChecklists, ...pendingChk }),
+    [shareChecklists, pendingChk]
+  );
+  const rawIntake = data?.intake;
+  const intakeAnswers = useMemo<IntakeAnswers>(() => (isIntakeAnswers(rawIntake) ? rawIntake : {}), [rawIntake]);
+  const checklistTpl = useMemo(
+    () => (tplConfig ? resolveChecklist(tplConfig, tplTypeId, tplPropertyId) : null),
+    [tplConfig, tplTypeId, tplPropertyId]
+  );
+  const intakeTpl = useMemo(
+    () => (tplConfig ? resolveIntake(tplConfig, tplTypeId, tplPropertyId) : null),
+    [tplConfig, tplTypeId, tplPropertyId]
+  );
+  const retiredChk = useMemo(
+    () => (tplConfig && checklistTpl ? retiredChecklistEntries(tplConfig, checklistTpl, effectiveChecklists) : []),
+    [tplConfig, checklistTpl, effectiveChecklists]
+  );
+  const retiredIntake = useMemo(
+    () => (tplConfig && intakeTpl ? retiredIntakeEntries(tplConfig, intakeTpl, intakeAnswers) : []),
+    [tplConfig, intakeTpl, intakeAnswers]
+  );
+  const checklistScopeList = useMemo(() => (checklistTpl ? checklistScopes(checklistTpl) : []), [checklistTpl]);
+
+  // Ids the config has no text for — most likely an item an admin just added
+  // that someone has already checked. One refetch per distinct set (a deleted
+  // id stays unknown, and must not loop), after a short settle.
+  const unknownIds = [
+    ...retiredChk.filter((e) => e.text === null).map((e) => e.id),
+    ...retiredIntake.filter((e) => e.text === null).map((e) => e.id),
+  ].sort().join(',');
+  const unknownTried = useRef('');
+  useEffect(() => {
+    if (!unknownIds || unknownTried.current === unknownIds) return;
+    const t = setTimeout(() => { unknownTried.current = unknownIds; retryTemplates(); }, 2_000);
+    return () => clearTimeout(t);
+  }, [unknownIds]);
+
+  const lastUpdated = data?.lastUpdated;
+  useEffect(() => {
+    if (tplConfig && Date.now() - tplAttemptAt.current > 5 * 60_000) retryTemplates();
+    // Only a live update should trigger this, not the config arriving.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastUpdated]);
+
   const handlePassword = (password: string) => {
     // crypto.subtle only exists in secure contexts — on a plain-HTTP origin
     // every attempt would otherwise dead-end as "incorrect password".
@@ -615,7 +795,7 @@ export function CrisisShareView({ token }: { token: string }) {
   // token-gated toggle endpoint; the response (and the SSE fanout) carry the
   // server-stamped authoritative map.
   const toggleChecklist = (itemId: string, checked: boolean) => {
-    const name = viewerName.trim();
+    const name = accountName ?? viewerName.trim();
     const optimistic: ChecklistItemState = {
       checked,
       at: new Date().toISOString(),
@@ -689,7 +869,9 @@ export function CrisisShareView({ token }: { token: string }) {
 
   const status = incidentStatusDef(data.incidentStatus);
   const { dot, badge } = status;
-  const roots = data.roles.filter((r) => r.parentId === null);
+  // By order, as the editor's chart draws them: moving a role renumbers
+  // `order` and leaves the array alone.
+  const roots = data.roles.filter((r) => r.parentId === null).sort((a, b) => a.order - b.order);
   // Live layers prescribed by the incident team; drop ids this build no longer
   // knows (snapshots outlive deploys). Array.isArray guards because share
   // snapshots are stored as opaque JSON — a malformed one must not blank the
@@ -718,17 +900,20 @@ export function CrisisShareView({ token }: { token: string }) {
   );
   const drawnLayers = maskedDrawLayers.filter((l) => l.visible && l.positions.length > 0);
 
-  // Checklists / intake / IAP all key off the NORMALIZED type id — snapshots
-  // outlive deploys and can carry retired ids. Snapshot fields are untrusted
-  // JSON, so both maps are shape-guarded before use.
-  const typeId = incidentTypeDef(data.incidentType).id;
-  const checklistTpl = checklistTemplateFor(typeId);
-  const shareChecklists: ChecklistStateMap = isChecklistStateMap(data.checklists) ? data.checklists : {};
-  const effectiveChecklists: ChecklistStateMap = { ...shareChecklists, ...pendingChk };
-  const intakeTpl = intakeTemplateFor(typeId);
-  const intakeAnswers = isIntakeAnswers(data.intake) ? data.intake : {};
-  const intakeAnswered = answeredCount(intakeTpl, intakeAnswers);
-  const iapUrl = `/api/crisis/share/${token}/iap${viewKey ? `?k=${viewKey}` : ''}`;
+  // Snapshot fields are untrusted JSON: the checklist / intake maps were
+  // shape-guarded above, before the early returns.
+  const hasIntakeAnswers = Object.values(intakeAnswers).some((a) => a.trim().length > 0);
+  const intakeShown = (intakeTpl ? answeredCount(intakeTpl, intakeAnswers) : 0) + retiredIntake.length;
+  // The server picks the plan from the snapshot's type + property (most
+  // specific on file wins). Naming the scope in the URL makes the viewer
+  // refetch when either changes — PdfViewer loads once per url.
+  const iapParams = new URLSearchParams();
+  if (viewKey) iapParams.set('k', viewKey);
+  if (tplKey) iapParams.set('scope', tplKey);
+  const iapQuery = iapParams.toString();
+  const iapUrl = `/api/crisis/share/${token}/iap${iapQuery ? `?${iapQuery}` : ''}`;
+  const typeLabel = incidentTypeDef(data.incidentType).label;
+  const propertyLabel = tplPropertyId ? scopePropertyLabel(tplPropertyId, false) : null;
 
   const SHARE_TABS = [
     { id: 'report', label: 'Situation Report' },
@@ -782,13 +967,21 @@ export function CrisisShareView({ token }: { token: string }) {
 
         {/* Intake Q&A — appears once the team has answered at least one of the
             initial-contact questions in the Intake tab */}
-        {intakeAnswered > 0 && (
+        {hasIntakeAnswers && (
           <div>
             <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
               <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Intake — Initial Contact</h2>
-              <span className="text-[11px] text-white/35">{intakeAnswered} question{intakeAnswered === 1 ? '' : 's'} answered · updates live</span>
+              {intakeTpl && (
+                <span className="text-[11px] text-white/35">{intakeShown} question{intakeShown === 1 ? '' : 's'} answered · updates live</span>
+              )}
             </div>
-            <IntakeTable template={intakeTpl} answers={intakeAnswers} />
+            {intakeTpl ? (
+              <IntakeTable template={intakeTpl} answers={intakeAnswers} retired={retiredIntake} />
+            ) : tpl.key === tplKey && tpl.error ? (
+              <TemplatesUnavailable what="intake answers" message={tpl.error} onRetry={retryTemplates} />
+            ) : (
+              <TemplatesLoading what="intake answers" />
+            )}
           </div>
         )}
 
@@ -996,7 +1189,7 @@ export function CrisisShareView({ token }: { token: string }) {
             </div>
             <Suspense
               fallback={
-                <div className="grid h-[72vh] min-h-[440px] w-full place-items-center rounded-lg border border-white/10 bg-ink-950/60">
+                <div className="grid h-[60vh] min-h-[360px] w-full place-items-center rounded-lg border border-white/10 bg-ink-950/60 sm:h-[72vh] sm:min-h-[440px]">
                   <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-accent" />
                 </div>
               }
@@ -1120,12 +1313,12 @@ export function CrisisShareView({ token }: { token: string }) {
           <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
             <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">Incident Action Plan</h2>
             <span className="text-[11px] text-white/35">
-              Reference document for {incidentTypeDef(data.incidentType).label} incidents
+              The most specific plan on file for {typeLabel} incidents{propertyLabel ? ` at ${propertyLabel}` : ''}
             </span>
           </div>
           <PdfViewer
             url={iapUrl}
-            emptyMessage="No Incident Action Plan has been uploaded for this incident type yet — the incident team can add one from the admin panel."
+            emptyMessage={`No Incident Action Plan has been uploaded for ${typeLabel} incidents${propertyLabel ? ` or ${propertyLabel}` : ''} yet — the incident team can add one from the admin page.`}
           />
         </main>
       )}
@@ -1137,28 +1330,47 @@ export function CrisisShareView({ token }: { token: string }) {
           <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
             <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">ICS Role Checklists</h2>
             <span className="text-[11px] text-white/35">Live for everyone on this link · each check is timestamped</span>
-            <label className="ml-auto flex items-center gap-1.5 text-[10px] text-white/40">
-              Your name
-              <input
-                value={viewerName}
-                onChange={(e) => saveViewerName(e.target.value)}
-                placeholder="for the record"
-                maxLength={60}
-                className="w-32 rounded border border-white/12 bg-white/8 px-2 py-1 text-[11px] text-white/80 placeholder-white/25 outline-none transition focus:border-white/25"
-              />
-            </label>
+            {accountName ? (
+              <span className="ml-auto text-[10px] text-white/40">
+                Checks are recorded as <span className="text-white/70">{accountName}</span> (your account)
+              </span>
+            ) : (
+              <label className="ml-auto flex items-center gap-1.5 text-[10px] text-white/40">
+                Your name
+                <input
+                  value={viewerName}
+                  onChange={(e) => saveViewerName(e.target.value)}
+                  placeholder="for the record"
+                  maxLength={60}
+                  autoComplete="name"
+                  className="w-32 rounded border border-white/12 bg-white/8 px-2 py-1 text-[11px] text-white/80 placeholder-white/25 outline-none transition focus:border-white/25"
+                />
+              </label>
+            )}
           </div>
           {chkError && (
             <p className="mb-3 rounded border border-red-400/25 bg-red-400/8 px-3 py-2 text-[11px] text-red-300/90">
               {chkError}
             </p>
           )}
-          <ChecklistBoard
-            template={checklistTpl}
-            state={effectiveChecklists}
-            onToggle={toggleChecklist}
-            footnote={viewerName.trim() ? `Checks are recorded as ${viewerName.trim()}` : 'Add your name above to attribute your checks (optional)'}
-          />
+          <ScopeSummary scopes={checklistScopeList} className="mb-3" />
+          {checklistTpl ? (
+            <ChecklistBoard
+              template={checklistTpl}
+              state={effectiveChecklists}
+              onToggle={toggleChecklist}
+              retired={retiredChk}
+              footnote={
+                accountName ? undefined
+                : viewerName.trim() ? `Checks are recorded as ${viewerName.trim()}`
+                : 'Add your name above to attribute your checks (optional)'
+              }
+            />
+          ) : tpl.key === tplKey && tpl.error ? (
+            <TemplatesUnavailable what="checklists" message={tpl.error} onRetry={retryTemplates} />
+          ) : (
+            <TemplatesLoading what="checklists" />
+          )}
         </main>
       )}
 

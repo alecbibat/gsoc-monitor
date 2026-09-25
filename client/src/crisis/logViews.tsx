@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { entryTypeOf, type ActionLogEntry, type DisplayEntryType } from './crisisStore';
-import { ZoomableImage } from './ImageLightbox';
+import { ZoomableImage, thumbUrl } from './ImageLightbox';
 
 // Pieces of the Actions & Events Log shared between the incident editor
 // (ActionLog) and the read-only share page (CrisisShareView): entry styling,
@@ -245,9 +245,16 @@ function SnakeCard({ entry, x, y, w, onOpen }: {
         )}
         {hasImage && (
           <img
-            src={entry.attachmentData}
+            src={thumbUrl(entry.attachmentData!, 240)}
             alt={entry.attachmentName}
             className="mt-auto h-9 w-full rounded border border-white/10 object-cover"
+            loading="lazy"
+            decoding="async"
+            // Fall back to the original if the resized rendition is refused.
+            onError={(e) => {
+              const full = entry.attachmentData!;
+              if (e.currentTarget.getAttribute('src') !== full) e.currentTarget.src = full;
+            }}
           />
         )}
         {!hasImage && entry.attachmentName && (
@@ -313,6 +320,7 @@ function EntryDetailModal({ entry, onClose }: { entry: ActionLogEntry; onClose: 
           <ZoomableImage
             src={entry.attachmentData}
             alt={entry.attachmentName}
+            thumbWidth={960}
             wrapperClassName="w-full"
             className="mt-4 max-h-[50vh] w-full rounded-lg border border-white/10 object-contain"
           />

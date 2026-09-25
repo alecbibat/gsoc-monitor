@@ -8,7 +8,9 @@ import { wrap } from '../asyncWrap';
 import { normalizeIncidentTypeId } from '../incidentTaxonomy';
 import { applyChecklistToggle, cleanActor, invalidToggleReason, type ChecklistItemState } from '../checklist';
 import { broadcastIncident } from './incidentBus';
-import { findIapForType, sendPdf } from './iap';
+import { findIapForScope, sendPdf } from './iap';
+import { loadEffectiveConfig } from '../crisisTemplates/store';
+import { checklistItemApplies, shareTemplatesConfig } from '../crisisTemplates/effective';
 
 const router = Router();
 
@@ -129,6 +131,48 @@ function gonePayload(row: {
   };
 }
 
+interface ShareRow {
+  incident_id: string | null;
+  snapshot: Record<string, unknown>;
+  password_hash: string | null;
+  active: boolean;
+  expires_at: Date | null;
+  revoked_at: Date | null;
+  live: boolean;
+}
+
+/**
+ * The viewer-side read gate every share read path shares: load the link,
+ * check the viewer (session or break-glass key), refuse a dead link with the
+ * closure payload. Answers 404 / 401 / 410 itself and returns null; otherwise
+ * the live row and how the viewer got in.
+ */
+async function openLiveShare(
+  req: Request, res: Response, token: string
+): Promise<{ row: ShareRow; gate: Extract<ShareGateResult, { ok: true }> } | null> {
+  const { rows: [row] } = await withPasswordColumn(() => pool.query<ShareRow>(
+    `SELECT incident_id, snapshot, password_hash, active, expires_at, revoked_at,
+            (${LIVE}) AS live
+     FROM share_links WHERE token = $1`,
+    [token]
+  ));
+  if (!row) { res.status(404).json({ error: 'Not found' }); return null; }
+  const gate = await gateShare(req, row.password_hash);
+  if (!gate.ok) { denyShare(res, gate); return null; }
+  if (!row.live) { res.status(410).json(gonePayload(row)); return null; }
+  return { row, gate };
+}
+
+/** The incident type (normalized) and property a share snapshot resolves templates / the IAP for. */
+function snapshotScope(snapshot: Record<string, unknown> | null): { incidentType: string; propertyId: string | null } {
+  const rawType = snapshot?.incidentType;
+  const rawProp = snapshot?.locationGroupId;
+  return {
+    incidentType: normalizeIncidentTypeId(typeof rawType === 'string' ? rawType : null),
+    propertyId: typeof rawProp === 'string' && rawProp ? rawProp : null,
+  };
+}
+
 // POST /api/crisis/publish — create a new share link, returns token + url
 router.post('/publish', requireAuth, wrap(async (req: Request, res: Response) => {
   const snapshot = req.body;
@@ -169,32 +213,37 @@ router.post('/publish', requireAuth, wrap(async (req: Request, res: Response) =>
 // PATCH /api/crisis/share/:token — push updated snapshot, notify SSE clients
 router.patch('/share/:token', requireAuth, wrap(async (req: Request, res: Response) => {
   const { token } = req.params;
-  const { rows: [row] } = await pool.query(
-    `SELECT snapshot FROM share_links WHERE token = $1 AND ${LIVE}`,
-    [token]
-  );
-  if (!row) { res.status(404).json({ error: 'Not found' }); return; }
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+    res.status(400).json({ error: 'Body must be a JSON object' }); return;
+  }
 
   // The checklist map is owned by the per-item toggle endpoints (which update
   // every live snapshot themselves): a viewer's check must not be clobbered by
   // the editor's next debounced auto-publish carrying a stale copy. The one
   // exception is a snapshot that has no map yet (link published before the
   // feature) — the first PATCH seeds it.
-  const prevChecklists = (row.snapshot as { checklists?: unknown })?.checklists;
-  const merged = {
-    ...(row.snapshot as object),
-    ...req.body,
-    ...(prevChecklists !== undefined ? { checklists: prevChecklists } : {}),
-    lastUpdated: new Date().toISOString(),
-  };
-  // Snapshots can be MB-scale; stringify once and reuse for the UPDATE + SSE.
-  const json = JSON.stringify(merged);
-  await pool.query(
-    'UPDATE share_links SET snapshot = $1 WHERE token = $2',
-    [json, token]
+  //
+  // ONE statement, merged in the database — never read, merge in JS, write
+  // back: a toggle's fanout (updateShareChecklists) landing between the read
+  // and the write was overwritten by the map this request had read, and
+  // viewers saw the item uncheck. Under READ COMMITTED an UPDATE that meets a
+  // concurrent write to its row re-evaluates SET against the NEWEST version,
+  // so `snapshot->'checklists'` here is always the latest map.
+  const { rows: [row] } = await pool.query<{ json: string }>(
+    `UPDATE share_links
+        SET snapshot = (snapshot || $1::jsonb) || CASE
+              WHEN snapshot ? 'checklists'
+                THEN jsonb_build_object('checklists', snapshot->'checklists', 'lastUpdated', $3::text)
+              ELSE jsonb_build_object('lastUpdated', $3::text)
+            END
+      WHERE token = $2 AND ${LIVE}
+      RETURNING snapshot::text AS json`,
+    [JSON.stringify(req.body), token, new Date().toISOString()]
   );
+  if (!row) { res.status(404).json({ error: 'Not found' }); return; }
 
-  const payload = `event: update\ndata: ${json}\n\n`;
+  // Snapshots can be MB-scale: the stored text goes straight to the viewers.
+  const payload = `event: update\ndata: ${row.json}\n\n`;
   sseClients.get(token)?.forEach((client) => {
     try { client.write(payload); } catch { /* disconnected */ }
   });
@@ -207,18 +256,10 @@ router.patch('/share/:token', requireAuth, wrap(async (req: Request, res: Respon
 // or expired link answers 410 with a closure summary — an exec opening the
 // link the morning after stand-down gets an answer, not a broken page.
 router.get('/share/:token', wrap(async (req: Request, res: Response) => {
-  const { rows: [row] } = await withPasswordColumn(() => pool.query(
-    `SELECT snapshot, password_hash, active, expires_at, revoked_at,
-            (${LIVE}) AS live
-     FROM share_links WHERE token = $1`,
-    [req.params.token]
-  ));
-  if (!row) { res.status(404).json({ error: 'Not found' }); return; }
-  const gate = await gateShare(req, row.password_hash);
-  if (!gate.ok) { denyShare(res, gate); return; }
-  if (!row.live) { res.status(410).json(gonePayload(row)); return; }
-  logShareAccess(req.params.token, req, gate);
-  res.json(row.snapshot);
+  const open = await openLiveShare(req, res, req.params.token);
+  if (!open) return;
+  logShareAccess(req.params.token, req, open.gate);
+  res.json(open.row.snapshot);
 }, 'crisis'));
 
 // GET /api/crisis/share/:token/access — editor-side access stats. Now that
@@ -317,23 +358,49 @@ router.delete('/share/:token', requireAuth, wrap(async (req: Request, res: Respo
  * it out to connected viewers. Toggles bypass the editor's auto-publish (which
  * only runs while an editor has the incident open), so the toggle endpoints
  * call this directly.
+ *
+ * Runs under the incident row's lock (the same one applyChecklistToggle
+ * takes) and fans out the map as the row holds it NOW, not the caller's copy:
+ * two toggles' fanouts used to be able to finish out of order and leave the
+ * older map on the share page. `checklists` is only the fallback for an
+ * incident row that is gone. Each snapshot is merged in one UPDATE (see the
+ * PATCH route), so a concurrent auto-publish can't be overwritten either.
  */
 export async function updateShareChecklists(
   incidentId: string,
   checklists: Record<string, ChecklistItemState>
 ): Promise<void> {
-  const { rows } = await pool.query<{ token: string; snapshot: Record<string, unknown> }>(
-    `SELECT token, snapshot FROM share_links WHERE incident_id = $1 AND ${LIVE}`,
-    [incidentId]
-  );
-  const lastUpdated = new Date().toISOString();
-  for (const { token, snapshot } of rows) {
-    const json = JSON.stringify({ ...(snapshot as object), checklists, lastUpdated });
-    await pool.query('UPDATE share_links SET snapshot = $1 WHERE token = $2', [json, token]);
-    const payload = `event: update\ndata: ${json}\n\n`;
-    sseClients.get(token)?.forEach((client) => {
-      try { client.write(payload); } catch { /* disconnected */ }
-    });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [inc] } = await client.query<{ checklists: unknown }>(
+      `SELECT data->'checklists' AS checklists FROM incidents WHERE id = $1 FOR UPDATE`,
+      [incidentId]
+    );
+    const current = inc?.checklists;
+    const map = current && typeof current === 'object' && !Array.isArray(current) ? current : checklists;
+    const { rows } = await client.query<{ token: string; json: string }>(
+      `UPDATE share_links
+          SET snapshot = snapshot || jsonb_build_object('checklists', $2::jsonb, 'lastUpdated', $3::text)
+        WHERE incident_id = $1 AND ${LIVE}
+        RETURNING token, snapshot::text AS json`,
+      [incidentId, JSON.stringify(map), new Date().toISOString()]
+    );
+    // Pushed while the lock still orders fanouts, so viewers get them in the
+    // order they were written. Nothing untrue can reach them if the COMMIT
+    // then fails: the map was read from the (committed) incident row.
+    for (const { token, json } of rows) {
+      const payload = `event: update\ndata: ${json}\n\n`;
+      sseClients.get(token)?.forEach((c) => {
+        try { c.write(payload); } catch { /* disconnected */ }
+      });
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => { /* connection already gone */ });
+    throw err;
+  } finally {
+    client.release();
   }
 }
 
@@ -344,27 +411,31 @@ router.post('/share/:token/checklist/:itemId', wrap(async (req: Request, res: Re
   const { token, itemId } = req.params;
   const invalid = invalidToggleReason(itemId, req.body);
   if (invalid) { res.status(400).json({ error: invalid }); return; }
-  const { rows: [row] } = await withPasswordColumn(() => pool.query(
-    `SELECT incident_id, snapshot, password_hash, active, expires_at, revoked_at,
-            (${LIVE}) AS live
-     FROM share_links WHERE token = $1`,
-    [token]
-  ));
-  if (!row) { res.status(404).json({ error: 'Not found' }); return; }
-  const gate = await gateShare(req, row.password_hash);
-  if (!gate.ok) { denyShare(res, gate); return; }
-  if (!row.live) { res.status(410).json(gonePayload(row)); return; }
+  const open = await openLiveShare(req, res, token);
+  if (!open) return;
+  const { row, gate } = open;
   if (!row.incident_id) {
     // Pre-W4 links were published without an incident id — there is no parent
     // record to write to, so the checklist stays read-only on those.
     res.status(409).json({ error: 'Checklist is read-only on this link' }); return;
   }
+  // Only the lines the share page shows as live may be toggled from it (its
+  // retired items are read-only). Unlike the signed-in toggle, an id outside
+  // the blocks that apply to the snapshot's type + property is refused: the
+  // templates route below returns the text of any stored id another scope
+  // owns, so it would read out that scope's checklist and plant a fake entry
+  // in the incident.
+  const { incidentType, propertyId } = snapshotScope(row.snapshot);
+  if (!checklistItemApplies(await loadEffectiveConfig(), incidentType, propertyId, itemId)) {
+    res.status(409).json({ error: 'That item is not on this incident\'s current checklist — reload to see the latest' }); return;
+  }
 
   const body = req.body as { checked: boolean; by?: unknown };
   // A signed-in viewer's account name outranks the self-typed one the share
   // page used to rely on: the toggle lands in the incident's audit trail, and
-  // an attested identity is worth more there than a text box.
-  const by = (gate.via === 'session' ? gate.viewer.name : null) ?? cleanActor(body.by) ?? 'Share viewer';
+  // an attested identity is worth more there than a text box. Both go through
+  // cleanActor: a blank or control-character account name falls through.
+  const by = cleanActor(gate.via === 'session' ? gate.viewer.name : undefined) ?? cleanActor(body.by) ?? 'Share viewer';
   const result = await applyChecklistToggle(row.incident_id, itemId, body.checked, by);
   if (!result.ok) { res.status(result.status).json({ error: result.error }); return; }
   if (result.changed) {
@@ -377,25 +448,49 @@ router.post('/share/:token/checklist/:itemId', wrap(async (req: Request, res: Re
   res.json({ checklists: result.checklists });
 }, 'crisis'));
 
-// GET /api/crisis/share/:token/iap — the Incident Action Plan PDF for this
-// incident's type (fallback: the general default document). Same gate as the
-// snapshot; 404 with { noIap: true } when nothing is uploaded.
+// GET /api/crisis/share/:token/iap — the Incident Action Plan PDF that best
+// fits this incident (type + property, then type, then property, then the
+// general default — iap.ts). Same gate as the snapshot; 404 with
+// { noIap: true } when nothing applies.
 router.get('/share/:token/iap', wrap(async (req: Request, res: Response) => {
-  const { rows: [row] } = await withPasswordColumn(() => pool.query(
-    `SELECT snapshot, password_hash, active, expires_at, revoked_at,
-            (${LIVE}) AS live
-     FROM share_links WHERE token = $1`,
-    [req.params.token]
-  ));
-  if (!row) { res.status(404).json({ error: 'Not found' }); return; }
-  const gate = await gateShare(req, row.password_hash);
-  if (!gate.ok) { denyShare(res, gate); return; }
-  if (!row.live) { res.status(410).json(gonePayload(row)); return; }
-  const rawType = (row.snapshot as { incidentType?: unknown })?.incidentType;
-  const doc = await findIapForType(normalizeIncidentTypeId(typeof rawType === 'string' ? rawType : null));
-  if (!doc) { res.status(404).json({ error: 'No IAP uploaded for this incident type', noIap: true }); return; }
+  const open = await openLiveShare(req, res, req.params.token);
+  if (!open) return;
+  const { incidentType, propertyId } = snapshotScope(open.row.snapshot);
+  const doc = await findIapForScope(incidentType, propertyId);
+  if (!doc) { res.status(404).json({ error: 'No IAP uploaded for this incident', noIap: true }); return; }
   sendPdf(res, doc.name, doc.content, doc.updated_at);
 }, 'crisis'));
+
+// GET /api/crisis/share/:token/templates — the checklist / intake templates
+// this incident resolves to, for the share page's Checklists and Intake tabs.
+// Same gate as the snapshot. Only the blocks that apply to the snapshot's
+// type + property are sent (a viewer has no business reading every scope's
+// content, nor the names of the admins who edited them), plus the text of
+// any state the incident holds for lines it no longer resolves to — so that
+// record stays readable on the share page too.
+router.get('/share/:token/templates', wrap(async (req: Request, res: Response) => {
+  const open = await openLiveShare(req, res, req.params.token);
+  if (!open) return;
+  const snap = open.row.snapshot ?? {};
+  const { incidentType, propertyId } = snapshotScope(snap);
+  const config = await loadEffectiveConfig();
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(shareTemplatesConfig(config, incidentType, propertyId, snap.checklists, snap.intake));
+}, 'crisis'));
+
+/**
+ * An admin changed the templates: tell every connected share viewer, so an
+ * open share page can refetch its checklist / intake (`templates` event; no
+ * payload — each viewer's own fetch goes through its gate).
+ */
+export function broadcastShareTemplates(): void {
+  const payload = `event: templates\ndata: ${JSON.stringify({ at: new Date().toISOString() })}\n\n`;
+  for (const clients of sseClients.values()) {
+    for (const client of clients) {
+      try { client.write(payload); } catch { /* disconnected */ }
+    }
+  }
+}
 
 // GET /api/crisis/share/:token/events — SSE stream for live updates (no account
 // needed, but password-protected links require the ?k= view key)

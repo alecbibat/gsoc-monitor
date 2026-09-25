@@ -161,9 +161,7 @@ export async function migrate() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
-      -- Pre-uploaded Incident Action Plan PDFs for the share link's IAP tab.
-      -- One document per incident type; incident_type NULL is the general
-      -- default that answers for every type without its own upload. Stored as
+      -- Pre-uploaded Incident Action Plan PDFs for the IAP tabs. Stored as
       -- BYTEA because the dyno filesystem is wiped on deploy and the Cloudinary
       -- preset is image-only (routes/iap.ts).
       CREATE TABLE IF NOT EXISTS iap_documents (
@@ -174,8 +172,48 @@ export async function migrate() {
         size          INTEGER     NOT NULL,
         updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
-      CREATE UNIQUE INDEX IF NOT EXISTS iap_documents_type_key
-        ON iap_documents ((COALESCE(incident_type, '__general__')));
+
+      -- IAPs are filed per (incident type, property): either part NULL means
+      -- "any", both NULL is the general default. An incident gets the most
+      -- specific document that applies (routes/iap.ts findIapForScope). This
+      -- replaces the original one-per-type index; existing rows (all
+      -- property-less) satisfy the new one unchanged.
+      ALTER TABLE iap_documents ADD COLUMN IF NOT EXISTS location_group_id TEXT;
+      DROP INDEX IF EXISTS iap_documents_type_key;
+      CREATE UNIQUE INDEX IF NOT EXISTS iap_documents_scope_key
+        ON iap_documents ((COALESCE(incident_type, '__general__')), (COALESCE(location_group_id, '__all__')));
+
+      -- Admin edits to the crisis templates (ICS role checklists, intake
+      -- questions, the checklist role list). The built-in defaults live in
+      -- code (data/crisisTemplateDefaults); a row here REPLACES the default
+      -- block for its scope, and "reset to default" deletes it. kind is
+      -- 'checklist-block' | 'intake-block' | 'checklist-roles'; scope_key is
+      -- 'type|property' with '*' for "any" ('*' alone for the role list).
+      -- revision is the optimistic-concurrency token a save (and a reset,
+      -- when it says) must quote.
+      CREATE TABLE IF NOT EXISTS crisis_template_overrides (
+        kind       TEXT        NOT NULL,
+        scope_key  TEXT        NOT NULL,
+        data       JSONB       NOT NULL,
+        revision   INTEGER     NOT NULL DEFAULT 1,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_by TEXT,
+        PRIMARY KEY (kind, scope_key)
+      );
+
+      -- Every override's revision comes from this one sequence
+      -- (crisisTemplates/store.ts), so no number is ever issued twice — not
+      -- even to a scope that was reset (row deleted) and saved again, where a
+      -- per-row count would restart and match an old editor's stale revision.
+      -- Seeded past the revisions stored before it existed.
+      DO $$
+      BEGIN
+        IF to_regclass('crisis_template_revision_seq') IS NULL THEN
+          CREATE SEQUENCE crisis_template_revision_seq AS integer;
+          PERFORM setval('crisis_template_revision_seq',
+            COALESCE((SELECT MAX(revision) FROM crisis_template_overrides), 0) + 1, false);
+        END IF;
+      END $$;
     `);
 
     // Signup code. If SIGNUP_CODE is set in the environment it is authoritative

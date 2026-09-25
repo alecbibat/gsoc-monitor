@@ -1,37 +1,41 @@
 import { describe, expect, it } from 'vitest';
 import {
-  INTAKE_TEMPLATES, answeredCount, intakeTemplateFor, isIntakeAnswers,
+  answeredCount, intakeGroupLetter, isIntakeAnswers, type IntakeTemplate,
 } from './intakeTemplate';
 
-const tpl = INTAKE_TEMPLATES.default;
-const allQuestions = tpl.groups.flatMap((g) => g.questions);
-
-describe('intake template', () => {
-  it('carries the 30 initial-contact questions in 6 groups', () => {
-    expect(tpl.groups).toHaveLength(6);
-    expect(allQuestions).toHaveLength(30);
-  });
-
-  it('numbers questions sequentially with unique ids', () => {
-    expect(allQuestions.map((q) => q.n)).toEqual(allQuestions.map((_, i) => i + 1));
-    expect(new Set(allQuestions.map((q) => q.id)).size).toBe(allQuestions.length);
-  });
-
-  it('falls back to the default template for unmapped incident types', () => {
-    expect(intakeTemplateFor('earthquake')).toBe(tpl);
-    expect(intakeTemplateFor('not-a-type')).toBe(tpl);
-  });
-});
+// Content lives server-side now (admin-edited templates); a small resolved
+// template of the shape resolveIntake produces stands in for it.
+const tpl: IntakeTemplate = {
+  id: 'resolved:*|*',
+  title: 'Intake — Initial Contact Questions',
+  source: 'test',
+  groups: [
+    { id: 'g-what', label: 'What happened', questions: [{ id: 'q-1', n: 1, text: 'What?' }, { id: 'q-2', n: 2, text: 'Where?' }] },
+    { id: 'g-life', label: 'Life safety', questions: [{ id: 'q-3', n: 3, text: 'Injuries?' }] },
+  ],
+};
 
 describe('answeredCount', () => {
   it('counts non-empty answers only — the share-table gate', () => {
-    const q1 = allQuestions[0].id;
-    const q2 = allQuestions[1].id;
     expect(answeredCount(tpl, {})).toBe(0);
-    expect(answeredCount(tpl, { [q1]: '  ' })).toBe(0);
-    expect(answeredCount(tpl, { [q1]: 'MV Example, callsign X', [q2]: '' })).toBe(1);
+    expect(answeredCount(tpl, { 'q-1': '  ' })).toBe(0);
+    expect(answeredCount(tpl, { 'q-1': 'Kitchen fire', 'q-2': '' })).toBe(1);
+    expect(answeredCount(tpl, { 'q-1': 'a', 'q-2': 'b', 'q-3': 'c' })).toBe(3);
     // Answers keyed to questions this template doesn't know don't count.
     expect(answeredCount(tpl, { 'iq-999': 'stale' })).toBe(0);
+  });
+});
+
+describe('intakeGroupLetter', () => {
+  it('letters groups A…Z, then AA, AB, …', () => {
+    expect([0, 1, 25].map(intakeGroupLetter)).toEqual(['A', 'B', 'Z']);
+    expect([26, 27, 51, 52].map(intakeGroupLetter)).toEqual(['AA', 'AB', 'AZ', 'BA']);
+    expect(intakeGroupLetter(26 + 26 * 26)).toBe('AAA');
+  });
+
+  it('clamps nonsense input to A', () => {
+    expect(intakeGroupLetter(-3)).toBe('A');
+    expect(intakeGroupLetter(0.7)).toBe('A');
   });
 });
 

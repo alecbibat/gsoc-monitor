@@ -230,6 +230,9 @@ router.delete('/:id/log/:entryId', wrap(async (req: Request, res: Response) => {
     const log = logOf(data);
     const next = log.filter((e) => e?.id !== req.params.entryId);
     if (next.length === log.length) return 'noop';
+    // Auto-generated audit events can't be removed any more than edited
+    // (see PATCH) — the AAR metrics are computed from them.
+    if (log.some((e) => e?.id === req.params.entryId && e.system)) return 'forbidden';
     data.actionLog = next;
     return 'changed';
   });
