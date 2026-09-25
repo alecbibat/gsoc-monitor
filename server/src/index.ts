@@ -24,7 +24,7 @@ import newsMapRouter from './routes/newsMap';
 import smokeRouter from './routes/smoke';
 import aqiRouter from './routes/aqi';
 import windRouter, { initWindStream } from './routes/wind';
-import lightningRouter, { initLightningStream, flushLightning } from './routes/lightning';
+import lightningRouter, { initLightning, shutdownLightning } from './lightning';
 import riversRouter, { initRiversStream } from './routes/rivers';
 import fireOutlookRouter from './routes/fireOutlook';
 import jtwcRouter from './routes/jtwc';
@@ -168,9 +168,12 @@ function main() {
   // Background ADS-B poller: keeps last-known aircraft positions and altitude
   // trails accumulating (and persisted) even when no client is connected.
   initFlightsTracker();
-  // Persistent Blitzortung collector → rolling buffer behind /api/lightning so
-  // the client can request the last 1/6/12/24h of strikes.
-  initLightningStream();
+  // Persistent Blitzortung collector: every strike of the last 24 h, kept in
+  // memory and in Postgres, behind /api/lightning (display field, counts near
+  // a location, collector health). It starts collecting immediately and
+  // restores the persisted history in the background — never the other way
+  // round, so a slow or unreachable database costs no live strikes.
+  initLightning();
   // Keep the NWPS national gauge list warm in the cache so /api/rivers never
   // blocks on the ~13 MB upstream pull.
   initRiversStream();
@@ -312,14 +315,17 @@ function main() {
   // Heroku sends SIGTERM to every process, allows 30s, then SIGKILLs (R12).
   // Any SIGTERM listener disables Node's default exit, so we must exit
   // ourselves: stop accepting connections, let in-flight requests finish,
-  // write the final lightning chunk, then exit. The unref'd backstop exits
+  // persist the lightning tail, then exit. Lightning shuts down in two phases:
+  // it flushes at once but keeps collecting until the server has closed (or
+  // 20 s), then stops and makes a final flush bounded at 3 s — so the strikes
+  // of the shutdown window itself are saved too. The unref'd backstop exits
   // before the 30s SIGKILL even if a long-lived SSE stream or a stuck DB
   // write keeps things open.
   process.once('SIGTERM', () => {
     console.log('[shutdown] SIGTERM - flushing and exiting');
     setTimeout(() => process.exit(0), 25_000).unref();
     const closed = new Promise<void>((resolve) => server.close(() => resolve()));
-    void Promise.allSettled([flushLightning(), closed]).then(() => process.exit(0));
+    void Promise.allSettled([shutdownLightning(closed), closed]).then(() => process.exit(0));
   });
 
   void migrateWithRetry();

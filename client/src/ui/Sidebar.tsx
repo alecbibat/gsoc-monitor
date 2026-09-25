@@ -7,6 +7,7 @@ import { useAlertsStatus } from '../layers/alerts/alertsStore';
 import { useEarthquakesStatus } from '../layers/earthquakes/earthquakesStore';
 import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { useLightningStatus } from '../layers/lightning/lightningStore';
+import { lightningStatusText } from './lightningStatusText';
 import { useFiresStatus } from '../layers/fires/firesStore';
 import { useWildfiresStatus } from '../layers/wildfires/wildfiresStore';
 import { useOutagesStatus } from '../layers/outages/outagesStore';
@@ -119,8 +120,19 @@ export function Sidebar() {
   const hurricanesStatus = useHurricanesStatus(
     useShallow((s) => ({ count: s.count, invests: s.invests, disturbances: s.disturbances, error: s.error }))
   );
+  // Scalars only: `server` is a fresh object on every /field poll.
   const lightningStatus = useLightningStatus(
-    useShallow((s) => ({ connected: s.connected, ratePerMin: s.ratePerMin, error: s.error }))
+    useShallow((s) => ({
+      fieldError: s.field.error,
+      serverConnected: s.server ? s.server.collector.connected : null,
+      serverDownSince: s.server?.collector.downSince ?? null,
+      serverRatePerMin: s.server?.collector.ratePerMin ?? 0,
+      restoring: s.server ? s.server.coverage.restoring || s.server.restore.state !== 'done' : false,
+      restoreState: s.server?.restore.state ?? null,
+      restoreProgress: s.server?.restore.progress ?? 0,
+      ratePerMin: s.ratePerMin,
+      liveSource: s.liveSource,
+    }))
   );
   const firesStatus = useFiresStatus(
     useShallow((s) => ({ count: s.count, capped: s.capped, error: s.error }))
@@ -479,13 +491,7 @@ export function Sidebar() {
             label="Lightning (Blitzortung)"
             active={active.lightning}
             onToggle={() => toggleLayer('lightning')}
-            statusText={
-              lightningStatus.error
-                ? lightningStatus.error
-                : lightningStatus.connected
-                  ? `${lightningStatus.ratePerMin} strikes/min · live`
-                  : 'Connecting to network…'
-            }
+            statusText={lightningStatusText(lightningStatus)}
           >
             <LightningControls />
           </LayerToggle>

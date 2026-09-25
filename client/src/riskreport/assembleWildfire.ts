@@ -9,6 +9,9 @@ import { haversineMeters, MILES_TO_M, pointInRings } from '../lib/geo';
 import { containmentColor } from '../layers/wildfires/wildfiresData';
 import { QPF_LAYER } from '../layers/precip/precipStore';
 import { drawFlame, drawHatchedPolygon, drawPin, drawPolygon, drawRing, renderMapSnapshot } from './mapSnapshot';
+import { drawStrikeX, stageIndexForAge } from '../layers/lightning/lightningPalette';
+import { fetchLightningFeed, lightningSectionFromFeed } from './lightningFeed';
+import { appendBlufDrivers, type LightningSectionResult } from './lightningSection';
 import type { SmokePolygon } from '../types';
 import {
   RISK_RINGS, bumpLevel, maxLevel,
@@ -183,9 +186,9 @@ export async function assembleWildfireReport(
     inHmsCoverage
       ? track('smoke', api.smoke(), (v) => !(v.error != null && v.polygons.length === 0))
       : Promise.resolve({ value: null, error: 'outside HMS coverage' } as FeedOutcome<Awaited<ReturnType<typeof api.smoke>>>),
-    // Radius-filtered on the server so local strikes arrive unthinned — a
-    // global 24 h window would be stride-sampled to ~nothing near any point.
-    track('lightning', api.lightningHistory(1440, { lat: target.lat, lon: target.lon, radiusMi: 130 })),
+    // Exact server-side counts + the nearest strike over everything stored
+    // (/near); an older server without /near falls back to legacy history.
+    track('lightning', fetchLightningFeed(target, signal)),
     track('qpf', fetchWpcSiteQpf(target.lat, target.lon)),
   ]);
 
@@ -524,58 +527,17 @@ export async function assembleWildfireReport(
   }
 
   // ── Lightning (Blitzortung network, past 24 h) ────────────────────────────
-  const lightning: WildfireReportData['lightning'] = {};
-  const strikes: { lat: number; lon: number; t: number; distanceMi: number }[] = [];
+  // Levels, counts and caveats are built in lightningSection.ts (pure, tested).
+  let lightning: WildfireReportData['lightning'] = {};
+  let lightningSec: LightningSectionResult | null = null;
   {
     if (lightningRes.value === null) {
       lightning.unavailable = `Lightning history unavailable (${lightningRes.error ?? 'unknown error'})`;
       sections.push({ id: 'lightning', title: 'Lightning (24 h)', level: 'low', drivers: [], unavailable: lightning.unavailable });
     } else {
-      const lt = lightningRes.value;
-      // Keep everything the 110 mi map view can show (a little past 100 mi).
-      for (let i = 0; i < lt.lat.length; i++) {
-        const dm = distMi(target, lt.lat[i], lt.lon[i]);
-        if (dm <= 130) strikes.push({ lat: lt.lat[i], lon: lt.lon[i], t: lt.t[i], distanceMi: dm });
-      }
-      // The radius-filtered request normally arrives unthinned, so these are
-      // exact (of collected strikes). If the response WAS stride-sampled (a
-      // pre-filter server, or a truly extreme local storm), scale the sampled
-      // counts back up and say so — never present a sample as a census.
-      const sampled = lt.thinned && lt.returned > 0;
-      const scale = sampled ? lt.totalInWindow / lt.returned : 1;
-      const approx = (n: number) => Math.round(n * scale);
-      const n25 = strikes.filter((s) => s.distanceMi <= 25).length;
-      const n100 = strikes.filter((s) => s.distanceMi <= 100).length;
-      lightning.strikes25mi = approx(n25);
-      lightning.strikes100mi = approx(n100);
-      lightning.coverageMin = lt.coverageMin;
-
-      const nearestMi = strikes.reduce<number>((m, s) => Math.min(m, s.distanceMi), Infinity);
-      let level: RiskLevel = 'low';
-      const drivers: string[] = [];
-      if (nearestMi <= 5) {
-        level = 'elevated';
-        drivers.push(`Strike ${nearestMi < 1 ? '<1' : Math.round(nearestMi)} mi from the property in the past 24 h — direct ignition source`);
-      } else if (nearestMi <= 25) {
-        level = 'guarded';
-        drivers.push(`Nearest ${sampled ? 'sampled ' : ''}strike ${Math.round(nearestMi)} mi away in the past 24 h`);
-      }
-      if ((lightning.strikes100mi ?? 0) > 0) {
-        drivers.push(`${sampled ? '≈' : ''}${lightning.strikes100mi!.toLocaleString()} strike${lightning.strikes100mi === 1 ? '' : 's'} within 100 mi in the past 24 h`);
-      }
-      if (sampled) {
-        drivers.push(`⚠ Strike data was sampled (${lt.returned.toLocaleString()} of ${lt.totalInWindow.toLocaleString()} returned) — counts are estimates and sparse nearby activity can be missed`);
-      }
-      if (lt.coverageMin < 23 * 60) {
-        drivers.push(`⚠ Only ${(lt.coverageMin / 60).toFixed(1)} h of strike history collected — counts undercount the full day`);
-      }
-      sections.push({
-        id: 'lightning', title: 'Lightning (24 h)', level, drivers,
-        countLabel:
-          n25 === 0
-            ? sampled ? 'None sampled ≤25 mi' : 'None ≤25 mi'
-            : `${sampled ? '≈' : ''}${lightning.strikes25mi} ≤25 mi`,
-      });
+      lightningSec = lightningSectionFromFeed(lightningRes.value, target);
+      lightning = lightningSec.lightning;
+      sections.push(lightningSec.section);
     }
   }
 
@@ -795,15 +757,10 @@ export async function assembleWildfireReport(
     },
   });
 
-  // Lightning, past 24 h — age-tinted dots (same palette as the globe layer),
-  // oldest drawn first so fresh strikes sit on top.
-  const AGE_TINTS: { maxH: number; color: string }[] = [
-    { maxH: 1, color: 'rgba(255,216,77,0.95)' },
-    { maxH: 6, color: 'rgba(255,157,46,0.82)' },
-    { maxH: 12, color: 'rgba(255,90,60,0.64)' },
-    { maxH: Infinity, color: 'rgba(216,70,110,0.46)' },
-  ];
-  const lightningSnapshot = lightningRes.value === null
+  // Lightning, past 24 h — every strike an X in the globe's age ramp
+  // (lightningPalette), oldest drawn first so fresh strikes sit on top.
+  const mapStrikes = lightningSec?.mapStrikes ?? null;
+  const lightningSnapshot = mapStrikes === null
     ? Promise.resolve(null)
     : renderMapSnapshot({
         centerLat: target.lat,
@@ -815,14 +772,11 @@ export async function assembleWildfireReport(
         attribution: '© Esri © OSM · strikes Blitzortung.org',
         draw: (ctx, proj) => {
           const nowS = Date.now() / 1000;
-          for (const s of strikes.slice().sort((a, b) => a.t - b.t)) {
-            const ageH = (nowS - s.t) / 3600;
-            const tint = AGE_TINTS.find((a) => ageH < a.maxH) ?? AGE_TINTS[AGE_TINTS.length - 1];
+          for (const s of mapStrikes) {
+            const stage = stageIndexForAge(nowS - s.t);
+            if (stage < 0) continue; // expired — past 24 h
             const [x, y] = proj.toXY(s.lon, s.lat);
-            ctx.beginPath();
-            ctx.arc(x, y, 3.5, 0, Math.PI * 2);
-            ctx.fillStyle = tint.color;
-            ctx.fill();
+            drawStrikeX(ctx, x, y, stage, 9);
           }
           drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, { stroke: 'rgba(61,220,255,0.55)', width: 2, dash: [8, 6], label: '25 mi' });
           drawRing(ctx, proj, target.lat, target.lon, 100 * MILES_TO_M, { stroke: 'rgba(61,220,255,0.4)', width: 2, dash: [8, 6], label: '100 mi' });
@@ -874,6 +828,9 @@ export async function assembleWildfireReport(
   }
   const overallLevel = available.reduce<RiskLevel>((acc, s) => maxLevel(acc, s.level), 'low');
   const overallDrivers = available.flatMap((s) => (s.level === 'low' ? [] : s.drivers));
+  // Lightning blind spots / restore / offline caveats reach the bottom line
+  // even when the section is Low — a blind collector must not read as a calm day.
+  if (lightningSec) appendBlufDrivers(overallDrivers, lightningSec.blufDrivers);
   const downFeeds = sections.filter((s) => s.unavailable);
   if (downFeeds.length > 0) {
     overallDrivers.push(`⚠ ${downFeeds.length} feed${downFeeds.length === 1 ? '' : 's'} unavailable — this picture is incomplete`);
@@ -903,7 +860,7 @@ export async function assembleWildfireReport(
       { name: 'NOAA WPC', detail: 'quantitative precipitation forecast, 24/48/72 h accumulation' },
       { name: 'NOAA HMS', detail: 'analyst-drawn smoke plumes from GOES/VIIRS imagery, latest analysis day' },
       { name: 'NASA GIBS', detail: 'MODIS Aqua true-color daily mosaic (satellite snapshot base)' },
-      { name: 'Blitzortung.org', detail: 'community lightning detection network, past 24 h of strikes' },
+      { name: 'Blitzortung.org', detail: 'community lightning detection network — every strike recorded server-side, past 24 h' },
       { name: 'Esri · OpenStreetMap', detail: 'map snapshot base tiles' },
     ],
     gaps,

@@ -89,6 +89,8 @@ export const api = {
   smoke: () => getJson<import('../types').SmokeResponse>('/api/smoke'),
   aqi: () => getJson<import('../types').AqiResponse>('/api/aqi'),
   wind: () => getJson<import('../types').WindGrid>('/api/wind'),
+  // Legacy history — the risk report's fallback for a server without
+  // /api/lightning/near. New lightning calls live in ./lightningApi.
   lightningHistory: (minutes: number, near?: { lat: number; lon: number; radiusMi: number }) =>
     getJson<import('../types').LightningHistoryResponse>(
       `/api/lightning?minutes=${minutes}` +

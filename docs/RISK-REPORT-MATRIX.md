@@ -36,7 +36,7 @@ formula gets revisited with that QA bar.)
 | Fuel conditions | LANDFIRE zonal histogram, 3 mi ring (existing analyzer) | FBP score ≥70 → elevated driver · ≥85 → high driver (standard-conditions caveat printed) |
 | Wind now / 48 h peak | wind point-forecast route | sustained ≥25 mph or gusts ≥35 → elevated driver · sustained ≥35 / gusts ≥50 → high driver |
 | Smoke (HMS plumes) | `/api/smoke` (NOAA HMS, analyst-drawn from GOES/VIIRS) | Heavy plume over the site → elevated · Medium → guarded · Light → low with driver; count-framed ("None / Light / Medium / Heavy overhead"); stale-analysis caveat printed when the latest HMS day is not today; outside North America → unavailable (HMS coverage), satellite snapshot still rendered |
-| Lightning (24 h strikes) | `/api/lightning?minutes=1440&lat&lon&radiusMi=130` (Blitzortung) | nearest strike ≤5 mi → elevated (ignition source) · ≤25 mi → guarded; count-framed ("N ≤25 mi"); the server filters to the 130 mi radius BEFORE its 20k response cap so local counts arrive unthinned; if a response is still stride-sampled, counts are scaled estimates marked "≈" with an explicit sampling caveat; partial-coverage caveat when server history < ~23 h |
+| Lightning (24 h strikes) | `/api/lightning/near?lat&lon&radiusMi=130&hours=24` (Blitzortung; the server records every strike) | nearest strike ≤5 mi → elevated (ignition source) · ≤25 mi → guarded; count-framed ("N ≤25 mi"); counts are computed server-side over every stored strike before any map-point thinning, and used as-is; the nearest strike is taken over all stored strikes in the window; "≈" while pre-upgrade 1-in-6 history is inside the window (counted ×6, with a caveat); once the memory cap has evicted positions inside the window the counts and nearest strike cover only the time since, so they print as lower bounds ("≥N ≤25 mi", "None ≤25 mi since HH:MM") — "≥" wins over "≈" — and only the global `/status` counts stay exact; caveats for collector blind spots (≥10 min in total), history still restoring, collector offline, and evicted positions (a nearby strike before HH:MM would be missed) always reach the BLUF, even at Low; an older server without `/near` falls back to `/api/lightning`, whose 1-in-6 history is counted ×6 with "≈" and a sampling caveat in the BLUF |
 
 Section list in the report: BLUF (overall + drivers) · hero exposure map ·
 key stat cards · ring exposure table · hotspots · named incidents · alerts ·
@@ -44,7 +44,7 @@ outlook (7-day PSA chip strip above one regional today-map + legend) · fuels
 (raster map + fuel-group legend) · wind chart · smoke (HMS plumes as 45°
 HATCHING + cased outlines over the GIBS MODIS true-color mosaic — hatch
 density scales with smoke density, and the imagery beneath stays visible) ·
-lightning (age-tinted strike map) · rainfall (site 24/48/72 h chip strip —
+lightning (24 h strike map: X marks in the globe's age ramp) · rainfall (site 24/48/72 h chip strip —
 WPC identify at the property point, same product as the map, daily-forecast
 fallback labeled as such — above one regional WPC 72 h map + exact WPC ramp
 legend) · 10-day forecast strip · sources with retrieval timestamps.

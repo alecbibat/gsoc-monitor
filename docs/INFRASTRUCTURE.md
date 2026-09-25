@@ -42,7 +42,8 @@ DB-backed routes but does not take the dyno down).
 | `share_links` | Public share token, full incident **snapshot JSONB**, SHA-256 password hash, `expires_at`, `label`, `revoked_at` | **PII, externally reachable** |
 | `share_access_log` | token, timestamp, **viewer IP address**, user agent | **PII / audit** |
 | `watchlist_sources` | OSINT source definitions (URL, kind, config) — *sources only, never the items* | Low |
-| `lightning_chunks` | Gzipped binary strike history (`BYTEA`), ~290 rows/day, pruned to a 24h window | Low |
+| `lightning_blocks` | Every received strike, packed and gzipped (`BYTEA`, ~7 B/strike), one row per minute; pruned at 25h | Low |
+| `lightning_chunks` | Legacy pre-upgrade history (1 in 6 strikes kept, 5-min chunks). Read-only: restored and counted ×6 until it ages out; dropped in the next release | Low |
 | `snapshots` | Small key/value JSONB, e.g. the ~80 KB wind grid | Low |
 | `iap_documents` | **Incident Action Plan PDFs stored as `BYTEA`**, 15 MB cap, one per incident type + a general default | Operational |
 
@@ -78,6 +79,16 @@ re-scraped at startup, so the fleet reappears within ~15s.
 TTL cache (`cache.ts`, 2000-entry cap), the OSINT intel rolling buffer (800 items,
 36h max age — **items are never persisted**), the flight tracker's last-known
 positions, SSE client sets, and the auth failed-login rate-limit map.
+
+The lightning collector's working set is in memory too, but it is **rebuilt from
+`lightning_blocks` at boot**: a full-fidelity strike log in segments of 8 B/strike,
+capped at 12M strikes (`LIGHTNING_MAX_STRIKES`, ~96 MB) with a memory guard —
+24 h up to ~140 strikes/s. Restarts and deploys lose at most a minute or two,
+reported as a coverage gap. When the cap or the guard evicts the oldest
+positions, only the global counts in `/api/lightning/status` stay exact (a
+per-minute ring keeps them) and `/status` reports what was evicted. Counts and
+the nearest strike around a place (`/near`) cover only the time since: the
+risk report prints them as lower bounds ("≥N") and says so in its bottom line.
 
 ### Browser storage (per user, per device)
 
@@ -123,7 +134,7 @@ data route.
 
 Other env vars: `PORT`, `NODE_ENV`, `NWS_USER_AGENT` (contact string required by NWS
 and Nominatim policy), `SHIPS_SCRAPE_CRUISEMAPPER`, `SHIPS_POLL_MINUTES`,
-`SHIPS_SNAPSHOT_PATH`, `AIS_MMSI_FILTER`.
+`SHIPS_SNAPSHOT_PATH`, `AIS_MMSI_FILTER`, `LIGHTNING_MAX_STRIKES`.
 
 > **`VITE_*` vars are build-time.** They are compiled into the public JavaScript
 > bundle and are readable by anyone. They must be set in Heroku **before** the build
@@ -146,7 +157,7 @@ and Nominatim policy), `SHIPS_SCRAPE_CRUISEMAPPER`, `SHIPS_POLL_MINUTES`,
 | `/api/satellites` | celestrak.org |
 | `/api/rivers` | api.water.noaa.gov |
 | `/api/wind` | api.open-meteo.com, api.met.no |
-| `/api/lightning` | `wss://ws1/ws7/ws8.blitzortung.org` |
+| `/api/lightning` (legacy history) · `/field` · `/near` · `/status` · `/debug` | `wss://ws1/ws7/ws8.blitzortung.org` |
 | `/api/smoke` | satepsanone.nesdis.noaa.gov |
 | `/api/fire-outlook` | fsapps.nwcg.gov |
 | `/api/jtwc-invests` | metoc.navy.mil |

@@ -595,7 +595,10 @@ export interface WatchlistSource {
   createdAt: string;
 }
 
-// Windowed lightning history from the server's rolling Blitzortung buffer.
+// Windowed lightning history from the server's rolling Blitzortung buffer
+// (GET /api/lightning). Legacy: the globe and the risk report use the
+// /field, /near and /status contract in ./lightning; the report falls back to
+// this only against a server that predates /near.
 // Coordinates are parallel arrays; `t` is epoch SECONDS.
 export interface LightningHistoryResponse {
   lat: number[];

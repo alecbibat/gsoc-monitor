@@ -127,10 +127,31 @@ export interface WildfireReportData {
     unavailable?: string;
   };
   lightning: {
+    /** Server counts over every stored strike (weighted ×6 for pre-upgrade history). */
     strikes25mi?: number;
     strikes100mi?: number;
-    /** Server-side history coverage in minutes — may be < the 24 h window. */
+    /** Minutes of the 24 h window the server's collector covered — may be < the window. */
     coverageMin?: number;
+    /** Closest strike within 130 mi over all stored strikes, and its age. */
+    nearestMi?: number;
+    nearestAgeS?: number;
+    /**
+     * false while pre-upgrade 1-in-6 history is inside the window — counts
+     * print with "≈" — or once the memory cap evicted positions inside it.
+     */
+    countsExact?: boolean;
+    /**
+     * Set when the memory cap evicted strike positions inside the window: the
+     * counts and nearest strike cover only this time (epoch ms) → now, so
+     * they print as lower bounds ("≥"). See lightningCountPrefix.
+     */
+    countsFromMs?: number;
+    /** Collector blind spots inside the window (epoch ms), for the map caption. */
+    coverage?: { windowMin: number; coveredMin: number; gaps: { fromMs: number; toMs: number }[] };
+    /** Honesty caveats (blind time, restore, offline, eviction, legacy sampling). */
+    notes?: string[];
+    /** What the map can't show (point sampling, evicted or 1-in-6 periods). */
+    mapNote?: string;
     unavailable?: string;
   };
   fuel: {
@@ -159,7 +180,7 @@ export interface WildfireReportData {
     qpf: string | null;        // WPC 72 h precip accumulation, regional
     outlook: string | null;    // regional significant fire potential, today
     smoke: string | null;      // GIBS true-color satellite + HMS plume outlines
-    lightning: string | null;  // age-tinted strikes, past 24 h
+    lightning: string | null;  // strikes as age-colored X marks, past 24 h
   };
   /** 48 h hourly wind window for the chart (mph, "from" bearings). */
   windHourly: { times: string[]; speedMph: number[]; gustMph: number[]; dirDeg: number[] } | null;
