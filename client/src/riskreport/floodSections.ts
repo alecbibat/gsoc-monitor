@@ -309,6 +309,9 @@ export function buildFloodAlertsSection(
   }
   if (opts.pointLookupDown) {
     drivers.push('⚠ NWS point lookup unavailable — alerts matched by polygon and county outline, so a zone-based alert may not cover the site itself');
+    if (opts.unplaceable) {
+      drivers.push("⚠ This area's zone-based alerts (Flood Watches, river Flood Warnings) can't be placed without the point lookup — more may be in effect");
+    }
   }
   if (opts.countiesDown) {
     if (hits.length === 0) {
@@ -419,7 +422,8 @@ export function buildGaugeSection(gauges: GaugeHit[], opts: { inUs: boolean }): 
   // (power, telemetry, debris). One that still has a flooding NWS forecast
   // already speaks through the table above; the rest are a caveat that
   // reaches the bottom line whatever the level.
-  const dark = all.filter((g) => g.offline && g.distanceMi <= 25 && catSev(gaugeTier(g)) < 2);
+  // (A dark gauge that already contributes through its forecast is named above.)
+  const dark = all.filter((g) => g.offline && g.distanceMi <= 25 && gaugeLevel(g) === 'low');
   for (const g of dark.slice(0, 3)) {
     const since = fmtUtcShort(g.obsTime);
     drivers.push(
@@ -427,7 +431,10 @@ export function buildGaugeSection(gauges: GaugeHit[], opts: { inUs: boolean }): 
         `${since ? ` since ${since}` : ''} — river state there unknown`
     );
   }
-  if (dark.length > 3) drivers.push(`⚠ +${dark.length - 3} more NWPS gauges within 25 mi not reporting`);
+  if (dark.length > 3) {
+    const n = dark.length - 3;
+    drivers.push(`⚠ +${n} more NWPS ${plural(n, 'gauge')} within 25 mi not reporting`);
+  }
 
   if (level === 'low') {
     const reporting = all.filter((g) => !g.offline);
@@ -584,12 +591,21 @@ export function buildEroSection(days: EroDay[], nowMs: number): SectionResult {
     drivers.push(`No excessive-rainfall risk area over the property, ${first === last ? `Day ${first}` : `Days ${first}–${last}`}`);
   }
   const today = valid.find((d) => d.day === 1);
+  // Overnight the section can be raised by a Day 2 starting within 12 h — the
+  // chip must not say "None today" beside that level.
+  const soon = valid.find((d) => d.day !== 1 && d.category > 0 && imminent(d));
   return {
     id: 'ero',
     title: FLOOD_SECTION_TITLES.ero,
     level,
     drivers,
-    countLabel: !today ? 'Day 1 unknown' : today.category === 0 ? 'None today' : `Day 1: ${ERO_META[today.category].short}`,
+    countLabel: !today
+      ? 'Day 1 unknown'
+      : today.category > 0
+        ? `Day 1: ${ERO_META[today.category].short}`
+        : soon
+          ? `Day ${soon.day} (<12 h): ${ERO_META[soon.category].short}`
+          : 'None today',
   };
 }
 
@@ -741,15 +757,20 @@ const RAIN_WINDOWS: { key: 'in24' | 'in72' | 'in120'; high: number; elevated: nu
 type RainKey = 'in24' | 'in48' | 'in72' | 'in120';
 
 /**
- * Window wording per source. The daily fallback is whole calendar days from
- * TOMORROW (today's total already holds rain that has fallen), so it can't
- * claim "next 24 h".
+ * Window wording per source, as the phrase after "forecast". The daily
+ * fallback is whole calendar days from TOMORROW (today's total already holds
+ * rain that has fallen), so it can't claim "next 24 h".
  */
-function rainWindowLabel(key: RainKey, source: FloodReportData['rain']['source']): string {
+function rainWindowPhrase(key: RainKey, source: FloodReportData['rain']['source']): string {
   if (source === 'daily') {
-    return { in24: 'tomorrow', in48: 'next 2 days from tomorrow', in72: 'next 3 days from tomorrow', in120: 'next 5 days from tomorrow' }[key];
+    return {
+      in24: 'for tomorrow',
+      in48: 'for the 2 days from tomorrow',
+      in72: 'for the 3 days from tomorrow',
+      in120: 'for the 5 days from tomorrow',
+    }[key];
   }
-  return { in24: 'next 24 h', in48: 'next 48 h', in72: 'next 72 h', in120: 'next 5 days' }[key];
+  return { in24: 'in the next 24 h', in48: 'in the next 48 h', in72: 'in the next 72 h', in120: 'in the next 5 days' }[key];
 }
 
 const RAIN_SOURCE_SUFFIX: Record<NonNullable<FloodReportData['rain']['source']>, string> = {
@@ -788,14 +809,17 @@ export function buildRainSection(rain: FloodReportData['rain'], antecedent: Ante
   if (level !== 'low') {
     // Name the window(s) that set the level.
     for (const s of scored) {
-      if (s.level === level) drivers.push(`${fmtInches(s.v)} in forecast ${rain.source === 'daily' ? 'for' : 'in'} the ${rainWindowLabel(s.w.key, rain.source)}${src}`);
+      if (s.level === level) drivers.push(`${fmtInches(s.v)} in forecast ${rainWindowPhrase(s.w.key, rain.source)}${src}`);
     }
     // Wet-ground escalator: the same rain on saturated soil floods sooner.
+    // Unknown wetness (feed down, or a series too holed to total) is said,
+    // never taken for dry ground.
     const wet = wetGround(antecedent);
+    const wetKnown = antecedent !== null && (isNum(antecedent.past72In) || isNum(antecedent.past7dIn));
     if (wet) {
       level = bumpLevel(level);
       drivers.push(`Ground already wet (${wet}) — rainfall level raised one step`);
-    } else if (antecedent === null) {
+    } else if (!wetKnown) {
       drivers.push('⚠ Recent rainfall unavailable — if the ground is already wet this level would be one step higher');
     }
   } else {
@@ -804,11 +828,9 @@ export function buildRainSection(rain: FloodReportData['rain'], antecedent: Ante
     const key = ctx.find((k) => isNum(rain[k]));
     if (key) {
       const v = rain[key] as number;
-      const label = rainWindowLabel(key, rain.source);
+      const phrase = rainWindowPhrase(key, rain.source);
       drivers.push(
-        v >= 0.005
-          ? `${fmtInches(v)} in forecast ${rain.source === 'daily' ? 'for' : 'in'} the ${label}${src}`
-          : `No measurable rain forecast ${rain.source === 'daily' ? 'for' : 'in'} the ${label}${src}`
+        v >= 0.005 ? `${fmtInches(v)} in forecast ${phrase}${src}` : `No measurable rain forecast ${phrase}${src}`
       );
     }
   }
@@ -1069,7 +1091,9 @@ export function buildBurnScarSection(
       return unavailableSection('burn-scars', 'Fire-perimeter list hit its record cap — a burn scar near the property may be missing');
     }
     const drivers = ["No burn scar from this year's fires within 10 mi"];
-    if (d !== undefined && d <= 100) drivers.push(`Nearest: ${s.nearestName ?? 'unnamed fire'} burn scar ${Math.round(d)} mi away`);
+    if (d !== undefined && d <= 100) {
+      drivers.push(`Nearest: ${s.nearestName ?? 'unnamed fire'} burn scar ${d < 20 ? fmtMi(d) : Math.round(d)} mi away`);
+    }
     return { ...base, level: 'low', drivers: [...drivers, ...yearNote] };
   }
 

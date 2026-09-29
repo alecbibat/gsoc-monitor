@@ -448,6 +448,10 @@ describe('buildFloodAlertsSection — point lookup down (county-outline fallback
     expect(s.level).toBe('guarded');
     expect(s.drivers[0]).toBe('Flood Advisory in effect at the property');
     expect(s.drivers).toContainEqual(expect.stringMatching(POINT_DOWN));
+    // A hit must not read as the whole story where zone alerts can't be placed.
+    expect(s.drivers).toContain(
+      "⚠ This area's zone-based alerts (Flood Watches, river Flood Warnings) can't be placed without the point lookup — more may be in effect"
+    );
 
     const ok = buildFloodAlertsSection([], { countiesDown: false, unplaceable: true });
     expect(ok.unavailable).toBeUndefined();
@@ -661,13 +665,13 @@ describe('buildGaugeSection — gauges gone dark (out of service / not reporting
     expect(major.drivers).toEqual(['Broken Bridge (10.0 mi): out of service, NWS forecast Major flood']);
   });
 
-  it('a dark gauge ≤5 mi with an action-stage forecast: Guarded from the table, and still the ⚠ caveat', () => {
+  it('a dark gauge ≤5 mi with an action-stage forecast is Guarded from the table and named once — no duplicate ⚠ line', () => {
     const s = buildGaugeSection([dark(3, 'Dark Creek', { fcat: 'action' })], { inUs: true });
     expect(s.level).toBe('guarded');
-    expect(s.drivers).toEqual([
-      'Dark Creek (3.0 mi): not reporting, NWS forecast Action stage',
-      '⚠ Dark Creek (3.0 mi) not reporting — river state there unknown',
-    ]);
+    expect(s.drivers).toEqual(['Dark Creek (3.0 mi): not reporting, NWS forecast Action stage']);
+    // 5–25 mi an action forecast contributes nothing, so the caveat carries it.
+    const far = buildGaugeSection([dark(12, 'Dark Creek', { fcat: 'action' })], { inUs: true });
+    expect(far.drivers).toContain('⚠ Dark Creek (12.0 mi) not reporting — river state there unknown');
   });
 
   it('a distant dark gauge with a flooding forecast counts as "(observed or forecast)" regional context', () => {
@@ -909,6 +913,9 @@ describe('buildEroSection — a day starting within 12 h is weighed as Day 1', (
   it('says the day is starting within 12 h (no date chip), and later days keep their own rule and wording', () => {
     const s = buildEroSection(eroDays([0, 2, 3, 0, 0], DATES, STARTS), NIGHT);
     expect(s.level).toBe('elevated');
+    // The chip names the imminent day instead of "None today" beside Elevated.
+    expect(s.countLabel).toBe('Day 2 (<12 h): SLGT');
+    expect(buildEroSection(eroDays([0, 2, 0, 0, 0], DATES), NIGHT).countLabel).toBe('None today');
     expect(s.drivers).toEqual([
       'WPC Day 2, starting within 12 h: Slight risk (≥15%) of excessive rainfall at the property',
       'Moderate risk flagged for Day 3 (Wed 9/30)', // starts in 33 h: Days 2–3 rule → Elevated, not High
@@ -1241,11 +1248,10 @@ describe('buildRainSection', () => {
     const s = buildRainSection({ in24: 2.3, in48: 3, in72: 4.2, in120: 5, source: 'daily' }, DRY);
     expect(s.level).toBe('elevated');
     expect(s.drivers).toHaveLength(2);
-    expect(s.drivers[0]).toMatch(/^2\.3 in forecast for .*tomorrow \(daily forecast\)$/);
-    expect(s.drivers[0]).not.toMatch(/next 24 h/);
-    expect(s.drivers[1]).toBe('4.2 in forecast for the next 3 days from tomorrow (daily forecast)');
+    expect(s.drivers[0]).toBe('2.3 in forecast for tomorrow (daily forecast)');
+    expect(s.drivers[1]).toBe('4.2 in forecast for the 3 days from tomorrow (daily forecast)');
     expect(buildRainSection({ in24: 0, in48: 0, in72: 0, in120: 3.1, source: 'daily' }, DRY).drivers).toEqual([
-      '3.1 in forecast for the next 5 days from tomorrow (daily forecast)',
+      '3.1 in forecast for the 5 days from tomorrow (daily forecast)',
     ]);
   });
 
@@ -1257,11 +1263,23 @@ describe('buildRainSection', () => {
       drivers: ['0.3 in forecast in the next 48 h (Open-Meteo hourly forecast)'],
     });
     expect(buildRainSection({ in24: 0.1, in48: 0.2, in72: 0.3, source: 'daily' }, DRY).drivers).toEqual([
-      '0.3 in forecast for the next 3 days from tomorrow (daily forecast)',
+      '0.3 in forecast for the 3 days from tomorrow (daily forecast)',
     ]);
     expect(buildRainSection({ in24: 0, in48: 0, source: 'daily' }, DRY).drivers).toEqual([
-      'No measurable rain forecast for the next 2 days from tomorrow (daily forecast)',
+      'No measurable rain forecast for the 2 days from tomorrow (daily forecast)',
     ]);
+    expect(buildRainSection({ in24: 0.2, source: 'daily' }, DRY).drivers).toEqual([
+      '0.2 in forecast for tomorrow (daily forecast)',
+    ]);
+  });
+
+  it('recent rainfall known to be holed is unknown ground, not dry ground', () => {
+    // The feed answered but no past total could be computed → caveat, no bump.
+    const s = buildRainSection(wpc({ in24: 2.5 }), {});
+    expect(s.level).toBe('elevated');
+    expect(s.drivers).toContain('⚠ Recent rainfall unavailable — if the ground is already wet this level would be one step higher');
+    // One computable total is enough to judge.
+    expect(buildRainSection(wpc({ in24: 2.5 }), { past7dIn: 0.4 }).drivers.some((d) => d.startsWith('⚠'))).toBe(false);
   });
 
   it.each<[Partial<FloodReportData['rain']>, AntecedentSummary | null, RiskLevel]>([
