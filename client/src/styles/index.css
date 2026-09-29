@@ -237,12 +237,12 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Wildfire risk-report loading: radar scope + acquisition console ──────────
+/* ── Risk-report loading: radar scope + acquisition console ──────────────────
    Same contract as the screensaver block above: motion is additive signal
    (sweep rotation, blip ignition, console boot-in, cursor blink) and only
    runs for viewers who allow it — static colors and the SCAN/LOCK/DOWN/SKIP
    state words carry the same information without it. Blip delays are negative
-   multiples of the sweep period so each ember flashes exactly as the beam
+   multiples of the sweep period so each blip flashes exactly as the beam
    crosses its bearing, from the first frame. */
 @media (prefers-reduced-motion: no-preference) {
   .risk-scan-sweep {

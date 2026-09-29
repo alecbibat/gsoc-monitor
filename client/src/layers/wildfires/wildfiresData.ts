@@ -35,12 +35,20 @@ export interface NamedFire {
 
 export interface FirePerimeter {
   rings: number[][][]; // [ring][point] = [lon, lat]
+  name?: string; // poly_IncidentName — lets the flood report name a burn scar
+  acres?: number; // attr_IncidentSize
 }
 
 export interface WildfiresResult {
   fires: NamedFire[];
   perimeters: FirePerimeter[];
   error: string | null;
+  /**
+   * Set when the perimeter query failed. The layer shrugs that off (markers
+   * still draw), but the flood report's burn-scar check must not read an
+   * empty perimeter list as "no burn scars".
+   */
+  perimeterError?: string | null;
 }
 
 // Containment ramp: hot red when barely contained, cooling to amber as it rises,
@@ -154,7 +162,7 @@ function ringsOf(geom: GeoJSON.Geometry | null | undefined): number[][][] {
 async function fetchPerimeters(): Promise<FirePerimeter[]> {
   const feats = await queryGeoJson(PERIM, {
     where: `attr_IncidentSize>=${PERIM_MIN_ACRES}`,
-    outFields: 'poly_IncidentName',
+    outFields: 'poly_IncidentName,attr_IncidentSize',
     orderByFields: 'attr_IncidentSize DESC',
     resultRecordCount: String(MAX_PERIMS),
     outSR: '4326',
@@ -164,7 +172,14 @@ async function fetchPerimeters(): Promise<FirePerimeter[]> {
   const perims: FirePerimeter[] = [];
   for (const f of feats) {
     const rings = ringsOf(f.geometry).filter((r) => r.length >= 3);
-    if (rings.length) perims.push({ rings });
+    if (!rings.length) continue;
+    const p = f.properties ?? {};
+    perims.push({
+      rings,
+      name: str(p.poly_IncidentName) ?? undefined,
+      // num(null) is 0 — a missing size must stay unknown, not "0 acres".
+      acres: p.attr_IncidentSize == null ? undefined : num(p.attr_IncidentSize) ?? undefined,
+    });
   }
   return perims;
 }
@@ -184,5 +199,9 @@ export async function fetchWildfires(): Promise<WildfiresResult> {
     fires: firesRes.value,
     perimeters: perimRes.status === 'fulfilled' ? perimRes.value : [],
     error: null,
+    perimeterError:
+      perimRes.status === 'rejected'
+        ? perimRes.reason instanceof Error ? perimRes.reason.message : 'unreachable'
+        : null,
   };
 }

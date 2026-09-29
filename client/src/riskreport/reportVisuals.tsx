@@ -30,9 +30,21 @@ const dayName = (iso: string) => {
 // ── 10-day forecast strip (Wunderground-style) ───────────────────────────────
 // Each day: glyph, precip probability, a hi/lo bar positioned against the
 // period's full temperature span (so warm and cold days read at a glance),
-// and max wind/gust.
+// and max wind/gust. `showPrecipAmount` adds each day's forecast amount under
+// its probability — the flood report reads "how much", not just "how likely";
+// off by default so the wildfire strip renders exactly as before.
 
-export function ForecastStrip({ forecast }: { forecast: Extract<WildfireReportData['forecastDaily'], { days: unknown }> }) {
+// "0.42 in" / "<0.01 in" / "0 in" — never "0.00" for a trace.
+const fmtDayPrecip = (v: number) =>
+  !Number.isFinite(v) ? '—' : v < 0.005 ? '0 in' : v < 0.01 ? '<0.01 in' : `${v.toFixed(2)} in`;
+
+export function ForecastStrip({
+  forecast,
+  showPrecipAmount = false,
+}: {
+  forecast: Extract<WildfireReportData['forecastDaily'], { days: unknown }>;
+  showPrecipAmount?: boolean;
+}) {
   const days = forecast.days.slice(0, 10);
   if (days.length === 0) return null;
   const allMax = Math.max(...days.map((d) => d.tMaxF));
@@ -55,6 +67,14 @@ export function ForecastStrip({ forecast }: { forecast: Extract<WildfireReportDa
               <div className={`text-[9px] ${wet ? 'print-color font-semibold text-sky-300' : 'text-white/30'}`} style={wet ? { color: '#7dd3fc' } : undefined}>
                 {Math.round(d.precipProbPct)}%
               </div>
+              {showPrecipAmount && (
+                <div
+                  className={`text-[9px] tabular-nums ${d.precipIn >= 0.1 ? 'print-color text-sky-300' : 'text-white/30'} ${d.precipIn >= 0.5 ? 'font-bold' : ''}`}
+                  style={d.precipIn >= 0.1 ? { color: '#7dd3fc' } : undefined}
+                >
+                  {fmtDayPrecip(d.precipIn)}
+                </div>
+              )}
               {/* Temperature bar against the 10-day span */}
               <div className="relative w-3" style={{ height: TRACK_H }}>
                 <div className="absolute inset-x-1 inset-y-0 rounded-full bg-white/6" />

@@ -7,10 +7,10 @@ import { LANDFIRE_CONUS_RECT, LANDFIRE_FBFM40_IMAGESERVER } from '../layers/fuel
 import { analyzeFuelZone } from '../fuelzone/zonalStats';
 import { haversineMeters, MILES_TO_M, pointInRings } from '../lib/geo';
 import { containmentColor } from '../layers/wildfires/wildfiresData';
-import { QPF_LAYER } from '../layers/precip/precipStore';
 import { drawFlame, drawHatchedPolygon, drawPin, drawPolygon, drawRing, renderMapSnapshot } from './mapSnapshot';
 import { drawStrikeX, stageIndexForAge } from '../layers/lightning/lightningPalette';
 import { fetchLightningFeed, lightningSectionFromFeed } from './lightningFeed';
+import { fetchWpcSiteQpf, renderQpfSnapshot } from './wpcQpf';
 import { appendBlufDrivers, type LightningSectionResult } from './lightningSection';
 import type { SmokePolygon } from '../types';
 import {
@@ -34,59 +34,6 @@ const MAX_RING_MI = RISK_RINGS[RISK_RINGS.length - 1].miles; // 100
 const todayUtcIso = () => new Date().toISOString().slice(0, 10);
 const addDaysIso = (date: string, days: number) =>
   new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
-
-const WPC_QPF_MAPSERVER =
-  'https://mapservices.weather.noaa.gov/vector/rest/services/precip/wpc_qpf/MapServer';
-
-// WPC QPF at the property point, read from the SAME MapServer the rainfall map
-// renders — the chip strip and the map must agree on source (a point forecast
-// from a different model regularly disagrees with WPC and reads as a bug).
-// Identify returns each window's contour polygon containing the point; an
-// empty result set means the point is outside every contour (< 0.01 in).
-// Attribute values arrive as strings.
-async function fetchWpcSiteQpf(
-  lat: number,
-  lon: number
-): Promise<{ in24: number; in48: number; in72: number }> {
-  const layers = [QPF_LAYER['24h'], QPF_LAYER['48h'], QPF_LAYER['72h']];
-  const url =
-    `${WPC_QPF_MAPSERVER}/identify?f=json&geometryType=esriGeometryPoint` +
-    `&geometry=${lon.toFixed(4)},${lat.toFixed(4)}&sr=4326` +
-    `&layers=all:${layers.join(',')}&tolerance=0&returnGeometry=false` +
-    `&mapExtent=${(lon - 0.5).toFixed(2)},${(lat - 0.5).toFixed(2)},${(lon + 0.5).toFixed(2)},${(lat + 0.5).toFixed(2)}` +
-    '&imageDisplay=400,400,96';
-  const res = await fetch(url, { signal: AbortSignal.timeout(12_000) });
-  if (!res.ok) throw new Error(`WPC identify HTTP ${res.status}`);
-  const j = (await res.json()) as {
-    results?: Array<{ layerId?: number; attributes?: Record<string, unknown> }>;
-    error?: { message?: string };
-  };
-  if (j.error) throw new Error(`WPC identify: ${j.error.message ?? 'service error'}`);
-  if (!Array.isArray(j.results)) throw new Error('WPC identify: malformed response');
-
-  // The value field is named `qpf` today; scan defensively so a rename
-  // degrades to the daily-forecast fallback instead of silently zeroing.
-  const byLayer: Record<number, number> = {};
-  let foundAny = false;
-  for (const r of j.results) {
-    if (r.layerId === undefined) continue;
-    for (const [k, raw] of Object.entries(r.attributes ?? {})) {
-      if (!/qpf/i.test(k)) continue;
-      const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
-      if (!Number.isFinite(n)) continue;
-      foundAny = true;
-      // Nested contours stack — the highest containing value wins.
-      byLayer[r.layerId] = Math.max(byLayer[r.layerId] ?? 0, n);
-      break;
-    }
-  }
-  if (j.results.length > 0 && !foundAny) throw new Error('WPC identify: no qpf attribute found');
-  return {
-    in24: byLayer[QPF_LAYER['24h']] ?? 0,
-    in48: byLayer[QPF_LAYER['48h']] ?? 0,
-    in72: byLayer[QPF_LAYER['72h']] ?? 0,
-  };
-}
 
 const distMi = (target: RiskTarget, lat: number, lon: number) =>
   haversineMeters(target.lat, target.lon, lat, lon) / MILES_TO_M;
@@ -642,35 +589,8 @@ export async function assembleWildfireReport(
         },
       });
 
-  // Single 72 h accumulation map — the full multi-day picture in one image;
-  // per-window site totals live in the strip above it (view-side).
-  const qpfSnapshot = renderMapSnapshot({
-    centerLat: target.lat,
-    centerLon: target.lon,
-    fitRadiusM: 220 * MILES_TO_M,
-    width: MAP_W,
-    height: 380,
-    signal,
-    overlayAlpha: 0.68,
-    overlayUrl: (proj) =>
-      `${WPC_QPF_MAPSERVER}/export` +
-      `?bbox=${proj.bbox3857.join(',')}` +
-      `&bboxSR=3857&imageSR=3857&size=${proj.width},${proj.height}` +
-      `&layers=show:${QPF_LAYER['72h']}` +
-      '&format=png32&transparent=true&f=image',
-    attribution: '© Esri © OSM · QPF NOAA/WPC',
-    draw: (ctx, proj) => {
-      // High-contrast ring: dark casing under a bright dashed stroke — the
-      // faint cyan version disappeared against the QPF ramp.
-      drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, {
-        stroke: 'rgba(5,7,10,0.85)', width: 6,
-      });
-      drawRing(ctx, proj, target.lat, target.lon, 25 * MILES_TO_M, {
-        stroke: '#ffffff', width: 2.5, dash: [8, 6], label: '25 mi',
-      });
-      drawSite(ctx, proj);
-    },
-  });
+  // Single 72 h accumulation map (shared with the flood report).
+  const qpfSnapshot = renderQpfSnapshot(target, MAP_W, signal);
 
   // Regional outlook, today only — every PSA colored by today's class, the
   // site's PSA outlined white; the 7-day picture is the strip above the map.
@@ -813,7 +733,10 @@ export async function assembleWildfireReport(
   // ── Site rainfall chips — WPC point values first (same product as the map),
   // daily point forecast as a clearly-labeled fallback ──────────────────────
   const rain: WildfireReportData['rain'] = (() => {
-    if (wpcQpfRes.value) return { ...wpcQpfRes.value, source: 'wpc' as const };
+    if (wpcQpfRes.value) {
+      const { in24, in48, in72 } = wpcQpfRes.value;
+      return { in24, in48, in72, source: 'wpc' as const };
+    }
     if ('days' in forecastDaily && forecastDaily.days.length > 0) {
       const sum = (n: number) =>
         forecastDaily.days.slice(0, n).reduce((a, d) => a + d.precipIn, 0);
@@ -837,6 +760,7 @@ export async function assembleWildfireReport(
   }
 
   return {
+    hazard: 'wildfire',
     target,
     generatedAt: new Date().toISOString(),
     overall: { level: overallLevel, drivers: overallDrivers },

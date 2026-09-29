@@ -106,6 +106,13 @@ export const api = {
     getJson<import('../types').WindForecast>(`/api/wind/forecast?lat=${lat}&lon=${lon}`),
   weatherDaily: (lat: number, lon: number) =>
     getJson<import('../types').DailyForecast>(`/api/wind/daily?lat=${lat}&lon=${lon}`),
+  // Flood risk report inputs (server-proxied; see server/src/routes/flood.ts).
+  floodZone: (lat: number, lon: number) =>
+    getJson<import('../types').FemaZoneResponse>(`/api/flood/zone?lat=${lat}&lon=${lon}`),
+  floodPrecip: (lat: number, lon: number) =>
+    getJson<import('../types').FloodPrecipResponse>(`/api/flood/precip?lat=${lat}&lon=${lon}`),
+  floodDischarge: (lat: number, lon: number) =>
+    getJson<import('../types').FloodDischargeResponse>(`/api/flood/discharge?lat=${lat}&lon=${lon}`),
 
   // OSINT intel engine: the public read-only feed + the team-shared watchlist CRUD.
   intel: () => getJson<import('../types').IntelResponse>('/api/intel'),

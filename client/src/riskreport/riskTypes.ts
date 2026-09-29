@@ -103,6 +103,7 @@ export interface OutlookDayCell {
 }
 
 export interface WildfireReportData {
+  hazard: 'wildfire';
   target: RiskTarget;
   generatedAt: string;
   overall: { level: RiskLevel; drivers: string[] };

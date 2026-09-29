@@ -54,14 +54,43 @@ Known gaps (listed in the report footer): RH/fuel-moisture not yet ingested
 chunk 8b); LANDFIRE fuels are CONUS-only, so the fuel section degrades to
 "unavailable" for Windstar/international assets.
 
-## Flood (next)
+## Flood (implemented)
 
-| Input | Source | Threshold sketch |
+Same frame as wildfire: fixed rings, each section its own level + drivers, the
+overall rating is the worst available section, a down feed is "unavailable"
+(never a silent Low). Static exposure (the FEMA zone) never lifts the level on
+its own beyond Guarded — it escalates the live signals instead.
+
+| Input | Source | Threshold → level contribution |
 |---|---|---|
-| River gauges | NWPS rivers store | any gauge ≤25 mi at/above flood stage, or forecast to crest above |
-| Forecast rain | WPC QPF layer | 24 h QPF ≥2 in over site → elevated; ≥4 in → high |
-| Flood alerts | NWS alerts store | Flash Flood Warning at site → critical |
-| Burn scars | (gap — no source yet) | — |
+| Flood-family alerts at the site | NWS alerts (point-in-polygon, county geometry for zone/county alerts) | **critical**: Flash Flood Warning (incl. Flash Flood Emergency — `flashFloodDamageThreat` CATASTROPHIC or "flash flood emergency" in the text), Storm Surge Warning, Tsunami Warning · **high**: Flood Warning, Coastal Flood Warning, Lakeshore Flood Warning, Hurricane Warning, Typhoon Warning · **elevated**: Flash Flood Watch, Flood Watch, Coastal/Lakeshore Flood Watch, Storm Surge Watch, Tsunami Watch/Advisory, Hurricane Watch, Typhoon Watch, Tropical Storm Warning · **guarded**: every other flood-family product (Flood/Coastal/Lakeshore Flood Advisory, Flood/Flash Flood/Coastal Flood Statement, Hydrologic Outlook, Tropical Storm Watch, Hurricane Local Statement…). Marine "Hurricane Force Wind" products are excluded. Count-framed ("None active / N active"); county shapes down with no hit → unavailable |
+| River gauges | NWPS national list (`/api/rivers`) — tier = worse of observed and NWS-forecast category | **≤5 mi**: major → critical · moderate → high · minor → elevated · action → guarded. **5–25 mi**: major → high · moderate → elevated · minor → guarded. **25–100 mi**: major/moderate → guarded. Count-framed ("N in flood ≤25 mi"). Server snapshot still warming → unavailable; outside the US with nothing ≤100 mi → unavailable (NWPS covers the US) |
+| Gauge forecasts & impacts | NWPS per-gauge detail (`/api/rivers/:lid`) for up to 3 gauges ≤25 mi (flooding first, then nearest) | Context only (hydrograph with flood-stage lines, forecast crest, NWS impact statements, record crest) — the level comes from the gauge row above |
+| Excessive Rainfall Outlook | WPC `wpc_precip_hazards` MapServer, Days 1–5 (point-in-polygon, highest nested category) | **Day 1**: High/Moderate → high · Slight → elevated · Marginal → guarded. **Days 2–3**: High/Moderate → elevated · Slight → guarded · Marginal → driver only. **Days 4–5**: High/Moderate → guarded, else driver only. Outside CONUS → unavailable |
+| Forecast rainfall | WPC QPF identify at the site (same product as the map); Open-Meteo daily sums as a labeled fallback | **high**: 24 h ≥ 4 in or 72 h ≥ 6 in · **elevated**: 24 h ≥ 2 in or 72 h ≥ 4 in · **guarded**: 24 h ≥ 1 in, 72 h ≥ 2 in or 5-day ≥ 3 in. Wet-ground escalator: past 72 h ≥ 2 in or past 7 days ≥ 3 in bumps a non-Low rainfall level one step |
+| Recent rainfall (antecedent) | Open-Meteo modelled past 7 days at the site (not rain-gauge observations — labeled so) | **elevated**: past 72 h ≥ 4 in · **guarded**: past 72 h ≥ 2 in or past 7 days ≥ 3 in · else Low with the 7-day total as a driver |
+| FEMA flood zone | FEMA NFHL layer 28 (Flood Hazard Zones) via `/api/flood/zone` | Any SFHA zone (A, AE, AH, AO, AR, A99, V, VE) → guarded, with the floodway and V/VE coastal high-hazard called out · 0.2%-annual-chance (shaded X), levee-reduced, minimal (X), undetermined (D) → Low with the zone as a driver · nearest SFHA ≤ 0.25 mi when outside it → driver. No polygon in the query envelope → unavailable ("no digital flood map"); outside the US → unavailable. Count label = the zone ("Zone AE") |
+| SFHA escalator (overall) | FEMA zone × live sections | Property inside the SFHA and any live section (alerts, gauges, outlook, rainfall, burn scars, river discharge) at Elevated or worse → overall bumps one level, with the zone named in the driver |
+| Burn scars | NIFC WFIGS current-season perimeters ≥100 acres (the wildfire layer's perimeter feed) | nearest perimeter ≤10 mi → guarded · ≤10 mi **and** a rain signal (Day 1–3 ERO ≥ Marginal at the site, or 72 h QPF ≥ 0.5 in) → elevated · ≤2 mi (or inside) **and** a strong rain signal (Day 1–2 ERO ≥ Slight, or 24 h QPF ≥ 1 in) → high. Outside the US → unavailable |
+| River discharge (model) | GloFAS v4 via Open-Meteo Flood API (`/api/flood/discharge`), nearest ~5 km model river cell; return-period flows from a Gumbel fit (method of moments — the GloFAS method) to the annual maxima of the last 20 complete reanalysis years, persisted per model cell (the 20-year pull costs ~520 Open-Meteo calls, so it runs once per cell, not per report) | peak ensemble median over the next 15 days ≥ 20-yr → high · ≥ 5-yr → elevated · ≥ 2-yr → guarded · otherwise ensemble max ≥ 5-yr → guarded ("some members"). Capped at Guarded when an NWPS gauge exists ≤25 mi (the official forecast leads). 2-yr flow < 5 m³/s → Low, "minor stream — not assessed". Thresholds unavailable → unavailable (the chart still renders) |
+
+Section list in the report: BLUF (overall + drivers) · hero exposure map
+(rings, NWPS gauges colored by flood category, active flood-alert areas in view,
+current-season burn scars) · key stat cards · ring exposure table (gauges,
+action, flooding, forecast flooding per ring) · flood alerts (with the NWS
+WHAT/WHERE/WHEN/IMPACTS bullets) + alert map · river gauges table · gauge
+forecast cards (hydrograph with flood-stage lines, crest, impacts) · FEMA flood
+zone (NFHL zones map + legend) · Excessive Rainfall Outlook (Day 1–5 chip strip
+above the Day 1 regional map + legend) · forecast rainfall (24/48/72 h/5-day
+chips above the WPC 72 h map, 48 h hourly timing chart) · recent rainfall
+(past 7 days) · burn scars · river discharge (GloFAS chart with return-period
+lines) · 10-day forecast strip · sources.
+
+Known gaps (listed in the report footer): flash-flood guidance grids (FFG);
+coastal water-level/tide gauges (NOAA CO-OPS); dam and levee condition (USACE
+NID/NLD); snowpack and snowmelt; soil moisture (antecedent rainfall is the
+proxy); burn scars from earlier seasons; site elevation vs. base flood
+elevation; urban drainage capacity.
 
 ## Severe weather / winter / seismic / utility (sketches)
 

@@ -1,15 +1,19 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useRiskReportStore } from './riskReportStore';
-import { RISK_LEVELS, RISK_RINGS, type RiskLevel, type SectionResult, type WildfireReportData } from './riskTypes';
-import { ChipStrip, ForecastStrip, LegendRow, MapFigure, OutlookStrip, WindChart, type StripCell } from './reportVisuals';
+import { RISK_LEVELS, RISK_RINGS, type WildfireReportData } from './riskTypes';
+import { ChipStrip, ForecastStrip, LegendRow, MapFigure, OutlookStrip, WindChart } from './reportVisuals';
 import { FUEL_GROUPS, rgbCss } from '../layers/fuel/fbfm40';
 import { OUTLOOK_LEGEND } from '../layers/fireOutlook/fireOutlookMeta';
-import { QPF_LEGEND } from '../layers/precip/precipStore';
+import { LevelBadge, QpfRampLegend, Section, SourcesFooter, StatCard, fmtTs, num, rainCells } from './reportParts';
 import { LEGEND_ITEMS as LIGHTNING_LEGEND } from '../layers/lightning/lightningPalette';
 import { coverageCaption, lightningCountPrefix } from './lightningSection';
 import { usePrintStyles } from '../lib/printStyles';
 import { RiskScanLoading } from './RiskScanLoading';
+import { FloodReportBody } from './FloodReportBody';
+import type { RiskHazard } from './riskReportStore';
+
+const HAZARD_LABEL: Record<RiskHazard, string> = { wildfire: 'Wildfire', flood: 'Flood' };
 
 // Plumes are drawn as hatching + outlines so the satellite imagery (the smoke
 // itself) stays visible — the legend mirrors that with hatched swatches.
@@ -19,137 +23,10 @@ const SMOKE_LEGEND = [
   { color: 'rgba(220,80,20,1)', label: 'Heavy', hatch: true },
 ];
 
-// Chip color from the exact WPC ramp the map renders — below the first ramp
-// step (0.01 in) the map draws nothing, so the chip goes neutral gray.
-const qpfHex = (inches: number): string => {
-  let rgb: [number, number, number] | null = null;
-  for (const s of QPF_LEGEND) {
-    if (inches >= s.inches) rgb = s.rgb;
-    else break;
-  }
-  return rgb ? `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` : '#4b5563';
-};
-
-function rainCells(rain: WildfireReportData['rain']): StripCell[] {
-  const windows: Array<[string, number | undefined]> = [
-    ['Next 24 h', rain.in24],
-    ['Next 48 h', rain.in48],
-    ['Next 72 h', rain.in72],
-  ];
-  return windows
-    .filter((w): w is [string, number] => w[1] !== undefined)
-    .map(([top, v]) => ({
-      top,
-      hex: qpfHex(v),
-      bottom: v < 0.005 ? 'None' : v < 0.01 ? '<0.01 in' : `${v.toFixed(2)} in`,
-      emph: v >= 0.5,
-    }));
-}
-
-// The exact WPC accumulation ramp under the rainfall map (mirrors the globe
-// layer's PrecipLegend; tick labels are approximate positions on the ramp).
-function QpfRampLegend() {
-  return (
-    <div className="px-1">
-      <div className="print-color flex h-2.5 overflow-hidden rounded-sm ring-1 ring-white/10">
-        {QPF_LEGEND.map((s) => (
-          <div
-            key={s.inches}
-            className="flex-1"
-            style={{ background: `rgb(${s.rgb[0]}, ${s.rgb[1]}, ${s.rgb[2]})` }}
-            title={`${s.inches}"`}
-          />
-        ))}
-      </div>
-      <div className="mt-0.5 flex justify-between text-[8px] tabular-nums text-white/40">
-        <span>0.01&quot;</span>
-        <span>0.5</span>
-        <span>1</span>
-        <span>2</span>
-        <span>5</span>
-        <span>20+</span>
-      </div>
-    </div>
-  );
-}
-
 // ── Property wildfire risk report (roadmap Track 3, wildfire end-to-end) ─────
 // Select property → the assembly cross-references every wildfire input at the
 // fixed analysis rings → this renderer. Mirrors the archive report's look and
 // prints through the same shared print pipeline.
-
-function fmtTs(iso: string) {
-  try { return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }); }
-  catch { return iso; }
-}
-
-function LevelBadge({ level, size = 'md' }: { level: RiskLevel; size?: 'md' | 'lg' }) {
-  const def = RISK_LEVELS[level];
-  return (
-    <span
-      className={`print-color inline-flex items-center gap-1.5 rounded-full border font-bold uppercase tracking-widest ${
-        size === 'lg' ? 'px-3 py-1 text-[12px]' : 'px-2 py-0.5 text-[9px]'
-      }`}
-      style={{ color: def.color, background: `${def.color}1c`, borderColor: `${def.color}55` }}
-    >
-      <span className="h-1.5 w-1.5 rounded-full" style={{ background: def.color }} />
-      {def.label}
-    </span>
-  );
-}
-
-function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="print-card rounded-lg border border-white/8 bg-white/4 px-3.5 py-3">
-      <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-white/35 print-muted">{label}</div>
-      <div className="mt-1 text-[15px] font-semibold text-white/85">{value}</div>
-      {sub && <div className="mt-0.5 text-[10px] text-white/40 print-muted">{sub}</div>}
-    </div>
-  );
-}
-
-function Section({ section, children }: { section: SectionResult; children?: React.ReactNode }) {
-  return (
-    <section className="print-card">
-      <div className="mb-2 flex items-center gap-3">
-        <h2 className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/50">{section.title}</h2>
-        {section.unavailable ? (
-          <span className="rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-white/40">
-            Unavailable
-          </span>
-        ) : (
-          <>
-            {section.countLabel && (
-              <span className="rounded-full border border-white/15 bg-white/6 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-white/55">
-                {section.countLabel}
-              </span>
-            )}
-            {/* A count-framed section only shows a risk chip when it actually
-                raises risk — "None active · Low" was answering two questions. */}
-            {(!section.countLabel || section.level !== 'low') && <LevelBadge level={section.level} />}
-          </>
-        )}
-      </div>
-      {section.unavailable ? (
-        <p className="rounded-lg border border-white/8 bg-white/4 px-4 py-3 text-[12px] text-white/45">{section.unavailable}</p>
-      ) : (
-        <>
-          {section.drivers.length > 0 && (
-            <ul className="mb-2 space-y-0.5 text-[12px] text-white/70">
-              {section.drivers.map((d, i) => (
-                <li key={i}>· {d}</li>
-              ))}
-            </ul>
-          )}
-          {children}
-        </>
-      )}
-    </section>
-  );
-}
-
-const num = (v: number | undefined, digits = 0) =>
-  v === undefined || Number.isNaN(v) ? '—' : v.toFixed(digits);
 
 function ReportBody({ data }: { data: WildfireReportData }) {
   const overall = RISK_LEVELS[data.overall.level];
@@ -446,29 +323,13 @@ function ReportBody({ data }: { data: WildfireReportData }) {
         )}
       </section>
 
-      {/* Sources + gaps */}
-      <section className="print-card border-t border-white/8 pt-4">
-        <h2 className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-white/35">Sources</h2>
-        <ul className="space-y-0.5 text-[10px] text-white/40 print-muted">
-          {data.sources.map((s, i) => (
-            <li key={i}><span className="text-white/60">{s.name}</span> — {s.detail}</li>
-          ))}
-        </ul>
-        {data.gaps.length > 0 && (
-          <p className="mt-3 text-[10px] leading-relaxed text-white/30 print-muted">
-            Not yet factored: {data.gaps.join(' · ')}
-          </p>
-        )}
-        <p className="mt-3 text-center text-[9px] text-white/25 print-muted">
-          Generated {fmtTs(data.generatedAt)} · fixed analysis rings ({RISK_RINGS.map((r) => r.label).join(' / ')}) · advisory product, verify against official sources before acting
-        </p>
-      </section>
+      <SourcesFooter sources={data.sources} gaps={data.gaps} generatedAt={data.generatedAt} />
     </main>
   );
 }
 
 export function RiskReportView() {
-  const { target, status, data, error, close, feeds } = useRiskReportStore();
+  const { target, hazard, status, data, error, close, feeds } = useRiskReportStore();
   usePrintStyles('risk-report-root');
 
   // Exit beat: hold the acquisition screen briefly once assembly finishes so
@@ -494,7 +355,7 @@ export function RiskReportView() {
       {/* Top bar — hidden when printing */}
       <div className="print-hide sticky top-0 z-10 flex items-center gap-4 border-b border-white/8 bg-ink-900/90 px-8 py-3 backdrop-blur-sm">
         <div>
-          <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/30">Property Risk Report · Wildfire</p>
+          <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/30">Property Risk Report · {HAZARD_LABEL[hazard]}</p>
           <p className="text-[15px] font-semibold text-white/85">
             {target.groupIcon} {target.name}
             {target.groupName && <span className="ml-2 text-[11px] text-white/40">{target.groupName}</span>}
@@ -524,7 +385,7 @@ export function RiskReportView() {
       </div>
 
       {(status === 'loading' || (status === 'ready' && !settled)) && (
-        <RiskScanLoading target={target} feeds={feeds} />
+        <RiskScanLoading target={target} hazard={hazard} feeds={feeds} />
       )}
       {status === 'error' && (
         <div className="flex h-[60vh] items-center justify-center">
@@ -539,7 +400,7 @@ export function RiskReportView() {
             <td className="block">
               <div className="print-page-header hidden">
                 <span className="font-bold uppercase tracking-widest">GSOC Monitor · Property Risk Report</span>
-                <span>{target.name} — Wildfire</span>
+                <span>{target.name} — {HAZARD_LABEL[hazard]}</span>
                 <span className="ml-auto">Generated {new Date().toLocaleString()}</span>
               </div>
             </td>
@@ -550,7 +411,7 @@ export function RiskReportView() {
             <td className="block">
               {status === 'ready' && settled && data && (
                 <div className="watch-ledger-in">
-                  <ReportBody data={data} />
+                  {data.hazard === 'flood' ? <FloodReportBody data={data} /> : <ReportBody data={data} />}
                 </div>
               )}
             </td>

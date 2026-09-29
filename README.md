@@ -140,6 +140,31 @@ answers*, so the record an after-action review relies on is never lost. When
 editing defaults in code, append new lines rather than reordering: ids are
 minted from position.
 
+## Property risk reports
+
+Two canned, printable reports open from any location pin's card (**🔥 Wildfire
+risk**, **🌊 Flood risk**) and from a Property Watch pop-out. Each one pulls
+every relevant feed for the property at fixed analysis rings (1 / 5 / 25 / 100
+mi) and rates each section `low → guarded → elevated → high → critical`. The
+overall rating is the worst section, with every driver listed.
+
+- **Wildfire** — satellite hotspots, named incidents, fire-weather alerts, the
+  7-day fire-potential outlook, surface fuels, wind, smoke, lightning and
+  forecast rainfall.
+- **Flood** — flood, surge and tsunami alerts at the site (with the NWS
+  what/where/when/impacts text); NWPS river gauges within 100 mi, plus
+  hydrographs, forecast crests and NWS impact statements for the nearest ones;
+  the FEMA flood zone (NFHL); WPC's Days 1–5 Excessive Rainfall Outlook; WPC
+  rainfall forecast with 48 h hourly timing; rain already fallen over the past
+  7 days; current-season burn scars; and a GloFAS river-discharge forecast
+  against 2/5/20-year flows. A property in the FEMA 1%-annual-chance floodplain
+  has its rating raised one step when a live signal reaches Elevated.
+
+A feed that is down, or doesn't cover the property (most flood products are
+US-only), shows as **Unavailable**, never as a quiet Low. Thresholds and inputs
+are defined in [docs/RISK-REPORT-MATRIX.md](docs/RISK-REPORT-MATRIX.md). Change
+them there first.
+
 ## Project structure
 
 ```

@@ -48,6 +48,13 @@ export interface RawAlert {
     expires?: string;
     areaDesc?: string;
     geocode?: { SAME?: string[]; UGC?: string[] };
+    /**
+     * CAP parameters as NWS sends them — string arrays keyed by name, e.g.
+     * flashFloodDamageThreat: ['CATASTROPHIC'] (a Flash Flood Emergency) or
+     * flashFloodDetection: ['OBSERVED']. Shape is upstream-controlled: read
+     * defensively.
+     */
+    parameters?: Record<string, unknown>;
   };
 }
 

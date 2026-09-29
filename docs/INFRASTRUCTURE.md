@@ -156,6 +156,7 @@ and Nominatim policy), `SHIPS_SCRAPE_CRUISEMAPPER`, `SHIPS_POLL_MINUTES`,
 | `/api/geocode` | nominatim.openstreetmap.org |
 | `/api/satellites` | celestrak.org |
 | `/api/rivers` | api.water.noaa.gov |
+| `/api/flood` (zone · precip · discharge) | hazards.fema.gov (FEMA NFHL), api.open-meteo.com, flood-api.open-meteo.com |
 | `/api/wind` | api.open-meteo.com, api.met.no |
 | `/api/lightning` (legacy history) · `/field` · `/near` · `/status` · `/debug` | `wss://ws1/ws7/ws8.blitzortung.org` |
 | `/api/smoke` | satepsanone.nesdis.noaa.gov |

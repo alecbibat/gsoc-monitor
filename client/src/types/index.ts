@@ -529,6 +529,78 @@ export interface RiverDetail {
   updated: number;
 }
 
+// --- Flood risk report inputs (/api/flood/*) ---------------------------------
+// Server-proxied because the upstreams are slow (FEMA NFHL), quota-bound
+// (Open-Meteo) or heavy (40 years of GloFAS reanalysis for the return-period
+// thresholds). Mirrors server/src/routes/flood.ts — keep the two in sync.
+
+/** One FEMA NFHL flood-hazard polygon (layer 28, S_FLD_HAZ_AR). */
+export interface FemaZoneFeature {
+  /** FLD_ZONE: 'A' | 'AE' | 'AH' | 'AO' | 'AR' | 'A99' | 'V' | 'VE' | 'X' | 'D' | 'OPEN WATER' | … */
+  zone: string;
+  /** ZONE_SUBTY, e.g. 'FLOODWAY', '0.2 PCT ANNUAL CHANCE FLOOD HAZARD' (null when blank). */
+  subtype: string | null;
+  /** SFHA_TF === 'T' — inside the 1%-annual-chance Special Flood Hazard Area. */
+  sfha: boolean;
+}
+
+export interface FemaZoneResponse {
+  /** At least one NFHL polygon inside the ~2 mi query envelope — the area has a digital flood map. */
+  covered: boolean;
+  /** The polygon containing the property point (null = no mapped zone at the point). */
+  atSite:
+    | (FemaZoneFeature & {
+        /** STATIC_BFE in feet (null when FEMA's -9999 sentinel or absent). */
+        bfeFt: number | null;
+        /** DEPTH in feet — AO-zone base flood depth (null when sentinel/absent). */
+        depthFt: number | null;
+        /** V_DATUM, e.g. 'NAVD88' (null when blank). */
+        datum: string | null;
+      })
+    | null;
+  /** Polygons intersecting the envelope, generalized, rings as [lon, lat] (holes included). */
+  polygons: Array<FemaZoneFeature & { rings: number[][][] }>;
+  /** Distance to the nearest SFHA polygon found in the envelope (0 = at site; null = none within it). */
+  nearestSfhaMi: number | null;
+  /** The envelope query hit its record cap — the map may be missing polygons. */
+  truncated: boolean;
+  updated: number;
+}
+
+/** Open-Meteo precipitation at the property: modelled past 7 days + 3 forecast days. */
+export interface FloodPrecipResponse {
+  timezone: string;
+  utcOffsetSeconds: number;
+  /** Local calendar dates, oldest first: 7 past days, today, then forecast days. */
+  daily: { time: string[]; precipIn: number[] };
+  /** Local ISO hours ('YYYY-MM-DDTHH:MM'), same span as daily. probPct is null for past hours. */
+  hourly: { time: string[]; precipIn: number[]; probPct: Array<number | null> };
+  updated: number;
+}
+
+/** GloFAS v4 (via Open-Meteo Flood API) river discharge at the nearest model river cell. */
+export interface FloodDischargeResponse {
+  /** Model cell the API answered for (may sit a few km from the property). */
+  lat: number;
+  lon: number;
+  /** Daily ISO dates, oldest first: ~14 past days then ~30 forecast days. */
+  time: string[];
+  /** Deterministic/reanalysis discharge, m³/s. */
+  discharge: Array<number | null>;
+  /** Ensemble statistics, m³/s — null on past days (forecast-only variables). */
+  median: Array<number | null>;
+  p25: Array<number | null>;
+  p75: Array<number | null>;
+  min: Array<number | null>;
+  max: Array<number | null>;
+  /**
+   * Empirical return-period flows from the reanalysis annual maxima (complete
+   * years only); null when the climatology request failed or had too few years.
+   */
+  thresholds: { rp2: number; rp5: number; rp20: number; years: number; fromYear: number; toYear: number } | null;
+  updated: number;
+}
+
 // --- OSINT intel engine (Dataminr-style ingestion) --------------------------
 // One normalized item from any source — scanner/dispatch, crime, crashes, news
 // or social — plus the team-shared watchlist rows that produce them.
