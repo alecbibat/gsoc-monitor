@@ -310,7 +310,7 @@ export function buildFloodAlertsSection(
   if (opts.pointLookupDown) {
     drivers.push('⚠ NWS point lookup unavailable — alerts matched by polygon and county outline, so a zone-based alert may not cover the site itself');
     if (opts.unplaceable) {
-      drivers.push("⚠ This area's zone-based alerts (Flood Watches, river Flood Warnings) can't be placed without the point lookup — more may be in effect");
+      drivers.push("⚠ This area's zone-based alerts (Flood Watches, Typhoon / Tropical Storm Warnings) can't be placed without the point lookup — more may be in effect");
     }
   }
   if (opts.countiesDown) {
@@ -489,16 +489,19 @@ export function pickDetailGauges(gauges: GaugeHit[], max = 3): GaugeHit[] {
 
 /** Ring exposure table: gauges inside each fixed ring and their observed / forecast states. */
 export function floodRingCounts(gauges: GaugeHit[]): FloodRingCount[] {
-  // Reporting gauges only: a dark gauge has no observed state to count.
+  // Observed columns count reporting gauges only (a dark gauge has no reading);
+  // an NWS forecast needs no live reading, so dark gauges still count there.
   const reporting = gauges.filter((g) => !g.offline);
   return RISK_RINGS.map((ring) => {
     const inside = within(reporting, ring.miles);
+    const all = within(gauges, ring.miles);
     return {
       ring,
       gauges: inside.length,
       action: inside.filter((g) => g.cat === 'action').length,
       flooding: inside.filter((g) => catSev(g.cat) >= 2).length,
-      forecastFlooding: inside.filter((g) => catSev(g.fcat) >= 2).length,
+      forecastFlooding: all.filter((g) => catSev(g.fcat) >= 2).length,
+      offline: all.length - inside.length,
     };
   });
 }
@@ -743,6 +746,9 @@ export function buildAntecedentSection(a: AntecedentSummary): SectionResult {
       p7 !== undefined ? `${fmtInches(p7)} in over the past 7 days` : `${fmtInches(p72!)} in over the past 72 h`
     );
   }
+  // One window missing (a gap in the model series) is said, not implied dry.
+  if (p72 === undefined) drivers.push('Past-72 h total unavailable (gap in the model series)');
+  else if (p7 === undefined) drivers.push('Past-7-day total unavailable (gap in the model series)');
   return { id: 'antecedent', title: FLOOD_SECTION_TITLES.antecedent, level, drivers };
 }
 
@@ -814,8 +820,10 @@ export function buildRainSection(rain: FloodReportData['rain'], antecedent: Ante
     // Wet-ground escalator: the same rain on saturated soil floods sooner.
     // Unknown wetness (feed down, or a series too holed to total) is said,
     // never taken for dry ground.
+    // Dry ground is only known when BOTH totals are in and below their
+    // thresholds: with one missing, the other window could still be wet.
     const wet = wetGround(antecedent);
-    const wetKnown = antecedent !== null && (isNum(antecedent.past72In) || isNum(antecedent.past7dIn));
+    const wetKnown = wet !== null || (antecedent !== null && isNum(antecedent.past72In) && isNum(antecedent.past7dIn));
     if (wet) {
       level = bumpLevel(level);
       drivers.push(`Ground already wet (${wet}) — rainfall level raised one step`);
@@ -975,6 +983,9 @@ export function buildFemaSection(resp: FemaZoneResponse): { section: SectionResu
   }
   if (resp.envelopeUnavailable) {
     drivers.push('⚠ Zone map around the property unavailable — distance to the nearest floodplain not checked');
+  }
+  if (resp.mapTrimmed) {
+    drivers.push("Zone map trimmed for size — the farthest zones aren't drawn (distances use FEMA's full shapes)");
   }
 
   return {
@@ -1136,7 +1147,12 @@ const MINOR_STREAM_M3S = 5;
  */
 export function buildDischargeSection(
   d: FloodDischargeResponse,
-  opts: { todayIso: string; forecastGauge: { name: string; distanceMi: number } | null }
+  opts: {
+    todayIso: string;
+    forecastGauge: { name: string; distanceMi: number } | null;
+    /** false = the NWPS list itself is down or warming: "no official forecast" can't be claimed. */
+    gaugesKnown?: boolean;
+  }
 ): SectionResult {
   const th = d?.thresholds;
   if (!th || !isNum(th.rp2) || !isNum(th.rp5) || !isNum(th.rp20)) {
@@ -1199,7 +1215,11 @@ export function buildDischargeSection(
     const who = `the official NWS river forecast at ${fg.name} (${fmtMi(fg.distanceMi)} mi)`;
     drivers.push(capped ? `Capped at Guarded — ${who} leads` : `${who.charAt(0).toUpperCase()}${who.slice(1)} leads`);
   } else if (!fg && level !== 'low') {
-    drivers.push('Model only — no official NWS river forecast within 25 mi');
+    drivers.push(
+      opts.gaugesKnown === false
+        ? 'NWPS gauges unavailable — could not check for an official NWS river forecast nearby'
+        : 'Model only — no official NWS river forecast within 25 mi'
+    );
   }
   return { ...base, level, drivers };
 }

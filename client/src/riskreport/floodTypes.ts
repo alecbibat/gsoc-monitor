@@ -99,6 +99,9 @@ export interface GaugeDetailView {
   recordCrest: RiverCrest | null;
   forecastReliability: string | null;
   inServiceMsg: string | null;
+  /** The point has stopped reporting: its "observed" values are its last reading, not now. */
+  offline?: 'out_of_service' | 'stale';
+  obsTime?: string | null;
 }
 
 export interface FloodRingCount {
@@ -109,8 +112,10 @@ export interface FloodRingCount {
   action: number;
   /** Observed minor flood or worse. */
   flooding: number;
-  /** NWS forecast minor flood or worse. */
+  /** NWS forecast minor flood or worse — dark gauges included (a forecast needs no live reading). */
   forecastFlooding: number;
+  /** Forecast points in the ring that have stopped reporting (not in `gauges`). */
+  offline: number;
 }
 
 /** FEMA zone at the property, display-ready. */
@@ -129,6 +134,8 @@ export interface FloodReportData {
   hazard: 'flood';
   target: RiskTarget;
   generatedAt: string;
+  /** The property's local calendar date when the report was assembled. */
+  localToday: string;
   overall: { level: RiskLevel; drivers: string[] };
   sections: SectionResult[];
   ringCounts: FloodRingCount[];

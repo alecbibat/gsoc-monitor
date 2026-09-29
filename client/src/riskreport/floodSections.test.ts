@@ -450,7 +450,7 @@ describe('buildFloodAlertsSection — point lookup down (county-outline fallback
     expect(s.drivers).toContainEqual(expect.stringMatching(POINT_DOWN));
     // A hit must not read as the whole story where zone alerts can't be placed.
     expect(s.drivers).toContain(
-      "⚠ This area's zone-based alerts (Flood Watches, river Flood Warnings) can't be placed without the point lookup — more may be in effect"
+      "⚠ This area's zone-based alerts (Flood Watches, Typhoon / Tropical Storm Warnings) can't be placed without the point lookup — more may be in effect"
     );
 
     const ok = buildFloodAlertsSection([], { countiesDown: false, unplaceable: true });
@@ -780,18 +780,18 @@ describe('floodRingCounts', () => {
     ]);
   });
 
-  it('counts reporting gauges only — a dark gauge (even with a flooding forecast) is left out', () => {
+  it('observed columns count reporting gauges only; forecast flooding and the dark count include dark gauges', () => {
     const counts = floodRingCounts([
       gauge(0.5, 'action'),
       dark(0.8, 'x'),
       dark(3, 'y', { fcat: 'major' }),
       dark(20, 'z', { fcat: 'action', offline: 'out_of_service' }),
     ]);
-    expect(counts.map((c) => [c.ring.miles, c.gauges, c.action, c.flooding, c.forecastFlooding])).toEqual([
-      [1, 1, 1, 0, 0],
-      [5, 1, 1, 0, 0],
-      [25, 1, 1, 0, 0],
-      [100, 1, 1, 0, 0],
+    expect(counts.map((c) => [c.ring.miles, c.gauges, c.action, c.flooding, c.forecastFlooding, c.offline])).toEqual([
+      [1, 1, 1, 0, 0, 1],
+      [5, 1, 1, 0, 1, 2],
+      [25, 1, 1, 0, 1, 3],
+      [100, 1, 1, 0, 1, 3],
     ]);
   });
 });
@@ -1278,8 +1278,12 @@ describe('buildRainSection', () => {
     const s = buildRainSection(wpc({ in24: 2.5 }), {});
     expect(s.level).toBe('elevated');
     expect(s.drivers).toContain('⚠ Recent rainfall unavailable — if the ground is already wet this level would be one step higher');
-    // One computable total is enough to judge.
-    expect(buildRainSection(wpc({ in24: 2.5 }), { past7dIn: 0.4 }).drivers.some((d) => d.startsWith('⚠'))).toBe(false);
+    // One total missing leaves the other window's wetness unknown: still a caveat…
+    expect(buildRainSection(wpc({ in24: 2.5 }), { past7dIn: 0.4 }).drivers.some((d) => d.startsWith('⚠'))).toBe(true);
+    expect(buildRainSection(wpc({ in24: 2.5 }), { past72In: 1 }).drivers.some((d) => d.startsWith('⚠'))).toBe(true);
+    // …unless the one we have is already wet (then it bumps), or both are in and dry.
+    expect(buildRainSection(wpc({ in24: 2.5 }), { past72In: 2.2 }).level).toBe('high');
+    expect(buildRainSection(wpc({ in24: 2.5 }), { past72In: 1, past7dIn: 0.4 }).drivers.some((d) => d.startsWith('⚠'))).toBe(false);
   });
 
   it.each<[Partial<FloodReportData['rain']>, AntecedentSummary | null, RiskLevel]>([
@@ -1905,3 +1909,35 @@ describe('computeFloodOverall', () => {
     });
   });
 });
+
+describe('second-review follow-ups', () => {
+  it('discharge: with the NWPS list down it never claims "no official forecast"', () => {
+    const d: FloodDischargeResponse = {
+      lat: 38.6, lon: -90.2,
+      time: ['2026-09-29', '2026-09-30'],
+      discharge: [100, null], median: [100, 1500], p25: [90, 1200], p75: [110, 1600], min: [80, 900], max: [120, 1800],
+      thresholds: { rp2: 900, rp5: 1400, rp20: 2200, years: 20, fromYear: 2006, toYear: 2025 },
+      updated: 0,
+    };
+    const down = buildDischargeSection(d, { todayIso: '2026-09-29', forecastGauge: null, gaugesKnown: false });
+    expect(down.level).toBe('elevated');
+    expect(down.drivers).toContain('NWPS gauges unavailable — could not check for an official NWS river forecast nearby');
+    expect(down.drivers.join(' ')).not.toMatch(/Model only/);
+  });
+
+  it('FEMA: a server-trimmed map gets a map-only note', () => {
+    const { section } = buildFemaSection({
+      covered: true,
+      atSite: { zone: 'X', subtype: 'AREA OF MINIMAL FLOOD HAZARD', sfha: false, bfeFt: null, depthFt: null, datum: null },
+      polygons: [], nearestSfhaMi: null, truncated: false, mapTrimmed: true, updated: 0,
+    });
+    expect(section.drivers).toContain("Zone map trimmed for size — the farthest zones aren't drawn (distances use FEMA's full shapes)");
+  });
+
+  it('antecedent: a window lost to a model gap is said, not implied dry', () => {
+    expect(buildAntecedentSection({ past7dIn: 0.4 }).drivers).toContain('Past-72 h total unavailable (gap in the model series)');
+    expect(buildAntecedentSection({ past72In: 0.4 }).drivers).toContain('Past-7-day total unavailable (gap in the model series)');
+    expect(buildAntecedentSection({ past72In: 0.4, past7dIn: 0.9 }).drivers.join(' ')).not.toMatch(/unavailable/);
+  });
+});
+

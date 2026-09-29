@@ -167,6 +167,8 @@ const toDetailView = (d: RiverDetail, hit: GaugeHit): GaugeDetailView => ({
   recordCrest: d.recordCrest,
   forecastReliability: d.forecastReliability,
   inServiceMsg: d.inServiceMsg,
+  offline: hit.offline,
+  obsTime: hit.obsTime,
 });
 
 export async function assembleFloodReport(
@@ -286,7 +288,19 @@ export async function assembleFloodReport(
   const offSec = typeof off === 'number' && Number.isFinite(off) ? off : Math.round(target.lon / 15) * 3600;
   const nowMs = Date.now();
   const localDate = (ms: number) => new Date(ms + offSec * 1000).toISOString().slice(0, 10);
-  const localToday = localDate(nowMs);
+  // Without the precip feed's offset, the daily feed's IANA zone beats the
+  // longitude estimate (which ignores DST and Alaska time) for "today".
+  const zoneToday = (tz: string | undefined): string | null => {
+    try {
+      return tz
+        ? new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(nowMs))
+        : null;
+    } catch {
+      return null;
+    }
+  };
+  const localToday =
+    typeof off === 'number' && Number.isFinite(off) ? localDate(nowMs) : zoneToday(dailyRes.value?.timezone) ?? localDate(nowMs);
 
   const sections: SectionResult[] = [];
 
@@ -365,7 +379,12 @@ export async function assembleFloodReport(
   // The nearest point with a current NWS river forecast — the one that
   // outranks the GloFAS model. An observation-only or threshold-less gauge
   // says nothing about where the river is going.
-  const forecastGauge = gaugesAll.find((g) => g.distanceMi <= 25 && g.fcat !== null && g.fcat !== 'none') ?? null;
+  // A dark gauge counts only while its forecast says something (action or
+  // worse) — one the gauge section calls "state unknown" can't outrank the model.
+  const forecastGauge =
+    gaugesAll.find(
+      (g) => g.distanceMi <= 25 && g.fcat !== null && g.fcat !== 'none' && (!g.offline || catSev(g.fcat) >= 1)
+    ) ?? null;
   // Display list: within 25 mi every flooding point first, then the nearest
   // others up to 10; beyond it, points that are (or are forecast to be) in
   // flood — a flooding river 60 mi out still matters for access and supply.
@@ -509,7 +528,7 @@ export async function assembleFloodReport(
     sections.push(unavailableSection('discharge', `GloFAS river discharge unavailable (${dischargeRes.error ?? 'empty series'})`));
   } else {
     // GloFAS days are UTC days.
-    sections.push(buildDischargeSection(discharge, { todayIso: todayUtcIso(), forecastGauge }));
+    sections.push(buildDischargeSection(discharge, { todayIso: todayUtcIso(), forecastGauge, gaugesKnown: nearby !== null }));
   }
 
   // ── Overall ───────────────────────────────────────────────────────────────
@@ -670,6 +689,7 @@ export async function assembleFloodReport(
     hazard: 'flood',
     target,
     generatedAt: new Date().toISOString(),
+    localToday,
     overall,
     sections,
     ringCounts: floodRingCounts(gaugesAll),

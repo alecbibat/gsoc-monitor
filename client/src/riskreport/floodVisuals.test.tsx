@@ -73,6 +73,7 @@ const rich: FloodReportData = {
   hazard: 'flood',
   target: { key: 'k', name: 'River Lodge', lat: 38.6, lon: -90.2, groupName: 'Lodges', groupIcon: '🏨' },
   generatedAt: '2026-09-29T15:00:00Z',
+  localToday: '2026-09-29',
   overall: { level: 'critical', drivers: ['Flash Flood Warning in effect at the property — Flash Flood Emergency'] },
   sections: [
     { id: 'alerts', title: 'Flood alerts at site', level: 'critical', drivers: ['Flash Flood Warning in effect at the property'], countLabel: '1 active' },
@@ -84,7 +85,7 @@ const rich: FloodReportData = {
     { id: 'burn-scars', title: 'Burn scars (post-fire runoff)', level: 'low', drivers: ["No burn scar from this year's fires within 10 mi"] },
     { id: 'discharge', title: 'River discharge forecast (GloFAS)', level: 'guarded', drivers: ['Model peak 1,300 m³/s on Oct 5 — above the 2-year flow (900 m³/s)'] },
   ],
-  ringCounts: RISK_RINGS.map((ring, i) => ({ ring, gauges: i + 1, action: 0, flooding: i > 0 ? 1 : 0, forecastFlooding: i > 0 ? 1 : 0 })),
+  ringCounts: RISK_RINGS.map((ring, i) => ({ ring, gauges: i + 1, action: 0, flooding: i > 0 ? 1 : 0, forecastFlooding: i > 0 ? 1 : 0, offline: 0 })),
   alerts: [{
     event: 'Flash Flood Warning', severity: 'Severe', expires: '2026-09-29T21:00:00Z',
     headline: 'Flash Flood Warning issued September 29 at 2:00PM CDT',
@@ -140,7 +141,7 @@ const degraded: FloodReportData = {
     { id: 'burn-scars', title: 'Burn scars (post-fire runoff)', level: 'low', drivers: [], unavailable: 'WFIGS fire perimeters cover the US only' },
     { id: 'discharge', title: 'River discharge forecast (GloFAS)', level: 'low', drivers: [], unavailable: 'GloFAS return-period thresholds unavailable — discharge shown for trend only' },
   ],
-  ringCounts: RISK_RINGS.map((ring) => ({ ring, gauges: 0, action: 0, flooding: 0, forecastFlooding: 0 })),
+  ringCounts: RISK_RINGS.map((ring) => ({ ring, gauges: 0, action: 0, flooding: 0, forecastFlooding: 0, offline: 0 })),
   alerts: [],
   gauges: [],
   gaugeDetails: [],
@@ -186,6 +187,60 @@ describe('FloodReportBody', () => {
     // A down gauge feed never prints its ring counts as zeros.
     expect(html).not.toMatch(/<td class="px-3 py-1\.5 text-right">0<\/td>/);
     noNaN(html);
+  });
+});
+
+describe('FloodReportBody — the review fixes, rendered', () => {
+  it('a gauge gone dark within 25 mi is never "no NWPS gauge" on the card, and shows as dark in the ring table', () => {
+    const data: FloodReportData = {
+      ...rich,
+      gauges: [{ lid: 'DARK1', name: 'Dark Creek', state: 'MO', lat: 38.6, lon: -90.2, distanceMi: 3, cat: 'none', fcat: null, stage: null, unit: '', isFlow: false, offline: 'stale' }],
+      ringCounts: RISK_RINGS.map((ring) => ({ ring, gauges: 0, action: 0, flooding: 0, forecastFlooding: 0, offline: ring.miles >= 5 ? 1 : 0 })),
+    };
+    const html = renderToStaticMarkup(<FloodReportBody data={data} />);
+    expect(html).not.toContain('no NWPS gauge within 25 mi');
+    expect(html).toContain('1 not reporting ≤25 mi — river state unknown');
+    expect(html).toContain('+ 1 dark');
+    expect(html).toContain('Not reporting');
+  });
+
+  it('overnight, the "Excessive rainfall today" card follows the imminent Day 2, not the quiet Day 1', () => {
+    const gen = Date.parse('2026-09-29T05:00:00Z'); // 1 am EDT
+    const data: FloodReportData = {
+      ...rich,
+      generatedAt: new Date(gen).toISOString(),
+      ero: {
+        days: [
+          { day: 1, date: '2026-09-28', category: 0, startMs: Date.parse('2026-09-28T12:00:00Z') },
+          { day: 2, date: '2026-09-29', category: 3, startMs: Date.parse('2026-09-29T12:00:00Z') },
+          { day: 3, date: '2026-09-30', category: 0, startMs: Date.parse('2026-09-30T12:00:00Z') },
+        ],
+      },
+    };
+    const html = renderToStaticMarkup(<FloodReportBody data={data} />);
+    expect(html).toContain('WPC Day 2, starts within 12 h');
+    expect(html).toContain('Tonight');
+  });
+
+  it('a county-placed alert says so on its card and on the stat card', () => {
+    const data: FloodReportData = {
+      ...rich,
+      alerts: [{ ...rich.alerts[0], event: 'Coastal Flood Warning', level: 'elevated', tags: [], countyResolved: true }],
+    };
+    const html = renderToStaticMarkup(<FloodReportBody data={data} />);
+    expect(html).toContain('County-level match — confirm the site is in the warned area');
+    expect(html).toContain('Coastal Flood Warning · county-level match');
+  });
+
+  it("a dark gauge's detail card shows its last reading as not current — no trend, no 'now'", () => {
+    const d = stageDetail({ offline: 'stale', obsTime: '2026-09-27T14:00:00Z' });
+    const data: FloodReportData = { ...rich, gaugeDetails: [d] };
+    const html = renderToStaticMarkup(<FloodReportBody data={data} />);
+    expect(html).toContain('Not reporting');
+    expect(html).toContain('— not current');
+    expect(html).not.toContain('Rising');
+    expect(renderToStaticMarkup(<HydrographChart detail={d} />)).not.toContain('>now<');
+    expect(renderToStaticMarkup(<HydrographChart detail={stageDetail()} />)).toContain('>now<');
   });
 });
 

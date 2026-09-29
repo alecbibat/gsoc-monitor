@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useRiskReportStore } from './riskReportStore';
 import { RISK_LEVELS, RISK_RINGS, type WildfireReportData } from './riskTypes';
@@ -9,12 +9,15 @@ import { LevelBadge, QpfRampLegend, Section, SourcesFooter, StatCard, fmtTs, num
 import { LEGEND_ITEMS as LIGHTNING_LEGEND } from '../layers/lightning/lightningPalette';
 import { coverageCaption, lightningCountPrefix } from './lightningSection';
 import { usePrintStyles } from '../lib/printStyles';
+import { lazyWithReload } from '../lib/lazyWithReload';
 import { RiskScanLoading } from './RiskScanLoading';
 import type { RiskHazard } from './riskReportStore';
 
 // Lazy: the flood body (and its charts) is only downloaded when a flood
 // report opens; the host warms this chunk while the feeds load.
-const FloodReportBody = lazy(() => import('./FloodReportBody').then((m) => ({ default: m.FloodReportBody })));
+// Reload-once on a failed chunk load: a tab that outlived a deploy asks for
+// the old chunk name, which the server no longer has.
+const FloodReportBody = lazyWithReload(() => import('./FloodReportBody').then((m) => ({ default: m.FloodReportBody })));
 
 const HAZARD_LABEL: Record<RiskHazard, string> = { wildfire: 'Wildfire', flood: 'Flood' };
 

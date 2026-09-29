@@ -322,7 +322,8 @@ export function HydrographChart({ detail }: { detail: GaugeDetailView }) {
   const fcPath = fc.length ? (obs.length ? [obs[obs.length - 1], ...fc] : fc) : [];
   // "now" = the latest observation (NWPS observes every 15–60 min). A
   // forecast-only point has no "now" to mark.
-  const nowT = obs.length ? obs[obs.length - 1].t : null;
+  // A dark gauge's last observation is not "now" either.
+  const nowT = obs.length && !detail.offline ? obs[obs.length - 1].t : null;
 
   // Crest: NWPS's crest time, else the forecast series' own peak.
   const crestT = (() => {
@@ -434,7 +435,11 @@ export function HydrographChart({ detail }: { detail: GaugeDetailView }) {
         })()}
       </svg>
       <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-[9px] text-white/50">
-        <span className="flex items-center gap-1.5"><LineSwatch color={OBS_COLOR} /> observed</span>
+        {obs.length > 0 && (
+          <span className="flex items-center gap-1.5">
+            <LineSwatch color={OBS_COLOR} /> {detail.offline ? 'observed (last readings)' : 'observed'}
+          </span>
+        )}
         {fc.length > 0 && <span className="flex items-center gap-1.5"><LineSwatch dash="4 2" /> NWS forecast</span>}
         {lines.length > 0 && <span>colored lines = flood stages</span>}
         {showCrest && <span>▼ forecast crest</span>}
@@ -469,7 +474,8 @@ export function GaugeDetailCard({ detail }: { detail: GaugeDetailView }) {
   const crestCat = detail.crest?.cat ?? null;
   const obsTime = fmtGaugeTime(detail.observed?.time);
   const crestTime = fmtGaugeTime(detail.crest?.time);
-  const trend = detail.trend ? TREND[detail.trend] : null;
+  // A dark gauge's trend compares a stale reading with the crest — not a trend.
+  const trend = detail.trend && !detail.offline ? TREND[detail.trend] : null;
   const lines = gaugeThresholdLines(detail);
 
   // NWS impact statements and crest history are keyed to river STAGE (ft).
@@ -509,7 +515,7 @@ export function GaugeDetailCard({ detail }: { detail: GaugeDetailView }) {
               {fmtGaugeValue(obsV, unit)}
             </span>
             <span className="text-[11px] text-white/50">{unit}</span>
-            {obsCat && <CatChip cat={obsCat} />}
+            {detail.offline ? <OfflineChip status={detail.offline} /> : obsCat && <CatChip cat={obsCat} />}
             {trend && (
               <span
                 className={`text-[11px] font-semibold ${trend.color ? 'print-color' : 'text-white/55'}`}
@@ -519,7 +525,9 @@ export function GaugeDetailCard({ detail }: { detail: GaugeDetailView }) {
               </span>
             )}
           </div>
-          <div className="mt-0.5 text-[10px] text-white/40 print-muted">{obsTime ?? 'observation time unknown'}</div>
+          <div className="mt-0.5 text-[10px] text-white/40 print-muted">
+            {detail.offline ? `last reading ${obsTime ?? 'time unknown'} — not current` : obsTime ?? 'observation time unknown'}
+          </div>
         </div>
 
         {/* Forecast crest */}

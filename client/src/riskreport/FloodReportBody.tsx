@@ -61,8 +61,9 @@ function AlertCard({ alert: a }: { alert: FloodAlertHit }) {
         {a.severity && <span className="text-white/45">{a.severity}</span>}
         {a.expires && <span className="ml-auto text-white/45">{`until ${fmtTs(a.expires)}`}</span>}
       </div>
-      {tags.length > 0 && (
+      {(tags.length > 0 || a.countyResolved) && (
         <div className="mt-1.5 flex flex-wrap gap-1">
+          {a.countyResolved && <TagChip tag="County-level match — confirm the site is in the warned area" />}
           {tags.map((t) => <TagChip key={t} tag={t} />)}
         </div>
       )}
@@ -118,9 +119,11 @@ export function FloodReportBody({ data }: { data: FloodReportData }) {
 
   const alertStat = (() => {
     if (!alertsS || alertsS.unavailable) return { value: '—', sub: alertsS?.unavailable ?? 'not assessed' };
+    const county = data.alerts.some((a) => a.countyResolved);
     return {
       value: data.alerts.length === 0 ? 'None' : String(data.alerts.length),
-      sub: data.alerts[0]?.event, // sorted worst first
+      // Sorted worst first; a county-outline match is never a site fact.
+      sub: data.alerts[0] ? `${data.alerts[0].event}${county ? ' · county-level match' : ''}` : undefined,
     };
   })();
 
@@ -143,7 +146,15 @@ export function FloodReportBody({ data }: { data: FloodReportData }) {
     if (ring25 && (ring25.flooding > 0 || ring25.forecastFlooding > 0)) {
       return { value: '≤25 mi', sub: 'see River gauges below' };
     }
-    const n = ring25?.gauges ?? data.gauges.filter((x) => x.distanceMi <= 25).length;
+    const n = ring25?.gauges ?? data.gauges.filter((x) => x.distanceMi <= 25 && !x.offline).length;
+    const dark = ring25?.offline ?? data.gauges.filter((x) => x.distanceMi <= 25 && x.offline).length;
+    // A gauge gone dark is unknown river state — never "no gauge" or "none in flood".
+    if (dark > 0) {
+      return {
+        value: n === 0 ? 'Unknown' : 'None reporting',
+        sub: `${dark} not reporting ≤25 mi — river state unknown${n > 0 ? ` · ${n} reporting, none in flood` : ''}`,
+      };
+    }
     return {
       value: 'None ≤25 mi',
       sub: n === 0 ? 'no NWPS gauge within 25 mi' : `${n} ${n === 1 ? 'gauge' : 'gauges'} within 25 mi, none in flood`,
@@ -156,6 +167,16 @@ export function FloodReportBody({ data }: { data: FloodReportData }) {
     }
     const d1 = data.ero.days.find((d) => d.day === 1);
     if (!d1 || !(d1.category in ERO_META)) return { value: 'Unknown', sub: 'Day 1 not returned' };
+    // Overnight WPC's Day 1 is the tail of the night and "Day 2" is the coming
+    // daytime — the card follows whichever the section weighed as imminent.
+    const genMs = Date.parse(data.generatedAt);
+    const soon = data.ero.days.find(
+      (d) => d.day !== 1 && d.category > 0 && typeof d.startMs === 'number' && d.startMs - genMs <= 12 * 3_600_000
+    );
+    if (soon && soon.category > d1.category) {
+      const m = ERO_META[soon.category];
+      return { value: m.label, sub: `${m.prob} probability · WPC Day ${soon.day}, starts within 12 h` };
+    }
     const meta = ERO_META[d1.category];
     return { value: meta.label, sub: `${meta.prob} probability · WPC Day 1` };
   })();
@@ -199,9 +220,8 @@ export function FloodReportBody({ data }: { data: FloodReportData }) {
           ? "Chips are whole calendar days from tomorrow (daily point forecast) — today's rain so far is under Recent rainfall"
           : null;
 
-  // The property's local date: the last antecedent day is today there, and
-  // the hourly feed's first bar is the current hour.
-  const localToday = data.antecedent.days?.at(-1)?.date ?? data.hourlyRain?.times?.[0]?.slice(0, 10);
+  // The property's local date, as the assembly resolved it.
+  const localToday = data.localToday;
   // GloFAS days are UTC days (the section builder is handed the UTC date too).
   const dischargeToday = data.generatedAt.slice(0, 10);
 
@@ -291,7 +311,10 @@ export function FloodReportBody({ data }: { data: FloodReportData }) {
                 <tr key={r.ring.id} className="border-b border-white/5 text-white/70 last:border-0">
                   <td className="px-3 py-1.5 font-semibold">{r.ring.label}</td>
                   <td className="px-3 py-1.5 text-white/45">{r.ring.meaning}</td>
-                  <td className="px-3 py-1.5 text-right">{ringCell(r.gauges)}</td>
+                  <td className="px-3 py-1.5 text-right">
+                    {ringCell(r.gauges)}
+                    {!gaugesDown && r.offline > 0 && <span className="text-white/40">{` + ${r.offline} dark`}</span>}
+                  </td>
                   <td className="px-3 py-1.5 text-right">{ringCell(r.action)}</td>
                   <td className={`px-3 py-1.5 text-right ${!gaugesDown && r.flooding > 0 ? 'font-bold text-white/90' : ''}`}>
                     {ringCell(r.flooding)}
@@ -307,7 +330,7 @@ export function FloodReportBody({ data }: { data: FloodReportData }) {
         {gaugesDown ? (
           <Note>{`Gauge counts unknown — ${gaugesDown}`}</Note>
         ) : (
-          <Note>Reporting NWPS forecast points per ring · Action = observed near flood stage · In flood = observed minor flood or worse · Forecast flood = NWS forecast minor or worse</Note>
+          <Note>Reporting NWPS forecast points per ring (+ dark = not reporting) · Action = observed near flood stage · In flood = observed minor flood or worse · Forecast flood = NWS forecast minor or worse, dark gauges included</Note>
         )}
       </section>
 

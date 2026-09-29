@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useRiskReportStore, type RiskReportData } from './riskReportStore';
 import { assembleWildfireReport } from './assembleWildfire';
 import { RiskReportView } from './RiskReportView';
+import { importWithReload } from '../lib/lazyWithReload';
 import type { FeedResult, RiskFeedId } from './feedManifest';
 
 // Runs the hazard's assembly whenever a target opens; the view is a pure renderer.
@@ -34,10 +35,13 @@ export function RiskReportHost() {
     // The flood report's code is its own chunk, fetched only when one opens —
     // a wildfire report never downloads it. Its body chunk is warmed here too,
     // so the finished report doesn't wait on a second fetch.
-    if (hazard === 'flood') void import('./FloodReportBody');
+    // A preload that fails is harmless: the view's lazy load retries and reloads.
+    if (hazard === 'flood') import('./FloodReportBody').catch(() => {});
     const run: Promise<RiskReportData> =
       hazard === 'flood'
-        ? import('./assembleFlood').then((m) => m.assembleFloodReport(target, onFeed, controller.signal))
+        ? importWithReload(() => import('./assembleFlood')).then((m) =>
+            m.assembleFloodReport(target, onFeed, controller.signal)
+          )
         : assembleWildfireReport(target, onFeed, controller.signal);
     run
       .then((data) => { if (stillCurrent()) useRiskReportStore.getState().setData(data); })

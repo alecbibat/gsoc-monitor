@@ -31,3 +31,15 @@ export function lazyWithReload<T extends ComponentType<any>>(factory: () => Prom
     })
   );
 }
+
+/**
+ * The same reload-once guard for a plain dynamic import (a module loaded on
+ * demand rather than a component): on a failed chunk load, reload to pick up
+ * the new build — the returned promise then never settles — else rethrow.
+ */
+export function importWithReload<T>(factory: () => Promise<T>): Promise<T> {
+  return factory().catch((err: unknown) => {
+    if (reloadOnce()) return new Promise<T>(() => {});
+    throw err;
+  });
+}
