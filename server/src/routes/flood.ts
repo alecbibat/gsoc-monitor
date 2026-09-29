@@ -526,19 +526,25 @@ function clipAgainst(
   return out;
 }
 
-function ringArea(ring: number[][]): number {
+// Shoelace area with x = lon, y = lat: positive for a counter-clockwise ring,
+// negative for a clockwise one.
+function signedRingArea(ring: number[][]): number {
   let a = 0;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
     a += (ring[j][0] - ring[i][0]) * (ring[j][1] + ring[i][1]);
   }
-  return Math.abs(a) / 2;
+  return a / 2;
 }
+
+const ringArea = (ring: number[][]) => Math.abs(signedRingArea(ring));
 
 /**
  * Sutherland–Hodgman clip of one ring to the box. Clipping each ring on its
  * own preserves even-odd fill inside the box (every ring's inside/outside is
- * unchanged there), so holes survive. Returns a closed ring, or null when
- * nothing with area is left.
+ * unchanged there), so holes survive. It also keeps each ring's winding — a
+ * half-plane clip leaves the winding number inside the half-plane as it was
+ * — which is what lets thinRings still tell exteriors from holes. Returns a
+ * closed ring, or null when nothing with area is left.
  */
 export function clipRingToBox(ring: number[][], box: Box): number[][] | null {
   let minX = Infinity;
@@ -591,33 +597,69 @@ function thinRing(ring: number[][], stride: number): number[][] | null {
   return pts.length >= 3 ? [...pts, [pts[0][0], pts[0][1]]] : null;
 }
 
+// The widest stride that still leaves a closed ring a triangle: m distinct
+// vertices keep ceil(m / k) of them, and 3 need k < m / 2.
+const widestStride = (ring: number[][]) => Math.max(1, Math.floor((ring.length - 2) / 2));
+
+// thinRing, but never past a triangle: a ring is thinned only as far as it
+// stays a ring, and one too small to thin at all (a clipped box's 5 vertices)
+// is kept whole.
+const thinRingToTriangle = (ring: number[][], stride: number): number[][] =>
+  thinRing(ring, Math.min(stride, widestStride(ring))) ?? ring;
+
 /**
  * Thin a polygon's closed rings to at most `maxVertices` by keeping every
- * stride-th vertex. The stride starts at the even share (total / budget) and
- * grows only until the largest ring fits, which is always kept; the other
- * rings are then kept largest-first while they fit. Each thinned ring rounds
- * up by a vertex or two, so with many rings the budget runs out before the
- * last of them — and it is the specks (small holes and islands, invisible at
- * the report map's scale) that go, not the shape. [] only when even the
- * largest ring can't fit as a triangle. Survivors keep their order.
+ * stride-th vertex. The report map fills even-odd, so an exterior ring
+ * dropped while its holes stay turns the holes into the zone and the zone
+ * into empty — the site's own zone vanishing from its map. Exteriors are
+ * therefore never dropped: the stride starts at the even share (total /
+ * budget) and grows only until every exterior fits, each thinned no further
+ * than a triangle. Holes then go in largest AREA first while the budget lasts,
+ * so the ones left out are the smallest — specks invisible at the report
+ * map's scale — whatever their vertex counts. [] only when the exteriors
+ * can't fit even as triangles. Survivors keep their order.
  */
 export function thinRings(rings: number[][][], maxVertices: number): number[][][] {
   const total = vertexCount(rings);
   if (total <= maxVertices) return rings;
-  const bySize = rings.map((ring, i) => ({ ring, i })).sort((a, b) => b.ring.length - a.ring.length);
+  // Esri winds exterior rings clockwise (negative area here) and holes
+  // counter-clockwise; clipRingToBox keeps that. The largest ring is an
+  // exterior whatever its winding — no hole is larger than the exterior
+  // around it — so a polygon wound the other way still keeps its outline.
+  const sized = rings.map((ring, i) => ({ ring, i, area: signedRingArea(ring) }));
+  const largest = sized.reduce((a, b) => (Math.abs(b.area) > Math.abs(a.area) ? b : a));
+  const isExterior = (r: (typeof sized)[number]) => r.area < 0 || r === largest;
+  const exteriors = sized.filter(isExterior);
+  const holes = sized.filter((r) => !isExterior(r)).sort((a, b) => Math.abs(b.area) - Math.abs(a.area));
+
+  // Exterior vertices only fall as the stride grows, and stop falling once
+  // every exterior is down to a triangle: binary-search that range for the
+  // smallest stride that fits.
+  const exteriorVertices = (stride: number) =>
+    exteriors.reduce((s, r) => s + thinRingToTriangle(r.ring, stride).length, 0);
   let stride = Math.ceil(total / maxVertices);
-  // Terminates: a large enough stride thins any ring below a triangle (null).
-  let largest = thinRing(bySize[0].ring, stride);
-  while (largest && largest.length > maxVertices) largest = thinRing(bySize[0].ring, ++stride);
-  if (!largest) return [];
-  const keep = new Map<number, number[][]>([[bySize[0].i, largest]]);
-  let used = largest.length;
-  for (const { ring, i } of bySize.slice(1)) {
-    const t = thinRing(ring, stride);
-    if (t && used + t.length <= maxVertices) {
-      keep.set(i, t);
-      used += t.length;
-    }
+  let hi = exteriors.reduce((s, r) => Math.max(s, widestStride(r.ring)), stride);
+  if (exteriorVertices(hi) > maxVertices) return [];
+  while (stride < hi) {
+    const mid = Math.floor((stride + hi) / 2);
+    if (exteriorVertices(mid) <= maxVertices) hi = mid;
+    else stride = mid + 1;
+  }
+
+  const keep = new Map<number, number[][]>();
+  let used = 0;
+  for (const { ring, i } of exteriors) {
+    const t = thinRingToTriangle(ring, stride);
+    keep.set(i, t);
+    used += t.length;
+  }
+  for (const { ring, i } of holes) {
+    const t = thinRingToTriangle(ring, stride);
+    // Stop at the first hole that doesn't fit, so every hole dropped is
+    // smaller than every hole kept.
+    if (used + t.length > maxVertices) break;
+    keep.set(i, t);
+    used += t.length;
   }
   return rings.map((_, i) => keep.get(i)).filter((r): r is number[][] => r !== undefined);
 }
@@ -628,8 +670,9 @@ export function thinRings(rings: number[][][], maxVertices: number): number[][][
  * than patchy. The nearest polygon (normally the site's own zone) is always
  * kept — if it alone is over the budget it is thinned to fit (`thinned`)
  * rather than dropped, since a map without the site's own zone would read as
- * "no zone here". It is dropped only if nothing of it survives thinning.
- * Survivors keep their original order.
+ * "no zone here" — which is also why thinning never drops an exterior ring.
+ * It is dropped only if its exteriors can't fit even as triangles. Survivors
+ * keep their original order.
  */
 export function capPolygonVertices<T extends { rings: number[][][]; distMi: number }>(
   items: T[],
@@ -891,18 +934,24 @@ const glofasCellCentre = (v: number): number => Number((Math.floor(v * 20) / 20 
 export const snapToGlofasLat = (lat: number): number =>
   Math.min(GLOFAS_LAT_MAX, Math.max(GLOFAS_LAT_MIN, glofasCellCentre(lat)));
 
+// The last of the grid's 7200 columns (-180.025 + 7199 × 0.05).
+const GLOFAS_LON_LAST = 179.925;
+
 /**
- * Centre longitude of the GloFAS cell holding `lon`. The grid's first column
- * is centred at -180.025, i.e. it spans 179.95…180; that cell comes back as
- * 179.975 — the same column (Open-Meteo wraps the column index on a global
- * grid) but inside the API's ±180 range, which would reject -180.025. ±180 is
- * one meridian and, like every cell edge, belongs to the cell east of it.
+ * Centre longitude of the GloFAS cell Open-Meteo will answer for `lon`. That
+ * is the cell holding it everywhere but the antimeridian: the grid's first
+ * column is centred at -180.025 (spanning 179.95…180), and Open-Meteo's
+ * nearest-column lookup does not wrap on a global grid — a query anywhere in
+ * 179.95…180 rounds to column 7200 and is clamped to the last one (179.925),
+ * while -180 rounds half away from zero to column 1 (-179.975). Column 0 is
+ * never served, so that strip snaps to 179.925: the cache key and the stored
+ * threshold fit then name the cell whose flow is actually in the answer.
  */
 export function snapToGlofasLon(lon: number): number {
   // Wrap only when needed: the modulo arithmetic can nudge an in-range value
   // across a cell edge.
-  const w = lon >= -180 && lon < 180 ? lon : ((((lon + 180) % 360) + 360) % 360) - 180;
-  return glofasCellCentre(w);
+  const w = lon >= -180 && lon <= 180 ? lon : ((((lon + 180) % 360) + 360) % 360) - 180;
+  return w >= 179.95 ? GLOFAS_LON_LAST : glofasCellCentre(w);
 }
 
 type DischargeDaily = Record<string, unknown> & { time?: unknown };
@@ -1057,6 +1106,12 @@ function readLatLon(req: Request): { lat: number; lon: number } | null {
 
 const BAD_COORDS = { error: 'valid lat and lon query params required' };
 
+// The at-site-only answers /zone has cached. The cache hands back the very
+// Buffer it stored, so identity tells a partial stale answer from a complete
+// one without re-parsing a multi-MB map, and the set lets go of a body once
+// the cache has.
+const partialZoneBodies = new WeakSet<Buffer>();
+
 router.get('/zone', async (req, res) => {
   const p = readLatLon(req);
   if (!p) {
@@ -1079,13 +1134,27 @@ router.get('/zone', async (req, res) => {
       ZONE_TTL_MS,
       async () => {
         const zone = await fetchFemaZone(lat, lon);
-        partial = zone.envelopeUnavailable === true;
-        return Buffer.from(JSON.stringify(zone));
+        if (zone.envelopeUnavailable) {
+          partial = true;
+          // A blip's at-site-only answer must not displace a complete one:
+          // storing it would also overwrite the cache's last good value, and
+          // the full map (FIRMs change months apart) is the better answer.
+          // Failing this refresh makes staleOnError serve that map instead.
+          const stale = cache.getStale<Buffer>(key);
+          if (stale !== undefined && !partialZoneBodies.has(stale)) {
+            throw new Error('FEMA NFHL envelope unavailable; serving the last complete zone map');
+          }
+        }
+        const out = Buffer.from(JSON.stringify(zone));
+        if (partial) partialZoneBodies.add(out);
+        return out;
       },
       { staleOnError: true }
     );
-    // getOrFetch stored it for the full week; re-store a partial answer with
-    // the short TTL so the next report retries the envelope.
+    // Either a fresh partial answer (getOrFetch stored it for the full week)
+    // or the complete one it stood in for (served, not re-stored): hold it
+    // for the short TTL only, so the next report retries the envelope without
+    // every report in between waiting on it.
     if (partial) cache.set(key, body, PARTIAL_ZONE_TTL_MS);
     res.type('application/json').send(body);
   } catch (err) {

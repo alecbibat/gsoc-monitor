@@ -40,21 +40,22 @@ router.get('/active', async (req, res, next) => {
     return;
   }
   try {
-    const body = await cache.getOrFetch<Buffer>(
-      `alerts:point:${point}`,
-      60_000,
-      async () => {
-        const upstream = await fetch(`${NWS_ALERTS_URL}?point=${point}`, {
-          headers: { 'User-Agent': config.nwsUserAgent, Accept: 'application/geo+json' },
-          // One location's alerts are a small document; fail over sooner than
-          // the national feed does.
-          signal: AbortSignal.timeout(15_000),
-        });
-        if (!upstream.ok) throw new Error(`NWS point alerts error: ${upstream.status}`);
-        return Buffer.from(JSON.stringify(await upstream.json()));
-      },
-      { staleOnError: true }
-    );
+    // No staleOnError, unlike the national feed below: this answer is a
+    // present-tense test of one site, and an hours-old cached "no alert here"
+    // served through an NWS outage would print as the property's current
+    // status. A failure 502s instead, so the client falls back to its
+    // caveated county-outline check. The 60 s entry still spares NWS the
+    // repeats of one report's render.
+    const body = await cache.getOrFetch<Buffer>(`alerts:point:${point}`, 60_000, async () => {
+      const upstream = await fetch(`${NWS_ALERTS_URL}?point=${point}`, {
+        headers: { 'User-Agent': config.nwsUserAgent, Accept: 'application/geo+json' },
+        // One location's alerts are a small document; fail over sooner than
+        // the national feed does.
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!upstream.ok) throw new Error(`NWS point alerts error: ${upstream.status}`);
+      return Buffer.from(JSON.stringify(await upstream.json()));
+    });
     res.type('application/json').send(body);
   } catch (err) {
     res.status(502).json({ error: 'Failed to fetch NWS alerts', detail: String(err) });

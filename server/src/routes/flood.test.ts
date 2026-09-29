@@ -76,13 +76,23 @@ function circle(lat: number, lon: number, rMi: number, n = 40): number[][] {
   return ring;
 }
 
-function shoelace(ring: number[][]): number {
+// Positive counter-clockwise, negative clockwise (x = lon, y = lat).
+function signedShoelace(ring: number[][]): number {
   let a = 0;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
     a += (ring[j][0] - ring[i][0]) * (ring[j][1] + ring[i][1]);
   }
-  return Math.abs(a) / 2;
+  return a / 2;
 }
+
+const shoelace = (ring: number[][]) => Math.abs(signedShoelace(ring));
+
+// clipRingToBox hands rings back at geometryPrecision=6.
+const round6 = (v: number) => Math.round(v * 1e6) / 1e6;
+
+// square() and circle() wind counter-clockwise — an Esri hole. Reversed, a
+// ring winds clockwise like an Esri exterior.
+const clockwise = (ring: number[][]) => [...ring].reverse();
 
 function feature(partial: Partial<NfhlFeature>): NfhlFeature {
   return { zone: 'X', subtype: null, sfha: false, bfeFt: null, depthFt: null, datum: null, rings: [], ...partial };
@@ -305,6 +315,15 @@ describe('clipRingToBox', () => {
     expect(clipRingToBox(square(10, 10, 1), box)).toBeNull();
     expect(clipRingToBox(square(2, 2, 0.5), box)).toEqual(square(2, 2, 0.5));
   });
+
+  it("keeps each ring's winding, so exteriors and holes stay told apart", () => {
+    const u = [[0, 0], [3, 0], [3, 3], [2, 3], [2, 1], [1, 1], [1, 3], [0, 3], [0, 0]];
+    const uBox = { xmin: -1, ymin: -1, xmax: 4, ymax: 2 };
+    expect(signedShoelace(clipRingToBox(square(1, 1, 1), box)!)).toBeCloseTo(1, 9);
+    expect(signedShoelace(clipRingToBox(clockwise(square(1, 1, 1)), box)!)).toBeCloseTo(-1, 9);
+    expect(signedShoelace(clipRingToBox(u, uBox)!)).toBeCloseTo(5, 9);
+    expect(signedShoelace(clipRingToBox(clockwise(u), uBox)!)).toBeCloseTo(-5, 9);
+  });
 });
 
 const vertices = (rings: number[][][]) => rings.reduce((s, r) => s + r.length, 0);
@@ -324,13 +343,38 @@ describe('thinRings', () => {
     expect(out[out.length - 1]).toEqual(out[0]);
   });
 
-  it('drops rings that thin below a triangle, and gives up under one triangle of budget', () => {
-    const outer = circle(SITE.lat, SITE.lon, 0.5, 80);
-    const speck = square(SITE.lon, SITE.lat, 0.0001); // 5 vertices
-    const out = thinRings([outer, speck, speck, speck], 60);
-    expect(out).toHaveLength(1);
-    expect(vertices(out)).toBeLessThanOrEqual(60);
+  it('keeps a ring too small to thin whole while it fits, and gives up under one triangle of budget', () => {
+    const outer = circle(SITE.lat, SITE.lon, 0.5, 80); // 81 vertices, the largest ring
+    const speck = square(SITE.lon, SITE.lat, 0.0001); // 5 vertices: no stride leaves a triangle
+    // 96 into 50: stride 2 leaves 41 of the outline, then one whole speck fits.
+    const out = thinRings([outer, speck, speck, speck], 50);
+    expect(out.map((r) => r.length)).toEqual([41, 5]);
+    expect(out[1]).toEqual(speck);
     expect(thinRings([outer], 3)).toEqual([]);
+  });
+
+  it('never drops an exterior ring, however few vertices it has next to its holes', () => {
+    // Esri winding: exteriors clockwise, holes counter-clockwise.
+    const outer = clockwise(square(SITE.lon, SITE.lat, 0.02)); // 5 vertices
+    const island = clockwise(square(SITE.lon + 0.05, SITE.lat, 0.001)); // a second exterior, 5 vertices
+    const bigHole = circle(SITE.lat + miLat(0.5), SITE.lon, 0.3); // 41 vertices
+    const smallHole = circle(SITE.lat - miLat(0.5), SITE.lon, 0.1); // 41 vertices
+    // 92 into 30: stride 4 leaves 11 of each hole; the 4-cornered exteriors
+    // can't thin and stay whole (10), so one hole fits — the bigger one.
+    const out = thinRings([bigHole, outer, smallHole, island], 30);
+    expect(out.map((r) => r.length)).toEqual([11, 5, 5]);
+    expect(out[0].slice(0, -1)).toEqual([0, 4, 8, 12, 16, 20, 24, 28, 32, 36].map((i) => bigHole[i]));
+    expect(out[1]).toEqual(outer);
+    expect(out[2]).toEqual(island);
+  });
+
+  it('drops holes smallest area first, whatever their vertex counts', () => {
+    const outer = clockwise(square(SITE.lon, SITE.lat, 0.02));
+    const wideHole = square(SITE.lon + 0.01, SITE.lat, 0.005); // 5 vertices, large
+    const fineHole = circle(SITE.lat - miLat(0.5), SITE.lon, 0.05, 80); // 81 vertices, tiny
+    // 91 into 20: stride 5 would leave 17 of the fine hole, but the wide one
+    // goes in first and the fine one no longer fits.
+    expect(thinRings([fineHole, outer, wideHole], 20)).toEqual([outer, wideHole]);
   });
 
   it('stays within the budget when many rings round up, dropping the smallest rings first', () => {
@@ -470,6 +514,31 @@ describe('assembleFemaZone', () => {
     // skips that vertex and would read 0.11.
     expect(z.nearestSfhaMi).toBe(0.1);
     expect(nearestSfhaMi(SITE.lat, SITE.lon, [{ ...here, rings: z.polygons[0].rings }], null)).toBe(0.11);
+  });
+
+  it("keeps a box-clipped outer ring whose holes hold most of the vertices, so the site's zone still covers it", () => {
+    // A county-sized X polygon (Esri winding: clockwise outline) clipped to
+    // the envelope's 5-vertex box, holed by three floodplains near — not
+    // at — the site: 5 + 3 × 41 = 128 vertices into 30.
+    const box = envelopeAround(SITE.lat, SITE.lon);
+    const holes = [
+      circle(SITE.lat + miLat(1), SITE.lon, 0.5),
+      circle(SITE.lat - miLat(1), SITE.lon, 0.3),
+      circle(SITE.lat, SITE.lon + miLon(1), 0.1),
+    ];
+    const x = feature({ zone: 'X', rings: [clockwise(square(SITE.lon, SITE.lat, 1)), ...holes] });
+    const z = assembleFemaZone(SITE.lat, SITE.lon, result([feature({ zone: 'X' })]), result([x]), box, 30);
+    const [outer, ...kept] = z.polygons[0].rings;
+    expect(outer).toEqual(clipRingToBox(clockwise(square(SITE.lon, SITE.lat, 1)), box));
+    expect(outer).toHaveLength(5);
+    expect(signedShoelace(outer)).toBeLessThan(0);
+    // Stride 5 leaves 9 of each hole; the smallest one no longer fits.
+    expect(kept.map((r) => r.length)).toEqual([9, 9]);
+    expect(kept[0][0]).toEqual(holes[0][0].map(round6));
+    expect(kept[1][0]).toEqual(holes[1][0].map(round6));
+    expect(z.mapTrimmed).toBe(true);
+    // Even-odd over what is drawn: the site is still inside its own zone.
+    expect(featureDistanceMi(SITE.lat, SITE.lon, z.polygons[0].rings)).toBe(0);
   });
 });
 
@@ -619,16 +688,30 @@ describe('GloFAS cell snapping', () => {
     expect(snapToGlofasLat(-75)).toBe(-59.975);
   });
 
-  it('wraps longitude at the antimeridian, staying inside ±180', () => {
-    // Column 0 (centred at -180.025) spans 179.95…180: named 179.975.
-    expect(snapToGlofasLon(179.96)).toBe(179.975);
+  it('snaps the antimeridian strip to the column Open-Meteo actually serves, inside ±180', () => {
+    // Column 0 (centred at -180.025) spans 179.95…180, but Open-Meteo never
+    // serves it: that strip is clamped to the last column, 179.925.
     expect(snapToGlofasLon(179.94)).toBe(179.925);
-    // ±180 is one meridian; like any cell edge it belongs to the cell east of it.
-    expect(snapToGlofasLon(180)).toBe(-179.975);
+    expect(snapToGlofasLon(179.95)).toBe(179.925);
+    expect(snapToGlofasLon(179.96)).toBe(179.925);
+    expect(snapToGlofasLon(179.99)).toBe(179.925);
+    expect(snapToGlofasLon(180)).toBe(179.925);
+    // -180 rounds half away from zero to column 1.
     expect(snapToGlofasLon(-180)).toBe(-179.975);
     expect(snapToGlofasLon(-179.99)).toBe(-179.975);
-    expect(snapToGlofasLon(-180.01)).toBe(179.975);
-    expect(snapToGlofasLon(540)).toBe(-179.975);
+    expect(snapToGlofasLon(-180.01)).toBe(179.925); // 179.99
+    expect(snapToGlofasLon(540)).toBe(-179.975); // -180
+  });
+
+  it('names, for any longitude, the column Open-Meteo would answer with', () => {
+    // Open-Meteo's lookup on this grid (RegularGrid, nx 7200, lonMin -180.025,
+    // dx 0.05): nearest column, half away from zero, clamped — no wrap.
+    const served = (lon: number) => -180.025 + 0.05 * Math.min(7199, Math.round((lon + 180.025) / 0.05));
+    for (let lon = -180; lon <= 180; lon += 0.0137) {
+      if (Math.abs(lon * 20 - Math.round(lon * 20)) < 1e-6) continue; // a cell edge: a float tie
+      expect(snapToGlofasLon(lon)).toBeCloseTo(served(lon), 9);
+    }
+    for (const lon of [-180, 179.95, 179.975, 180]) expect(snapToGlofasLon(lon)).toBeCloseTo(served(lon), 9);
   });
 });
 
@@ -1077,6 +1160,67 @@ describe('flood routes', () => {
       expect(body).not.toHaveProperty('envelopeUnavailable');
       expect(body.nearestSfhaMi).toBe(0);
       expect(seen.filter(isEnvelope)).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps serving the last complete map when a refresh gets only the at-site zone', async () => {
+    upstream = (u) => jsonResponse(isEnvelope(u) ? ENVELOPE : AE_POINT);
+    const url = `${base}/zone?lat=33.25&lon=-93.25`;
+    const complete = (await (await realFetch(url)).json()) as Record<string, unknown>;
+    expect(complete.nearestSfhaMi).toBe(0);
+    expect(complete).not.toHaveProperty('envelopeUnavailable');
+
+    upstream = (u) => (isEnvelope(u) ? jsonResponse(ESRI_ERROR) : jsonResponse(AE_POINT));
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 8 * 24 * 60 * 60 * 1000); // past the week
+      const refreshed = await realFetch(url);
+      expect(refreshed.status).toBe(200);
+      expect(await refreshed.json()).toEqual(complete);
+      expect(seen.filter(isEnvelope)).toHaveLength(2);
+
+      // Held for the short TTL: no report waits on the failing envelope...
+      await realFetch(url);
+      expect(seen.filter(isEnvelope)).toHaveLength(2);
+
+      // ...and the complete map is still what a later failure falls back to.
+      vi.setSystemTime(Date.now() + 16 * 60 * 1000);
+      expect(await (await realFetch(url)).json()).toEqual(complete);
+      expect(seen.filter(isEnvelope)).toHaveLength(3);
+
+      upstream = (u) => jsonResponse(isEnvelope(u) ? ENVELOPE : AE_POINT);
+      vi.setSystemTime(Date.now() + 16 * 60 * 1000);
+      const recovered = (await (await realFetch(url)).json()) as Record<string, unknown>;
+      expect(recovered).not.toHaveProperty('envelopeUnavailable');
+      expect(recovered.updated).toBeGreaterThan(complete.updated as number);
+      expect(seen.filter(isEnvelope)).toHaveLength(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('replaces an at-site-only answer with a fresh one when no complete map was ever cached', async () => {
+    upstream = (u) => (isEnvelope(u) ? jsonResponse(ESRI_ERROR) : jsonResponse(AE_POINT));
+    const url = `${base}/zone?lat=34.75&lon=-94.75`;
+    const first = (await (await realFetch(url)).json()) as Record<string, unknown>;
+    expect(first).toMatchObject({ atSite: AE_SITE, envelopeUnavailable: true });
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 16 * 60 * 1000);
+      const second = (await (await realFetch(url)).json()) as Record<string, unknown>;
+      expect(second).toMatchObject({ atSite: AE_SITE, envelopeUnavailable: true, polygons: [] });
+      expect(second.updated).toBeGreaterThan(first.updated as number);
+      expect(seen.filter(isEnvelope)).toHaveLength(2);
+
+      // Still held for minutes, not a week.
+      await realFetch(url);
+      expect(seen.filter(isEnvelope)).toHaveLength(2);
+      vi.setSystemTime(Date.now() + 16 * 60 * 1000);
+      await realFetch(url);
+      expect(seen.filter(isEnvelope)).toHaveLength(3);
     } finally {
       vi.useRealTimers();
     }

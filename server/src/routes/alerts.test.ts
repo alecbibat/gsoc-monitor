@@ -89,11 +89,55 @@ describe('alerts proxy', () => {
     expect(await res.json()).toMatchObject({ error: 'Failed to fetch NWS alerts' });
   });
 
+  it('serves a cached point answer through a failure only inside the 60 s TTL, then 502s', async () => {
+    upstream = () => collection(['urn:site']);
+    const url = `${base}?point=35.1,-89.9`;
+    expect((await realFetch(url)).status).toBe(200);
+
+    upstream = () => new Response('Service Unavailable', { status: 503 });
+    const cached = await realFetch(url);
+    expect(cached.status).toBe(200);
+    expect(await cached.json()).toMatchObject({ features: [{ id: 'urn:site' }] });
+    expect(seen).toHaveLength(1);
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 61_000);
+      // Past the TTL the old answer is no longer the site's current status:
+      // 502, so the client takes its caveated county-outline path.
+      const expired = await realFetch(url);
+      expect(expired.status).toBe(502);
+      const body = await expired.json();
+      expect(body).toMatchObject({ error: 'Failed to fetch NWS alerts' });
+      expect(body).not.toHaveProperty('features');
+      expect(seen).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('leaves the national feed on its own path and cache key', async () => {
     upstream = () => collection(['urn:national']);
     const res = await realFetch(base);
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ features: [{ id: 'urn:national' }] });
     expect(seen.map((s) => s.url)).toEqual(['https://api.weather.gov/alerts/active']);
+  });
+
+  it('still degrades the national feed to its last good copy when NWS fails', async () => {
+    upstream = () => collection(['urn:national-old']);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 10 * 60_000); // past any earlier test's entry
+      expect((await realFetch(base)).status).toBe(200);
+      upstream = () => new Response('Service Unavailable', { status: 503 });
+      vi.setSystemTime(Date.now() + 61_000);
+      const res = await realFetch(base);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ features: [{ id: 'urn:national-old' }] });
+      expect(seen).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
