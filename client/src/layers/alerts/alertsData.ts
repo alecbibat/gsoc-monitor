@@ -48,6 +48,13 @@ export interface RawAlert {
     expires?: string;
     areaDesc?: string;
     geocode?: { SAME?: string[]; UGC?: string[] };
+    /**
+     * CAP parameters as NWS sends them — string arrays keyed by name, e.g.
+     * flashFloodDamageThreat: ['CATASTROPHIC'] (a Flash Flood Emergency) or
+     * flashFloodDetection: ['OBSERVED']. Shape is upstream-controlled: read
+     * defensively.
+     */
+    parameters?: Record<string, unknown>;
   };
 }
 
@@ -212,6 +219,30 @@ async function fetchAlertsFrom(url: string): Promise<RawAlert[]> {
 // back to direct once the network or the NWS edge recovers.
 const DIRECT_RETRY_MS = 10 * 60_000;
 let directDownSince: number | null = null;
+
+/**
+ * Active alerts whose areas contain one point, resolved by NWS itself
+ * (forecast zones, county zones and storm polygons) — the flood report's site
+ * test. The national feed can only place a geometry-less alert by painting
+ * every county in its SAME list, which puts a coastal Storm Surge Warning on
+ * inland towns of the same county and can't place territory alerts at all.
+ * Direct first, then the server proxy, like fetchActiveAlerts.
+ */
+export async function fetchAlertsAtPoint(lat: number, lon: number): Promise<RawAlert[]> {
+  // NWS rejects more than 4 decimals.
+  const point = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+  try {
+    return await fetchAlertsFrom(`${ALERTS_API}?point=${point}`);
+  } catch (err) {
+    const directReason = err instanceof Error ? err.message : 'unreachable';
+    try {
+      return await fetchAlertsFrom(`${ALERTS_PROXY}?point=${point}`);
+    } catch (err2) {
+      const proxyReason = err2 instanceof Error ? err2.message : 'unreachable';
+      throw new Error(`direct: ${directReason} · proxy: ${proxyReason}`);
+    }
+  }
+}
 
 /**
  * Fetch all currently-active NWS alerts: directly from api.weather.gov, then

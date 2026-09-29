@@ -1,20 +1,62 @@
 import { useEffect, useState } from 'react';
 import { RISK_RINGS, type RiskTarget } from './riskTypes';
-import { WILDFIRE_FEEDS, type FeedProgress, type FeedResult } from './feedManifest';
+import { FLOOD_FEEDS, WILDFIRE_FEEDS, type FeedDef, type FeedProgress, type FeedResult, type RiskFeedId } from './feedManifest';
+import type { RiskHazard } from './riskReportStore';
 
 // ── Risk-report loading screen: radar scope + feed acquisition console ───────
 // Everything animated here is real: the scope's rings are the report's actual
 // analysis rings (1/5/25/100 mi, log-spaced like real range rings), and the
-// console rows flip as each feed's fetch settles in assembleWildfire — no
-// fake staged progress, matching the report's fail-honest rule. A feed the
-// report will call unavailable shows DOWN here, not LOCK.
+// console rows flip as each feed's fetch settles in the hazard's assembly —
+// no fake staged progress, matching the report's fail-honest rule. A feed the
+// report will call unavailable shows DOWN here, not LOCK. Each hazard brings
+// its own feed manifest and beam color (ember for wildfire, water for flood).
+
+interface ScanTheme {
+  /** Conic trail behind a bright leading edge at 12 o'clock. */
+  sweep: string;
+  blip: string;
+  blipGlow: string;
+  core: string;
+  coreGlow: string;
+  echo: string;
+  /** Tailwind gradient stops for the progress bar (literal, so JIT keeps them). */
+  progress: string;
+}
+
+const SCAN_THEMES: Record<RiskHazard, ScanTheme> = {
+  wildfire: {
+    sweep:
+      'conic-gradient(from 0deg, transparent 0deg, transparent 285deg, rgba(251,146,60,0.02) 297deg, rgba(251,146,60,0.16) 344deg, rgba(255,200,150,0.5) 358deg, rgba(255,224,189,0.85) 360deg)',
+    blip: '#fb923c',
+    blipGlow: 'rgba(251,146,60,0.22)',
+    core: '#fdba74',
+    coreGlow: 'rgba(251,146,60,0.9)',
+    echo: 'rgba(251,146,60,0.6)',
+    progress: 'from-accent to-amber-400',
+  },
+  flood: {
+    sweep:
+      'conic-gradient(from 0deg, transparent 0deg, transparent 285deg, rgba(56,189,248,0.02) 297deg, rgba(56,189,248,0.16) 344deg, rgba(147,210,255,0.5) 358deg, rgba(210,238,255,0.85) 360deg)',
+    blip: '#38bdf8',
+    blipGlow: 'rgba(56,189,248,0.22)',
+    core: '#7dd3fc',
+    coreGlow: 'rgba(56,189,248,0.9)',
+    echo: 'rgba(56,189,248,0.6)',
+    progress: 'from-accent to-sky-400',
+  },
+};
+
+const FEEDS_BY_HAZARD: Record<RiskHazard, readonly FeedDef[]> = {
+  wildfire: WILDFIRE_FEEDS,
+  flood: FLOOD_FEEDS,
+};
 
 const SIZE = 300;
 const C = SIZE / 2;
 const R = 136;
 const SWEEP_S = 3.6; // one sweep revolution — blip delays sync to this
 
-// Ember blips the sweep "detects" each pass: deterministic polar positions
+// Blips the sweep "detects" each pass: deterministic polar positions
 // (degrees clockwise from north — the sweep's own coordinate system) so the
 // scope reads identically on every open and never re-rolls on re-render.
 const BLIPS = [
@@ -36,7 +78,7 @@ const blipXY = (deg: number, f: number): [number, number] => {
   return [C + Math.sin(a) * f * R, C - Math.cos(a) * f * R];
 };
 
-function Scope() {
+function Scope({ theme }: { theme: ScanTheme }) {
   return (
     <div className="relative" style={{ width: SIZE, height: SIZE }}>
       {/* Targeting brackets */}
@@ -108,7 +150,7 @@ function Scope() {
           );
         })}
 
-        {/* Ember blips — each ignites as the sweep passes its bearing (negative
+        {/* Blips — each ignites as the sweep passes its bearing (negative
             delay keeps the cycle live from the first frame); the static 0.45
             opacity is the reduced-motion rendering. */}
         {BLIPS.map((b, i) => {
@@ -116,8 +158,8 @@ function Scope() {
           const delay = `${((b.deg / 360) * SWEEP_S - SWEEP_S).toFixed(2)}s`;
           return (
             <g key={i} className="risk-scan-blip" opacity="0.45" style={{ animationDelay: delay }}>
-              <circle cx={x} cy={y} r={b.r * 2.4} fill="rgba(251,146,60,0.22)" />
-              <circle cx={x} cy={y} r={b.r} fill="#fb923c" />
+              <circle cx={x} cy={y} r={b.r * 2.4} fill={theme.blipGlow} />
+              <circle cx={x} cy={y} r={b.r} fill={theme.blip} />
             </g>
           );
         })}
@@ -128,11 +170,7 @@ function Scope() {
           returns glowing through the beam. */}
       <div
         className="risk-scan-sweep pointer-events-none absolute rounded-full"
-        style={{
-          inset: C - R,
-          background:
-            'conic-gradient(from 0deg, transparent 0deg, transparent 285deg, rgba(251,146,60,0.02) 297deg, rgba(251,146,60,0.16) 344deg, rgba(255,200,150,0.5) 358deg, rgba(255,224,189,0.85) 360deg)',
-        }}
+        style={{ inset: C - R, background: theme.sweep }}
       />
 
       {/* Slow counter-rotating outer dial */}
@@ -140,8 +178,11 @@ function Scope() {
 
       {/* The property at scope center */}
       <div className="pointer-events-none absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2">
-        <span className="risk-scan-echo absolute -inset-1.5 rounded-full border border-orange-400/60" />
-        <span className="absolute inset-0 rotate-45 bg-orange-300 shadow-[0_0_10px_rgba(251,146,60,0.9)]" />
+        <span className="risk-scan-echo absolute -inset-1.5 rounded-full border" style={{ borderColor: theme.echo }} />
+        <span
+          className="absolute inset-0 rotate-45"
+          style={{ background: theme.core, boxShadow: `0 0 10px ${theme.coreGlow}` }}
+        />
       </div>
     </div>
   );
@@ -164,9 +205,20 @@ const STATE_WORD: Record<FeedResult | 'pending', { word: string; cls: string }> 
   skipped: { word: 'SKIP', cls: 'text-white/45' },
 };
 
-function Console({ feeds, elapsed }: { feeds: FeedProgress; elapsed: number }) {
-  const done = WILDFIRE_FEEDS.filter((f) => feeds[f.id] !== undefined).length;
-  const total = WILDFIRE_FEEDS.length;
+function Console({
+  defs,
+  feeds,
+  elapsed,
+  theme,
+}: {
+  defs: readonly FeedDef[];
+  feeds: FeedProgress;
+  elapsed: number;
+  theme: ScanTheme;
+}) {
+  const resultOf = (f: FeedDef) => feeds[f.id as RiskFeedId];
+  const done = defs.filter((f) => resultOf(f) !== undefined).length;
+  const total = defs.length;
 
   return (
     <div className="w-[340px] max-w-full">
@@ -178,14 +230,14 @@ function Console({ feeds, elapsed }: { feeds: FeedProgress; elapsed: number }) {
 
       <div className="mt-2 h-[3px] overflow-hidden rounded-full bg-white/10">
         <div
-          className="h-full rounded-full bg-gradient-to-r from-accent to-amber-400 transition-[width] duration-500 ease-out"
+          className={`h-full rounded-full bg-gradient-to-r ${theme.progress} transition-[width] duration-500 ease-out`}
           style={{ width: `${(done / total) * 100}%` }}
         />
       </div>
 
       <ul className="mt-3 space-y-[7px]">
-        {WILDFIRE_FEEDS.map((f, i) => {
-          const result = feeds[f.id];
+        {defs.map((f, i) => {
+          const result = resultOf(f);
           const state = STATE_WORD[result ?? 'pending'];
           return (
             <li key={f.id} className="risk-scan-row flex items-center gap-2.5" style={{ animationDelay: `${i * 60}ms` }}>
@@ -204,8 +256,18 @@ function Console({ feeds, elapsed }: { feeds: FeedProgress; elapsed: number }) {
 const fmtCoord = (v: number, pos: string, neg: string) =>
   `${Math.abs(v).toFixed(3)}° ${v >= 0 ? pos : neg}`;
 
-export function RiskScanLoading({ target, feeds }: { target: RiskTarget; feeds: FeedProgress }) {
-  const pending = WILDFIRE_FEEDS.find((f) => feeds[f.id] === undefined);
+export function RiskScanLoading({
+  target,
+  hazard,
+  feeds,
+}: {
+  target: RiskTarget;
+  hazard: RiskHazard;
+  feeds: FeedProgress;
+}) {
+  const defs = FEEDS_BY_HAZARD[hazard];
+  const theme = SCAN_THEMES[hazard];
+  const pending = defs.find((f) => feeds[f.id as RiskFeedId] === undefined);
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     // Keyed on target identity: open() always creates a fresh target object,
@@ -223,7 +285,7 @@ export function RiskScanLoading({ target, feeds }: { target: RiskTarget; feeds: 
     >
       <div className="flex flex-col items-center gap-10 lg:flex-row lg:items-center lg:gap-16">
         <div>
-          <Scope />
+          <Scope theme={theme} />
           <div className="mt-4 text-center font-mono">
             <div className="text-[10px] uppercase tracking-[0.2em] text-white/60">
               {target.groupIcon} {target.name}
@@ -233,7 +295,7 @@ export function RiskScanLoading({ target, feeds }: { target: RiskTarget; feeds: 
             </div>
           </div>
         </div>
-        <Console feeds={feeds} elapsed={elapsed} />
+        <Console defs={defs} feeds={feeds} elapsed={elapsed} theme={theme} />
       </div>
 
       {/* Live terminal line: names whatever the assembly is actually waiting

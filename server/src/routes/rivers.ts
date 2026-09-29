@@ -31,7 +31,8 @@ const SEVERITY: Record<FloodCat, number> = {
 };
 
 // Map NWPS floodCategory strings to our tiers. Returns null for states we drop
-// from the map (stale observation, offline sensor, no current forecast).
+// from the map (stale observation, offline sensor, no current forecast) — the
+// dark gauges among them are still listed in the snapshot's `offline`.
 function normalizeCat(c: string | undefined): FloodCat | null {
   switch (c) {
     case 'major':
@@ -66,7 +67,7 @@ interface NwpsStatusSide {
   floodCategory?: string;
   validTime?: string;
 }
-interface NwpsGauge {
+export interface NwpsGauge {
   lid: string;
   name: string;
   latitude: number;
@@ -91,9 +92,25 @@ export interface RiverGauge {
   isFlow: boolean; // true when the primary reading is flow, not stage
 }
 
+// A forecast point whose observation has gone dark (sensor out of service, or
+// no reading recent enough to be current). Mirrors client OfflineGauge.
+export interface OfflineGauge {
+  lid: string;
+  name: string;
+  lat: number;
+  lon: number;
+  state: string;
+  status: 'out_of_service' | 'stale'; // NWPS observed out_of_service / obs_not_current
+  fcat: FloodCat | null; // current forecast tier, when the forecast is still current
+  obsTime: string | null; // last observation's valid time (ISO)
+}
+
 export interface RiversResponse {
   gauges: RiverGauge[];
   counts: Record<FloodCat, number>;
+  // Always sent by this server; optional in the client type only because an
+  // older server's snapshot lacks it.
+  offline: OfflineGauge[];
   updated: number;
   warming?: boolean; // true when the snapshot isn't ready yet (cold start)
 }
@@ -102,15 +119,24 @@ function round4(n: number): number {
   return Math.round(n * 1e4) / 1e4;
 }
 
-async function fetchRivers(): Promise<RiversResponse> {
-  const res = await fetch(`${NWPS}/gauges`, {
-    headers: NWPS_HEADERS,
-    signal: AbortSignal.timeout(90_000),
-  });
-  if (!res.ok) throw new Error(`NWPS /gauges HTTP ${res.status}`);
-  const json = (await res.json()) as { gauges?: NwpsGauge[] };
-  const raw = json.gauges ?? [];
+// NWPS observed states that mean "this gauge normally reports, but can't now".
+// Every other uncategorized state (missing, fcst_not_current, anything new) is
+// skipped: nothing says the point is a live gauge that went quiet.
+function offlineStatus(c: string | undefined): OfflineGauge['status'] | null {
+  if (c === 'out_of_service') return 'out_of_service';
+  if (c === 'obs_not_current') return 'stale';
+  return null;
+}
 
+/**
+ * The national snapshot from NWPS's /gauges list. Points without a current
+ * observed category stay off the map and out of `counts`, but the ones that
+ * have gone dark are listed in `offline`, forecast and all: a gauge often
+ * fails at the flood peak, and the flood report must be able to say "the
+ * gauge beside you is offline" rather than skip to a farther one reading
+ * normal.
+ */
+export function buildRiversSnapshot(raw: NwpsGauge[], now = Date.now()): RiversResponse {
   const counts: Record<FloodCat, number> = {
     major: 0,
     moderate: 0,
@@ -121,12 +147,29 @@ async function fetchRivers(): Promise<RiversResponse> {
     none: 0,
   };
   const gauges: RiverGauge[] = [];
+  const offline: OfflineGauge[] = [];
 
   for (const g of raw) {
     if (!Number.isFinite(g.latitude) || !Number.isFinite(g.longitude)) continue;
     const obs = g.status?.observed;
     const cat = normalizeCat(obs?.floodCategory);
-    if (!cat) continue; // drop stale/offline/uncategorized
+    if (!cat) {
+      // Off the map and out of the counts either way; dark gauges are listed.
+      const status = offlineStatus(obs?.floodCategory);
+      if (status) {
+        offline.push({
+          lid: g.lid,
+          name: g.name,
+          lat: round4(g.latitude),
+          lon: round4(g.longitude),
+          state: g.state?.abbreviation ?? '',
+          status,
+          fcat: normalizeCat(g.status?.forecast?.floodCategory),
+          obsTime: typeof obs?.validTime === 'string' && obs.validTime ? obs.validTime : null,
+        });
+      }
+      continue;
+    }
     const isFlow = (obs?.primaryUnit ?? 'ft') === 'kcfs';
     gauges.push({
       lid: g.lid,
@@ -145,7 +188,17 @@ async function fetchRivers(): Promise<RiversResponse> {
     counts[cat]++;
   }
 
-  return { gauges, counts, updated: Date.now() };
+  return { gauges, counts, offline, updated: now };
+}
+
+async function fetchRivers(): Promise<RiversResponse> {
+  const res = await fetch(`${NWPS}/gauges`, {
+    headers: NWPS_HEADERS,
+    signal: AbortSignal.timeout(90_000),
+  });
+  if (!res.ok) throw new Error(`NWPS /gauges HTTP ${res.status}`);
+  const json = (await res.json()) as { gauges?: NwpsGauge[] };
+  return buildRiversSnapshot(json.gauges ?? []);
 }
 
 // Background-refreshed national snapshot. NWPS's /gauges pull is ~13 MB and has
@@ -211,7 +264,7 @@ router.get('/', (_req, res) => {
   // Snapshot not ready yet (cold start / just-deployed). Kick a background
   // refresh and tell the client to retry shortly — never block on the slow pull.
   void refreshRivers();
-  res.json({ gauges: [], counts: { ...EMPTY_COUNTS }, updated: Date.now(), warming: true });
+  res.json({ gauges: [], counts: { ...EMPTY_COUNTS }, offline: [], updated: Date.now(), warming: true });
 });
 
 // --- Per-gauge detail -------------------------------------------------------

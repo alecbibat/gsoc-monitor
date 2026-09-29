@@ -1,11 +1,14 @@
 import { useEffect } from 'react';
-import { useRiskReportStore } from './riskReportStore';
+import { useRiskReportStore, type RiskReportData } from './riskReportStore';
 import { assembleWildfireReport } from './assembleWildfire';
 import { RiskReportView } from './RiskReportView';
+import { importWithReload } from '../lib/lazyWithReload';
+import type { FeedResult, RiskFeedId } from './feedManifest';
 
-// Runs the assembly whenever a target opens; the view is a pure renderer.
+// Runs the hazard's assembly whenever a target opens; the view is a pure renderer.
 export function RiskReportHost() {
   const target = useRiskReportStore((s) => s.target);
+  const hazard = useRiskReportStore((s) => s.hazard);
   const status = useRiskReportStore((s) => s.status);
 
   useEffect(() => {
@@ -17,14 +20,30 @@ export function RiskReportHost() {
     const controller = new AbortController();
     // The cancelled flag alone has a gap: open(B) commits before A's effect
     // cleanup runs, so a resolution landing in that window could pin A's data
-    // under B's header. Identity-check the store's CURRENT target too.
-    const stillCurrent = () =>
-      !cancelled && useRiskReportStore.getState().target === target;
-    assembleWildfireReport(target, (id, result) => {
-      // Feed outcomes stream in mid-assembly; the same identity guard keeps a
-      // stale run from painting its progress under a newer target's header.
+    // under B's header. Identity-check the store's CURRENT target too — and
+    // its hazard, so a wildfire run can never paint into a flood report of
+    // the same property (or the reverse).
+    const stillCurrent = () => {
+      const s = useRiskReportStore.getState();
+      return !cancelled && s.target === target && s.hazard === hazard;
+    };
+    // Feed outcomes stream in mid-assembly; the same identity guard keeps a
+    // stale run from painting its progress under a newer target's header.
+    const onFeed = (id: RiskFeedId, result: FeedResult) => {
       if (stillCurrent()) useRiskReportStore.getState().setFeedResult(id, result);
-    }, controller.signal)
+    };
+    // The flood report's code is its own chunk, fetched only when one opens —
+    // a wildfire report never downloads it. Its body chunk is warmed here too,
+    // so the finished report doesn't wait on a second fetch.
+    // A preload that fails is harmless: the view's lazy load retries and reloads.
+    if (hazard === 'flood') import('./FloodReportBody').catch(() => {});
+    const run: Promise<RiskReportData> =
+      hazard === 'flood'
+        ? importWithReload(() => import('./assembleFlood')).then((m) =>
+            m.assembleFloodReport(target, onFeed, controller.signal)
+          )
+        : assembleWildfireReport(target, onFeed, controller.signal);
+    run
       .then((data) => { if (stillCurrent()) useRiskReportStore.getState().setData(data); })
       .catch((e) => {
         if (stillCurrent()) {
@@ -32,7 +51,7 @@ export function RiskReportHost() {
         }
       });
     return () => { cancelled = true; controller.abort(); };
-  }, [target, status]);
+  }, [target, hazard, status]);
 
   return <RiskReportView />;
 }

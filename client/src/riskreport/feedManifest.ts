@@ -1,5 +1,5 @@
-// ── Wildfire feed manifest ───────────────────────────────────────────────────
-// The canonical, ordered list of everything the wildfire assembly acquires,
+// ── Risk-report feed manifests ───────────────────────────────────────────────
+// The canonical, ordered list of everything each hazard's assembly acquires,
 // shared by the assembly (which reports each feed's outcome as it lands) and
 // the loading screen (which renders the acquisition console from it). Order
 // here is display order. `maps` is the post-fetch snapshot-render stage — it
@@ -8,7 +8,7 @@
 
 export type FeedResult = 'ok' | 'failed' | 'skipped';
 
-export interface WildfireFeedDef {
+export interface FeedDef {
   id: string;
   label: string;
   source: string;
@@ -27,10 +27,34 @@ export const WILDFIRE_FEEDS = [
   { id: 'lightning', label: 'Lightning · 24 h', source: 'BLITZORTUNG' },
   { id: 'qpf', label: 'Forecast rainfall', source: 'NOAA WPC' },
   { id: 'maps', label: 'Exposure map render', source: 'Esri · OSM' },
-] as const satisfies readonly WildfireFeedDef[];
+] as const satisfies readonly FeedDef[];
 
 export type WildfireFeedId = (typeof WILDFIRE_FEEDS)[number]['id'];
 
-export type FeedProgress = Partial<Record<WildfireFeedId, FeedResult>>;
+// `gauge-detail` waits on `gauges` (it needs the nearby list to pick which
+// forecast points to open), so it settles after it on every run. `alerts` is
+// NWS's own point lookup (the rated input); `alert-areas` is the national
+// list, for the regional map and as the fallback when the lookup fails.
+export const FLOOD_FEEDS = [
+  { id: 'alerts', label: 'Flood & surge alerts · site', source: 'NWS' },
+  { id: 'alert-areas', label: 'Flood alert areas · region', source: 'NWS' },
+  { id: 'counties', label: 'County geometry', source: 'NWS' },
+  { id: 'gauges', label: 'River gauges · 100 mi', source: 'NOAA NWPS' },
+  { id: 'gauge-detail', label: 'Gauge forecasts & impacts', source: 'NOAA NWPS' },
+  { id: 'ero', label: 'Excessive rainfall outlook', source: 'NOAA WPC' },
+  { id: 'qpf', label: 'Forecast rainfall', source: 'NOAA WPC' },
+  { id: 'fema', label: 'Flood zone · NFHL', source: 'FEMA' },
+  { id: 'precip', label: 'Recent & hourly rain', source: 'OPEN-METEO' },
+  { id: 'discharge', label: 'River discharge · 30 d', source: 'GLOFAS' },
+  { id: 'burn-scars', label: 'Burn scars', source: 'NIFC WFIGS' },
+  { id: 'daily', label: '10-day forecast', source: 'OPEN-METEO' },
+  { id: 'maps', label: 'Exposure map render', source: 'Esri · OSM' },
+] as const satisfies readonly FeedDef[];
 
-export type OnFeedResult = (id: WildfireFeedId, result: FeedResult) => void;
+export type FloodFeedId = (typeof FLOOD_FEEDS)[number]['id'];
+
+export type RiskFeedId = WildfireFeedId | FloodFeedId;
+
+export type FeedProgress = Partial<Record<RiskFeedId, FeedResult>>;
+
+export type OnFeedResult<Id extends RiskFeedId = WildfireFeedId> = (id: Id, result: FeedResult) => void;
