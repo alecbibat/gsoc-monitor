@@ -97,12 +97,18 @@ export const qpfHex = (inches: number): string => {
   return rgb ? `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` : '#4b5563';
 };
 
-/** Site rainfall chips (24/48/72 h, and 5 days when present), WPC ramp colors. */
-export function rainCells(rain: { in24?: number; in48?: number; in72?: number; in120?: number }): StripCell[] {
+/**
+ * Site rainfall chips (24/48/72 h, and 5 days when present), WPC ramp colors.
+ * `calendarDays`: the values are whole days from tomorrow, labeled as such.
+ */
+export function rainCells(
+  rain: { in24?: number; in48?: number; in72?: number; in120?: number },
+  calendarDays = false
+): StripCell[] {
   const windows: Array<[string, number | undefined]> = [
-    ['Next 24 h', rain.in24],
-    ['Next 48 h', rain.in48],
-    ['Next 72 h', rain.in72],
+    [calendarDays ? 'Tomorrow' : 'Next 24 h', rain.in24],
+    [calendarDays ? 'Next 2 days' : 'Next 48 h', rain.in48],
+    [calendarDays ? 'Next 3 days' : 'Next 72 h', rain.in72],
     ['Next 5 days', rain.in120],
   ];
   return windows

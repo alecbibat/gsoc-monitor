@@ -32,9 +32,12 @@ export const WILDFIRE_FEEDS = [
 export type WildfireFeedId = (typeof WILDFIRE_FEEDS)[number]['id'];
 
 // `gauge-detail` waits on `gauges` (it needs the nearby list to pick which
-// forecast points to open), so it settles after it on every run.
+// forecast points to open), so it settles after it on every run. `alerts` is
+// NWS's own point lookup (the rated input); `alert-areas` is the national
+// list, for the regional map and as the fallback when the lookup fails.
 export const FLOOD_FEEDS = [
-  { id: 'alerts', label: 'Flood & surge alerts', source: 'NWS' },
+  { id: 'alerts', label: 'Flood & surge alerts · site', source: 'NWS' },
+  { id: 'alert-areas', label: 'Flood alert areas · region', source: 'NWS' },
   { id: 'counties', label: 'County geometry', source: 'NWS' },
   { id: 'gauges', label: 'River gauges · 100 mi', source: 'NOAA NWPS' },
   { id: 'gauge-detail', label: 'Gauge forecasts & impacts', source: 'NOAA NWPS' },

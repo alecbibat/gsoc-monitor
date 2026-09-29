@@ -42,15 +42,20 @@ export interface FemaZoneResponse {
   atSite: FemaSiteZone | null;
   polygons: FemaZonePolygon[];
   nearestSfhaMi: number | null;
+  /** FEMA's own record cap (exceededTransferLimit): zones, possibly the nearest SFHA, may be missing. */
   truncated: boolean;
+  /** This server's vertex cap trimmed the map. The map only — distances used the full shapes. */
+  mapTrimmed?: boolean;
+  /** The envelope query failed but the point query answered: atSite stands, nothing else was checked. */
+  envelopeUnavailable?: boolean;
   updated: number;
 }
 
 export interface FloodPrecipResponse {
   timezone: string;
   utcOffsetSeconds: number;
-  daily: { time: string[]; precipIn: number[] };
-  hourly: { time: string[]; precipIn: number[]; probPct: Array<number | null> };
+  daily: { time: string[]; precipIn: Array<number | null> };
+  hourly: { time: string[]; precipIn: Array<number | null>; probPct: Array<number | null> };
   updated: number;
 }
 
@@ -81,6 +86,11 @@ const RETRY_DELAY_MS = 400;
 // A retry with less time than this left in its budget can't realistically
 // succeed — fail now rather than spend the rest of the window.
 const MIN_RETRY_MS = 2_000;
+// Hard ceiling on one upstream body. An NFHL envelope answer is normally a few
+// MB; one past this is a pathological feature set, and the parse would cost
+// several times its size in heap on a 512 MB dyno. Open-Meteo answers are
+// tens to hundreds of KB, so the same ceiling never bites them.
+const MAX_BODY_BYTES = 25 * 1024 * 1024;
 
 // `retryable` separates a blip (timeout, reset, 5xx, 429) from a request the
 // upstream will never answer (a 400 for bad parameters) — retrying the latter
@@ -109,14 +119,53 @@ function upstreamReason(body: unknown): string | null {
   return null;
 }
 
-async function fetchOnce(url: string, label: string, timeoutMs: number): Promise<unknown> {
+const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/**
+ * The body as text, refusing past `maxBytes`: a declared Content-Length over
+ * the cap fails before any of it is read, and the stream is counted as it
+ * arrives (the header can be absent, or be the compressed size). Too large is
+ * not retryable — the same query would send the same body again.
+ */
+async function readBodyCapped(res: Response, label: string, maxBytes: number): Promise<string> {
+  const tooLarge = () => new UpstreamError(`${label}: response too large (over ${maxBytes} bytes)`, false);
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await res.body?.cancel().catch(() => {});
+    throw tooLarge();
+  }
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function fetchOnce(url: string, label: string, timeoutMs: number, maxBytes: number): Promise<unknown> {
   let res: Response;
   try {
     res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(timeoutMs) });
   } catch (err) {
-    throw new UpstreamError(`${label}: ${err instanceof Error ? err.message : String(err)}`, true);
+    throw new UpstreamError(`${label}: ${errText(err)}`, true);
   }
-  const text = await res.text().catch(() => '');
+  let text = '';
+  try {
+    text = await readBodyCapped(res, label, maxBytes);
+  } catch (err) {
+    // An error body that can't be read only loses its reason — the status
+    // below still decides. A 200 whose body can't be read is the failure.
+    if (res.ok) throw err instanceof UpstreamError ? err : new UpstreamError(`${label}: ${errText(err)}`, true);
+  }
   let body: unknown;
   try {
     body = JSON.parse(text);
@@ -135,6 +184,15 @@ async function fetchOnce(url: string, label: string, timeoutMs: number): Promise
   return body;
 }
 
+export interface UpstreamOptions {
+  /** Tries in all, transient failures only (default 1). */
+  attempts?: number;
+  /** Wall-clock budget for every try and backoff together (default timeoutMs). */
+  budgetMs?: number;
+  /** Largest body accepted, in bytes (default MAX_BODY_BYTES). */
+  maxBytes?: number;
+}
+
 /**
  * GET a JSON upstream with a hard per-try timeout and up to `attempts` tries
  * (transient failures only), all inside `budgetMs`. The budget keeps the worst
@@ -145,8 +203,7 @@ export async function fetchUpstreamJson(
   url: string,
   label: string,
   timeoutMs: number,
-  attempts = 1,
-  budgetMs = timeoutMs
+  { attempts = 1, budgetMs = timeoutMs, maxBytes = MAX_BODY_BYTES }: UpstreamOptions = {}
 ): Promise<unknown> {
   const deadline = Date.now() + budgetMs;
   let lastErr: unknown;
@@ -154,7 +211,7 @@ export async function fetchUpstreamJson(
     const left = deadline - Date.now();
     if (i > 0 && left < MIN_RETRY_MS) break;
     try {
-      return await fetchOnce(url, label, Math.max(1, Math.min(timeoutMs, left)));
+      return await fetchOnce(url, label, Math.max(1, Math.min(timeoutMs, left)), maxBytes);
     } catch (err) {
       lastErr = err;
       if (err instanceof UpstreamError && !err.retryable) break;
@@ -188,6 +245,9 @@ function stringRun(v: unknown): string[] {
 
 const NFHL_ZONES = 'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query';
 const ZONE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // FIRMs change by LOMR/revision, months apart
+// An at-site-only answer (envelope failed) is a blip's result, not the map's:
+// hold it just long enough to spare FEMA a retry storm, then ask again.
+const PARTIAL_ZONE_TTL_MS = 15 * 60 * 1000;
 const FEMA_TIMEOUT_MS = 25_000; // NFHL is routinely slow; 25 s still fits the platform window
 const ENVELOPE_MI = 2;
 // ~60k vertices ≈ 1.5 MB of JSON — the most a printable report map needs.
@@ -445,7 +505,8 @@ export function nearestSfhaMi(
 // riverine AE polygon can run 100 miles upstream, and an area-of-minimal-hazard
 // X polygon is often a county-wide shape holed by every floodplain in it. The
 // report only draws the envelope, so each ring is clipped to it first; the
-// vertex cap then drops whole polygons, farthest first.
+// vertex cap then drops whole polygons, farthest first, and thins the nearest
+// one if it alone is over the cap.
 
 const round6 = (v: number) => Math.round(v * 1e6) / 1e6;
 
@@ -521,26 +582,82 @@ export function clipRingToBox(ring: number[][], box: Box): number[][] | null {
   return out;
 }
 
+const vertexCount = (rings: number[][][]) => rings.reduce((s, r) => s + r.length, 0);
+
+// Every stride-th vertex of a closed ring, re-closed; null below a triangle.
+function thinRing(ring: number[][], stride: number): number[][] | null {
+  const pts: number[][] = [];
+  for (let i = 0; i < ring.length - 1; i += stride) pts.push(ring[i]);
+  return pts.length >= 3 ? [...pts, [pts[0][0], pts[0][1]]] : null;
+}
+
+/**
+ * Thin a polygon's closed rings to at most `maxVertices` by keeping every
+ * stride-th vertex. The stride starts at the even share (total / budget) and
+ * grows only until the largest ring fits, which is always kept; the other
+ * rings are then kept largest-first while they fit. Each thinned ring rounds
+ * up by a vertex or two, so with many rings the budget runs out before the
+ * last of them — and it is the specks (small holes and islands, invisible at
+ * the report map's scale) that go, not the shape. [] only when even the
+ * largest ring can't fit as a triangle. Survivors keep their order.
+ */
+export function thinRings(rings: number[][][], maxVertices: number): number[][][] {
+  const total = vertexCount(rings);
+  if (total <= maxVertices) return rings;
+  const bySize = rings.map((ring, i) => ({ ring, i })).sort((a, b) => b.ring.length - a.ring.length);
+  let stride = Math.ceil(total / maxVertices);
+  // Terminates: a large enough stride thins any ring below a triangle (null).
+  let largest = thinRing(bySize[0].ring, stride);
+  while (largest && largest.length > maxVertices) largest = thinRing(bySize[0].ring, ++stride);
+  if (!largest) return [];
+  const keep = new Map<number, number[][]>([[bySize[0].i, largest]]);
+  let used = largest.length;
+  for (const { ring, i } of bySize.slice(1)) {
+    const t = thinRing(ring, stride);
+    if (t && used + t.length <= maxVertices) {
+      keep.set(i, t);
+      used += t.length;
+    }
+  }
+  return rings.map((_, i) => keep.get(i)).filter((r): r is number[][] => r !== undefined);
+}
+
 /**
  * Keep polygons nearest-first until the vertex budget is spent; everything
  * farther is dropped, so what remains is complete out to some distance rather
  * than patchy. The nearest polygon (normally the site's own zone) is always
- * kept. Survivors keep their original order.
+ * kept — if it alone is over the budget it is thinned to fit (`thinned`)
+ * rather than dropped, since a map without the site's own zone would read as
+ * "no zone here". It is dropped only if nothing of it survives thinning.
+ * Survivors keep their original order.
  */
 export function capPolygonVertices<T extends { rings: number[][][]; distMi: number }>(
   items: T[],
   maxVertices = MAX_VERTICES
-): { kept: T[]; dropped: number } {
+): { kept: T[]; dropped: number; thinned: boolean } {
   const byDist = items.map((item, i) => ({ item, i })).sort((a, b) => a.item.distMi - b.item.distMi);
-  const keep = new Set<number>();
+  const keep = new Map<number, T>();
+  let thinned = false;
   let total = 0;
   for (const { item, i } of byDist) {
-    const v = item.rings.reduce((s, r) => s + r.length, 0);
-    if (keep.size > 0 && total + v > maxVertices) break;
-    keep.add(i);
+    const v = vertexCount(item.rings);
+    if (total + v > maxVertices) {
+      if (keep.size > 0) break;
+      const rings = thinRings(item.rings, maxVertices);
+      thinned = true;
+      if (!rings.length) break;
+      keep.set(i, { ...item, rings });
+      total += vertexCount(rings);
+      continue;
+    }
+    keep.set(i, item);
     total += v;
   }
-  return { kept: items.filter((_, i) => keep.has(i)), dropped: items.length - keep.size };
+  return {
+    kept: items.map((_, i) => keep.get(i)).filter((item): item is T => item !== undefined),
+    dropped: items.length - keep.size,
+    thinned,
+  };
 }
 
 /** Combine the point and envelope answers into the client's shape (minus `updated`). */
@@ -569,7 +686,7 @@ export function assembleFemaZone(
       distMi: featureDistanceMi(lat, lon, f.rings) ?? Infinity,
     });
   }
-  const { kept, dropped } = capPolygonVertices(clipped, maxVertices);
+  const { kept, dropped, thinned } = capPolygonVertices(clipped, maxVertices);
 
   return {
     // Any polygon in the envelope means the area has a digital FIRM. No polygon
@@ -578,9 +695,14 @@ export function assembleFemaZone(
     atSite,
     polygons: kept.map(({ zone, subtype, sfha, rings }) => ({ zone, subtype, sfha, rings })),
     nearestSfhaMi: nearest,
-    // exceededTransferLimit: the service stopped at its record cap, so
-    // polygons (possibly the nearest SFHA) may be missing, not just trimmed.
-    truncated: envelope.exceededTransferLimit || dropped > 0,
+    // Two different gaps, kept apart because they mean different things.
+    // truncated: FEMA stopped at its record cap, so zones — possibly the
+    // nearest SFHA — never reached us and nearestSfhaMi may be too far.
+    // mapTrimmed: we dropped or thinned polygons to bound the payload; the
+    // distance above was measured on every shape FEMA sent, so only the
+    // drawing is affected.
+    truncated: envelope.exceededTransferLimit,
+    ...(dropped > 0 || thinned ? { mapTrimmed: true } : {}),
   };
 }
 
@@ -598,10 +720,9 @@ function nfhlUrl(params: Record<string, string>): string {
 export async function fetchFemaZone(lat: number, lon: number): Promise<FemaZoneResponse> {
   const box = envelopeAround(lat, lon);
   const common = { inSR: '4326', spatialRel: 'esriSpatialRelIntersects' };
-  // Both or nothing: without the point answer atSite would falsely read "no
-  // mapped zone", and without the envelope nearestSfhaMi would falsely read
-  // "none nearby".
-  const [pointJson, envJson] = await Promise.all([
+  // Parsed inside each settled promise, so an Esri error body (HTTP 200 +
+  // { error }) fails its own query like a timeout or an oversized answer does.
+  const [pointR, envR] = await Promise.allSettled([
     fetchUpstreamJson(
       nfhlUrl({
         ...common,
@@ -612,7 +733,7 @@ export async function fetchFemaZone(lat: number, lon: number): Promise<FemaZoneR
       }),
       'FEMA NFHL point',
       FEMA_TIMEOUT_MS
-    ),
+    ).then(parseNfhlQuery),
     fetchUpstreamJson(
       nfhlUrl({
         ...common,
@@ -626,18 +747,39 @@ export async function fetchFemaZone(lat: number, lon: number): Promise<FemaZoneR
       }),
       'FEMA NFHL envelope',
       FEMA_TIMEOUT_MS
-    ),
+    ).then(parseNfhlQuery),
   ]);
+  // No point answer, no report: atSite would falsely read "no mapped zone".
+  if (pointR.status === 'rejected') throw pointR.reason;
+  if (envR.status === 'fulfilled') {
+    return { ...assembleFemaZone(lat, lon, pointR.value, envR.value, box), updated: Date.now() };
+  }
+  // The envelope is the slow, heavy query and the one that times out. The
+  // point answer is still the report's headline, so serve it alone and say
+  // the rest was not checked — an empty map must not read as "no SFHA
+  // nearby". Only a zone at the point proves the area is mapped, though:
+  // with neither a zone nor an envelope, coverage itself is unknown.
+  const atSite = pickSiteZone(pointR.value.features);
+  if (atSite === null) throw envR.reason;
+  console.warn(`[flood] NFHL envelope failed for ${lat},${lon}; serving the at-site zone only:`, errText(envR.reason));
   return {
-    ...assembleFemaZone(lat, lon, parseNfhlQuery(pointJson), parseNfhlQuery(envJson), box),
+    covered: true,
+    atSite,
+    polygons: [],
+    nearestSfhaMi: null,
+    truncated: false,
+    envelopeUnavailable: true,
     updated: Date.now(),
   };
 }
 
 // ── Precipitation at the site (Open-Meteo) ────────────────────────────────────
 // Modelled, not gauged: past_days=7 gives the antecedent-rain signal (wet
-// ground floods faster) and forecast_days=3 the timing of what's coming. The
-// report labels it as model output.
+// ground floods faster) and forecast_days=6 (today + 5 days) the timing of
+// what's coming — the client sums the hourly series into next-24/48/72 h and
+// 5-day totals. 7 past + 6 forecast days stays inside Open-Meteo's two weeks
+// per call; past that, one request is billed as several. The report labels it
+// as model output.
 
 const PRECIP_TTL_MS = 30 * 60 * 1000;
 const PRECIP_TIMEOUT_MS = 15_000;
@@ -674,16 +816,18 @@ export function normalizePrecip(json: unknown): Omit<FloodPrecipResponse, 'updat
   return {
     timezone: typeof j.timezone === 'string' && j.timezone ? j.timezone : 'UTC',
     utcOffsetSeconds: finiteOrNull(j.utc_offset_seconds) ?? 0,
+    // A missing hour/day is a model gap and stays null: a hole is not a dry
+    // hour, and a 0 here would quietly shrink every total that spans it. The
+    // client declines any window with a gap in it rather than under-report
+    // the rain. Past-hour probability is null for the same reason — "no
+    // forecast was made" must not read as a 0% chance.
     daily: {
       time: dTime.slice(0, dLen),
-      // A missing hour/day is a model gap; the client sums these, so 0 keeps
-      // totals computable. Past-hour probability stays null — "no forecast
-      // was made" must not read as a 0% chance.
-      precipIn: dSum.slice(0, dLen).map((v) => finiteOrNull(v) ?? 0),
+      precipIn: dSum.slice(0, dLen).map(finiteOrNull),
     },
     hourly: {
       time: hTime.slice(0, hLen),
-      precipIn: hSum.slice(0, hLen).map((v) => finiteOrNull(v) ?? 0),
+      precipIn: hSum.slice(0, hLen).map(finiteOrNull),
       probPct: hProb ? hProb.slice(0, hLen).map(finiteOrNull) : new Array<number | null>(hLen).fill(null),
     },
   };
@@ -694,10 +838,13 @@ export async function fetchFloodPrecip(lat: number, lon: number): Promise<FloodP
     'https://api.open-meteo.com/v1/forecast' +
     `?latitude=${lat}&longitude=${lon}` +
     '&hourly=precipitation,precipitation_probability&daily=precipitation_sum' +
-    '&past_days=7&forecast_days=3&precipitation_unit=inch&timezone=auto';
+    '&past_days=7&forecast_days=6&precipitation_unit=inch&timezone=auto';
   // One quick retry: Open-Meteo blips are usually single requests, and the
   // report fans out many calls at once.
-  const json = await fetchUpstreamJson(url, 'Open-Meteo precip', PRECIP_TIMEOUT_MS, 2, PRECIP_BUDGET_MS);
+  const json = await fetchUpstreamJson(url, 'Open-Meteo precip', PRECIP_TIMEOUT_MS, {
+    attempts: 2,
+    budgetMs: PRECIP_BUDGET_MS,
+  });
   return { ...normalizePrecip(json), updated: Date.now() };
 }
 
@@ -728,8 +875,35 @@ const CLIMATE_ROUTE_WAIT_MS = 20_000;
 // report for that cell.
 const CLIMATE_BACKOFF_MS = 15 * 60 * 1000;
 
-/** Snap to the GloFAS 0.05° grid so nearby sites share one cached call. */
-export const snapToGlofasGrid = (v: number): number => Math.round(v * 20) / 20;
+// GloFAS v4 on Open-Meteo is a 0.05° grid whose cell CENTRES sit at odd
+// multiples of 0.025° (rows -59.975…89.975; 7200 columns from -180.025).
+// Rounding to a multiple of 0.05 lands on a cell CORNER, where Open-Meteo's
+// nearest-cell lookup is a float tie-break between four cells — most of the
+// time a neighbour of the one holding the site. Snapping to the centre of the
+// containing cell makes the lookup unambiguous, and nearby sites still share
+// one cached call (and one stored threshold fit).
+const GLOFAS_LAT_MIN = -59.975;
+const GLOFAS_LAT_MAX = 89.975;
+
+const glofasCellCentre = (v: number): number => Number((Math.floor(v * 20) / 20 + 0.025).toFixed(3));
+
+/** Centre latitude of the GloFAS cell holding `lat`, clamped to the grid's rows. */
+export const snapToGlofasLat = (lat: number): number =>
+  Math.min(GLOFAS_LAT_MAX, Math.max(GLOFAS_LAT_MIN, glofasCellCentre(lat)));
+
+/**
+ * Centre longitude of the GloFAS cell holding `lon`. The grid's first column
+ * is centred at -180.025, i.e. it spans 179.95…180; that cell comes back as
+ * 179.975 — the same column (Open-Meteo wraps the column index on a global
+ * grid) but inside the API's ±180 range, which would reject -180.025. ±180 is
+ * one meridian and, like every cell edge, belongs to the cell east of it.
+ */
+export function snapToGlofasLon(lon: number): number {
+  // Wrap only when needed: the modulo arithmetic can nudge an in-range value
+  // across a cell edge.
+  const w = lon >= -180 && lon < 180 ? lon : ((((lon + 180) % 360) + 360) % 360) - 180;
+  return glofasCellCentre(w);
+}
 
 type DischargeDaily = Record<string, unknown> & { time?: unknown };
 
@@ -893,14 +1067,27 @@ router.get('/zone', async (req, res) => {
   // a few dozen metres wide — so only near-identical pins share a cache entry.
   const lat = Math.round(p.lat * 1e4) / 1e4;
   const lon = Math.round(p.lon * 1e4) / 1e4;
+  const key = `flood-zone:${lat},${lon}`;
   try {
-    const data = await cache.getOrFetch<FemaZoneResponse>(
-      `flood-zone:${lat},${lon}`,
+    // Cached as the serialized answer, not the object: up to MAX_VERTICES
+    // coordinates as nested arrays hold ~3× their JSON size in heap, and a
+    // week of entries sits on a 512 MB dyno. Serializing once also spares
+    // every repeat report a multi-MB JSON.stringify (same as ./alerts).
+    let partial = false;
+    const body = await cache.getOrFetch<Buffer>(
+      key,
       ZONE_TTL_MS,
-      () => fetchFemaZone(lat, lon),
+      async () => {
+        const zone = await fetchFemaZone(lat, lon);
+        partial = zone.envelopeUnavailable === true;
+        return Buffer.from(JSON.stringify(zone));
+      },
       { staleOnError: true }
     );
-    res.json(data);
+    // getOrFetch stored it for the full week; re-store a partial answer with
+    // the short TTL so the next report retries the envelope.
+    if (partial) cache.set(key, body, PARTIAL_ZONE_TTL_MS);
+    res.type('application/json').send(body);
   } catch (err) {
     console.error('FEMA flood zone route error', err);
     res.status(502).json({ error: 'FEMA flood zone unavailable' });
@@ -937,7 +1124,7 @@ router.get('/discharge', async (req, res) => {
     return;
   }
   try {
-    res.json(await getFloodDischarge(snapToGlofasGrid(p.lat), snapToGlofasGrid(p.lon)));
+    res.json(await getFloodDischarge(snapToGlofasLat(p.lat), snapToGlofasLon(p.lon)));
   } catch (err) {
     console.error('River discharge route error', err);
     res.status(502).json({ error: 'River discharge forecast unavailable' });

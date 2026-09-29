@@ -33,6 +33,30 @@ async function queryLayer(day: number, params: Record<string, string>): Promise<
 }
 
 /**
+ * A WPC time attribute → epoch ms: ArcGIS date fields arrive as epoch ms,
+ * text fields as "2026-09-29 12:00:00" (UTC) or ISO. undefined when unreadable.
+ */
+export function eroTimeMs(v: unknown): number | undefined {
+  if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v < 1e11 ? v * 1000 : v;
+  if (typeof v !== 'string' || !v.trim()) return undefined;
+  const t = v.trim();
+  const iso = /[zZ]|[+-]\d{2}:?\d{2}$/.test(t) ? t.replace(' ', 'T') : `${t.replace(' ', 'T')}Z`;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+/** The day's period start from any containing feature (start_time, else valid_time). */
+function startOf(j: EsriQueryResponse): number | undefined {
+  for (const f of j.features ?? []) {
+    const a = f.attributes ?? {};
+    const key = Object.keys(a).find((k) => k.toLowerCase() === 'start_time') ?? Object.keys(a).find((k) => k.toLowerCase() === 'valid_time');
+    const ms = key ? eroTimeMs(a[key]) : undefined;
+    if (ms !== undefined) return ms;
+  }
+  return undefined;
+}
+
+/**
  * Highest category among features; throws when features exist but none
  * parses — an unreadable outlook is an outage, not "no risk".
  */
@@ -56,7 +80,10 @@ function categoryOf(day: number, j: EsriQueryResponse): EroCategory {
  * All-or-nothing: any day failing fails the feed, so a partial outlook never
  * reads as a quiet one.
  */
-export async function fetchEroSiteDays(lat: number, lon: number): Promise<{ day: number; category: EroCategory }[]> {
+export async function fetchEroSiteDays(
+  lat: number,
+  lon: number
+): Promise<{ day: number; category: EroCategory; startMs?: number }[]> {
   const point = {
     geometry: `${lon.toFixed(4)},${lat.toFixed(4)}`,
     geometryType: 'esriGeometryPoint',
@@ -64,7 +91,12 @@ export async function fetchEroSiteDays(lat: number, lon: number): Promise<{ day:
     returnGeometry: 'false',
   };
   return Promise.all(
-    ERO_DAYS.map(async (day) => ({ day, category: categoryOf(day, await queryLayer(day, point)) }))
+    ERO_DAYS.map(async (day) => {
+      const j = await queryLayer(day, point);
+      // The period start is only readable when the site sits in a risk area —
+      // exactly when it matters; the caller estimates it otherwise.
+      return { day, category: categoryOf(day, j), startMs: startOf(j) };
+    })
   );
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useRiskReportStore } from './riskReportStore';
 import { RISK_LEVELS, RISK_RINGS, type WildfireReportData } from './riskTypes';
@@ -10,8 +10,11 @@ import { LEGEND_ITEMS as LIGHTNING_LEGEND } from '../layers/lightning/lightningP
 import { coverageCaption, lightningCountPrefix } from './lightningSection';
 import { usePrintStyles } from '../lib/printStyles';
 import { RiskScanLoading } from './RiskScanLoading';
-import { FloodReportBody } from './FloodReportBody';
 import type { RiskHazard } from './riskReportStore';
+
+// Lazy: the flood body (and its charts) is only downloaded when a flood
+// report opens; the host warms this chunk while the feeds load.
+const FloodReportBody = lazy(() => import('./FloodReportBody').then((m) => ({ default: m.FloodReportBody })));
 
 const HAZARD_LABEL: Record<RiskHazard, string> = { wildfire: 'Wildfire', flood: 'Flood' };
 
@@ -411,7 +414,13 @@ export function RiskReportView() {
             <td className="block">
               {status === 'ready' && settled && data && (
                 <div className="watch-ledger-in">
-                  {data.hazard === 'flood' ? <FloodReportBody data={data} /> : <ReportBody data={data} />}
+                  {data.hazard === 'flood' ? (
+                    <Suspense fallback={null}>
+                      <FloodReportBody data={data} />
+                    </Suspense>
+                  ) : (
+                    <ReportBody data={data} />
+                  )}
                 </div>
               )}
             </td>

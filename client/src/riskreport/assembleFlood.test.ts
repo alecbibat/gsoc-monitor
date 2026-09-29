@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SnapshotOptions } from './mapSnapshot';
 import type { FemaZoneResponse, FloodDischargeResponse, FloodPrecipResponse, RiverDetail, RiverGauge, RiversResponse } from '../types';
 import type { RawAlert } from '../layers/alerts/alertsData';
-import type { WildfiresResult } from '../layers/wildfires/wildfiresData';
+import type { BurnScarInput } from './floodSections';
 import type { EroPolygon } from './floodTypes';
 
 // The flood assembly end to end with the network mocked and the REAL section
@@ -17,14 +17,15 @@ const calls: string[] = [];
 // ── Mutable feed fixtures, reset per test ────────────────────────────────────
 type Feed<T> = () => Promise<T>;
 const feeds: {
+  siteAlerts: Feed<RawAlert[]>;
   alerts: Feed<RawAlert[]>;
   rivers: Feed<RiversResponse>;
   riverDetail: (lid: string) => Promise<RiverDetail>;
   zone: Feed<FemaZoneResponse>;
   precip: Feed<FloodPrecipResponse>;
   discharge: Feed<FloodDischargeResponse>;
-  wildfires: Feed<WildfiresResult>;
-  eroDays: Feed<{ day: number; category: 0 | 1 | 2 | 3 | 4 }[]>;
+  scars: Feed<{ scars: BurnScarInput[]; truncated: boolean }>;
+  eroDays: Feed<{ day: number; category: 0 | 1 | 2 | 3 | 4; startMs?: number }[]>;
   eroPolys: Feed<EroPolygon[]>;
   qpf: Feed<{ in24: number; in48: number; in72: number; in120: number }>;
   daily: Feed<import('../types').DailyForecast>;
@@ -45,15 +46,21 @@ vi.mock('../api/client', () => ({
   },
 }));
 vi.mock('../layers/alerts/alertsData', () => ({
+  fetchAlertsAtPoint: () => { calls.push('siteAlerts'); return feeds.siteAlerts(); },
   fetchActiveAlerts: () => { calls.push('alerts'); return feeds.alerts(); },
   loadCounties: async () => { calls.push('counties'); return new Map(); },
-  // Alerts in these fixtures always carry their own polygon.
+  // An alert's own polygon when it has one; otherwise its SAME counties,
+  // which in these fixtures always paint a county-sized box around TARGET.
   alertRings: (a: RawAlert) =>
-    a.geometry && a.geometry.type === 'Polygon' ? [a.geometry.coordinates[0] as number[][]] : [],
+    a.geometry && a.geometry.type === 'Polygon'
+      ? [a.geometry.coordinates[0] as number[][]]
+      : a.properties.geocode?.SAME?.length
+        ? [box(TARGET.lat, TARGET.lon, 0.5)]
+        : [],
   alertColorHex: () => '#1769ff',
 }));
-vi.mock('../layers/wildfires/wildfiresData', () => ({
-  fetchWildfires: () => { calls.push('wildfires'); return feeds.wildfires(); },
+vi.mock('./burnScars', () => ({
+  fetchBurnScars: () => { calls.push('scars'); return feeds.scars(); },
 }));
 vi.mock('./wpcQpf', () => ({
   fetchWpcSiteQpf: () => { calls.push('qpf'); return feeds.qpf(); },
@@ -80,6 +87,8 @@ const { assembleFloodReport, inUsCoverage } = await import('./assembleFlood');
 const TARGET = { key: 'k', name: 'River Lodge', lat: 38.6, lon: -90.2 };
 // Paris — outside every US-only flood product.
 const ABROAD = { key: 'p', name: 'Paris Office', lat: 48.85, lon: 2.35 };
+// Guam — NWS territory the county outlines don't cover.
+const GUAM = { key: 'g', name: 'Tumon Hotel', lat: 13.51, lon: 144.8 };
 
 const box = (lat: number, lon: number, d: number): number[][] => [
   [lon - d, lat - d], [lon + d, lat - d], [lon + d, lat + d], [lon - d, lat + d], [lon - d, lat - d],
@@ -114,14 +123,14 @@ function detail(lid: string): RiverDetail {
 }
 
 function precip(): FloodPrecipResponse {
-  // 7 past days + today + 2 forecast days, hourly, UTC-5.
+  // 7 past days + today + 5 forecast days, hourly, UTC-5.
   const offset = -5 * 3600;
   const localNow = new Date(Date.now() + offset * 1000);
   const today = localNow.toISOString().slice(0, 10);
   const start = Date.parse(`${today}T00:00:00Z`) - 7 * 86_400_000;
-  const daily = { time: [] as string[], precipIn: [] as number[] };
-  const hourly = { time: [] as string[], precipIn: [] as number[], probPct: [] as Array<number | null> };
-  for (let d = 0; d < 10; d++) {
+  const daily = { time: [] as string[], precipIn: [] as Array<number | null> };
+  const hourly = { time: [] as string[], precipIn: [] as Array<number | null>, probPct: [] as Array<number | null> };
+  for (let d = 0; d < 13; d++) {
     const date = new Date(start + d * 86_400_000).toISOString().slice(0, 10);
     daily.time.push(date);
     daily.precipIn.push(d < 7 ? 0.6 : 0.2);
@@ -182,6 +191,7 @@ const zoneAE: FemaZoneResponse = {
 
 function flashFloodWarning(): RawAlert {
   return {
+    id: 'ffw-1',
     geometry: { type: 'Polygon', coordinates: [box(TARGET.lat, TARGET.lon, 0.2)] },
     properties: {
       event: 'Flash Flood Warning',
@@ -194,9 +204,21 @@ function flashFloodWarning(): RawAlert {
   };
 }
 
+// Issued for the coastal zones of the property's county: no polygon, SAME codes only.
+function stormSurgeWarning(): RawAlert {
+  return {
+    id: 'ssw-1',
+    geometry: null,
+    properties: { event: 'Storm Surge Warning', severity: 'Extreme', geocode: { SAME: ['029189'] } },
+  };
+}
+
 function healthyFeeds() {
+  // NWS's own point lookup: only the Flash Flood Warning covers the site.
+  feeds.siteAlerts = async () => [flashFloodWarning()];
   feeds.alerts = async () => [
     flashFloodWarning(),
+    stormSurgeWarning(),
     // A river Flood Warning upstream — not at the site, but on the hero map.
     { geometry: { type: 'Polygon', coordinates: [box(TARGET.lat + 0.6, TARGET.lon, 0.1)] }, properties: { event: 'Flood Warning', severity: 'Moderate' } },
     // Not flood-family — ignored entirely.
@@ -216,9 +238,9 @@ function healthyFeeds() {
   feeds.zone = async () => zoneAE;
   feeds.precip = async () => precip();
   feeds.discharge = async () => discharge(1500);
-  feeds.wildfires = async () => ({
-    fires: [], error: null, perimeterError: null,
-    perimeters: [{ name: 'Creek Fire', acres: 4200, rings: [box(TARGET.lat + 0.05, TARGET.lon, 0.01)] }],
+  feeds.scars = async () => ({
+    scars: [{ name: 'Creek Fire', acres: 4200, rings: [box(TARGET.lat + 0.05, TARGET.lon, 0.01)] }],
+    truncated: false,
   });
   feeds.eroDays = async () => [
     { day: 1, category: 2 }, { day: 2, category: 1 }, { day: 3, category: 0 }, { day: 4, category: 0 }, { day: 5, category: 0 },
@@ -312,7 +334,7 @@ describe('assembleFloodReport — US property with an active flood', () => {
     expect(ids.at(-1)).toBe('maps');
     expect(events.every(([, r]) => r === 'ok')).toBe(true);
     expect(ids.sort()).toEqual([
-      'alerts', 'burn-scars', 'counties', 'daily', 'discharge', 'ero', 'fema', 'gauge-detail',
+      'alert-areas', 'alerts', 'burn-scars', 'counties', 'daily', 'discharge', 'ero', 'fema', 'gauge-detail',
       'gauges', 'maps', 'precip', 'qpf',
     ]);
   });
@@ -327,6 +349,19 @@ describe('assembleFloodReport — US property with an active flood', () => {
     expect(snapshots).toHaveLength(4);
     for (const s of snapshots) expect(() => s.draw!(fakeCtx(), fakeProj)).not.toThrow();
   });
+
+  it("uses NWS's point lookup as the site test: a county-wide coastal product it doesn't place is not at the property", async () => {
+    const { report } = await run();
+    expect(report.alerts.map((a) => a.event)).toEqual(['Flash Flood Warning']);
+    expect(report.overall.drivers.some((d) => d.includes('Storm Surge'))).toBe(false);
+  });
+
+  it('caps the model at Guarded, naming the NWPS gauge whose NWS forecast leads', async () => {
+    const { report } = await run();
+    const sec = report.sections.find((s) => s.id === 'discharge')!;
+    expect(sec.level).toBe('guarded');
+    expect(sec.drivers.some((d) => d.includes('official NWS river forecast at Gauge NEAR1'))).toBe(true);
+  });
 });
 
 describe('assembleFloodReport — honesty when feeds are down or out of coverage', () => {
@@ -334,7 +369,7 @@ describe('assembleFloodReport — honesty when feeds are down or out of coverage
     feeds.rivers = async () => ({ gauges: [], counts: {} as never, updated: Date.now() });
     const { report, events } = await run(ABROAD);
     expect(inUsCoverage(ABROAD.lat, ABROAD.lon)).toBe(false);
-    for (const c of ['alerts', 'counties', 'floodZone', 'wildfires', 'eroDays', 'eroPolys', 'qpf']) {
+    for (const c of ['siteAlerts', 'alerts', 'counties', 'floodZone', 'scars', 'eroDays', 'eroPolys', 'qpf']) {
       expect(calls).not.toContain(c);
     }
     const byId = Object.fromEntries(report.sections.map((s) => [s.id, s]));
@@ -342,14 +377,76 @@ describe('assembleFloodReport — honesty when feeds are down or out of coverage
       expect(byId[id].unavailable, id).toBeTruthy();
     }
     expect(byId.alerts.countLabel).toBeUndefined();
-    // Rain falls back to the global daily forecast, labeled as such.
-    expect(report.rain.source).toBe('daily');
+    // Rain comes from the global hourly point forecast, from now on.
+    expect(report.rain.source).toBe('hourly');
+    expect(report.rain.in24).toBeCloseTo(0.24, 5);
     expect(byId.rain.unavailable).toBeUndefined();
     expect(byId.discharge.unavailable).toBeUndefined();
     expect(report.maps.qpf).toBeNull();
     const skippedIds = events.filter(([, r]) => r === 'skipped').map(([id]) => id).sort();
-    expect(skippedIds).toEqual(['alerts', 'burn-scars', 'counties', 'ero', 'fema', 'gauge-detail', 'qpf']);
+    expect(skippedIds).toEqual(['alert-areas', 'alerts', 'burn-scars', 'counties', 'ero', 'fema', 'gauge-detail', 'qpf']);
     expect(report.overall.drivers.at(-1)).toMatch(/^⚠ \d+ feeds? unavailable/);
+  });
+
+  it('with the point lookup down, places alerts by polygon and county — a county-placed coastal warning is capped and says so', async () => {
+    feeds.siteAlerts = down('point lookup');
+    const { report, events } = await run();
+    expect(events).toContainEqual(['alerts', 'failed']);
+    const surge = report.alerts.find((a) => a.event === 'Storm Surge Warning')!;
+    expect(surge.countyResolved).toBe(true);
+    expect(surge.level).toBe('elevated');
+    const ffw = report.alerts.find((a) => a.event === 'Flash Flood Warning')!;
+    expect(ffw.countyResolved).toBeUndefined(); // its own polygon placed it
+    const sec = report.sections.find((s) => s.id === 'alerts')!;
+    expect(sec.level).toBe('critical');
+    expect(sec.drivers.some((d) => d.includes("coastal zones of the property's county"))).toBe(true);
+    expect(sec.drivers.some((d) => d.startsWith('⚠ NWS point lookup unavailable'))).toBe(true);
+  });
+
+  it('in a territory the county outlines miss, a down point lookup is unavailable, never "None active"', async () => {
+    feeds.siteAlerts = down('point lookup');
+    feeds.alerts = async () => [{
+      geometry: null,
+      properties: { event: 'Typhoon Warning', severity: 'Extreme', geocode: { SAME: ['066010'] } },
+    }];
+    feeds.rivers = async () => ({ gauges: [], counts: {} as never, updated: Date.now() });
+    const { report } = await run(GUAM);
+    const sec = report.sections.find((s) => s.id === 'alerts')!;
+    expect(sec.unavailable).toMatch(/point lookup unavailable/);
+  });
+
+  it('both alert paths down → unavailable with both reasons', async () => {
+    feeds.siteAlerts = down('point lookup');
+    feeds.alerts = down('national list');
+    const { report } = await run();
+    expect(report.sections.find((s) => s.id === 'alerts')!.unavailable).toMatch(/point lookup down.*national list down/);
+  });
+
+  it('a gauge beside the property that stopped reporting is a caveat that reaches the bottom line', async () => {
+    const healthy = await feeds.rivers();
+    feeds.rivers = async () => ({
+      ...healthy,
+      offline: [{
+        lid: 'DARK1', name: 'Dark Creek at Town', lat: TARGET.lat + 0.01, lon: TARGET.lon, state: 'MO',
+        status: 'out_of_service', fcat: null, obsTime: '2026-09-29T10:15:00Z',
+      }],
+    });
+    const { report } = await run();
+    const caveat = '⚠ Dark Creek at Town (0.7 mi) out of service since 10:15 UTC Sep 29 — river state there unknown';
+    expect(report.sections.find((s) => s.id === 'gauges')!.drivers).toContain(caveat);
+    expect(report.overall.drivers).toContain(caveat);
+    expect(report.gauges.find((g) => g.lid === 'DARK1')?.offline).toBe('out_of_service');
+    // Dark gauges have no observed state to count.
+    expect(report.ringCounts.find((r) => r.ring.id === 'immediate')!.gauges).toBe(0);
+  });
+
+  it('with no forecasting gauge within 25 mi the model is not capped, and says it is model-only', async () => {
+    const healthy = await feeds.rivers();
+    feeds.rivers = async () => ({ ...healthy, gauges: healthy.gauges.map((g) => ({ ...g, fcat: null })) });
+    const { report } = await run();
+    const sec = report.sections.find((s) => s.id === 'discharge')!;
+    expect(sec.level).toBe('elevated');
+    expect(sec.drivers).toContain('Model only — no official NWS river forecast within 25 mi');
   });
 
   it('a warming NWPS snapshot is unavailable, not "no gauges", and skips the detail stage', async () => {
@@ -363,22 +460,41 @@ describe('assembleFloodReport — honesty when feeds are down or out of coverage
   });
 
   it('a failed perimeter query makes burn scars unavailable and DOWN', async () => {
-    feeds.wildfires = async () => ({ fires: [], perimeters: [], error: null, perimeterError: 'HTTP 500' });
+    feeds.scars = down('HTTP 500');
     const { report, events } = await run();
     expect(report.sections.find((s) => s.id === 'burn-scars')!.unavailable).toMatch(/HTTP 500/);
     expect(events).toContainEqual(['burn-scars', 'failed']);
   });
 
-  it('WPC down falls back to the daily forecast for rain and marks the outlook unavailable', async () => {
+  it('a truncated perimeter list with no scar nearby is unavailable, not "none within 10 mi"', async () => {
+    feeds.scars = async () => ({ scars: [], truncated: true });
+    const { report } = await run();
+    expect(report.sections.find((s) => s.id === 'burn-scars')!.unavailable).toMatch(/record cap/);
+    expect(report.burnScars.unavailable).toMatch(/record cap/);
+  });
+
+  it('WPC down: rain from the hourly forecast, the outlook unavailable', async () => {
     feeds.qpf = down('WPC');
     feeds.eroDays = down('ERO');
     feeds.eroPolys = down('ERO map');
     const { report, events } = await run();
-    expect(report.rain.source).toBe('daily');
+    expect(report.rain.source).toBe('hourly');
     expect(report.sections.find((s) => s.id === 'ero')!.unavailable).toMatch(/ERO down/);
     expect(report.maps.ero).toBeNull();
     expect(events).toContainEqual(['qpf', 'failed']);
     expect(events).toContainEqual(['ero', 'failed']);
+  });
+
+  it('WPC and the hourly feed down: whole days from tomorrow, never today', async () => {
+    feeds.qpf = down('WPC');
+    feeds.precip = down('precip');
+    const { report } = await run();
+    expect(report.rain.source).toBe('daily');
+    // daily() gives 0.4 in every day; tomorrow alone is 0.4, not today + tomorrow.
+    expect(report.rain.in24).toBeCloseTo(0.4, 5);
+    expect(report.rain.in72).toBeCloseTo(1.2, 5);
+    const sec = report.sections.find((s) => s.id === 'rain')!;
+    expect(sec.drivers.join(' ')).toMatch(/tomorrow/);
   });
 
   it('gauge detail failures degrade to no cards, reported DOWN', async () => {
@@ -387,6 +503,14 @@ describe('assembleFloodReport — honesty when feeds are down or out of coverage
     expect(report.gaugeDetails).toEqual([]);
     expect(events).toContainEqual(['gauge-detail', 'failed']);
     expect(report.sections.find((s) => s.id === 'gauges')!.unavailable).toBeUndefined();
+  });
+
+  it('a discharge answer without return-period thresholds reads DOWN in the console', async () => {
+    feeds.discharge = async () => ({ ...discharge(1500), thresholds: null });
+    const { report, events } = await run();
+    expect(events).toContainEqual(['discharge', 'failed']);
+    expect(report.sections.find((s) => s.id === 'discharge')!.unavailable).toMatch(/thresholds unavailable/);
+    expect(report.discharge).not.toBeNull(); // the chart still draws
   });
 
   it('throws when every feed is down', async () => {

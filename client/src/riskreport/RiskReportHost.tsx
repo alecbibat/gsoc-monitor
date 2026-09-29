@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
-import { useRiskReportStore } from './riskReportStore';
+import { useRiskReportStore, type RiskReportData } from './riskReportStore';
 import { assembleWildfireReport } from './assembleWildfire';
-import { assembleFloodReport } from './assembleFlood';
 import { RiskReportView } from './RiskReportView';
 import type { FeedResult, RiskFeedId } from './feedManifest';
 
@@ -32,9 +31,13 @@ export function RiskReportHost() {
     const onFeed = (id: RiskFeedId, result: FeedResult) => {
       if (stillCurrent()) useRiskReportStore.getState().setFeedResult(id, result);
     };
-    const run =
+    // The flood report's code is its own chunk, fetched only when one opens —
+    // a wildfire report never downloads it. Its body chunk is warmed here too,
+    // so the finished report doesn't wait on a second fetch.
+    if (hazard === 'flood') void import('./FloodReportBody');
+    const run: Promise<RiskReportData> =
       hazard === 'flood'
-        ? assembleFloodReport(target, onFeed, controller.signal)
+        ? import('./assembleFlood').then((m) => m.assembleFloodReport(target, onFeed, controller.signal))
         : assembleWildfireReport(target, onFeed, controller.signal);
     run
       .then((data) => { if (stillCurrent()) useRiskReportStore.getState().setData(data); })

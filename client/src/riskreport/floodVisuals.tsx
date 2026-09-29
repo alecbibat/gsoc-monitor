@@ -1,7 +1,7 @@
 import type { FloodCat, FloodDischargeResponse, RiverSeriesPoint, RiverThreshold } from '../types';
 import { CAT, catColor, catLabel, catSev } from '../layers/rivers/riverMeta';
 import { ERO_META, type EroCategory, type EroDay, type FloodReportData, type GaugeDetailView } from './floodTypes';
-import { BURN_SCAR_STYLE, FEMA_CLASS_ORDER, FEMA_CLASS_STYLE } from './floodPalette';
+import { BURN_SCAR_STYLE, FEMA_CLASS_ORDER, FEMA_CLASS_STYLE, OFFLINE_GAUGE_COLOR } from './floodPalette';
 import { RISK_LEVELS } from './riskTypes';
 import { fmtTs, qpfHex } from './reportParts';
 import { ChipStrip, shortDayDate, type LegendItem } from './reportVisuals';
@@ -187,27 +187,53 @@ export const FEMA_LEGEND: LegendItem[] = FEMA_CLASS_ORDER.slice()
     return st.hatch ? { color: st.stroke, label: st.label, hatch: true } : { color: st.fill, label: st.label };
   });
 
-/** Hero-map gauge dots, worst first — the worse of observed and NWS forecast. */
-export const GAUGE_LEGEND: LegendItem[] = (['major', 'moderate', 'minor', 'action', 'normal'] as const).map((c) => ({
-  color: CAT[c].color,
-  label: CAT[c].label,
-}));
+/** Hero-map gauge dots, worst first — the worse of observed and NWS forecast — then the non-flood states and dark gauges. */
+export const GAUGE_LEGEND: LegendItem[] = [
+  ...(['major', 'moderate', 'minor', 'action', 'normal', 'low', 'none'] as const).map((c) => ({
+    color: CAT[c].color,
+    label: CAT[c].label,
+  })),
+  { color: OFFLINE_GAUGE_COLOR, label: 'Not reporting (hollow)' },
+];
 
-/** The hatched current-season perimeters on the hero map. */
+/** A forecast point with no current reading — never a flood-category color. */
+export function OfflineChip({ status }: { status: 'out_of_service' | 'stale' }) {
+  return (
+    <span
+      className="print-color inline-flex items-center whitespace-nowrap rounded-full border px-1.5 py-px text-[9px] font-bold uppercase tracking-wider"
+      style={{ color: OFFLINE_GAUGE_COLOR, background: `${OFFLINE_GAUGE_COLOR}1f`, borderColor: `${OFFLINE_GAUGE_COLOR}66` }}
+    >
+      {status === 'out_of_service' ? 'Out of service' : 'Not reporting'}
+    </span>
+  );
+}
+
+/** The hatched perimeters of this year's fires on the hero map. */
 export const BURN_SCAR_LEGEND: LegendItem = { color: BURN_SCAR_STYLE.color, label: BURN_SCAR_STYLE.label, hatch: true };
 
 // ── Excessive Rainfall Outlook strip ─────────────────────────────────────────
 
-export function EroStrip({ days }: { days: EroDay[] }) {
+/**
+ * Day 1…5 chips labelled by the date each 12Z–12Z period starts: overnight,
+ * Day 1 is the tail of the period that began yesterday ("Tonight") and Day 2
+ * is today.
+ */
+export function EroStrip({ days, todayIso }: { days: EroDay[]; todayIso?: string }) {
   const valid = (Array.isArray(days) ? days : [])
     .filter((d) => d && Number.isInteger(d.day) && d.category in ERO_META)
     .sort((a, b) => a.day - b.day);
+  const label = (d: EroDay) => {
+    if (!d.date) return d.day === 1 ? 'Today' : `Day ${d.day}`;
+    if (todayIso && d.date < todayIso) return 'Tonight';
+    if (todayIso && d.date === todayIso) return 'Today';
+    return shortDayDate(d.date);
+  };
   return (
     <ChipStrip
       cells={valid.map((d) => {
         const meta = ERO_META[d.category as EroCategory];
         return {
-          top: d.day === 1 ? 'Today' : d.date ? shortDayDate(d.date) : `Day ${d.day}`,
+          top: label(d),
           hex: meta.hex,
           bottom: meta.label,
           emph: d.category >= 2,
@@ -294,8 +320,9 @@ export function HydrographChart({ detail }: { detail: GaugeDetailView }) {
   // The forecast joins the last observation; a gauge with no observed window
   // draws the forecast on its own.
   const fcPath = fc.length ? (obs.length ? [obs[obs.length - 1], ...fc] : fc) : [];
-  // "now" = the latest observation (NWPS observes every 15–60 min).
-  const nowT = obs.length ? obs[obs.length - 1].t : fc[0].t;
+  // "now" = the latest observation (NWPS observes every 15–60 min). A
+  // forecast-only point has no "now" to mark.
+  const nowT = obs.length ? obs[obs.length - 1].t : null;
 
   // Crest: NWPS's crest time, else the forecast series' own peak.
   const crestT = (() => {
@@ -322,7 +349,13 @@ export function HydrographChart({ detail }: { detail: GaugeDetailView }) {
 
   return (
     <div className="print-card overflow-x-auto rounded-lg border border-white/8 bg-white/4 p-2">
-      <svg viewBox={`0 0 ${W} ${H}`} className="print-color min-w-[520px] text-white" style={{ width: '100%' }}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="print-color min-w-[520px] text-white"
+        style={{ width: '100%' }}
+        role="img"
+        aria-label={`${detail.name || detail.lid}: observed and NWS-forecast ${(detail.primaryName || (flow ? 'flow' : 'stage')).toLowerCase()} against flood stages`}
+      >
         {/* Flood-category bands above each stage, faint — "in flood" reads as a zone */}
         {onScale.map((l, i) => {
           const top = i + 1 < onScale.length ? Y(onScale[i + 1].value) : PAD_T;
@@ -371,8 +404,12 @@ export function HydrographChart({ detail }: { detail: GaugeDetailView }) {
           </g>
         ))}
         {/* "now" marker */}
-        <line x1={X(nowT)} x2={X(nowT)} y1={PAD_T - 4} y2={H - PAD_B} stroke="currentColor" strokeOpacity={0.45} strokeWidth="1" strokeDasharray="3 3" />
-        <text x={X(nowT)} y={PAD_T - 7} textAnchor="middle" fontSize="8" fontWeight="600" fill="currentColor" fillOpacity={0.7}>now</text>
+        {nowT !== null && (
+          <>
+            <line x1={X(nowT)} x2={X(nowT)} y1={PAD_T - 4} y2={H - PAD_B} stroke="currentColor" strokeOpacity={0.45} strokeWidth="1" strokeDasharray="3 3" />
+            <text x={X(nowT)} y={PAD_T - 7} textAnchor="middle" fontSize="8" fontWeight="600" fill="currentColor" fillOpacity={0.7}>now</text>
+          </>
+        )}
         {/* Series */}
         {obs.length >= 2 && <path d={toPath(obs)} fill="none" stroke={OBS_COLOR} strokeWidth="2" strokeLinejoin="round" />}
         {obs.length === 1 && <circle cx={X(obs[0].t)} cy={Y(obs[0].v)} r="2.5" fill={OBS_COLOR} />}
@@ -401,6 +438,7 @@ export function HydrographChart({ detail }: { detail: GaugeDetailView }) {
         {fc.length > 0 && <span className="flex items-center gap-1.5"><LineSwatch dash="4 2" /> NWS forecast</span>}
         {lines.length > 0 && <span>colored lines = flood stages</span>}
         {showCrest && <span>▼ forecast crest</span>}
+        <span className="text-white/35">dates in your time zone</span>
         {offScale.length > 0 && (
           <span className="text-white/40">
             Above chart: {offScale.map((l) => `${CAT[l.cat].short} ${trimNum(l.value)} ${unit}`).join(' · ')}
@@ -539,7 +577,7 @@ export function GaugeDetailCard({ detail }: { detail: GaugeDetailView }) {
                   className={`flex gap-2 rounded px-2 py-1 text-[11px] leading-snug ${hit ? 'print-color border-l-2 text-white/85' : 'text-white/55'}`}
                   style={hit ? { background: 'rgba(249,115,22,0.12)', borderLeftColor: '#f97316' } : undefined}
                 >
-                  <span className="w-3 shrink-0 font-bold" aria-label={hit ? 'reached' : undefined}>{hit ? '●' : ''}</span>
+                  <span className="w-3 shrink-0 font-bold" role={hit ? 'img' : undefined} aria-label={hit ? 'reached' : undefined}>{hit ? '●' : ''}</span>
                   <span className="w-14 shrink-0 font-mono font-semibold text-white/75">
                     {`${trimNum(im.stage)} ${impactUnit}`}
                   </span>
@@ -637,7 +675,13 @@ export function RainTimingChart({ hourly }: { hourly: NonNullable<FloodReportDat
 
   return (
     <div className="print-card overflow-x-auto rounded-lg border border-white/8 bg-white/4 p-2">
-      <svg viewBox={`0 0 ${W} ${H}`} className="print-color min-w-[520px] text-white" style={{ width: '100%' }}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="print-color min-w-[520px] text-white"
+        style={{ width: '100%' }}
+        role="img"
+        aria-label={`Hourly rain at the property, next ${n} hours: ${fmtIn(total)} in total`}
+      >
         {yTicks.map((v) => (
           <g key={v}>
             <line x1={PAD_L} x2={PAD_L + plotW} y1={Y(v)} y2={Y(v)} stroke="currentColor" strokeOpacity={0.08} strokeWidth="1" />
@@ -671,12 +715,15 @@ export function RainTimingChart({ hourly }: { hourly: NonNullable<FloodReportDat
             </text>
           ) : null
         )}
-        {/* Day labels under the hours */}
-        {dayStarts.map(({ t, i }) => (
-          <text key={`day-${t}`} x={PAD_L + i * slot + 2} y={H - 5} textAnchor="start" fontSize="9" fontWeight="600" fill="currentColor" fillOpacity={0.65}>
-            {dayLabel(t)}
-          </text>
-        ))}
+        {/* Day labels under the hours — the first one is dropped when the next
+            day starts too soon after it (a report run late in the evening) */}
+        {dayStarts.map(({ t, i }, k) =>
+          k === 0 && dayStarts.length > 1 && dayStarts[1].i < 7 ? null : (
+            <text key={`day-${t}`} x={PAD_L + i * slot + 2} y={H - 5} textAnchor="start" fontSize="9" fontWeight="600" fill="currentColor" fillOpacity={0.65}>
+              {dayLabel(t)}
+            </text>
+          )
+        )}
       </svg>
       <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-[9px] text-white/50">
         <span className="flex items-center gap-1.5">
@@ -875,7 +922,13 @@ export function DischargeChart({ discharge, todayIso }: { discharge: FloodDischa
 
   return (
     <div className="print-card overflow-x-auto rounded-lg border border-white/8 bg-white/4 p-2">
-      <svg viewBox={`0 0 ${W} ${H}`} className="print-color min-w-[520px] text-white" style={{ width: '100%' }}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="print-color min-w-[520px] text-white"
+        style={{ width: '100%' }}
+        role="img"
+        aria-label="GloFAS river discharge: past model flow, ensemble forecast and return-period flows"
+      >
         {yTicks.map((v) => (
           <g key={v}>
             <line x1={PAD_L} x2={PAD_L + plotW} y1={Y(v)} y2={Y(v)} stroke="currentColor" strokeOpacity={0.08} strokeWidth="1" />

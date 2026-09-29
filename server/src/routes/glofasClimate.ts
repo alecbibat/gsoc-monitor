@@ -103,6 +103,10 @@ interface StoredClimate {
   savedAt: number;
 }
 
+// lat/lon are the cell's centre (flood.ts snapToGlofasLat/Lon). Rows stored
+// when cells were keyed by a corner (a multiple of 0.05°) can never match a
+// centre key, so they are simply never read again — no version bump needed to
+// stop a fit for a neighbouring cell being served as this one's.
 const snapshotKey = (lat: number, lon: number) => `glofas-rp:v1:${lat},${lon}`;
 
 /**

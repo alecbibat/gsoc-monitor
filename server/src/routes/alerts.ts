@@ -15,6 +15,52 @@ const router = Router();
 // (HTTP 403), so this sends the same NWS_USER_AGENT the other NOAA routes use.
 const NWS_ALERTS_URL = 'https://api.weather.gov/alerts/active';
 
+// ?point=lat,lon — the alerts in force AT one location, resolved by NWS's own
+// forecast-zone/county/polygon logic. The flood report uses it to say whether
+// a flood alert covers the property itself, which the national feed can't
+// answer without re-implementing NWS's zone geometry. Validated strictly: the
+// value is spliced into the upstream URL and used as a cache key, and NWS
+// itself only takes up to 4 decimals.
+const POINT_RE = /^-?\d{1,2}(\.\d{1,4})?,-?\d{1,3}(\.\d{1,4})?$/;
+
+function readPoint(raw: unknown): string | null {
+  if (typeof raw !== 'string' || !POINT_RE.test(raw)) return null;
+  const [lat, lon] = raw.split(',').map(Number);
+  return Math.abs(lat) <= 90 && Math.abs(lon) <= 180 ? raw : null;
+}
+
+router.get('/active', async (req, res, next) => {
+  if (req.query.point === undefined) {
+    next();
+    return;
+  }
+  const point = readPoint(req.query.point);
+  if (!point) {
+    res.status(400).json({ error: 'point must be "lat,lon" in decimal degrees (up to 4 decimals)' });
+    return;
+  }
+  try {
+    const body = await cache.getOrFetch<Buffer>(
+      `alerts:point:${point}`,
+      60_000,
+      async () => {
+        const upstream = await fetch(`${NWS_ALERTS_URL}?point=${point}`, {
+          headers: { 'User-Agent': config.nwsUserAgent, Accept: 'application/geo+json' },
+          // One location's alerts are a small document; fail over sooner than
+          // the national feed does.
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!upstream.ok) throw new Error(`NWS point alerts error: ${upstream.status}`);
+        return Buffer.from(JSON.stringify(await upstream.json()));
+      },
+      { staleOnError: true }
+    );
+    res.type('application/json').send(body);
+  } catch (err) {
+    res.status(502).json({ error: 'Failed to fetch NWS alerts', detail: String(err) });
+  }
+});
+
 router.get('/active', async (_req, res) => {
   try {
     const body = await cache.getOrFetch<Buffer>(

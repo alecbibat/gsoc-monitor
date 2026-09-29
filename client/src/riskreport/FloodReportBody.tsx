@@ -7,7 +7,7 @@ import { BlockTitle, LevelBadge, QpfRampLegend, Section, SourcesFooter, StatCard
 import { ChipStrip, ForecastStrip, LegendRow, MapFigure } from './reportVisuals';
 import {
   BURN_SCAR_LEGEND, CatChip, DischargeChart, ERO_LEGEND, EroStrip, FEMA_LEGEND, GAUGE_LEGEND, GaugeDetailCard,
-  RainLedger, RainTimingChart, dischargeHasData, fmtGaugeValue,
+  OfflineChip, RainLedger, RainTimingChart, dischargeHasData, fmtGaugeValue,
 } from './floodVisuals';
 
 // ── Property flood risk report: body ─────────────────────────────────────────
@@ -160,17 +160,24 @@ export function FloodReportBody({ data }: { data: FloodReportData }) {
     return { value: meta.label, sub: `${meta.prob} probability · WPC Day 1` };
   })();
 
+  const dailyRain = data.rain.source === 'daily';
   const rainStat = (() => {
     if (data.rain.unavailable) return { value: '—', sub: data.rain.unavailable };
-    const src = data.rain.source === 'wpc' ? 'WPC' : data.rain.source === 'daily' ? 'daily forecast' : undefined;
+    const src =
+      data.rain.source === 'wpc' ? 'WPC' : data.rain.source === 'hourly' ? 'Open-Meteo hourly' : dailyRain ? 'daily forecast' : undefined;
     return {
       value: fmtIn(data.rain.in72),
-      sub: [data.rain.in24 !== undefined ? `24 h ${fmtIn(data.rain.in24)}` : null, src].filter(Boolean).join(' · ') || undefined,
+      sub:
+        [data.rain.in24 !== undefined ? `${dailyRain ? 'tomorrow' : '24 h'} ${fmtIn(data.rain.in24)}` : null, src]
+          .filter(Boolean)
+          .join(' · ') || undefined,
     };
   })();
 
   const pastStat = (() => {
     if (data.antecedent.unavailable) return { value: '—', sub: data.antecedent.unavailable };
+    // A series with gaps leaves the totals uncomputed — the section says why.
+    if (antecedentS?.unavailable) return { value: '—', sub: antecedentS.unavailable };
     return {
       value: fmtIn(data.antecedent.past7dIn),
       sub: `modelled${data.antecedent.past72In !== undefined ? ` · past 72 h ${fmtIn(data.antecedent.past72In)}` : ''}`,
@@ -186,12 +193,15 @@ export function FloodReportBody({ data }: { data: FloodReportData }) {
   const rainSourceNote =
     data.rain.source === 'wpc'
       ? 'Chips are the WPC forecast at the property point — the same product the map renders'
-      : data.rain.source === 'daily'
-        ? 'Chips approximated from the daily point forecast (calendar days) — may differ from the WPC map'
-        : null;
+      : data.rain.source === 'hourly'
+        ? "Chips are the Open-Meteo hourly point forecast, summed from the current hour — WPC's forecast covers the lower 48 only (or is unavailable)"
+        : dailyRain
+          ? "Chips are whole calendar days from tomorrow (daily point forecast) — today's rain so far is under Recent rainfall"
+          : null;
 
-  // The property's local date: the hourly feed's first hour is "now" there.
-  const localToday = data.hourlyRain?.times?.[0]?.slice(0, 10);
+  // The property's local date: the last antecedent day is today there, and
+  // the hourly feed's first bar is the current hour.
+  const localToday = data.antecedent.days?.at(-1)?.date ?? data.hourlyRain?.times?.[0]?.slice(0, 10);
   // GloFAS days are UTC days (the section builder is handed the UTC date too).
   const dischargeToday = data.generatedAt.slice(0, 10);
 
@@ -246,7 +256,7 @@ export function FloodReportBody({ data }: { data: FloodReportData }) {
       <div className="space-y-2">
         <MapFigure
           src={data.maps.exposure}
-          caption={`Exposure map — analysis rings (${RISK_RINGS.map((r) => r.label).join(' / ')}), NWPS gauges colored by flood category (worse of observed and NWS forecast), flood-alert areas in view, current-season burn scars (hatched)`}
+          caption={`Exposure map — analysis rings (${RISK_RINGS.map((r) => r.label).join(' / ')}), NWPS gauges colored by flood category (worse of observed and NWS forecast; hollow = not reporting), flood-alert areas in view, this year's burn scars (hatched)`}
         />
         {data.maps.exposure && <LegendRow items={[...GAUGE_LEGEND, BURN_SCAR_LEGEND]} />}
       </div>
@@ -257,7 +267,7 @@ export function FloodReportBody({ data }: { data: FloodReportData }) {
         <StatCard label="Flood alerts at site" value={alertStat.value} sub={alertStat.sub} />
         <StatCard label="Nearest gauge in flood" value={gaugeStat.value} sub={gaugeStat.sub} />
         <StatCard label="Excessive rainfall today" value={eroStat.value} sub={eroStat.sub} />
-        <StatCard label="Rain next 72 h" value={rainStat.value} sub={rainStat.sub} />
+        <StatCard label={dailyRain ? 'Rain next 3 days' : 'Rain next 72 h'} value={rainStat.value} sub={rainStat.sub} />
         <StatCard label="Past 7 days" value={pastStat.value} sub={pastStat.sub} />
       </div>
 
@@ -297,7 +307,7 @@ export function FloodReportBody({ data }: { data: FloodReportData }) {
         {gaugesDown ? (
           <Note>{`Gauge counts unknown — ${gaugesDown}`}</Note>
         ) : (
-          <Note>NWPS forecast points per ring · Action = observed near flood stage · In flood = observed minor flood or worse · Forecast flood = NWS forecast minor or worse</Note>
+          <Note>Reporting NWPS forecast points per ring · Action = observed near flood stage · In flood = observed minor flood or worse · Forecast flood = NWS forecast minor or worse</Note>
         )}
       </section>
 
@@ -341,7 +351,7 @@ export function FloodReportBody({ data }: { data: FloodReportData }) {
                         <td className="px-3 py-1.5 text-right tabular-nums">{`${num(g.distanceMi, 1)} mi`}</td>
                         <td className="px-3 py-1.5">
                           <span className="flex flex-wrap items-center gap-2">
-                            <CatChip cat={g.cat} />
+                            {g.offline ? <OfflineChip status={g.offline} /> : <CatChip cat={g.cat} />}
                             <span className="tabular-nums text-white/60">
                               {g.stage === null ? '—' : `${fmtGaugeValue(g.stage, g.unit)} ${g.unit}`}
                             </span>
@@ -353,7 +363,7 @@ export function FloodReportBody({ data }: { data: FloodReportData }) {
                   </tbody>
                 </table>
               </div>
-              <Note>Every NWPS forecast point within 25 mi (nearest 10), plus any farther point within 100 mi that is in or forecast to reach flood stage</Note>
+              <Note>NWPS forecast points within 25 mi (those in flood first, up to 10), plus up to 6 farther points within 100 mi that are in or forecast to reach flood stage</Note>
             </>
           )}
         </Section>
@@ -390,7 +400,7 @@ export function FloodReportBody({ data }: { data: FloodReportData }) {
         <>
           <Section section={eroS}>
             <div className="space-y-2">
-              {data.ero.days && data.ero.days.length > 0 && <EroStrip days={data.ero.days} />}
+              {data.ero.days && data.ero.days.length > 0 && <EroStrip days={data.ero.days} todayIso={localToday} />}
               <MapFigure src={data.maps.ero} caption={eroMapCaption} />
               {data.maps.ero && <LegendRow items={ERO_LEGEND} />}
             </div>
@@ -409,7 +419,7 @@ export function FloodReportBody({ data }: { data: FloodReportData }) {
         <>
           <Section section={rainS}>
             <div className="space-y-2">
-              {rainCells(data.rain).length > 0 && <ChipStrip cells={rainCells(data.rain)} />}
+              {rainCells(data.rain, dailyRain).length > 0 && <ChipStrip cells={rainCells(data.rain, dailyRain)} />}
               <MapFigure src={data.maps.qpf} caption={qpfMapCaption} />
               {data.maps.qpf && <QpfRampLegend />}
               {rainSourceNote && <Note>{rainSourceNote}</Note>}

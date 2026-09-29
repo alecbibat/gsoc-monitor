@@ -27,7 +27,7 @@ export const FLOOD_SECTION_TITLES: Record<FloodSectionId, string> = {
   alerts: 'Flood alerts at site',
   gauges: 'River gauges (NWPS)',
   ero: 'Excessive Rainfall Outlook (WPC)',
-  rain: 'Forecast rainfall (WPC)',
+  rain: 'Forecast rainfall',
   antecedent: 'Recent rainfall (past 7 days)',
   fema: 'FEMA flood zone',
   'burn-scars': 'Burn scars (post-fire runoff)',
@@ -242,6 +242,21 @@ export function toFloodAlertHit(a: RawAlert): FloodAlertHit | null {
   };
 }
 
+// Products NWS issues for COASTAL zones only. Inside a coastal county the
+// inland zones are left out on purpose — so when only the county outline
+// placed one at the property, it can't carry its full level.
+const COASTAL_ONLY_RE = /storm surge|tsunami|coastal flood|lakeshore flood/i;
+
+/**
+ * A hit placed only by the property's county outline (NWS's own point lookup
+ * was unavailable). Coastal-only products are capped at Elevated: the county
+ * matched, the warned coastal zone may well not.
+ */
+export function countyResolvedHit(hit: FloodAlertHit): FloodAlertHit {
+  const capped = COASTAL_ONLY_RE.test(hit.event) && rank(hit.level) > rank('elevated');
+  return { ...hit, countyResolved: true, level: capped ? 'elevated' : hit.level };
+}
+
 /** Worst matrix level first, then NWS severity; stable otherwise. Returns a copy. */
 export function sortFloodAlerts(hits: FloodAlertHit[]): FloodAlertHit[] {
   return hits
@@ -249,7 +264,16 @@ export function sortFloodAlerts(hits: FloodAlertHit[]): FloodAlertHit[] {
     .sort((x, y) => rank(y.level) - rank(x.level) || severityRank(y.severity) - severityRank(x.severity));
 }
 
-export function buildFloodAlertsSection(hits: FloodAlertHit[], opts: { countiesDown: boolean }): SectionResult {
+/**
+ * @param opts.countiesDown County shapes failed to load (fallback matching can't see county-based alerts).
+ * @param opts.pointLookupDown NWS's point lookup failed, so hits were matched by polygon / county outline.
+ * @param opts.unplaceable With the point lookup down, zone alerts for this property's area can't be
+ *   placed at all (US territories: the county outlines don't cover them).
+ */
+export function buildFloodAlertsSection(
+  hits: FloodAlertHit[],
+  opts: { countiesDown: boolean; pointLookupDown?: boolean; unplaceable?: boolean }
+): SectionResult {
   const sorted = sortFloodAlerts(hits);
   const level = sorted.reduce<RiskLevel>((acc, h) => maxLevel(acc, h.level), 'low');
   // One driver per distinct alert: a county under two river Flood Warnings
@@ -257,7 +281,12 @@ export function buildFloodAlertsSection(hits: FloodAlertHit[], opts: { countiesD
   const drivers: string[] = [];
   const counts = new Map<string, number>();
   for (const h of sorted) {
-    const d = `${h.event} in effect at the property${h.tags.includes('Flash Flood Emergency') ? ' — Flash Flood Emergency' : ''}`;
+    const where = h.countyResolved
+      ? COASTAL_ONLY_RE.test(h.event)
+        ? " issued for coastal zones of the property's county — confirm the site is in the warned zone"
+        : " issued for the property's county — confirm the site is in the warned area"
+      : ' in effect at the property';
+    const d = `${h.event}${where}${h.tags.includes('Flash Flood Emergency') ? ' — Flash Flood Emergency' : ''}`;
     if (!counts.has(d)) drivers.push(d);
     counts.set(d, (counts.get(d) ?? 0) + 1);
   }
@@ -273,6 +302,14 @@ export function buildFloodAlertsSection(hits: FloodAlertHit[], opts: { countiesD
     // This section answers "how many, or none" — frame it that way.
     countLabel: hits.length === 0 ? 'None active' : `${hits.length} active`,
   };
+  if (opts.pointLookupDown && opts.unplaceable && hits.length === 0) {
+    section.unavailable =
+      "NWS point lookup unavailable, and this area's zone-based alerts can't be placed from county outlines — flood alerts could not be checked";
+    return section;
+  }
+  if (opts.pointLookupDown) {
+    drivers.push('⚠ NWS point lookup unavailable — alerts matched by polygon and county outline, so a zone-based alert may not cover the site itself');
+  }
   if (opts.countiesDown) {
     if (hits.length === 0) {
       // County shapes down = zone/county alerts (Flood Watches, river Flood
@@ -315,8 +352,21 @@ export function gaugeStateLabel(c: FloodCat): string {
   return meta.label.charAt(0) + meta.label.slice(1).toLowerCase();
 }
 
+/** "14:05 UTC Sep 29" — the report is shared across time zones. */
+function fmtUtcShort(iso: string | null | undefined): string | null {
+  const ms = typeof iso === 'string' ? Date.parse(iso) : NaN;
+  if (!Number.isFinite(ms) || new Date(ms).getUTCFullYear() < 1900) return null;
+  const d = new Date(ms);
+  return `${d.toISOString().slice(11, 16)} UTC ${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
+}
+
 /** "Action stage now, forecast Minor flood" — the forecast only when it differs. */
-function gaugeStateText(g: Pick<GaugeHit, 'cat' | 'fcat'>, now: boolean): string {
+function gaugeStateText(g: Pick<GaugeHit, 'cat' | 'fcat' | 'offline'>, now: boolean): string {
+  if (g.offline) {
+    // No current reading: only the NWS forecast (if still current) speaks.
+    const base = g.offline === 'out_of_service' ? 'out of service' : 'not reporting';
+    return g.fcat && catSev(g.fcat) >= 1 ? `${base}, NWS forecast ${gaugeStateLabel(g.fcat)}` : base;
+  }
   let s = `${gaugeStateLabel(g.cat)}${now ? ' now' : ''}`;
   if (g.fcat && g.fcat !== g.cat) {
     const f = gaugeStateLabel(g.fcat);
@@ -365,13 +415,34 @@ export function buildGaugeSection(gauges: GaugeHit[], opts: { inUs: boolean }): 
     );
   }
 
-  if (level === 'low') {
-    const nearest = all[0];
+  // Gauges that have gone dark near the property — common at a flood's peak
+  // (power, telemetry, debris). One that still has a flooding NWS forecast
+  // already speaks through the table above; the rest are a caveat that
+  // reaches the bottom line whatever the level.
+  const dark = all.filter((g) => g.offline && g.distanceMi <= 25 && catSev(gaugeTier(g)) < 2);
+  for (const g of dark.slice(0, 3)) {
+    const since = fmtUtcShort(g.obsTime);
     drivers.push(
-      nearest.distanceMi <= 25
-        ? `Nearest NWPS gauge: ${nearest.name} (${fmtMi(nearest.distanceMi)} mi) — ${gaugeStateText(nearest, false)}`
-        : `No NWPS gauge within 25 mi — nearest: ${nearest.name} (${fmtMi(nearest.distanceMi)} mi), ${gaugeStateText(nearest, false)}`
+      `⚠ ${g.name} (${fmtMi(g.distanceMi)} mi) ${g.offline === 'out_of_service' ? 'out of service' : 'not reporting'}` +
+        `${since ? ` since ${since}` : ''} — river state there unknown`
     );
+  }
+  if (dark.length > 3) drivers.push(`⚠ +${dark.length - 3} more NWPS gauges within 25 mi not reporting`);
+
+  if (level === 'low') {
+    const reporting = all.filter((g) => !g.offline);
+    const nearest = reporting[0];
+    // Never call a farther gauge "nearest" while a closer one is dark.
+    const qualifier = nearest && all[0] !== nearest ? 'Nearest reporting' : 'Nearest';
+    if (nearest) {
+      drivers.push(
+        nearest.distanceMi <= 25
+          ? `${qualifier} NWPS gauge: ${nearest.name} (${fmtMi(nearest.distanceMi)} mi) — ${gaugeStateText(nearest, false)}`
+          : `No reporting NWPS gauge within 25 mi — nearest: ${nearest.name} (${fmtMi(nearest.distanceMi)} mi), ${gaugeStateText(nearest, false)}`
+      );
+    } else {
+      drivers.push('⚠ Every NWPS gauge within 100 mi is out of service or not reporting');
+    }
   }
 
   const flooding25 = scored.filter((s) => s.sev >= 2 && s.g.distanceMi <= 25).length;
@@ -389,7 +460,10 @@ export function buildGaugeSection(gauges: GaugeHit[], opts: { inUs: boolean }): 
  * state; de-duplicated, at most `max`.
  */
 export function pickDetailGauges(gauges: GaugeHit[], max = 3): GaugeHit[] {
-  const near = within(gauges, 25).sort((a, b) => a.distanceMi - b.distanceMi);
+  // A dark gauge is only worth a card while it still carries an NWS forecast.
+  const near = within(gauges, 25)
+    .filter((g) => !g.offline || catSev(g.fcat) >= 1)
+    .sort((a, b) => a.distanceMi - b.distanceMi);
   const flooding = near
     .filter((g) => catSev(gaugeTier(g)) >= 2)
     .sort((a, b) => catSev(gaugeTier(b)) - catSev(gaugeTier(a)) || a.distanceMi - b.distanceMi);
@@ -408,8 +482,10 @@ export function pickDetailGauges(gauges: GaugeHit[], max = 3): GaugeHit[] {
 
 /** Ring exposure table: gauges inside each fixed ring and their observed / forecast states. */
 export function floodRingCounts(gauges: GaugeHit[]): FloodRingCount[] {
+  // Reporting gauges only: a dark gauge has no observed state to count.
+  const reporting = gauges.filter((g) => !g.offline);
   return RISK_RINGS.map((ring) => {
-    const inside = within(gauges, ring.miles);
+    const inside = within(reporting, ring.miles);
     return {
       ring,
       gauges: inside.length,
@@ -471,20 +547,31 @@ function eroDayLevel(day: number, c: EroCategory): RiskLevel {
   return c >= 3 ? 'guarded' : 'low';
 }
 
-export function buildEroSection(days: EroDay[]): SectionResult {
+/** A day whose period starts this soon is "the coming day", whatever WPC numbers it. */
+const IMMINENT_MS = 12 * 3600_000;
+
+/**
+ * @param nowMs Overnight (after WPC's 01Z Day 1 update, before the ~09Z roll)
+ *   Day 1 is only the rest of the night and "Day 2" is the coming daytime; a
+ *   day whose period starts within 12 h of now is weighed with the Day 1 rule.
+ */
+export function buildEroSection(days: EroDay[], nowMs: number): SectionResult {
   const valid = (days ?? [])
     .filter((d) => d && Number.isInteger(d.day) && d.day >= 1 && d.day <= 5 && d.category in ERO_META)
     .sort((a, b) => a.day - b.day);
   if (valid.length === 0) return unavailableSection('ero', 'Excessive Rainfall Outlook returned no days for the property');
 
+  const imminent = (d: EroDay) => d.day === 1 || (isNum(d.startMs) && d.startMs - nowMs <= IMMINENT_MS);
   let level: RiskLevel = 'low';
   const drivers: string[] = [];
   for (const d of valid) {
-    level = maxLevel(level, eroDayLevel(d.day, d.category));
+    level = maxLevel(level, eroDayLevel(imminent(d) ? 1 : d.day, d.category));
     if (d.category === 0) continue;
     const meta = ERO_META[d.category];
     if (d.day === 1) {
       drivers.push(`WPC Day 1: ${meta.label} risk (${meta.prob}) of excessive rainfall at the property`);
+    } else if (imminent(d)) {
+      drivers.push(`WPC Day ${d.day}, starting within 12 h: ${meta.label} risk (${meta.prob}) of excessive rainfall at the property`);
     } else {
       // Later days still print when they move no level ("driver only").
       const date = fmtEroDate(d.date);
@@ -527,51 +614,71 @@ function sumWindow(values: unknown[], from: number, to: number): number | null {
   return round2(s);
 }
 
+/** 'YYYY-MM-DDTHH:MM' shifted by whole hours (local ISO strings, read as-is). */
+function shiftHour(t: string, hours: number): string {
+  const ms = Date.parse(`${t.slice(0, 16)}Z`);
+  return Number.isFinite(ms) ? new Date(ms + hours * 3600_000).toISOString().slice(0, 16) : t;
+}
+
 /**
  * Open-Meteo's modelled past 7 days + forecast at the property → the
- * antecedent totals and the next-48 h timing window. Hourly times are local
- * ('YYYY-MM-DDTHH:MM'), so "now" is placed in the property's local time via
- * the response's own UTC offset. Never throws: a field that can't be computed
- * from what arrived is omitted rather than guessed.
+ * antecedent totals, the rain still to come, and the next-48 h timing window.
+ * Hourly times are local ('YYYY-MM-DDTHH:MM') and each value is the PRECEDING
+ * hour's sum, so the entry stamped with the current hour is the last complete
+ * past hour and everything after it is still to come — no hour is counted as
+ * both fallen and forecast. "Now" is placed in the property's local time via
+ * the response's own UTC offset. Never throws: a total that can't be computed
+ * from what arrived (a hole in the series, a window past its end) is omitted
+ * rather than guessed.
  */
 export function summarizePrecip(
   resp: FloodPrecipResponse,
   nowMs: number
 ): {
   antecedent: AntecedentSummary;
+  /** Rain still to come, from the current hour: 24 / 48 / 72 h and 5 days. */
+  forecast: { in24?: number; in48?: number; in72?: number; in120?: number };
   hourlyNext48: { times: string[]; precipIn: number[]; probPct: (number | null)[] } | null;
 } {
   const antecedent: AntecedentSummary = {};
+  const forecast: { in24?: number; in48?: number; in72?: number; in120?: number } = {};
   let hourlyNext48: { times: string[]; precipIn: number[]; probPct: (number | null)[] } | null = null;
   const off = isNum(resp?.utcOffsetSeconds) ? resp.utcOffsetSeconds : 0;
   const localNow = new Date(nowMs + off * 1000);
-  if (Number.isNaN(localNow.getTime())) return { antecedent, hourlyNext48 };
+  if (Number.isNaN(localNow.getTime())) return { antecedent, forecast, hourlyNext48 };
   const localIso = localNow.toISOString();
   const curHour = localIso.slice(0, 13);
   const today = localIso.slice(0, 10);
 
-  // ── Hourly: past 24 / 72 h and the next 48 h ──────────────────────────────
+  // ── Hourly: past 24 / 72 h, what's still to come, the next 48 h ──────────
   const times = Array.isArray(resp?.hourly?.time) ? resp.hourly.time : [];
   const precip: unknown[] = Array.isArray(resp?.hourly?.precipIn) ? resp.hourly.precipIn : [];
   const prob: unknown[] = Array.isArray(resp?.hourly?.probPct) ? resp.hourly.probPct : [];
-  // First hour at or after now; -1 = the series ends before now (stale), so
-  // neither the past windows nor the timing chart can be placed.
-  const idx = times.findIndex((t) => typeof t === 'string' && t.slice(0, 13) >= curHour);
-  if (idx >= 0) {
-    // Hours strictly before the current hour (the current one is still falling).
-    const p24 = sumWindow(precip, idx - 24, idx);
-    const p72 = sumWindow(precip, idx - 72, idx);
+  // First entry at or after the current hour; -1 = the series ends before
+  // now (stale), so nothing can be placed.
+  const c = times.findIndex((t) => typeof t === 'string' && t.slice(0, 13) >= curHour);
+  if (c >= 0) {
+    // The entry stamped with the current hour closes the last complete hour.
+    const split = times[c].slice(0, 13) === curHour ? c + 1 : c;
+    const p24 = sumWindow(precip, split - 24, split);
+    const p72 = sumWindow(precip, split - 72, split);
     if (p24 !== null) antecedent.past24In = p24;
     if (p72 !== null) antecedent.past72In = p72;
 
-    const n = Math.min(48, times.length - idx, precip.length - idx);
+    for (const [key, h] of [['in24', 24], ['in48', 48], ['in72', 72], ['in120', 120]] as const) {
+      const v = sumWindow(precip, split, split + h);
+      if (v !== null) forecast[key] = v;
+    }
+
+    const n = Math.min(48, times.length - split, precip.length - split);
     if (n >= 6) {
       hourlyNext48 = {
-        times: times.slice(idx, idx + n),
+        // Labelled by the hour each bar covers (its entry is stamped at the end).
+        times: times.slice(split, split + n).map((t) => shiftHour(t, -1)),
         // Chart only (thresholds never read these): a missing hour draws as no bar.
-        precipIn: precip.slice(idx, idx + n).map((v) => (isNum(v) ? v : 0)),
+        precipIn: precip.slice(split, split + n).map((v) => (isNum(v) ? v : 0)),
         probPct: Array.from({ length: n }, (_, i) => {
-          const v = prob[idx + i];
+          const v = prob[split + i];
           return isNum(v) ? v : null;
         }),
       };
@@ -592,7 +699,7 @@ export function summarizePrecip(
     }
     if (days.length > 0) antecedent.days = days;
   }
-  return { antecedent, hourlyNext48 };
+  return { antecedent, forecast, hourlyNext48 };
 }
 
 /** Recent (modelled) rainfall — how wet the ground already is. */
@@ -625,11 +732,31 @@ export function buildAntecedentSection(a: AntecedentSummary): SectionResult {
 
 // Forecast windows, in the order drivers name them. The 5-day total only
 // reaches Guarded: a week-out total spread over days is a heads-up, not a flood.
-const RAIN_WINDOWS: { key: 'in24' | 'in72' | 'in120'; label: string; high: number; elevated: number; guarded: number }[] = [
-  { key: 'in24', label: 'next 24 h', high: 4, elevated: 2, guarded: 1 },
-  { key: 'in72', label: 'next 72 h', high: 6, elevated: 4, guarded: 2 },
-  { key: 'in120', label: 'next 5 days', high: Infinity, elevated: Infinity, guarded: 3 },
+const RAIN_WINDOWS: { key: 'in24' | 'in72' | 'in120'; high: number; elevated: number; guarded: number }[] = [
+  { key: 'in24', high: 4, elevated: 2, guarded: 1 },
+  { key: 'in72', high: 6, elevated: 4, guarded: 2 },
+  { key: 'in120', high: Infinity, elevated: Infinity, guarded: 3 },
 ];
+
+type RainKey = 'in24' | 'in48' | 'in72' | 'in120';
+
+/**
+ * Window wording per source. The daily fallback is whole calendar days from
+ * TOMORROW (today's total already holds rain that has fallen), so it can't
+ * claim "next 24 h".
+ */
+function rainWindowLabel(key: RainKey, source: FloodReportData['rain']['source']): string {
+  if (source === 'daily') {
+    return { in24: 'tomorrow', in48: 'next 2 days from tomorrow', in72: 'next 3 days from tomorrow', in120: 'next 5 days from tomorrow' }[key];
+  }
+  return { in24: 'next 24 h', in48: 'next 48 h', in72: 'next 72 h', in120: 'next 5 days' }[key];
+}
+
+const RAIN_SOURCE_SUFFIX: Record<NonNullable<FloodReportData['rain']['source']>, string> = {
+  wpc: ' (WPC)',
+  hourly: ' (Open-Meteo hourly forecast)',
+  daily: ' (daily forecast)',
+};
 
 /** Wet-ground escalator input: past 72 h ≥ 2 in or past 7 days ≥ 3 in. */
 function wetGround(a: AntecedentSummary | null): string | null {
@@ -639,9 +766,13 @@ function wetGround(a: AntecedentSummary | null): string | null {
   return null;
 }
 
+/**
+ * @param antecedent null = recent rainfall unavailable: the wet-ground
+ *   escalator can't be applied, and a non-Low level says so.
+ */
 export function buildRainSection(rain: FloodReportData['rain'], antecedent: AntecedentSummary | null): SectionResult {
   if (rain.unavailable) return unavailableSection('rain', rain.unavailable);
-  const src = rain.source === 'daily' ? ' (daily point forecast)' : rain.source === 'wpc' ? ' (WPC)' : '';
+  const src = rain.source ? RAIN_SOURCE_SUFFIX[rain.source] : '';
   const scored = RAIN_WINDOWS.flatMap((w) => {
     const v = rain[w.key];
     if (!isNum(v)) return [];
@@ -657,25 +788,27 @@ export function buildRainSection(rain: FloodReportData['rain'], antecedent: Ante
   if (level !== 'low') {
     // Name the window(s) that set the level.
     for (const s of scored) {
-      if (s.level === level) drivers.push(`${fmtInches(s.v)} in forecast in the ${s.w.label}${src}`);
+      if (s.level === level) drivers.push(`${fmtInches(s.v)} in forecast ${rain.source === 'daily' ? 'for' : 'in'} the ${rainWindowLabel(s.w.key, rain.source)}${src}`);
     }
     // Wet-ground escalator: the same rain on saturated soil floods sooner.
     const wet = wetGround(antecedent);
     if (wet) {
       level = bumpLevel(level);
       drivers.push(`Ground already wet (${wet}) — rainfall level raised one step`);
+    } else if (antecedent === null) {
+      drivers.push('⚠ Recent rainfall unavailable — if the ground is already wet this level would be one step higher');
     }
   } else {
     // Context at Low: the longest window we have.
-    const ctx =
-      [['in72', 'next 72 h'], ['in48', 'next 48 h'], ['in24', 'next 24 h']] as const;
-    const hit = ctx.find(([k]) => isNum(rain[k]));
-    if (hit) {
-      const v = rain[hit[0]] as number;
+    const ctx: RainKey[] = ['in72', 'in48', 'in24'];
+    const key = ctx.find((k) => isNum(rain[k]));
+    if (key) {
+      const v = rain[key] as number;
+      const label = rainWindowLabel(key, rain.source);
       drivers.push(
         v >= 0.005
-          ? `${fmtInches(v)} in forecast in the ${hit[1]}${src}`
-          : `No measurable rain forecast in the ${hit[1]}${src}`
+          ? `${fmtInches(v)} in forecast ${rain.source === 'daily' ? 'for' : 'in'} the ${label}${src}`
+          : `No measurable rain forecast ${rain.source === 'daily' ? 'for' : 'in'} the ${label}${src}`
       );
     }
   }
@@ -710,9 +843,19 @@ export function describeFemaZone(z: NonNullable<FemaZoneResponse['atSite']>): Fe
         : zone === 'A99' ? `1%-annual-chance floodplain, levee under construction (${tag})`
         : `1%-annual-chance floodplain (${tag})`;
       break;
-    case 'moderate':
-      label = `0.2%-annual-chance floodplain (${zone === 'X' ? 'Zone X, shaded' : tag})`;
+    case 'moderate': {
+      const where = zone === 'X' ? 'Zone X, shaded' : tag;
+      const sub = (z.subtype ?? '').toUpperCase();
+      // Shaded X is also where FEMA puts 1% flooding it keeps outside the
+      // SFHA — shallow, small-drainage or future-conditions — say which.
+      label =
+        sub.includes('0.2 PCT') || zone !== 'X' ? `0.2%-annual-chance floodplain (${where})`
+        : sub.includes('DEPTH') ? `1%-annual-chance flooding under 1 ft deep (${where})`
+        : sub.includes('DRAINAGE') ? `1%-annual-chance flooding, drainage under 1 sq mi (${where})`
+        : sub.includes('FUTURE') ? `1%-annual-chance floodplain under future conditions (${where})`
+        : `Moderate flood hazard (${where})`;
       break;
+    }
     case 'levee':
       label = `Levee-reduced risk (${tag})`;
       break;
@@ -805,7 +948,12 @@ export function buildFemaSection(resp: FemaZoneResponse): { section: SectionResu
       drivers.push(`Nearest 1%-annual-chance floodplain ${fmtMi(nearestSfhaMi)} mi away`);
     }
   }
-  if (resp.truncated) drivers.push('⚠ FEMA zone query hit its record cap — the zone map around the property may be incomplete');
+  if (resp.truncated) {
+    drivers.push("⚠ FEMA's zone query hit its record cap — zones near the property (and the nearest-floodplain distance) may be missing");
+  }
+  if (resp.envelopeUnavailable) {
+    drivers.push('⚠ Zone map around the property unavailable — distance to the nearest floodplain not checked');
+  }
 
   return {
     section: { id: 'fema', title: FLOOD_SECTION_TITLES.fema, level, drivers, countLabel: femaCountLabel(site) },
@@ -883,29 +1031,46 @@ export function nearestBurnScar(
 
 /**
  * Is rain coming to a burn scar? any = Day 1–3 ERO ≥ Marginal or 72 h QPF ≥
- * 0.5 in; strong = Day 1–2 ERO ≥ Slight or 24 h QPF ≥ 1 in.
+ * 0.5 in; strong = Day 1–2 ERO ≥ Slight or 24 h QPF ≥ 1 in. `unknown` when
+ * neither the outlook nor a rainfall forecast is available — "no signal" is
+ * then not the same as "no rain".
  */
-export function rainSignalFrom(ero: EroDay[] | undefined, rain: FloodReportData['rain']): { any: boolean; strong: boolean } {
+export function rainSignalFrom(
+  ero: EroDay[] | undefined,
+  rain: FloodReportData['rain']
+): { any: boolean; strong: boolean; unknown: boolean } {
   const eroMax = (maxDay: number) =>
     (ero ?? []).reduce((m, d) => (d && d.day >= 1 && d.day <= maxDay ? Math.max(m, d.category) : m), 0);
   const q: FloodReportData['rain'] = rain && !rain.unavailable ? rain : {};
   const strong = eroMax(2) >= 2 || (isNum(q.in24) && q.in24 >= 1);
   const any = strong || eroMax(3) >= 1 || (isNum(q.in72) && q.in72 >= 0.5);
-  return { any, strong };
+  const unknown = !ero?.length && !isNum(q.in24) && !isNum(q.in72);
+  return { any, strong, unknown };
 }
 
 const BURN_WHY = 'burned ground sheds rain fast — flash floods and debris flows follow far smaller storms';
 
+/**
+ * @param opts.truncated The perimeter query hit its record cap — a scar near
+ *   the property may be missing, so "none within 10 mi" can't be claimed.
+ * @param opts.yearStart Early in the year: the perimeter archive restarts each
+ *   January, so last year's scars (the riskiest) are not in it.
+ */
 export function buildBurnScarSection(
   s: ReturnType<typeof nearestBurnScar>,
-  rain: { any: boolean; strong: boolean }
+  rain: { any: boolean; strong: boolean; unknown?: boolean },
+  opts: { truncated?: boolean; yearStart?: boolean } = {}
 ): SectionResult {
   const base = { id: 'burn-scars', title: FLOOD_SECTION_TITLES['burn-scars'] };
   const d = s.nearestMi;
+  const yearNote = opts.yearStart ? ["⚠ The fire-perimeter archive restarts each January — last year's burn scars are not included"] : [];
   if (s.within10 === 0 || d === undefined || d > 10) {
-    const drivers = ['No current-season burn scar within 10 mi'];
+    if (opts.truncated) {
+      return unavailableSection('burn-scars', 'Fire-perimeter list hit its record cap — a burn scar near the property may be missing');
+    }
+    const drivers = ["No burn scar from this year's fires within 10 mi"];
     if (d !== undefined && d <= 100) drivers.push(`Nearest: ${s.nearestName ?? 'unnamed fire'} burn scar ${Math.round(d)} mi away`);
-    return { ...base, level: 'low', drivers };
+    return { ...base, level: 'low', drivers: [...drivers, ...yearNote] };
   }
 
   const name = s.nearestName ?? 'An unnamed fire';
@@ -921,25 +1086,33 @@ export function buildBurnScarSection(
   } else if (rain.any) {
     level = 'elevated';
     drivers.push('Rain signal in the next 72 h (WPC outlook Marginal or higher, or ≥0.5 in forecast)');
+  } else if (rain.unknown) {
+    drivers.push('⚠ Rain signal unknown (outlook and rainfall forecast unavailable) — with rain coming this would be Elevated or higher');
   }
-  if (s.within10 > 1) drivers.push(`${s.within10} current-season burn scars within 10 mi`);
-  return { ...base, level, drivers };
+  if (s.within10 > 1) drivers.push(`${s.within10} burn scars from this year's fires within 10 mi`);
+  if (opts.truncated) drivers.push('⚠ Fire-perimeter list hit its record cap — other scars nearby may be missing');
+  return { ...base, level, drivers: [...drivers, ...yearNote] };
 }
 
 // ── River discharge forecast (GloFAS) ────────────────────────────────────────
 
-const FORECAST_DAYS = 15;
+// Today plus the next 10 days: GloFAS's ensemble skill fades past ~10 days
+// for all but the largest rivers, and a day-15 peak must not carry the same
+// weight as tomorrow's.
+const FORECAST_DAYS = 11;
 /** Below this 2-year flow the model cell is a creek GloFAS can't resolve meaningfully. */
 const MINOR_STREAM_M3S = 5;
 
 /**
- * @param opts.todayIso Property-local today; forecast days are the dates after it.
- * @param opts.gaugeWithin25 An NWPS gauge within 25 mi carries the official
- *   NWS forecast — the model is then capped at Guarded.
+ * @param opts.todayIso GloFAS's own (UTC) day; the window is today and the next 10 days.
+ * @param opts.forecastGauge The nearest NWPS point within 25 mi that carries a
+ *   current NWS river forecast — when there is one, the official forecast
+ *   leads and the model is capped at Guarded. A gauge with no forecast (or no
+ *   flood thresholds) caps nothing: it says nothing about where the river goes.
  */
 export function buildDischargeSection(
   d: FloodDischargeResponse,
-  opts: { todayIso: string; gaugeWithin25: boolean }
+  opts: { todayIso: string; forecastGauge: { name: string; distanceMi: number } | null }
 ): SectionResult {
   const th = d?.thresholds;
   if (!th || !isNum(th.rp2) || !isNum(th.rp5) || !isNum(th.rp20)) {
@@ -957,7 +1130,7 @@ export function buildDischargeSection(
   const time = Array.isArray(d.time) ? d.time : [];
   const idxs: number[] = [];
   for (let i = 0; i < time.length && idxs.length < FORECAST_DAYS; i++) {
-    if (typeof time[i] === 'string' && time[i].slice(0, 10) > opts.todayIso) idxs.push(i);
+    if (typeof time[i] === 'string' && time[i].slice(0, 10) >= opts.todayIso) idxs.push(i);
   }
   const peakOf = (series: Array<number | null> | undefined) => {
     let best: { v: number; date: string } | null = null;
@@ -994,15 +1167,15 @@ export function buildDischargeSection(
     drivers.push(`Model peak ${fmtFlow(med.v)} m³/s${on(med)} — below the 2-year flow (${fmtFlow(th.rp2)} m³/s)`);
   }
 
-  // The official NWS river forecast leads wherever a gauge is close enough.
-  if (opts.gaugeWithin25 && level !== 'low') {
+  // The official NWS river forecast leads wherever one is issued close by.
+  const fg = opts.forecastGauge;
+  if (fg && level !== 'low') {
     const capped = rank(level) > rank('guarded');
     if (capped) level = 'guarded';
-    drivers.push(
-      capped
-        ? 'Capped at Guarded — an NWPS gauge within 25 mi carries the official NWS river forecast, which leads'
-        : 'An NWPS gauge within 25 mi carries the official NWS river forecast, which leads'
-    );
+    const who = `the official NWS river forecast at ${fg.name} (${fmtMi(fg.distanceMi)} mi)`;
+    drivers.push(capped ? `Capped at Guarded — ${who} leads` : `${who.charAt(0).toUpperCase()}${who.slice(1)} leads`);
+  } else if (!fg && level !== 'low') {
+    drivers.push('Model only — no official NWS river forecast within 25 mi');
   }
   return { ...base, level, drivers };
 }
@@ -1027,19 +1200,23 @@ export function computeFloodOverall(
 ): { level: RiskLevel; drivers: string[] } {
   const available = sections.filter((s) => !s.unavailable);
   let level = available.reduce<RiskLevel>((acc, s) => maxLevel(acc, s.level), 'low');
-  const drivers = available.flatMap((s) => (s.level === 'low' ? [] : s.drivers));
+  const isLive = (s: SectionResult) => (FLOOD_LIVE_SECTIONS as readonly string[]).includes(s.id);
+  // Non-Low sections bring every driver; a Low live section still brings its
+  // ⚠ caveats (a gauge gone dark, an alert lookup that fell back to county
+  // outlines) — a blind spot must never read as a calm day.
+  const drivers = available.flatMap((s) =>
+    s.level !== 'low' ? s.drivers : isLive(s) ? s.drivers.filter((d) => d.startsWith('⚠')) : []
+  );
 
   // SFHA escalator: static exposure multiplies the live signals — a Flood
   // Warning means more to a house in Zone AE than to one on the ridge above it.
-  const liveHot = available.some(
-    (s) => (FLOOD_LIVE_SECTIONS as readonly string[]).includes(s.id) && rank(s.level) >= rank('elevated')
-  );
+  const liveHot = available.some((s) => isLive(s) && rank(s.level) >= rank('elevated'));
   if (sfha?.sfha && liveHot) {
     const raised = level !== 'critical';
     level = bumpLevel(level);
     drivers.unshift(
-      `Property sits in FEMA Zone ${zoneCode(sfha)} (${sfhaPlain(sfha)}) — the live flood signals below apply directly` +
-        (raised ? '; overall raised one level' : '')
+      `Property sits in FEMA Zone ${zoneCode(sfha)} (${sfhaPlain(sfha)}) with live flood signals at Elevated or above` +
+        (raised ? ' — overall raised one level' : '')
     );
   }
 

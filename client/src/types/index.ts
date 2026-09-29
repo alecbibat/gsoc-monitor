@@ -487,8 +487,30 @@ export interface RiverGauge {
 export interface RiversResponse {
   gauges: RiverGauge[];
   counts: Record<FloodCat, number>;
+  /**
+   * Forecast points whose observation is out of service or stale. Kept out of
+   * `gauges` (the layer only draws live readings) but listed so the flood
+   * report can say a nearby river has gone dark instead of skipping it.
+   * Optional: absent from snapshots served by an older server.
+   */
+  offline?: OfflineGauge[];
   updated: number;
   warming?: boolean; // server snapshot not ready yet — retry shortly
+}
+
+/** An NWPS forecast point with no current observation. */
+export interface OfflineGauge {
+  lid: string;
+  name: string;
+  lat: number;
+  lon: number;
+  state: string;
+  /** NWPS observed status: out_of_service, or obs_not_current ('stale'). */
+  status: 'out_of_service' | 'stale';
+  /** Current NWS forecast category, when the point still has one. */
+  fcat: FloodCat | null;
+  /** Last observation's valid time (ISO), when NWPS gives one. */
+  obsTime: string | null;
 }
 
 export interface RiverThreshold {
@@ -562,19 +584,33 @@ export interface FemaZoneResponse {
   polygons: Array<FemaZoneFeature & { rings: number[][][] }>;
   /** Distance to the nearest SFHA polygon found in the envelope (0 = at site; null = none within it). */
   nearestSfhaMi: number | null;
-  /** The envelope query hit its record cap — the map may be missing polygons. */
+  /**
+   * FEMA's envelope query hit its record cap: zones (possibly the nearest
+   * SFHA) may be missing, so nearestSfhaMi is a lower-confidence answer.
+   */
   truncated: boolean;
+  /** The server dropped far polygons to bound the payload — the map only, never the distance. */
+  mapTrimmed?: boolean;
+  /**
+   * The zone-map (envelope) query failed while the point query succeeded:
+   * atSite stands, but polygons are empty and nearestSfhaMi was not checked.
+   */
+  envelopeUnavailable?: boolean;
   updated: number;
 }
 
-/** Open-Meteo precipitation at the property: modelled past 7 days + 3 forecast days. */
+/** Open-Meteo precipitation at the property: modelled past 7 days + today + 5 forecast days. */
 export interface FloodPrecipResponse {
   timezone: string;
   utcOffsetSeconds: number;
-  /** Local calendar dates, oldest first: 7 past days, today, then forecast days. */
-  daily: { time: string[]; precipIn: number[] };
-  /** Local ISO hours ('YYYY-MM-DDTHH:MM'), same span as daily. probPct is null for past hours. */
-  hourly: { time: string[]; precipIn: number[]; probPct: Array<number | null> };
+  /** Local calendar dates, oldest first: 7 past days, today, then forecast days. null = model gap. */
+  daily: { time: string[]; precipIn: Array<number | null> };
+  /**
+   * Local ISO hours ('YYYY-MM-DDTHH:MM'), same span as daily. Each value is
+   * the PRECEDING hour's sum (Open-Meteo convention). null = model gap —
+   * never read as a dry hour. probPct is null for past hours.
+   */
+  hourly: { time: string[]; precipIn: Array<number | null>; probPct: Array<number | null> };
   updated: number;
 }
 
@@ -594,8 +630,9 @@ export interface FloodDischargeResponse {
   min: Array<number | null>;
   max: Array<number | null>;
   /**
-   * Empirical return-period flows from the reanalysis annual maxima (complete
-   * years only); null when the climatology request failed or had too few years.
+   * Return-period flows: a Gumbel fit (method of moments) to the annual
+   * maxima of the last 20 complete reanalysis years; null when the
+   * climatology pull failed, is still running, or had too few years.
    */
   thresholds: { rp2: number; rp5: number; rp20: number; years: number; fromYear: number; toYear: number } | null;
   updated: number;

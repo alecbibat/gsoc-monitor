@@ -21,9 +21,15 @@ export const ERO_META: Record<EroCategory, { label: string; short: string; prob:
 export interface EroDay {
   /** 1–5 = WPC Day 1 … Day 5. */
   day: number;
-  /** Local ISO date the day's period starts on (display only; null when unknown). */
+  /** Property-local date the day's period starts on (display only; null when unknown). */
   date: string | null;
   category: EroCategory;
+  /**
+   * When the day's 12Z–12Z period starts (epoch ms), from the product when the
+   * site is inside a risk area, else from WPC's issuance cycle. Overnight the
+   * coming daytime is "Day 2" — this lets the rules weigh it like Day 1.
+   */
+  startMs?: number | null;
 }
 
 /** One ERO risk polygon (for the Day 1 regional map). */
@@ -44,6 +50,11 @@ export interface FloodAlertHit {
   tags: string[];
   /** The NWS "* WHAT… * WHERE… * WHEN… * IMPACTS…" bullets, when the text has them. */
   bullets: { label: string; text: string }[];
+  /**
+   * Matched only by the property's county outline (NWS's own point lookup was
+   * unavailable) — a zone-based product may not cover the site itself.
+   */
+  countyResolved?: boolean;
 }
 
 /** An NWPS forecast point near the property (from the bulk national list). */
@@ -61,6 +72,13 @@ export interface GaugeHit {
   stage: number | null;
   unit: string;
   isFlow: boolean;
+  /**
+   * Not reporting: NWPS marks the observation out of service or stale. `cat`
+   * is then 'none' (no current reading) and only `fcat` says anything.
+   */
+  offline?: 'out_of_service' | 'stale';
+  /** Last observation time for an offline gauge (ISO), when known. */
+  obsTime?: string | null;
 }
 
 /** Per-gauge forecast detail for the report's hydrograph cards. */
@@ -119,13 +137,19 @@ export interface FloodReportData {
   gauges: GaugeHit[];
   gaugeDetails: GaugeDetailView[];
   ero: { days?: EroDay[]; unavailable?: string };
-  /** WPC QPF at the property (same product as the rainfall map); daily-forecast fallback labeled. */
+  /**
+   * Rain still to come at the property. 'wpc' = WPC QPF (same product as the
+   * rainfall map); 'hourly' = the Open-Meteo hourly point forecast summed from
+   * the current hour (outside WPC's lower-48 domain, or WPC down); 'daily' =
+   * whole calendar days from tomorrow (last resort). Never includes rain that
+   * has already fallen — that is `antecedent`.
+   */
   rain: {
     in24?: number;
     in48?: number;
     in72?: number;
     in120?: number;
-    source?: 'wpc' | 'daily';
+    source?: 'wpc' | 'hourly' | 'daily';
     unavailable?: string;
   };
   /** Modelled rainfall already fallen (Open-Meteo past days) — how wet the ground is. */
@@ -145,7 +169,7 @@ export interface FloodReportData {
     unavailable?: string;
   };
   burnScars: {
-    /** Current-season perimeters (≥100 acres) within 10 mi. */
+    /** This year's fire perimeters (≥100 acres) within 10 mi. */
     within10?: number;
     nearestMi?: number;
     nearestName?: string;

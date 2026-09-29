@@ -151,12 +151,14 @@ overall rating is the worst section, with every driver listed.
 - **Wildfire** — satellite hotspots, named incidents, fire-weather alerts, the
   7-day fire-potential outlook, surface fuels, wind, smoke, lightning and
   forecast rainfall.
-- **Flood** — flood, surge and tsunami alerts at the site (with the NWS
-  what/where/when/impacts text); NWPS river gauges within 100 mi, plus
+- **Flood** — flood, surge and tsunami alerts at the site (placed by NWS's own
+  point lookup, with the NWS what/where/when/impacts text); NWPS river gauges
+  within 100 mi (gauges that have stopped reporting are flagged), plus
   hydrographs, forecast crests and NWS impact statements for the nearest ones;
-  the FEMA flood zone (NFHL); WPC's Days 1–5 Excessive Rainfall Outlook; WPC
-  rainfall forecast with 48 h hourly timing; rain already fallen over the past
-  7 days; current-season burn scars; and a GloFAS river-discharge forecast
+  the FEMA flood zone (NFHL); WPC's Days 1–5 Excessive Rainfall Outlook; the
+  rainfall forecast (WPC in the lower 48, the Open-Meteo hourly forecast
+  elsewhere) with 48 h hourly timing; rain already fallen over the past 7 days;
+  burn scars from this year's fires; and a GloFAS river-discharge forecast
   against 2/5/20-year flows. A property in the FEMA 1%-annual-chance floodplain
   has its rating raised one step when a live signal reaches Elevated.
 

@@ -81,7 +81,7 @@ const rich: FloodReportData = {
     { id: 'rain', title: 'Forecast rainfall (WPC)', level: 'elevated', drivers: ['2.30 in forecast in the next 24 h (WPC)'] },
     { id: 'antecedent', title: 'Recent rainfall (past 7 days)', level: 'guarded', drivers: ['3.10 in over the past 7 days — ground already wet'] },
     { id: 'fema', title: 'FEMA flood zone', level: 'guarded', drivers: ['Property is in the 1%-annual-chance floodplain (Zone AE)'], countLabel: 'Zone AE' },
-    { id: 'burn-scars', title: 'Burn scars (post-fire runoff)', level: 'low', drivers: ['No current-season burn scar within 10 mi'] },
+    { id: 'burn-scars', title: 'Burn scars (post-fire runoff)', level: 'low', drivers: ["No burn scar from this year's fires within 10 mi"] },
     { id: 'discharge', title: 'River discharge forecast (GloFAS)', level: 'guarded', drivers: ['Model peak 1,300 m³/s on Oct 5 — above the 2-year flow (900 m³/s)'] },
   ],
   ringCounts: RISK_RINGS.map((ring, i) => ({ ring, gauges: i + 1, action: 0, flooding: i > 0 ? 1 : 0, forecastFlooding: i > 0 ? 1 : 0 })),
