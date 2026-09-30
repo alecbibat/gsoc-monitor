@@ -11,9 +11,12 @@ import type { RadarFrame } from '../../types';
 const TILE_SIZE = 512;
 const COLOR_SCHEME = 2; // "Universal Blue" — the palette the CDN actually serves
 const OPTIONS = '1_1'; // smoothing on, snow tint on
-// RainViewer's mosaic is ~1 km data: past this level the tiles are plain
-// upscales, so let Cesium magnify the cached level instead of requesting more.
-const MAX_LEVEL = 9;
+// The free tier serves tiles only up to z7 (since 2025-12-31, whatever the
+// tile size). Past that the CDN answers 200 with a "Zoom Level Not Supported"
+// placeholder image, which Cesium would drape over the globe. Capping the
+// provider here makes Cesium magnify the z7 tiles at any closer zoom instead,
+// so the layer stays visible however far in the camera goes.
+export const MAX_LEVEL = 7;
 
 export function radarTileUrl(host: string, frame: RadarFrame): string {
   return `${host}${frame.path}/${TILE_SIZE}/{z}/{x}/{y}/${COLOR_SCHEME}/${OPTIONS}.png`;
