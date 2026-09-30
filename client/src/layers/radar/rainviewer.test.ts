@@ -1,3 +1,4 @@
+import * as Cesium from 'cesium';
 import { describe, expect, it } from 'vitest';
 import { MAX_LEVEL, makeRadarProvider, radarTileUrl } from './rainviewer';
 
@@ -20,9 +21,18 @@ describe('makeRadarProvider', () => {
     expect(MAX_LEVEL).toBe(7);
     const provider = makeRadarProvider(HOST, FRAME);
     expect(provider.maximumLevel).toBe(MAX_LEVEL);
+    // Cesium clamps to maximumLevel first and minimumLevel second, so a
+    // minimum above the cap would override it.
+    expect(provider.minimumLevel).toBeLessThanOrEqual(MAX_LEVEL);
   });
 
-  it('has no minimum level, so the layer shows from the whole-globe view down', () => {
-    expect(makeRadarProvider(HOST, FRAME).minimumLevel).toBe(0);
+  // The cap is only a cap on the URL's {z} if Cesium's level is the XYZ zoom:
+  // a single level-0 Web Mercator tile, and {z} rather than {reverseZ}.
+  it("maps Cesium's level straight onto RainViewer's XYZ zoom", () => {
+    const scheme = makeRadarProvider(HOST, FRAME).tilingScheme;
+    expect(scheme).toBeInstanceOf(Cesium.WebMercatorTilingScheme);
+    expect(scheme.getNumberOfXTilesAtLevel(0)).toBe(1);
+    expect(scheme.getNumberOfYTilesAtLevel(0)).toBe(1);
+    expect(radarTileUrl(HOST, FRAME)).toContain('/{z}/{x}/{y}/');
   });
 });

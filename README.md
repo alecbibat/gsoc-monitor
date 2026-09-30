@@ -40,7 +40,7 @@ npm run dev:client
 | NWS (api.weather.gov) | No key needed | Set `NWS_USER_AGENT` to identify your app per NWS policy: `"my-app (me@email.com)"`. Used for both alerts and zone-geometry lookups. |
 | USGS Earthquakes | No key needed | Fully public. |
 | CelesTrak (satellites) | No key needed | Public TLE data; the server caches each group for 2h per CelesTrak's guidance. |
-| RainViewer (radar) | No key needed | Public manifest + tile CDN. The free tier serves one fixed palette (the colour-scheme parameter is ignored) and currently no nowcast frames; the layer shows forecast frames automatically if they return. |
+| RainViewer (radar) | No key needed | Public manifest + tile CDN. The free tier serves one fixed palette (the colour-scheme parameter is ignored) and currently no nowcast frames; the layer shows forecast frames automatically if they return. Tiles stop at zoom 7 (deeper requests get a "Zoom Level Not Supported" placeholder), so the layer caps there and Cesium magnifies those tiles when you zoom in further. |
 | NASA GIBS (Earth basemap) | No key needed | Public WMTS tiles of the daily MODIS Terra/Aqua true-color mosaic, fetched straight from the browser (no server involvement). |
 | Nominatim (geocoding) | No key needed | Uses OSM data; `NWS_USER_AGENT` string is also used here as User-Agent per their policy. |
 
