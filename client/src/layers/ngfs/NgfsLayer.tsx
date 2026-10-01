@@ -6,7 +6,7 @@ import { startVisiblePolling } from '../../lib/poll';
 import { usePanelStore, type PanelOpenData } from '../../panels/panelStore';
 import type { NgfsPixel, NgfsResponse } from '../../types';
 import { pixelFootprint, SLOT_LON0 } from './abiFootprint';
-import { fetchNgfs, ngfsPanelData, ngfsPanelId, panelPayload, pixelStyle } from './ngfsMeta';
+import { fetchNgfs, ngfsPanelData, ngfsPanelId, panelPayload, pixelStyle, refreshedNgfsPanels } from './ngfsMeta';
 import { useNgfsStatus } from './ngfsStore';
 
 // The server refreshes every 2 minutes and GOES scans every 5.
@@ -25,20 +25,11 @@ function pickId(panel: PanelOpenData) {
   return { id: panel.id, gsocPanel: panel };
 }
 
-/**
- * Open NGFS panels show the pixel as of the click; bring their contents up
- * to date with each refresh (in place: re-opening would also raise them).
- * A pixel that has left the window keeps its last state.
- */
-function refreshOpenPanels(byId: Map<string, PanelOpenData>) {
+// Open NGFS panels show the pixel as of the click; keep them current.
+function refreshOpenPanels(byId: Map<string, PanelOpenData>, windowHours: NgfsResponse['windowHours']) {
   usePanelStore.setState((s) => {
-    if (!s.panels.some((pp) => pp.kind === 'ngfs' && byId.has(pp.id))) return s;
-    return {
-      panels: s.panels.map((pp) => {
-        const fresh = pp.kind === 'ngfs' ? byId.get(pp.id) : undefined;
-        return fresh ? { ...pp, title: fresh.title, subtitle: fresh.subtitle, payload: fresh.payload } : pp;
-      }),
-    };
+    const panels = refreshedNgfsPanels(s.panels, byId, windowHours);
+    return panels ? { panels } : s;
   });
 }
 
@@ -215,7 +206,7 @@ export function NgfsLayer() {
         }
       });
 
-      refreshOpenPanels(panels);
+      refreshOpenPanels(panels, data.windowHours);
 
       // The newest scan actually on the map (a newer one may still be
       // downloading, or failing; the notes say so).

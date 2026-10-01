@@ -53,7 +53,7 @@ function mw(v: number | null): string {
 export function NgfsDetails({ payload: p }: Props) {
   const now = Date.now();
   const age = ageClass(p.last, now);
-  const color = p.wildland ? age.color : NGFS_OTHER.color;
+  const color = p.wildland && !p.gone ? age.color : NGFS_OTHER.color;
   const size = footprintKm(p);
   const fuel = formatMix(p.fuel);
   const cover = formatMix(p.landCover);
@@ -63,16 +63,20 @@ export function NgfsDetails({ payload: p }: Props) {
   // Hot in the earliest scan the server has: it has been hot since before then.
   const hotBeforeHistory = p.first - p.historyFrom < SCAN_INTERVAL_MS;
 
-  const headline = !p.wildland
-    ? `${p.type} — not classed as wildland fire`
-    : minutesSince < 15
-      ? 'Heat in the latest satellite scans'
-      : `Last seen ${ago(p.last, now)}`;
-  const detail = !p.wildland
-    ? 'NGFS attributes this heat to a known non-vegetation source (industry, a gas flare, an urban area or a volcano).'
-    : minutesSince < 15
-      ? 'GOES saw anomalous heat in this pixel within the last few scans.'
-      : 'Not hot in the most recent scans. The fire may have died down, or cloud or smoke may be hiding it.';
+  const headline = p.gone
+    ? `No longer detected in the last ${p.windowHours} h`
+    : !p.wildland
+      ? `${p.type} — not classed as wildland fire`
+      : minutesSince < 15
+        ? 'Heat in the latest satellite scans'
+        : `Last seen ${ago(p.last, now)}`;
+  const detail = p.gone
+    ? 'This pixel has not been hot in any scan of the selected window. The details below are from its last detection.'
+    : !p.wildland
+      ? 'NGFS attributes this heat to a known non-vegetation source (industry, a gas flare, an urban area or a volcano).'
+      : minutesSince < 15
+        ? 'GOES saw anomalous heat in this pixel within the last few scans.'
+        : 'Not hot in the most recent scans. The fire may have died down, or cloud or smoke may be hiding it.';
 
   return (
     <div className="space-y-3">
@@ -111,7 +115,7 @@ export function NgfsDetails({ payload: p }: Props) {
           {formatLocal(p.last)} <span className="text-white/45">· {ago(p.last, now)}</span>
         </dd>
 
-        <dt className="text-white/40">Hot since</dt>
+        <dt className="text-white/40">First hot</dt>
         <dd
           title={
             `Earliest scan with this pixel hot among the scans loaded for the last ${p.windowHours} h` +

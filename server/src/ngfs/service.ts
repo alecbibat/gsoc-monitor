@@ -36,12 +36,13 @@ const REFRESH_MS = 100_000;
 const FAILURE_BACKOFF_MS = 30_000;
 const BACKFILL_PER_REFRESH = 12; // older frames paged in per product per refresh
 const FRAME_GAP_MS = 250; // pause between consecutive frame downloads
-// Failures that look like an outage (network, timeout, 5xx, 429) in a row
-// before the backfill stops for this refresh.
-const MAX_SOFT_FAILURES_IN_A_ROW = 2;
-// A frame that fails this often (at most once per refresh) is skipped and
-// shown as a gap, then tried again after SKIP_RETRY_MS in case the upstream
-// has recovered.
+// A product's backfill stops for this refresh after this many failed
+// downloads in a row that look like an outage (network, timeout, 5xx, 429),
+// or that many of any kind while none of its downloads has worked yet.
+const MAX_FAILURES_IN_A_ROW = 2;
+// A frame that fails this often (at most once per refresh, and only counted
+// when other frames of the same product downloaded in that refresh) is
+// skipped and shown as a gap, then tried again after SKIP_RETRY_MS.
 const MAX_FRAME_ATTEMPTS = 3;
 const SKIP_RETRY_MS = 20 * 60_000;
 
@@ -51,6 +52,9 @@ export interface NgfsProductStatus {
   sat: string;
   newestFrame: number | null; // epoch ms of the newest frame published upstream
   newestLoaded: number | null; // epoch ms of the newest frame in the cache
+  // Earliest time from which every frame up to newestLoaded is loaded (or
+  // skipped): how far back the history the client sees is complete.
+  loadedFrom: number | null;
   framesInWindow: number; // frames published upstream inside the window
   framesLoaded: number; // of those, how many are in the cache
   framesSkipped: number; // of those, how many keep failing and are currently given up on
@@ -82,12 +86,17 @@ interface ProductState {
 }
 
 // One refresh: the frame list and newest frame in the foreground, then the
-// background backfill. Failures are judged per cycle.
+// background backfill. Failures are judged per product per cycle: a failed
+// download only counts against its frame when other frames of the same
+// product (each has its own data store upstream) downloaded in that cycle.
 interface Cycle {
   tried: Set<string>; // `${product}|${stamp}` downloads attempted this cycle
-  soft: Array<{ product: string; stamp: string }>; // outage-like failures, charged only if something else worked
-  ok: number; // frame downloads that succeeded this cycle
+  failed: Map<string, string[]>; // product → stamps whose download failed this cycle
+  ok: Map<string, number>; // product → downloads that succeeded this cycle
+  run: Map<string, { any: number; soft: number }>; // product → consecutive failures so far
 }
+
+const newCycle = (): Cycle => ({ tried: new Set(), failed: new Map(), ok: new Map(), run: new Map() });
 
 type LoadResult = 'ok' | 'soft' | 'hard';
 
@@ -130,8 +139,14 @@ export class NgfsService {
     return this.frames.has(this.key(p, stamp));
   }
 
-  /** Given up on for now: failed MAX_FRAME_ATTEMPTS times, the last one under SKIP_RETRY_MS ago. */
+  /** Given up on: failed MAX_FRAME_ATTEMPTS times. Reported as a gap until it loads. */
   private skipped(p: NgfsProduct, stamp: string): boolean {
+    const f = this.state.get(p.product)!.failures.get(stamp);
+    return f != null && f.count >= MAX_FRAME_ATTEMPTS;
+  }
+
+  /** Skipped, and last tried under SKIP_RETRY_MS ago: not worth another request yet. */
+  private resting(p: NgfsProduct, stamp: string): boolean {
     const f = this.state.get(p.product)!.failures.get(stamp);
     return f != null && f.count >= MAX_FRAME_ATTEMPTS && this.now() - f.at < SKIP_RETRY_MS;
   }
@@ -148,30 +163,35 @@ export class NgfsService {
     const t = frameTimeMs(stamp);
     if (t == null) return 'hard';
     cycle.tried.add(this.key(p, stamp));
+    const run = cycle.run.get(p.product) ?? { any: 0, soft: 0 };
+    cycle.run.set(p.product, run);
     try {
       const observations = parseFrame(await this.client.frame(p.product, stamp), t);
       this.frames.set(this.key(p, stamp), { slot: p.slot, sat: p.sat, t, observations });
       st.failures.delete(stamp);
       st.frameErrors.delete(stamp);
-      cycle.ok++;
+      cycle.ok.set(p.product, (cycle.ok.get(p.product) ?? 0) + 1);
+      run.any = run.soft = 0;
       return 'ok';
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       st.frameErrors.set(stamp, msg);
       console.warn(`[ngfs] ${p.product} ${stamp}:`, msg);
+      cycle.failed.set(p.product, [...(cycle.failed.get(p.product) ?? []), stamp]);
+      run.any++;
       if (isFrameSpecific(err)) {
-        this.strike(p, stamp);
+        run.soft = 0;
         return 'hard';
       }
-      cycle.soft.push({ product: p.product, stamp });
+      run.soft++;
       return 'soft';
     }
   }
 
-  /** Stamps in the window not yet cached and not given up on, newest first. */
+  /** Stamps in the window not yet cached and not resting after repeated failures, newest first. */
   private missing(p: NgfsProduct): string[] {
     const st = this.state.get(p.product)!;
-    return st.stamps.filter((s) => !this.loaded(p, s) && !this.skipped(p, s)).reverse();
+    return st.stamps.filter((s) => !this.loaded(p, s) && !this.resting(p, s)).reverse();
   }
 
   private async refreshProduct(p: NgfsProduct, cycle: Cycle): Promise<void> {
@@ -197,23 +217,38 @@ export class NgfsService {
     if (newest && newest === st.stamps[st.stamps.length - 1]) await this.loadFrame(p, newest, cycle);
   }
 
+  /** Whether a product's backfill should stop for this cycle. */
+  private stalled(p: NgfsProduct, cycle: Cycle): boolean {
+    const run = cycle.run.get(p.product);
+    if (!run) return false;
+    // Outage-like failures in a row: the upstream is struggling right now.
+    if (run.soft >= MAX_FAILURES_IN_A_ROW) return true;
+    // Failures of any kind and nothing of this product has loaded: no sign
+    // the failures are about the frames rather than the product (e.g. every
+    // frame refused), so don't keep asking.
+    return run.any >= MAX_FAILURES_IN_A_ROW && !cycle.ok.get(p.product);
+  }
+
   private async backfill(cycle: Cycle): Promise<void> {
-    let softInARow = 0;
+    // Each product pages in its own backlog: one satellite's trouble never
+    // holds up the other's history.
     for (const p of this.products) {
       // A product whose list couldn't be read this cycle has a stale list.
       if (this.state.get(p.product)!.error !== null) continue;
       // One attempt per frame per cycle: skip what the foreground just tried.
       const todo = this.missing(p).filter((s) => !cycle.tried.has(this.key(p, s)));
       for (const stamp of todo.slice(0, BACKFILL_PER_REFRESH)) {
-        if (softInARow >= MAX_SOFT_FAILURES_IN_A_ROW) break;
+        if (this.stalled(p, cycle)) break;
         await sleep(this.gapMs);
-        const r = await this.loadFrame(p, stamp, cycle);
-        softInARow = r === 'soft' ? softInARow + 1 : 0;
+        await this.loadFrame(p, stamp, cycle);
       }
     }
-    // Outage-like failures count against a frame only when other downloads
-    // worked this cycle, i.e. the upstream was up and that frame wasn't.
-    if (cycle.ok > 0) for (const f of cycle.soft) this.strike(this.products.find((p) => p.product === f.product)!, f.stamp);
+    // A failure counts against its frame only when other frames of the same
+    // product downloaded this cycle: the product was up and that frame wasn't.
+    for (const p of this.products) {
+      if (!cycle.ok.get(p.product)) continue;
+      for (const stamp of cycle.failed.get(p.product) ?? []) this.strike(p, stamp);
+    }
   }
 
   private prune(): void {
@@ -233,7 +268,7 @@ export class NgfsService {
     if (!this.refreshing) {
       this.refreshing = (async () => {
         try {
-          const cycle: Cycle = { tried: new Set(), soft: [], ok: 0 };
+          const cycle = newCycle();
           await Promise.all(this.products.map((p) => this.refreshProduct(p, cycle)));
           this.prune();
           // Only count a refresh that reached the upstream, so an outage is
@@ -266,19 +301,24 @@ export class NgfsService {
       const inWindow = st.stamps.filter((s) => (frameTimeMs(s) ?? 0) >= windowStart);
       const loaded = (s: string) => this.loaded(p, s);
       const skipped = (s: string) => !loaded(s) && this.skipped(p, s);
-      let coveredFrom: number | null = null;
-      for (let i = inWindow.length - 1; i >= 0; i--) {
-        if (!loaded(inWindow[i]) && !skipped(inWindow[i])) break;
-        coveredFrom = frameTimeMs(inWindow[i]);
-      }
       const newest = st.stamps[st.stamps.length - 1];
       const newestLoaded = [...st.stamps].reverse().find(loaded);
+      // Contiguous history back from the newest loaded frame (skipped frames
+      // are known gaps, not pending ones).
+      let loadedFrom: number | null = null;
+      for (let i = inWindow.length - 1; i >= 0; i--) {
+        if (newestLoaded == null || inWindow[i] > newestLoaded) continue;
+        if (!loaded(inWindow[i]) && !skipped(inWindow[i])) break;
+        loadedFrom = frameTimeMs(inWindow[i]);
+      }
+      const coveredFrom = newest != null && loaded(newest) ? loadedFrom : null;
       return {
         product: p.product,
         slot: p.slot,
         sat: p.sat,
         newestFrame: newest ? frameTimeMs(newest) : null,
         newestLoaded: newestLoaded ? frameTimeMs(newestLoaded) : null,
+        loadedFrom,
         framesInWindow: inWindow.length,
         framesLoaded: inWindow.filter(loaded).length,
         framesSkipped: inWindow.filter(skipped).length,

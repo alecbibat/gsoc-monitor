@@ -455,10 +455,11 @@ export interface NgfsProductStatus {
   sat: string;
   newestFrame: number | null; // newest scan published upstream
   newestLoaded: number | null; // newest scan the server has (lags newestFrame while it downloads or fails)
+  loadedFrom: number | null; // every scan from here to newestLoaded is loaded (or a known gap)
   framesInWindow: number;
   framesLoaded: number;
   framesSkipped: number; // scans that kept failing to download and were given up on
-  coveredFrom: number | null; // every scan from here to the newest is loaded (or skipped)
+  coveredFrom: number | null; // loadedFrom, once the newest scan itself is loaded
   error: string | null;
 }
 

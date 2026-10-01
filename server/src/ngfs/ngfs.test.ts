@@ -489,34 +489,69 @@ describe('NgfsService catalog handling', () => {
 });
 
 describe('NgfsService failed frames', () => {
-  it('gives up on a frame after repeated failures and reports it as skipped, not pending', async () => {
+  it('gives up on a broken frame while the rest of the product loads, retries it later, and keeps reporting it as a gap', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    let now = Date.UTC(2026, 9, 1, 20, 5, 0);
-    const fake = fakeRealEarth({
-      times: { E: ['20261001.195017', '20261001.195517', '20261001.200017'] },
-      shapes: (_p, time) =>
-        time === '2026-10-01T19:55:17' ? { error: 'corrupt' } : { type: 'FeatureCollection', features: [CROSS_COUNTY] },
-    });
-    const svc = new NgfsService(
-      new RealEarthClient(fake.fetchFn as unknown as typeof fetch, () => now),
-      [{ product: 'E', slot: 'east', sat: 'GOES-19' }],
-      () => now,
-      0
-    );
-    for (let i = 0; i < 3; i++) {
+    const t0 = Date.UTC(2026, 9, 1, 20, 3, 0);
+    let now = t0;
+    const stamp = (ms: number) => {
+      const d = new Date(ms);
+      const p = (n: number) => String(n).padStart(2, '0');
+      return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}.${p(d.getUTCHours())}${p(d.getUTCMinutes())}17`;
+    };
+    // A new scan every 5 minutes, as upstream; the 19:55 one is corrupt.
+    const catalog = () => {
+      const last = Math.floor((now - 17_000) / 300_000) * 300_000;
+      return Array.from({ length: 12 }, (_, i) => stamp(last - (11 - i) * 300_000));
+    };
+    const broken: string[] = [];
+    const fetchFn = (async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/') {
+        const res = new Response('');
+        res.headers.append('set-cookie', 'PHPSESSID=s1');
+        return res;
+      }
+      if (url.pathname === '/util/session.php') return new Response(url.searchParams.get('sh'));
+      if (url.pathname === '/api/products') return Response.json([{ times: catalog() }]);
+      if (url.searchParams.get('time') === '19:55:17') {
+        broken.push(new Date(now).toISOString());
+        return Response.json({ error: 'corrupt' });
+      }
+      return Response.json({ type: 'FeatureCollection', features: [CROSS_COUNTY] });
+    }) as typeof fetch;
+    const svc = new NgfsService(new RealEarthClient(fetchFn, () => now), [{ product: 'E', slot: 'east', sat: 'GOES-19' }], () => now, 0);
+    const poll = async () => {
       await svc.ensureFresh();
       await svc.settle();
-      now += 150_000; // past REFRESH_MS
+    };
+    // Five minutes per poll: each refresh brings a new scan, so the product is
+    // demonstrably up and the broken frame's failures count against it.
+    for (let i = 0; i < 3; i++) {
+      await poll();
+      now += 300_000;
     }
-    const status = svc.snapshot(1).products[0];
-    expect(status).toMatchObject({ framesInWindow: 3, framesLoaded: 2, framesSkipped: 1, error: null });
-    // Coverage runs through the skipped scan to the oldest one.
-    expect(status.coveredFrom).toBe(Date.UTC(2026, 9, 1, 19, 50, 17));
-    const before = fake.calls.length;
-    now += 150_000;
+    expect(broken).toHaveLength(3); // one try per refresh
+    let status = svc.snapshot(1).products[0];
+    expect(status).toMatchObject({ framesSkipped: 1, error: null });
+    expect(status.framesLoaded + status.framesSkipped).toBe(status.framesInWindow);
+    // Resting: not asked for again until 20 minutes after the last try (20:13),
+    // and reported as a gap the whole time.
+    for (let i = 0; i < 3; i++) {
+      await poll();
+      expect(svc.snapshot(1).products[0].framesSkipped).toBe(1);
+      now += 300_000;
+    }
+    expect(broken).toHaveLength(3);
+    // 20:33, 20 minutes on: the response (sent before the background retry
+    // runs) still reports the gap rather than "still loading"...
     await svc.ensureFresh();
+    expect(svc.snapshot(1).products[0].framesSkipped).toBe(1);
     await svc.settle();
-    expect(fake.calls.slice(before).filter((c) => c.startsWith('/api/shapes'))).toEqual([]);
+    // ...and the retry is one more try.
+    expect(broken).toHaveLength(4);
+    status = svc.snapshot(1).products[0];
+    expect(status.framesSkipped).toBe(1);
+    expect(status.coveredFrom).toBe(status.loadedFrom);
     vi.restoreAllMocks();
   });
 });
@@ -535,11 +570,20 @@ describe('NgfsService under upstream trouble', () => {
     return Array.from({ length: 288 }, (_, i) => stampAt(last - (287 - i) * 300_000));
   };
 
-  function setup(opts: { shapesDown?: () => boolean; listsDown?: () => boolean; latencyMs?: number } = {}) {
+  function setup(
+    opts: {
+      shapesDown?: () => boolean;
+      listsDown?: () => boolean;
+      latencyMs?: number;
+      // Per-product override of the /api/shapes answer (undefined = normal).
+      shapes?: (product: string) => Response | undefined;
+    } = {}
+  ) {
     let now = Date.UTC(2026, 9, 1, 20, 3, 0);
     const shapeTimes: number[] = []; // frame time of every /api/shapes request
     const shapeAsked: number[] = []; // wall time of every /api/shapes request
     const listCalls: number[] = [];
+    const shapeProducts: string[] = [];
     let sessions = 0;
     const fetchFn = (async (input: string | URL | Request) => {
       const url = new URL(String(input));
@@ -559,6 +603,10 @@ describe('NgfsService under upstream trouble', () => {
       if (url.pathname === '/api/shapes') {
         shapeAsked.push(now);
         shapeTimes.push(Date.parse(`${url.searchParams.get('date')}T${url.searchParams.get('time')}Z`));
+        const product = url.searchParams.get('products')!;
+        shapeProducts.push(product);
+        const override = opts.shapes?.(product);
+        if (override) return override;
         if (opts.shapesDown?.()) return new Response('', { status: 503 });
         return Response.json({ type: 'FeatureCollection', features: [CROSS_COUNTY] });
       }
@@ -568,6 +616,7 @@ describe('NgfsService under upstream trouble', () => {
     return {
       svc,
       shapeTimes,
+      shapeProducts,
       shapeAsked,
       listCalls,
       sessions: () => sessions,
@@ -653,6 +702,57 @@ describe('NgfsService under upstream trouble', () => {
     }
   });
 
+  it('keeps loading one satellite’s history while the other’s frames are failing, and loses nothing', async () => {
+    let eastDown = true;
+    const h = setup({ shapes: (product) => (product === 'E' && eastDown ? new Response('', { status: 503 }) : undefined) });
+    const perPoll: Array<{ E: number; W: number }> = [];
+    for (let i = 0; i < 7; i++) {
+      const before = h.shapeProducts.length;
+      await h.poll();
+      const calls = h.shapeProducts.slice(before);
+      perPoll.push({ E: calls.filter((c) => c === 'E').length, W: calls.filter((c) => c === 'W').length });
+      h.advance(150_000);
+    }
+    // West pages in its whole 6 h backlog regardless of East...
+    const west = h.svc.snapshot(6).products[1];
+    expect(west.framesLoaded).toBe(west.framesInWindow);
+    // ...while East costs at most its newest frame plus one more try per refresh.
+    expect(Math.max(...perPoll.map((p) => p.E))).toBeLessThanOrEqual(2);
+    expect(h.svc.snapshot(6).products[0].framesSkipped).toBe(0);
+    eastDown = false;
+    for (let i = 0; i < 7; i++) {
+      await h.poll();
+      h.advance(150_000);
+    }
+    const east = h.svc.snapshot(6).products[0];
+    expect(east.framesSkipped).toBe(0);
+    expect(east.framesLoaded).toBe(east.framesInWindow);
+  });
+
+  it('stops asking after two tries per refresh when every frame of a product is refused', async () => {
+    let refused = true;
+    const h = setup({
+      shapes: (product) => (product === 'W' && refused ? Response.json({ error: 'down' }) : undefined),
+    });
+    const before = h.shapeProducts.length;
+    for (let i = 0; i < 20; i++) {
+      await h.poll();
+      h.advance(150_000);
+    }
+    const westCalls = h.shapeProducts.slice(before).filter((c) => c === 'W').length;
+    expect(westCalls).toBeLessThanOrEqual(20 * 2);
+    // Nothing of West ever loaded, so none of those refusals is pinned on a frame.
+    expect(h.svc.snapshot(6).products[1].framesSkipped).toBe(0);
+    expect(h.svc.snapshot(1).products[1].error).toMatch(/FeatureCollection/);
+    refused = false;
+    for (let i = 0; i < 7; i++) {
+      await h.poll();
+      h.advance(150_000);
+    }
+    const west = h.svc.snapshot(6).products[1];
+    expect(west.framesLoaded).toBe(west.framesInWindow);
+  });
+
   it('sends no frame requests at all while both frame lists are failing', async () => {
     let listsDown = false;
     const h = setup({ listsDown: () => listsDown });
@@ -703,5 +803,52 @@ describe('NgfsService newest-frame reporting', () => {
     });
     expect(status.error).toMatch(/HTTP 500/);
     vi.restoreAllMocks();
+  });
+});
+
+describe('RealEarthClient after an outage', () => {
+  it('opens a new session within minutes once the upstream is back, even if it forgot the old one', async () => {
+    let now = 0;
+    let upstreamUp = true;
+    let generation = 1; // sessions issued before a backend restart stop working
+    const valid = new Set<string>();
+    let sessions = 0;
+    const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/') {
+        const id = `g${generation}-s${++sessions}`;
+        valid.add(id);
+        const res = new Response('');
+        res.headers.append('set-cookie', `PHPSESSID=${id}`);
+        return res;
+      }
+      if (url.pathname === '/util/session.php') return new Response(url.searchParams.get('sh'));
+      const id = new Headers(init?.headers).get('re-session-id') ?? '';
+      if (!upstreamUp || !valid.has(id)) return new Response('', { status: 500 });
+      return Response.json([{ times: ['20261001.200017'] }]);
+    }) as typeof fetch;
+    const client = new RealEarthClient(fetchFn, () => now);
+    await client.frameTimes('P');
+    // Three-minute outage that ends with a backend restart wiping every session.
+    upstreamUp = false;
+    for (let t = 0; t < 3; t++) {
+      now += 60_000;
+      await expect(client.frameTimes('P')).rejects.toThrow(/HTTP 500/);
+    }
+    upstreamUp = true;
+    valid.clear();
+    generation++;
+    let recoveredAfter: number | null = null;
+    for (let t = 1; t <= 15 && recoveredAfter == null; t++) {
+      now += 60_000;
+      try {
+        await client.frameTimes('P');
+        recoveredAfter = t;
+      } catch {
+        /* still on the dead session */
+      }
+    }
+    expect(recoveredAfter).not.toBeNull();
+    expect(recoveredAfter!).toBeLessThanOrEqual(3);
   });
 });

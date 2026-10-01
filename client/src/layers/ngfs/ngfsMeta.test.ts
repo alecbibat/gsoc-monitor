@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NgfsProductStatus } from '../../types';
+import type { PanelData } from '../../panels/panelStore';
 import {
   ageClass,
   clockTime,
+  refreshedNgfsPanels,
   ngfsPanelData,
   panelPayload,
   trackedSince,
@@ -93,6 +95,7 @@ const product = (over: Partial<NgfsProductStatus> = {}): NgfsProductStatus => ({
   framesInWindow: 12,
   framesLoaded: 12,
   framesSkipped: 0,
+  loadedFrom: NOW - 61 * MIN,
   coveredFrom: NOW - 61 * MIN,
   error: null,
   ...over,
@@ -133,8 +136,8 @@ describe('sidebar status', () => {
       view({
         windowStart: NOW - 6 * 60 * MIN,
         products: [
-          product({ framesInWindow: 72, framesLoaded: 13, coveredFrom: NOW - 66 * MIN }),
-          product({ slot: 'west', framesInWindow: 72, framesLoaded: 1, coveredFrom: NOW - 6 * MIN }),
+          product({ framesInWindow: 72, framesLoaded: 13, loadedFrom: NOW - 66 * MIN, coveredFrom: NOW - 66 * MIN }),
+          product({ slot: 'west', framesInWindow: 72, framesLoaded: 1, loadedFrom: NOW - 6 * MIN, coveredFrom: NOW - 6 * MIN }),
         ],
       }),
       NOW
@@ -157,6 +160,30 @@ describe('sidebar status', () => {
       NOW
     );
     expect(notes).toEqual(['Latest GOES-East scan not loaded yet.']);
+  });
+
+  it('still says earlier scans are loading when the newest is missing too', () => {
+    // Cold start: 13 of 71 scans in, and the newest download hasn't landed.
+    const notes = ngfsNotes(
+      view({
+        windowStart: NOW - 6 * 60 * MIN,
+        products: [
+          product({
+            framesInWindow: 71,
+            framesLoaded: 13,
+            newestLoaded: NOW - 11 * MIN,
+            loadedFrom: NOW - 71 * MIN,
+            coveredFrom: null,
+          }),
+          product({ slot: 'west', sat: 'GOES-18', framesInWindow: 0, framesLoaded: 0, newestFrame: null, newestLoaded: null, loadedFrom: null }),
+        ],
+      }),
+      NOW
+    );
+    expect(notes).toEqual([
+      'Latest GOES-East scan not loaded yet.',
+      `Earlier scans still loading: complete from ${clockTime(NOW - 71 * MIN)}.`,
+    ]);
   });
 
   it('flags a feed that has gone quiet', () => {
@@ -209,10 +236,11 @@ describe('panel data', () => {
     fuel: null,
     landCover: null,
   };
-  const data = (coveredFrom: number | null) => ({
+  const data = (loadedFrom: number | null) => ({
     windowHours: 1 as const,
     windowStart: NOW - 60 * MIN,
-    products: [product(), product({ slot: 'west', sat: 'GOES-18', coveredFrom })],
+    // coveredFrom null throughout: the newest scan missing must not matter.
+    products: [product(), product({ slot: 'west', sat: 'GOES-18', loadedFrom, coveredFrom: null })],
   });
 
   it('carries the window and how much of it the pixel’s satellite has loaded', () => {
@@ -228,7 +256,10 @@ describe('panel data', () => {
   it('labels overlapping pixels apart by satellite and time', () => {
     const d = ngfsPanelData(pixel, panelPayload(pixel, data(null)));
     expect(d).toMatchObject({ id: 'ngfs-west-37.6586,-119.6136', kind: 'ngfs', title: 'DOME · NGFS heat' });
-    expect(d.subtitle).toBe(`Mariposa County, CA · GOES-West · last ${clockTime(NOW - 6 * MIN)}`);
+    expect(d.subtitle).toBe(`Mariposa County, CA · GOES-West · last ${clockTime(NOW - 6 * MIN)} · 1554 MW`);
+    // A neighbouring pixel of the same fire, same scan: still a different row.
+    const neighbour = { ...pixel, lat: pixel.lat + 0.02, frp: 310 };
+    expect(ngfsPanelData(neighbour, panelPayload(neighbour, data(null))).subtitle).not.toBe(d.subtitle);
   });
 
   it('reads when NGFS started tracking the fire object, and ignores other id formats', () => {
@@ -236,5 +267,33 @@ describe('panel data', () => {
     expect(trackedSince('ID-2026-09-20T16:51:17Z_12')).toBe(Date.UTC(2026, 8, 20, 16, 51, 17));
     expect(trackedSince('12345')).toBeNull();
     expect(trackedSince(null)).toBeNull();
+  });
+});
+
+describe('refreshedNgfsPanels', () => {
+  const base = { x: 0, y: 0, width: 300, height: 400, z: 3, dockedTo: null, locked: true };
+  const panel = (id: string, kind: PanelData['kind'], payload: Record<string, unknown> = {}): PanelData => ({
+    ...base,
+    id,
+    kind,
+    title: 'old',
+    subtitle: 'old',
+    payload,
+  });
+
+  it('is a no-op when no NGFS panel is open', () => {
+    expect(refreshedNgfsPanels([panel('q1', 'earthquakes')], new Map(), 1)).toBeNull();
+  });
+
+  it('updates open pixels in place, marks departed ones gone, and leaves other panels alone', () => {
+    const quake = panel('q1', 'earthquakes');
+    const live = panel('ngfs-east-1.0000,2.0000', 'ngfs', { frp: 1 });
+    const departed = panel('ngfs-east-3.0000,4.0000', 'ngfs', { frp: 9, windowHours: 6 });
+    const fresh = new Map([[live.id, { id: live.id, kind: 'ngfs' as const, title: 'new', subtitle: 'new sub', payload: { frp: 2 } }]]);
+    const out = refreshedNgfsPanels([quake, live, departed], fresh, 1)!;
+    expect(out[0]).toBe(quake);
+    expect(out[1]).toMatchObject({ title: 'new', subtitle: 'new sub', payload: { frp: 2 }, z: 3, locked: true });
+    expect(out[2].payload).toEqual({ frp: 9, windowHours: 1, gone: true });
+    expect(out[2].payload).not.toBe(departed.payload); // re-renders, so relative times move on
   });
 });

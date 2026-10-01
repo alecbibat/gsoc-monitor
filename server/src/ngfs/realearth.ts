@@ -62,14 +62,17 @@ export class RealEarthHttpError extends Error {
 // call was refused, so it isn't replaced: during an outage every failed call
 // would otherwise open a fresh PHP session on SSEC's server.
 const FRESH_SESSION_MS = 60_000;
+// After a fresh session was refused as well, wait this long before trying
+// another one on a failure.
+const RENEWAL_BACKOFF_MS = 3 * 60_000;
 
 export class RealEarthClient {
   private session: Session | null = null;
   private opening: Promise<Session> | null = null;
-  // Set when a retry on a fresh session was refused too: the upstream is
-  // failing, not the session, so no more sessions are opened on failures
-  // until a call succeeds again.
-  private renewalFailed = false;
+  // When a retry on a fresh session was last refused too: the upstream was
+  // failing, not the session, so failures don't open another session for a
+  // while (one every few minutes during an outage, not one per call).
+  private renewalFailedAt = -Infinity;
 
   constructor(
     private readonly fetchFn: FetchFn = fetch,
@@ -152,17 +155,25 @@ export class RealEarthClient {
         },
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
+      const now = this.now();
       if (r.ok) {
-        s.lastOk = this.now();
-        this.renewalFailed = false;
+        s.lastOk = now;
+        this.renewalFailedAt = -Infinity;
         return r.json();
       }
       await r.arrayBuffer();
-      if (attempt === 0 && r.status !== 404 && !this.renewalFailed && this.now() - s.lastOk >= FRESH_SESSION_MS) {
+      const renew =
+        attempt === 0 &&
+        r.status !== 404 &&
+        now - s.lastOk >= FRESH_SESSION_MS &&
+        now - this.renewalFailedAt >= RENEWAL_BACKOFF_MS;
+      if (renew) {
         if (this.session === s) this.session = null;
         continue;
       }
-      if (attempt > 0) this.renewalFailed = true;
+      // A 404 on the fresh session means the session works; only a refusal
+      // says renewing doesn't help.
+      if (attempt > 0 && r.status !== 404) this.renewalFailedAt = now;
       throw new RealEarthHttpError(r.status, path.split('?')[0]);
     }
   }
