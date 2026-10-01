@@ -31,6 +31,7 @@ import { LightningLayer } from '../layers/lightning/LightningLayer';
 import { WindLayer } from '../layers/wind/WindLayer';
 import { WindArrowsLayer } from '../layers/wind/WindArrowsLayer';
 import { FireLayer } from '../layers/fires/FireLayer';
+import { NgfsLayer } from '../layers/ngfs/NgfsLayer';
 import { WildfireLayer } from '../layers/wildfires/WildfireLayer';
 import { SmokeLayer } from '../layers/smoke/SmokeLayer';
 import { AqiLayer } from '../layers/aqi/AqiLayer';
@@ -70,6 +71,9 @@ function applyShareLayerFlags(enabled: ShareLiveLayerId[]) {
     // show the global / camera-viewport view of hotspots and news.
     firesNearMiles: 0,
     newsNearMiles: 0,
+    // NGFS shows the default past hour of wildland heat, not the operator's choice.
+    ngfsHours: 1,
+    ngfsShowOther: false,
   }));
 }
 
@@ -555,6 +559,7 @@ export function CrisisShareGlobe({
             {live.has('wind') && <WindLayer />}
             {live.has('windArrows') && <WindArrowsLayer />}
             {live.has('fires') && <FireLayer />}
+            {live.has('ngfs') && <NgfsLayer />}
             {live.has('wildfires') && <WildfireLayer />}
             {live.has('smoke') && <SmokeLayer />}
             {live.has('aqi') && <AqiLayer />}

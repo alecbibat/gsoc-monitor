@@ -192,6 +192,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'ngfs',
+    info: {
+      name: 'NGFS Heat Detections',
+      icon: '🛰️',
+      source: 'NOAA/NESDIS + UW–Madison CIMSS Next Generation Fire System (GOES-East / GOES-West)',
+      method:
+        'Fire heat detected in the 5-minute CONUS scans of the geostationary GOES-19 and GOES-18 ABI imagers, classified (wildland fire vs. industrial, gas flare, urban, volcano), tracked as fire objects across scans and matched to IRWIN incidents by NGFS. Fetched server-side from CIMSS’s public NGFS RealEarth service every 2 minutes and drawn as each detection’s ~2–5 km satellite pixel, colored by how recently it was hot.',
+      trust:
+        'A NOAA-funded research system run by CIMSS (University of Wisconsin–Madison), still labeled experimental. Geostationary scans catch new starts within minutes, far sooner than the polar-orbiting passes behind FIRMS, but at much coarser resolution; clouds and thick smoke can hide fires.',
+      url: 'https://cimss.ssec.wisc.edu/ngfs/',
+    },
+  },
+  {
     id: 'wildfires',
     info: {
       name: 'Named Fires',

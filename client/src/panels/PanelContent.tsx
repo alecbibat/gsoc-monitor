@@ -3,6 +3,7 @@ import { AlertDetails } from '../layers/alerts/AlertDetails';
 import { FlightDetails } from '../layers/flights/FlightDetails';
 import { HurricaneDetails } from '../layers/hurricanes/HurricaneDetails';
 import { FireDetails } from '../layers/fires/FireDetails';
+import { NgfsDetails } from '../layers/ngfs/NgfsDetails';
 import { WildfireDetails } from '../layers/wildfires/WildfireDetails';
 import { OutageDetails } from '../layers/outages/OutageDetails';
 import { ShipDetails } from '../layers/ships/ShipDetails';
@@ -27,6 +28,7 @@ const ACCENT_BY_KIND: Record<string, string> = {
   flights: 'border-accent/40',
   hurricanes: 'border-accent-warn/40',
   fires: 'border-accent-warn/40',
+  ngfs: 'border-orange-500/40',
   wildfires: 'border-red-500/40',
   outages: 'border-yellow-500/40',
   smoke: 'border-amber-500/40',
@@ -62,6 +64,7 @@ export function PanelContent({ panel }: { panel: PanelData }) {
       {panel.kind === 'flights' && <FlightDetails payload={panel.payload as never} />}
       {panel.kind === 'hurricanes' && <HurricaneDetails payload={panel.payload as never} />}
       {panel.kind === 'fires' && <FireDetails payload={panel.payload as never} />}
+      {panel.kind === 'ngfs' && <NgfsDetails payload={panel.payload as never} />}
       {panel.kind === 'wildfires' && <WildfireDetails payload={panel.payload as never} />}
       {panel.kind === 'outages' && <OutageDetails payload={panel.payload as never} />}
       {panel.kind === 'ships' && <ShipDetails payload={panel.payload as never} />}

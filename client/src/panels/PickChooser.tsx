@@ -21,6 +21,7 @@ const KIND_LABEL: Partial<Record<PanelKind, string>> = {
   ships: 'SHIP',
   hurricanes: 'STORM',
   fires: 'FIRE',
+  ngfs: 'HEAT',
   satellites: 'SAT',
   locations: 'PIN',
 };

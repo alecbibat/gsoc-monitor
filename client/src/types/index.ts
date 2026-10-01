@@ -5,6 +5,7 @@ export type LayerId =
   | 'hurricanes'
   | 'lightning'
   | 'fires'
+  | 'ngfs'
   | 'smoke'
   | 'aqi'
   | 'fuel'
@@ -418,6 +419,55 @@ export interface FireOutlookResponse {
   updated: number;
   dates: (string | null)[]; // 7 ISO dates
   psas: FireOutlookPsa[];
+}
+
+// --- NGFS heat detections (NOAA/CIMSS Next Generation Fire System) ---------
+// Wire format of GET /api/ngfs (server/src/ngfs): one record per hot GOES ABI
+// pixel per satellite over the requested window.
+export type NgfsSlot = 'east' | 'west';
+
+export interface NgfsPixel {
+  lat: number;
+  lon: number;
+  slot: NgfsSlot;
+  sat: string; // e.g. "GOES-19"
+  first: number; // first detection in the window, epoch ms
+  last: number; // latest detection, epoch ms
+  frames: number; // scans in the window with this pixel hot
+  frp: number | null; // latest pixel fire radiative power, MW
+  maxFrp: number | null; // peak pixel FRP in the window, MW
+  featureFrp: number | null; // FRP of the whole tracked fire object, MW
+  trackId: string | null; // NGFS fire-object id, stable across scans
+  type: string; // NGFS classification, e.g. "Possible Wildland Fire"
+  wildland: boolean; // false for industrial / gas flare / urban / volcano heat
+  confidence: string | null;
+  state: string | null;
+  county: string | null;
+  incident: string | null; // IRWIN incident NGFS matched it to
+  incidentType: string | null; // WF, RX, …
+  fuel: string | null; // "FBFM8:49,FBFM5:30,…" (LANDFIRE Anderson-13 mix, %)
+  landCover: string | null; // "Trees:76,Shrubs:21,…" (%)
+}
+
+export interface NgfsProductStatus {
+  product: string;
+  slot: NgfsSlot;
+  sat: string;
+  newestFrame: number | null;
+  framesInWindow: number;
+  framesLoaded: number;
+  framesSkipped: number; // scans that kept failing to download and were given up on
+  coveredFrom: number | null; // every scan from here to the newest is loaded (or skipped)
+  error: string | null;
+}
+
+export interface NgfsResponse {
+  generatedAt: number;
+  windowHours: 1 | 3 | 6;
+  windowStart: number;
+  products: NgfsProductStatus[];
+  pixels: NgfsPixel[];
+  warming?: boolean; // server still on its first fetch
 }
 
 // --- JTWC invests (tropical disturbances in the non-NHC basins) -------------

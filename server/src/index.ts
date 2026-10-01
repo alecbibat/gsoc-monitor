@@ -28,6 +28,7 @@ import lightningRouter, { initLightning, shutdownLightning } from './lightning';
 import riversRouter, { initRiversStream } from './routes/rivers';
 import floodRouter from './routes/flood';
 import fireOutlookRouter from './routes/fireOutlook';
+import ngfsRouter from './ngfs';
 import jtwcRouter from './routes/jtwc';
 import outagesRouter, { initOutagesStream } from './routes/outages';
 import crisisRouter from './routes/crisis';
@@ -171,6 +172,7 @@ function main() {
   // Flood report inputs; gated so the heavy GloFAS climatology isn't a public proxy.
   app.use('/api/flood', requireAuth, floodRouter);
   app.use('/api/fire-outlook', fireOutlookRouter);
+  app.use('/api/ngfs', ngfsRouter);
   app.use('/api/jtwc-invests', jtwcRouter);
   app.use('/api/outages', outagesRouter);
 
