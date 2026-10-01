@@ -1,7 +1,7 @@
 import express from 'express';
 import type { Server } from 'http';
 import type { AddressInfo } from 'net';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNgfsRouter } from './index';
 import { aggregatePixels, frameTimeMs, isWildlandType, parseFrame, type NgfsFrame } from './parse';
 import { cookiesFrom, RealEarthClient, REALEARTH_BASE } from './realearth';
@@ -242,16 +242,32 @@ describe('RealEarthClient', () => {
     expect(fake.sessionCount()).toBe(2);
   });
 
-  it('retries once on a fresh session when a call is refused', async () => {
+  it('retries once on a fresh session when a call on an established session is refused', async () => {
     const fake = fakeRealEarth({ times: { P: ['20261001.200117'] } });
-    const client = new RealEarthClient(fake.fetchFn as unknown as typeof fetch);
+    let now = 0;
+    const client = new RealEarthClient(fake.fetchFn as unknown as typeof fetch, () => now);
     await client.frameTimes('P');
+    now += 5 * 60_000;
     // Simulate SSEC dropping the session: the next /api call 500s once.
     const real = fake.fetchFn.getMockImplementation()!;
     fake.fetchFn.mockImplementationOnce(async () => new Response('{}', { status: 500 }));
     fake.fetchFn.mockImplementation(real);
     expect(await client.frameTimes('P')).toEqual(['20261001.200117']);
     expect(fake.sessionCount()).toBe(2);
+  });
+
+  it('does not open a new session per failed call while the upstream is erroring', async () => {
+    const fake = fakeRealEarth({ times: { P: ['20261001.200117'] } });
+    const client = new RealEarthClient(fake.fetchFn as unknown as typeof fetch, () => 0);
+    await client.frameTimes('P');
+    const real = fake.fetchFn.getMockImplementation()!;
+    fake.fetchFn.mockImplementation(async (input, init) =>
+      new URL(String(input)).pathname.startsWith('/api/') ? new Response('', { status: 503 }) : real(input, init)
+    );
+    for (let i = 0; i < 3; i++) {
+      await expect(client.frame('P', '20261001.200117')).rejects.toMatchObject({ status: 503 });
+    }
+    expect(fake.sessionCount()).toBe(1);
   });
 
   it('fails clearly when the handshake is not echoed', async () => {
@@ -312,7 +328,7 @@ describe('NgfsService', () => {
     expect(snap.products[0].framesLoaded).toBe(12);
     expect(snap.products[0].coveredFrom).toBeLessThanOrEqual(snap.windowStart + 300_000);
     expect(snap.pixels.find((p) => p.slot === 'east')!.frames).toBe(12);
-    // History older than 6 h is never requested.
+    // The newest frame plus 12 backfilled, per product.
     expect(shapeCalls(fake.calls)).toBe(26);
   });
 
@@ -347,6 +363,8 @@ describe('NgfsService', () => {
     const snap = svc.snapshot(1);
     expect(snap.pixels.every((p) => p.slot === 'east')).toBe(true);
     expect(snap.products[1].framesLoaded).toBe(0);
+    expect(snap.products[1].error).toMatch(/FeatureCollection/);
+    expect(snap.products[0].error).toBeNull();
     expect(svc.empty).toBe(false);
   });
 
@@ -499,6 +517,191 @@ describe('NgfsService failed frames', () => {
     await svc.ensureFresh();
     await svc.settle();
     expect(fake.calls.slice(before).filter((c) => c.startsWith('/api/shapes'))).toEqual([]);
+    vi.restoreAllMocks();
+  });
+});
+
+describe('NgfsService under upstream trouble', () => {
+  const EAST: NgfsProduct = { product: 'E', slot: 'east', sat: 'GOES-19' };
+  const WEST: NgfsProduct = { product: 'W', slot: 'west', sat: 'GOES-18' };
+  const stampAt = (ms: number) => {
+    const d = new Date(ms);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}.${p(d.getUTCHours())}${p(d.getUTCMinutes())}17`;
+  };
+  // A catalog that follows the clock: a frame every 5 minutes for the last 24 h.
+  const catalogAt = (now: number) => {
+    const last = Math.floor((now - 17_000) / 300_000) * 300_000;
+    return Array.from({ length: 288 }, (_, i) => stampAt(last - (287 - i) * 300_000));
+  };
+
+  function setup(opts: { shapesDown?: () => boolean; listsDown?: () => boolean; latencyMs?: number } = {}) {
+    let now = Date.UTC(2026, 9, 1, 20, 3, 0);
+    const shapeTimes: number[] = []; // frame time of every /api/shapes request
+    const shapeAsked: number[] = []; // wall time of every /api/shapes request
+    const listCalls: number[] = [];
+    let sessions = 0;
+    const fetchFn = (async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      now += opts.latencyMs ?? 0;
+      if (url.pathname === '/') {
+        sessions++;
+        const res = new Response('');
+        res.headers.append('set-cookie', `PHPSESSID=s${sessions}`);
+        return res;
+      }
+      if (url.pathname === '/util/session.php') return new Response(url.searchParams.get('sh'));
+      if (url.pathname === '/api/products') {
+        listCalls.push(now);
+        if (opts.listsDown?.()) return new Response('', { status: 502 });
+        return Response.json([{ times: catalogAt(now) }]);
+      }
+      if (url.pathname === '/api/shapes') {
+        shapeAsked.push(now);
+        shapeTimes.push(Date.parse(`${url.searchParams.get('date')}T${url.searchParams.get('time')}Z`));
+        if (opts.shapesDown?.()) return new Response('', { status: 503 });
+        return Response.json({ type: 'FeatureCollection', features: [CROSS_COUNTY] });
+      }
+      return new Response('', { status: 404 });
+    }) as typeof fetch;
+    const svc = new NgfsService(new RealEarthClient(fetchFn, () => now), [EAST, WEST], () => now, 0);
+    return {
+      svc,
+      shapeTimes,
+      shapeAsked,
+      listCalls,
+      sessions: () => sessions,
+      now: () => now,
+      advance: (ms: number) => (now += ms),
+      setNow: (ms: number) => (now = ms),
+      poll: async () => {
+        await svc.ensureFresh();
+        await svc.settle();
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('never asks for frames older than 6 h and keeps the cache bounded over a long run', async () => {
+    const h = setup();
+    for (let i = 0; i < 200; i++) {
+      await h.poll();
+      h.advance(150_000);
+    }
+    // ~8 h of polling: every request was inside the 6 h window when made.
+    h.shapeTimes.forEach((t, i) => expect(t).toBeGreaterThanOrEqual(h.shapeAsked[i] - 6 * 3_600_000));
+    // Two products × at most one window of 5-minute frames (+ the frame at the edge).
+    expect(h.svc.frameCount).toBeLessThanOrEqual(2 * 73);
+    // Once the backlog is in, a refresh fetches only new frames: ≤ 1 per product per 5 min.
+    const before = h.shapeTimes.length;
+    for (let i = 0; i < 4; i++) {
+      await h.poll();
+      h.advance(150_000);
+    }
+    expect(h.shapeTimes.length - before).toBeLessThanOrEqual(2 * 3);
+    const snap = h.svc.snapshot(6);
+    expect(snap.products.every((p) => p.framesSkipped === 0 && p.coveredFrom! <= snap.windowStart + 300_000)).toBe(true);
+  });
+
+  it('refreshes on every 2-minute poll of a lone viewer, however long the round trips take', async () => {
+    const h = setup({ latencyMs: 700 });
+    const t0 = h.now();
+    // The client polls on a fixed 2-minute interval, whatever the previous
+    // refresh cost; each upstream call here takes 0.7 s of that.
+    await h.svc.ensureFresh();
+    const lists = h.listCalls.length;
+    for (let k = 1; k <= 5; k++) {
+      await h.svc.settle();
+      h.setNow(t0 + k * 120_000);
+      await h.svc.ensureFresh();
+    }
+    expect(h.listCalls.length - lists).toBe(5 * 2); // both products, every poll
+  });
+
+  it('rides out a frame-download outage without giving up on any frame', async () => {
+    let down = false;
+    const h = setup({ shapesDown: () => down });
+    for (let i = 0; i < 8; i++) {
+      await h.poll(); // warm: backlog loaded
+      h.advance(150_000);
+    }
+    down = true;
+    const before = h.shapeTimes.length;
+    const sessionsBefore = h.sessions();
+    for (let i = 0; i < 6; i++) {
+      await h.poll(); // ~15 min of 503s from /api/shapes
+      h.advance(150_000);
+    }
+    // Per refresh: the newest frame per product, then at most 2 backfill tries before stopping.
+    expect(h.shapeTimes.length - before).toBeLessThanOrEqual(6 * (2 + 2));
+    // No new PHP session per failure: at most the scheduled 15-minute renewal.
+    expect(h.sessions() - sessionsBefore).toBeLessThanOrEqual(1);
+    down = false;
+    for (let i = 0; i < 3; i++) {
+      await h.poll();
+      h.advance(150_000);
+    }
+    const snap = h.svc.snapshot(6);
+    for (const p of snap.products) {
+      expect(p.framesSkipped).toBe(0);
+      expect(p.framesLoaded).toBe(p.framesInWindow);
+      expect(p.error).toBeNull();
+    }
+  });
+
+  it('sends no frame requests at all while both frame lists are failing', async () => {
+    let listsDown = false;
+    const h = setup({ listsDown: () => listsDown });
+    await h.poll(); // cold start: newest + 12 per product
+    listsDown = true;
+    const before = h.shapeTimes.length;
+    for (let i = 0; i < 4; i++) {
+      h.advance(31_000); // past the failure backoff each time
+      await h.poll();
+    }
+    expect(h.shapeTimes.length).toBe(before);
+    const snap = h.svc.snapshot(6);
+    expect(snap.products.every((p) => p.framesSkipped === 0)).toBe(true);
+    expect(snap.products[0].error).toMatch(/HTTP 502/);
+  });
+});
+
+describe('NgfsService newest-frame reporting', () => {
+  it('keeps reporting a failed newest frame after older frames load', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const now = Date.UTC(2026, 9, 1, 20, 5, 0);
+    const fake = fakeRealEarth({
+      times: { E: ['20261001.195017', '20261001.195517', '20261001.200017'] },
+    });
+    const real = fake.fetchFn.getMockImplementation()!;
+    fake.fetchFn.mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/shapes' && url.searchParams.get('time') === '20:00:17') {
+        return new Response('', { status: 500 });
+      }
+      return real(input, init);
+    });
+    const svc = new NgfsService(
+      new RealEarthClient(fake.fetchFn as unknown as typeof fetch, () => now),
+      [{ product: 'E', slot: 'east', sat: 'GOES-19' }],
+      () => now,
+      0
+    );
+    await svc.ensureFresh();
+    await svc.settle();
+    const status = svc.snapshot(1).products[0];
+    expect(status).toMatchObject({
+      framesLoaded: 2,
+      framesInWindow: 3,
+      coveredFrom: null,
+      newestFrame: Date.UTC(2026, 9, 1, 20, 0, 17),
+      newestLoaded: Date.UTC(2026, 9, 1, 19, 55, 17),
+    });
+    expect(status.error).toMatch(/HTTP 500/);
     vi.restoreAllMocks();
   });
 });

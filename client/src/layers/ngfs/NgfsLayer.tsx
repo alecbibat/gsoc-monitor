@@ -3,10 +3,10 @@ import { useEffect, useRef } from 'react';
 import { useCesiumViewer } from '../../cesium/CesiumContext';
 import { useLayersStore } from '../../store/layersStore';
 import { startVisiblePolling } from '../../lib/poll';
-import type { PanelOpenData } from '../../panels/panelStore';
+import { usePanelStore, type PanelOpenData } from '../../panels/panelStore';
 import type { NgfsPixel, NgfsResponse } from '../../types';
 import { pixelFootprint, SLOT_LON0 } from './abiFootprint';
-import { fetchNgfs, ngfsPanelId, pixelStyle } from './ngfsMeta';
+import { fetchNgfs, ngfsPanelData, ngfsPanelId, panelPayload, pixelStyle } from './ngfsMeta';
 import { useNgfsStatus } from './ngfsStore';
 
 // The server refreshes every 2 minutes and GOES scans every 5.
@@ -19,19 +19,27 @@ const WARMING_RETRY_MS = 15_000;
 const FOOTPRINT_MAX_M = 2_000_000;
 const DOT_MIN_M = 400_000;
 
-function pickId(p: NgfsPixel) {
-  const id = ngfsPanelId(p);
-  const where = [p.county, p.state].filter(Boolean).join(', ');
-  return {
-    id,
-    gsocPanel: {
-      id,
-      kind: 'ngfs',
-      title: p.incident ? `${p.incident} · NGFS heat` : 'NGFS Heat Detection',
-      subtitle: where || `${p.lat.toFixed(2)}, ${p.lon.toFixed(2)}`,
-      payload: { ...p },
-    } satisfies PanelOpenData,
-  };
+// The picked id: the global click handler reads `gsocPanel` off it exactly
+// as it does off an entity (see entityPanelLink).
+function pickId(panel: PanelOpenData) {
+  return { id: panel.id, gsocPanel: panel };
+}
+
+/**
+ * Open NGFS panels show the pixel as of the click; bring their contents up
+ * to date with each refresh (in place: re-opening would also raise them).
+ * A pixel that has left the window keeps its last state.
+ */
+function refreshOpenPanels(byId: Map<string, PanelOpenData>) {
+  usePanelStore.setState((s) => {
+    if (!s.panels.some((pp) => pp.kind === 'ngfs' && byId.has(pp.id))) return s;
+    return {
+      panels: s.panels.map((pp) => {
+        const fresh = pp.kind === 'ngfs' ? byId.get(pp.id) : undefined;
+        return fresh ? { ...pp, title: fresh.title, subtitle: fresh.subtitle, payload: fresh.payload } : pp;
+      }),
+    };
+  });
 }
 
 export function NgfsLayer() {
@@ -127,10 +135,13 @@ export function NgfsLayer() {
       const dotSpecs: Array<{ p: NgfsPixel; color: Cesium.Color; id: ReturnType<typeof pickId>; near: boolean }> = [];
       const nearOnly = () => new Cesium.DistanceDisplayConditionGeometryInstanceAttribute(0, FOOTPRINT_MAX_M);
 
+      const panels = new Map<string, PanelOpenData>();
+      for (const p of data.pixels) panels.set(ngfsPanelId(p), ngfsPanelData(p, panelPayload(p, data)));
+
       for (const p of visible) {
         const style = pixelStyle(p, now);
         const color = Cesium.Color.fromCssColorString(style.color);
-        const id = pickId(p);
+        const id = pickId(panels.get(ngfsPanelId(p))!);
         const ring = pixelFootprint(p.lat, p.lon, SLOT_LON0[p.slot]);
         if (ring) {
           const hierarchy = new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(ring.flat()));
@@ -204,7 +215,11 @@ export function NgfsLayer() {
         }
       });
 
-      const newest = data.products.map((p) => p.newestFrame ?? 0).reduce((a, b) => Math.max(a, b), 0);
+      refreshOpenPanels(panels);
+
+      // The newest scan actually on the map (a newer one may still be
+      // downloading, or failing; the notes say so).
+      const newest = data.products.map((p) => p.newestLoaded ?? 0).reduce((a, b) => Math.max(a, b), 0);
       useNgfsStatus.getState().setStatus({
         count: visible.length,
         hiddenOther: data.pixels.length - visible.length,
@@ -254,8 +269,9 @@ export function NgfsLayer() {
       if (retry) clearTimeout(retry);
       stopPolling();
       stopWatch?.();
-      if (!viewer.isDestroyed()) {
-        // A window/filter change redraws from scratch on the next load.
+      // On unmount the [viewer] effect's cleanup has already destroyed the
+      // collection (and everything in it).
+      if (!coll.isDestroyed()) {
         for (const p of incoming) coll.remove(p);
       }
     };

@@ -2,11 +2,14 @@
 // the age palette (used by the globe, the legend and the details panel, so
 // they can't drift), fuel/land-cover decoding and the detection fetch.
 
+import type { PanelOpenData } from '../../panels/panelStore';
 import type { NgfsPixel, NgfsResponse } from '../../types';
 import { haversineMeters } from '../../lib/geo';
 import { pixelFootprint, SLOT_LON0 } from './abiFootprint';
 
 export const NGFS_WINDOWS = [1, 3, 6] as const;
+/** GOES CONUS scan interval. */
+export const SCAN_INTERVAL_MS = 5 * 60_000;
 export type NgfsWindow = (typeof NGFS_WINDOWS)[number];
 
 // Age of a pixel's latest detection. GOES scans CONUS every 5 minutes and
@@ -106,6 +109,52 @@ export function footprintKm(p: Pick<NgfsPixel, 'lat' | 'lon' | 'slot'>): { ns: n
   };
 }
 
+/**
+ * When NGFS first detected the fire object, from its tracking id
+ * ("ID-2026-09-20T16:51:17.000Z_0002"). The format is undocumented, so
+ * anything else gives null rather than a guess.
+ */
+export function trackedSince(trackId: string | null | undefined): number | null {
+  const m = /^ID-(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)_\d+$/.exec(trackId ?? '');
+  if (!m) return null;
+  const t = Date.parse(m[1]);
+  return Number.isFinite(t) ? t : null;
+}
+
+/** What the details panel needs beyond the pixel: the window it was drawn from. */
+export interface NgfsPanelPayload extends NgfsPixel {
+  windowHours: NgfsWindow;
+  // Earliest scan the server had for this pixel's satellite in the window:
+  // the window start once history is fully loaded, later while it fills.
+  historyFrom: number;
+  historyComplete: boolean; // every scan back to the window start is loaded (or skipped)
+}
+
+export function panelPayload(p: NgfsPixel, data: Pick<NgfsResponse, 'windowHours' | 'windowStart' | 'products'>): NgfsPanelPayload {
+  const product = data.products.find((x) => x.slot === p.slot);
+  const covered = product?.coveredFrom ?? null;
+  return {
+    ...p,
+    windowHours: data.windowHours,
+    historyFrom: covered != null && covered > data.windowStart ? covered : data.windowStart,
+    // The first scan in the window can land up to one scan interval after its start.
+    historyComplete: covered != null && covered <= data.windowStart + SCAN_INTERVAL_MS,
+  };
+}
+
+/** Panel/pick-chooser entry for a pixel. The subtitle tells overlapping pixels apart. */
+export function ngfsPanelData(p: NgfsPixel, payload: NgfsPanelPayload): PanelOpenData {
+  const id = ngfsPanelId(p);
+  const where = [p.county, p.state].filter(Boolean).join(', ') || `${p.lat.toFixed(2)}, ${p.lon.toFixed(2)}`;
+  return {
+    id,
+    kind: 'ngfs',
+    title: p.incident ? `${p.incident} · NGFS heat` : 'NGFS Heat Detection',
+    subtitle: `${where} · ${SLOT_LABEL[p.slot]} · last ${clock(p.last)}`,
+    payload: { ...payload },
+  };
+}
+
 /** Stable per-pixel panel id: the same pixel re-opens the same panel after a refresh. */
 export function ngfsPanelId(p: Pick<NgfsPixel, 'lat' | 'lon' | 'slot'>): string {
   return `ngfs-${p.slot}-${p.lat.toFixed(4)},${p.lon.toFixed(4)}`;
@@ -138,9 +187,11 @@ export interface NgfsStatusView {
   error: string | null;
 }
 
-function clock(ms: number): string {
+/** Local "HH:MM". */
+export function clockTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }
+const clock = clockTime;
 
 // NGFS normally publishes a scan within a few minutes; well past that, say so.
 const STALE_SCAN_MS = 20 * 60_000;
@@ -149,6 +200,7 @@ const STALE_SCAN_MS = 20 * 60_000;
 export function ngfsStatusText(s: NgfsStatusView, hours: NgfsWindow): string {
   if (s.error) return s.error;
   if (s.loading && s.newestScan == null) return 'Loading NOAA NGFS…';
+  // newestScan is the newest scan actually on the map (see NgfsLayer).
   const n = `${s.count.toLocaleString()} hot pixel${s.count === 1 ? '' : 's'} · ${hours} h`;
   return s.newestScan ? `${n} · scan ${clock(s.newestScan)}` : n;
 }
@@ -167,13 +219,19 @@ export function ngfsNotes(s: NgfsStatusView, now: number): string[] {
     // Coverage is only as complete as the satellite furthest behind.
     let from: number | null = null;
     let skipped = 0;
+    const latestMissing: string[] = [];
     for (const p of s.products) {
       if (p.error) continue;
       skipped += p.framesSkipped;
       if (p.framesInWindow === 0 || p.framesLoaded + p.framesSkipped >= p.framesInWindow) continue;
-      const f = p.coveredFrom ?? p.newestFrame ?? now;
-      from = from == null ? f : Math.max(from, f);
+      if (p.coveredFrom == null) {
+        // Not even the newest scan is in yet, so there's no "complete from".
+        latestMissing.push(SLOT_LABEL[p.slot]);
+        continue;
+      }
+      from = from == null ? p.coveredFrom : Math.max(from, p.coveredFrom);
     }
+    if (latestMissing.length) notes.push(`Latest ${latestMissing.join(' and ')} scan not loaded yet.`);
     if (from != null) notes.push(`Earlier scans still loading: complete from ${clock(from)}.`);
     if (skipped > 0) {
       notes.push(`${skipped} scan${skipped === 1 ? '' : 's'} could not be downloaded; their detections are missing.`);

@@ -27,6 +27,7 @@ interface Session {
   id: string; // PHPSESSID
   cookie: string; // Cookie header value
   createdAt: number;
+  lastOk: number; // last successful /api call on this session (createdAt until one)
 }
 
 type FetchFn = typeof fetch;
@@ -47,9 +48,28 @@ export function cookiesFrom(setCookies: string[]): Map<string, string> {
   return jar;
 }
 
+/** An upstream answer with a non-2xx status, so callers can tell a bad frame from an outage. */
+export class RealEarthHttpError extends Error {
+  constructor(
+    readonly status: number,
+    path: string
+  ) {
+    super(`RealEarth ${path} HTTP ${status}`);
+  }
+}
+
+// A session that worked (or was opened) less than this long ago is not why a
+// call was refused, so it isn't replaced: during an outage every failed call
+// would otherwise open a fresh PHP session on SSEC's server.
+const FRESH_SESSION_MS = 60_000;
+
 export class RealEarthClient {
   private session: Session | null = null;
   private opening: Promise<Session> | null = null;
+  // Set when a retry on a fresh session was refused too: the upstream is
+  // failing, not the session, so no more sessions are opened on failures
+  // until a call succeeds again.
+  private renewalFailed = false;
 
   constructor(
     private readonly fetchFn: FetchFn = fetch,
@@ -94,7 +114,8 @@ export class RealEarthClient {
     if (!echo.ok || echoed !== hash) {
       throw new Error(`RealEarth session handshake failed (HTTP ${echo.status})`);
     }
-    return { hash, id, cookie, createdAt: this.now() };
+    const at = this.now();
+    return { hash, id, cookie, createdAt: at, lastOk: at };
   }
 
   private async getSession(product: string): Promise<Session> {
@@ -112,8 +133,9 @@ export class RealEarthClient {
   }
 
   /**
-   * GET an /api path as JSON. A rejected request is retried once on a brand
-   * new session, since an expired or rotated session is the likeliest cause.
+   * GET an /api path as JSON. A request refused on a session that hasn't
+   * worked for a while is retried once on a brand-new session, since an
+   * expired or rotated session is the likeliest cause.
    */
   async getJson(path: string, product: string): Promise<unknown> {
     for (let attempt = 0; ; attempt++) {
@@ -130,13 +152,18 @@ export class RealEarthClient {
         },
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
-      if (r.ok) return r.json();
+      if (r.ok) {
+        s.lastOk = this.now();
+        this.renewalFailed = false;
+        return r.json();
+      }
       await r.arrayBuffer();
-      if (attempt === 0 && r.status !== 404) {
+      if (attempt === 0 && r.status !== 404 && !this.renewalFailed && this.now() - s.lastOk >= FRESH_SESSION_MS) {
         if (this.session === s) this.session = null;
         continue;
       }
-      throw new Error(`RealEarth ${path.split('?')[0]} HTTP ${r.status}`);
+      if (attempt > 0) this.renewalFailed = true;
+      throw new RealEarthHttpError(r.status, path.split('?')[0]);
     }
   }
 

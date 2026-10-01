@@ -453,7 +453,8 @@ export interface NgfsProductStatus {
   product: string;
   slot: NgfsSlot;
   sat: string;
-  newestFrame: number | null;
+  newestFrame: number | null; // newest scan published upstream
+  newestLoaded: number | null; // newest scan the server has (lags newestFrame while it downloads or fails)
   framesInWindow: number;
   framesLoaded: number;
   framesSkipped: number; // scans that kept failing to download and were given up on

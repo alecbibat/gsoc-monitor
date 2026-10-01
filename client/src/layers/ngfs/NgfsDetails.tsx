@@ -1,9 +1,20 @@
-import type { NgfsPixel } from '../../types';
-import { ageClass, footprintKm, formatMix, incidentTypeLabel, NGFS_OTHER, SLOT_LABEL } from './ngfsMeta';
+import {
+  ageClass,
+  clockTime,
+  footprintKm,
+  formatMix,
+  incidentTypeLabel,
+  NGFS_OTHER,
+  SCAN_INTERVAL_MS,
+  SLOT_LABEL,
+  trackedSince,
+  type NgfsPanelPayload,
+} from './ngfsMeta';
 
 interface Props {
-  payload: NgfsPixel;
+  payload: NgfsPanelPayload;
 }
+
 
 function formatLat(lat: number): string {
   return `${Math.abs(lat).toFixed(3)}°${lat >= 0 ? 'N' : 'S'}`;
@@ -29,6 +40,7 @@ function ago(ms: number, now: number): string {
   if (min < 1) return 'just now';
   if (min < 60) return `${min} min ago`;
   const h = Math.floor(min / 60);
+  if (h >= 48) return `${Math.floor(h / 24)} days ago`;
   const m = min % 60;
   return m ? `${h} h ${m} min ago` : `${h} h ago`;
 }
@@ -47,6 +59,9 @@ export function NgfsDetails({ payload: p }: Props) {
   const cover = formatMix(p.landCover);
   const incidentType = incidentTypeLabel(p.incidentType);
   const minutesSince = (now - p.last) / 60_000;
+  const tracked = trackedSince(p.trackId);
+  // Hot in the earliest scan the server has: it has been hot since before then.
+  const hotBeforeHistory = p.first - p.historyFrom < SCAN_INTERVAL_MS;
 
   const headline = !p.wildland
     ? `${p.type} — not classed as wildland fire`
@@ -96,15 +111,33 @@ export function NgfsDetails({ payload: p }: Props) {
           {formatLocal(p.last)} <span className="text-white/45">· {ago(p.last, now)}</span>
         </dd>
 
-        <dt className="text-white/40">First detected</dt>
+        <dt className="text-white/40">Hot since</dt>
         <dd
           title={
-            'First scan in the selected window with this pixel hot; ' +
-            'the fire may have started before the window.'
+            `Earliest scan with this pixel hot among the scans loaded for the last ${p.windowHours} h` +
+            (hotBeforeHistory ? ', and it was already hot in the earliest one.' : '.')
           }
         >
-          {formatLocal(p.first)}
+          {hotBeforeHistory ? (
+            <>
+              before {clockTime(p.historyFrom)}{' '}
+              <span className="text-white/45">
+                · {p.historyComplete ? `start of the ${p.windowHours} h window` : 'earlier scans still loading'}
+              </span>
+            </>
+          ) : (
+            formatLocal(p.first)
+          )}
         </dd>
+
+        {tracked != null && (
+          <>
+            <dt className="text-white/40">Tracked since</dt>
+            <dd title="When NGFS first detected this fire object (from its tracking id)">
+              {formatLocal(tracked)} <span className="text-white/45">· {ago(tracked, now)}</span>
+            </dd>
+          </>
+        )}
 
         <dt className="text-white/40">Persistence</dt>
         <dd className="tabular-nums" title="GOES scans CONUS every 5 minutes">

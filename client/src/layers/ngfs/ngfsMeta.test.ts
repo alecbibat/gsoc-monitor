@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NgfsProductStatus } from '../../types';
 import {
   ageClass,
+  clockTime,
+  ngfsPanelData,
+  panelPayload,
+  trackedSince,
   fetchNgfs,
   footprintKm,
   formatMix,
@@ -85,6 +89,7 @@ const product = (over: Partial<NgfsProductStatus> = {}): NgfsProductStatus => ({
   slot: 'east',
   sat: 'GOES-19',
   newestFrame: NOW - 6 * MIN,
+  newestLoaded: NOW - 6 * MIN,
   framesInWindow: 12,
   framesLoaded: 12,
   framesSkipped: 0,
@@ -104,8 +109,9 @@ const view = (over: Partial<NgfsStatusView> = {}): NgfsStatusView => ({
 
 describe('sidebar status', () => {
   it('summarises count, window and scan time', () => {
-    expect(ngfsStatusText(view(), 1)).toMatch(/^124 hot pixels · 1 h · scan \d{2}:\d{2}$/);
-    expect(ngfsStatusText(view({ count: 1 }), 3)).toMatch(/^1 hot pixel · 3 h/);
+    // Built with the same locale calls as the code, so it holds in any locale.
+    expect(ngfsStatusText(view(), 1)).toBe(`${(124).toLocaleString()} hot pixels · 1 h · scan ${clockTime(NOW - 6 * MIN)}`);
+    expect(ngfsStatusText(view({ count: 1 }), 3)).toBe(`${(1).toLocaleString()} hot pixel · 3 h · scan ${clockTime(NOW - 6 * MIN)}`);
   });
 
   it('shows loading before the first answer, and errors verbatim', () => {
@@ -133,10 +139,7 @@ describe('sidebar status', () => {
       }),
       NOW
     );
-    expect(notes).toHaveLength(1);
-    expect(notes[0]).toMatch(/^Earlier scans still loading: complete from \d{2}:\d{2}\.$/);
-    const t = new Date(NOW - 6 * MIN).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-    expect(notes[0]).toContain(t);
+    expect(notes).toEqual([`Earlier scans still loading: complete from ${clockTime(NOW - 6 * MIN)}.`]);
   });
 
   it('reports scans given up on as gaps, not as still loading', () => {
@@ -145,6 +148,15 @@ describe('sidebar status', () => {
       NOW
     );
     expect(notes).toEqual(['2 scans could not be downloaded; their detections are missing.']);
+  });
+
+  it('says the newest scan is missing instead of claiming coverage from it', () => {
+    // The newest scan is published but not loaded: no "complete from" time exists.
+    const notes = ngfsNotes(
+      view({ products: [product({ framesLoaded: 11, coveredFrom: null, newestLoaded: NOW - 11 * MIN }), product({ slot: 'west', sat: 'GOES-18' })] }),
+      NOW
+    );
+    expect(notes).toEqual(['Latest GOES-East scan not loaded yet.']);
   });
 
   it('flags a feed that has gone quiet', () => {
@@ -171,5 +183,58 @@ describe('fetchNgfs', () => {
     await expect(fetchNgfs(1)).rejects.toThrow(/handshake failed \(HTTP 403\)/);
     vi.stubGlobal('fetch', async () => new Response('Bad gateway', { status: 502 }));
     await expect(fetchNgfs(1)).rejects.toThrow('HTTP 502');
+  });
+});
+
+describe('panel data', () => {
+  const pixel = {
+    lat: 37.65861,
+    lon: -119.61361,
+    slot: 'west' as const,
+    sat: 'GOES-18',
+    first: NOW - 60 * MIN,
+    last: NOW - 6 * MIN,
+    frames: 11,
+    frp: 1554,
+    maxFrp: 1600,
+    featureFrp: 1554,
+    trackId: 'ID-2026-09-20T16:51:17.000Z_0002',
+    type: 'Known Wildland Fire Incident',
+    wildland: true,
+    confidence: 'nominal',
+    state: 'CA',
+    county: 'Mariposa County',
+    incident: 'DOME',
+    incidentType: 'WF',
+    fuel: null,
+    landCover: null,
+  };
+  const data = (coveredFrom: number | null) => ({
+    windowHours: 1 as const,
+    windowStart: NOW - 60 * MIN,
+    products: [product(), product({ slot: 'west', sat: 'GOES-18', coveredFrom })],
+  });
+
+  it('carries the window and how much of it the pixel’s satellite has loaded', () => {
+    expect(panelPayload(pixel, data(NOW - 58 * MIN))).toMatchObject({
+      windowHours: 1,
+      historyFrom: NOW - 58 * MIN,
+      historyComplete: true,
+    });
+    expect(panelPayload(pixel, data(NOW - 20 * MIN))).toMatchObject({ historyFrom: NOW - 20 * MIN, historyComplete: false });
+    expect(panelPayload(pixel, data(null))).toMatchObject({ historyFrom: NOW - 60 * MIN, historyComplete: false });
+  });
+
+  it('labels overlapping pixels apart by satellite and time', () => {
+    const d = ngfsPanelData(pixel, panelPayload(pixel, data(null)));
+    expect(d).toMatchObject({ id: 'ngfs-west-37.6586,-119.6136', kind: 'ngfs', title: 'DOME · NGFS heat' });
+    expect(d.subtitle).toBe(`Mariposa County, CA · GOES-West · last ${clockTime(NOW - 6 * MIN)}`);
+  });
+
+  it('reads when NGFS started tracking the fire object, and ignores other id formats', () => {
+    expect(trackedSince('ID-2026-09-20T16:51:17.000Z_0002')).toBe(Date.UTC(2026, 8, 20, 16, 51, 17));
+    expect(trackedSince('ID-2026-09-20T16:51:17Z_12')).toBe(Date.UTC(2026, 8, 20, 16, 51, 17));
+    expect(trackedSince('12345')).toBeNull();
+    expect(trackedSince(null)).toBeNull();
   });
 });
