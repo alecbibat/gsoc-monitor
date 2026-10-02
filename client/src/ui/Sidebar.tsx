@@ -9,6 +9,8 @@ import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { useLightningStatus } from '../layers/lightning/lightningStore';
 import { lightningStatusText } from './lightningStatusText';
 import { useFiresStatus } from '../layers/fires/firesStore';
+import { useNgfsStatus } from '../layers/ngfs/ngfsStore';
+import { NGFS_WINDOWS, ngfsNotes, ngfsStatusText } from '../layers/ngfs/ngfsMeta';
 import { useWildfiresStatus } from '../layers/wildfires/wildfiresStore';
 import { useOutagesStatus } from '../layers/outages/outagesStore';
 import { useSmokeStatus } from '../layers/smoke/smokeStore';
@@ -105,6 +107,10 @@ export function Sidebar() {
   const setShipNames = useLayersStore((s) => s.setShipNames);
   const firesNearMiles = useLayersStore((s) => s.firesNearMiles);
   const setFiresNearMiles = useLayersStore((s) => s.setFiresNearMiles);
+  const ngfsHours = useLayersStore((s) => s.ngfsHours);
+  const setNgfsHours = useLayersStore((s) => s.setNgfsHours);
+  const ngfsShowOther = useLayersStore((s) => s.ngfsShowOther);
+  const setNgfsShowOther = useLayersStore((s) => s.setNgfsShowOther);
   const satelliteGroup = useLayersStore((s) => s.satelliteGroup);
   const setSatelliteGroup = useLayersStore((s) => s.setSatelliteGroup);
   // Status stores are written on every poll tick (lightning on every websocket
@@ -136,6 +142,18 @@ export function Sidebar() {
   );
   const firesStatus = useFiresStatus(
     useShallow((s) => ({ count: s.count, capped: s.capped, error: s.error }))
+  );
+  // `products` is replaced (not mutated) on each poll, so shallow compare holds.
+  const ngfsStatus = useNgfsStatus(
+    useShallow((s) => ({
+      count: s.count,
+      hiddenOther: s.hiddenOther,
+      newestScan: s.newestScan,
+      windowStart: s.windowStart,
+      products: s.products,
+      loading: s.loading,
+      error: s.error,
+    }))
   );
   const wildfiresStatus = useWildfiresStatus(useShallow((s) => ({ count: s.count, error: s.error })));
   const outagesStatus = useOutagesStatus(
@@ -571,6 +589,54 @@ export function Sidebar() {
                 ))}
               </div>
             </div>
+          </LayerToggle>
+          <LayerToggle
+            label="Heat Detections (NOAA NGFS)"
+            active={active.ngfs}
+            onToggle={() => toggleLayer('ngfs')}
+            statusText={ngfsStatusText(ngfsStatus, ngfsHours)}
+          >
+            <div className="pt-1">
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-white/30">
+                Last detected within
+              </div>
+              <div className="flex gap-1">
+                {NGFS_WINDOWS.map((h) => (
+                  <button
+                    key={h}
+                    onClick={() => setNgfsHours(h)}
+                    className={`flex-1 rounded px-1 py-1 text-[11px] font-medium transition ${
+                      ngfsHours === h
+                        ? 'bg-accent/20 text-accent'
+                        : 'bg-white/5 text-white/50 hover:bg-white/10'
+                    }`}
+                  >
+                    {h} h
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label className="flex items-center gap-2 pt-1.5 text-[11px] text-white/60">
+              <input
+                type="checkbox"
+                checked={ngfsShowOther}
+                onChange={(e) => setNgfsShowOther(e.target.checked)}
+                className="accent-accent"
+              />
+              Show non-wildland heat
+              {!ngfsShowOther && ngfsStatus.hiddenOther > 0 && (
+                <span className="text-white/35">({ngfsStatus.hiddenOther.toLocaleString()} hidden)</span>
+              )}
+            </label>
+            {ngfsNotes(ngfsStatus, Date.now()).map((n) => (
+              <p key={n} className="pt-1 text-[10px] leading-relaxed text-amber-300/70">
+                {n}
+              </p>
+            ))}
+            <p className="pt-1.5 text-[10px] leading-relaxed text-white/30">
+              GOES-East/West scans every 5 min (US &amp; nearby). Outline = the satellite pixel
+              (~2–5 km) the heat is somewhere inside. Experimental NOAA/CIMSS product.
+            </p>
           </LayerToggle>
           <LayerToggle
             label="Named Fires (NIFC)"
