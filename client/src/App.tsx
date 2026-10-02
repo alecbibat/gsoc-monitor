@@ -14,6 +14,7 @@ import { LightningLayer } from './layers/lightning/LightningLayer';
 import { RiversLayer } from './layers/rivers/RiversLayer';
 import { FireOutlookLayer } from './layers/fireOutlook/FireOutlookLayer';
 import { FireLayer } from './layers/fires/FireLayer';
+import { NgfsLayer } from './layers/ngfs/NgfsLayer';
 import { WildfireLayer } from './layers/wildfires/WildfireLayer';
 import { OutageLayer } from './layers/outages/OutageLayer';
 import { SmokeLayer } from './layers/smoke/SmokeLayer';
@@ -180,6 +181,7 @@ export default function App() {
           <AlertsLayer />
           <HurricaneLayer />
           <FireLayer />
+          <NgfsLayer />
           <WildfireLayer />
           <OutageLayer />
           <SmokeLayer />

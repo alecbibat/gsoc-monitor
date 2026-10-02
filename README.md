@@ -41,6 +41,7 @@ npm run dev:client
 | USGS Earthquakes | No key needed | Fully public. |
 | CelesTrak (satellites) | No key needed | Public TLE data; the server caches each group for 2h per CelesTrak's guidance. |
 | RainViewer (radar) | No key needed | Public manifest + tile CDN. The free tier serves one fixed palette (the colour-scheme parameter is ignored) and currently no nowcast frames; the layer shows forecast frames automatically if they return. |
+| NOAA/CIMSS NGFS (heat detections) | No key needed | Fetched server-side from CIMSS's public NGFS RealEarth service (`re-ngfs-pub.ssec.wisc.edu`), which only answers a viewer session (cookie + session handshake), so browsers can't call it directly. Each 5-minute GOES scan is downloaded once and cached for 6 h; nothing is polled while nobody has the layer open. `NWS_USER_AGENT` identifies the app. |
 | NASA GIBS (Earth basemap) | No key needed | Public WMTS tiles of the daily MODIS Terra/Aqua true-color mosaic, fetched straight from the browser (no server involvement). |
 | Nominatim (geocoding) | No key needed | Uses OSM data; `NWS_USER_AGENT` string is also used here as User-Agent per their policy. |
 
@@ -217,4 +218,4 @@ The architecture is designed for easy extension. For each new layer:
 4. Add a proxy route under `server/src/routes/`
 5. Add a toggle to `Sidebar.tsx`
 
-Shipped since: hurricanes (NOAA NHC), lightning (Blitzortung — the server records every strike around the clock, flagging any blind spot such as a restart's minute or two, and the globe opens on the last 24 h as age-colored X marks with live strikes on top), FIRMS fire hotspots, ships (AISStream), satellite tracker (CelesTrak TLE + satellite.js), the Earth map type (NASA MODIS Terra/Aqua daily true color via GIBS — AM/PM passes, date-steppable back to 2000).
+Shipped since: hurricanes (NOAA NHC), lightning (Blitzortung — the server records every strike around the clock, flagging any blind spot such as a restart's minute or two, and the globe opens on the last 24 h as age-colored X marks with live strikes on top), FIRMS fire hotspots, ships (AISStream), satellite tracker (CelesTrak TLE + satellite.js), the Earth map type (NASA MODIS Terra/Aqua daily true color via GIBS — AM/PM passes, date-steppable back to 2000), NOAA NGFS heat detections (GOES-East/West fire detections from the Next Generation Fire System every 5 minutes, drawn as each detection's ~2–5 km satellite pixel and colored by how recently it was hot over the past 1/3/6 h).

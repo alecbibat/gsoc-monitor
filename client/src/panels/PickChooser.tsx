@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import { usePickChooserStore } from './pickChooserStore';
 import { usePanelStore } from './panelStore';
 import { alertColorHex } from '../layers/alerts/alertsData';
+import { pixelStyle } from '../layers/ngfs/ngfsMeta';
+import type { NgfsPixel } from '../types';
 import type { PanelKind } from '../types';
 
 // Colour swatch for a pick row, where one exists. NWS alerts are colour-coded
@@ -11,6 +13,8 @@ function itemColor(kind: PanelKind, payload: Record<string, unknown>): string | 
   if (kind === 'alerts') {
     return alertColorHex((payload.event as string) ?? '', (payload.severity as string) ?? 'Unknown');
   }
+  // NGFS pixels are coloured by how recently they were hot.
+  if (kind === 'ngfs') return pixelStyle(payload as unknown as NgfsPixel, Date.now()).color;
   return null;
 }
 
@@ -21,6 +25,7 @@ const KIND_LABEL: Partial<Record<PanelKind, string>> = {
   ships: 'SHIP',
   hurricanes: 'STORM',
   fires: 'FIRE',
+  ngfs: 'HEAT',
   satellites: 'SAT',
   locations: 'PIN',
 };

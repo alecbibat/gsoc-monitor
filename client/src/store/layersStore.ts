@@ -23,6 +23,12 @@ interface LayersState {
   setShipNames: (v: boolean) => void;
   firesNearMiles: 0 | 5 | 50 | 100 | 200;
   setFiresNearMiles: (v: 0 | 5 | 50 | 100 | 200) => void;
+  // NGFS heat detections: lookback window, and whether NGFS's non-wildland
+  // classes (industrial, gas flares, urban, volcano) are drawn.
+  ngfsHours: 1 | 3 | 6;
+  setNgfsHours: (v: 1 | 3 | 6) => void;
+  ngfsShowOther: boolean;
+  setNgfsShowOther: (v: boolean) => void;
   // 0 = global (all geocoded events); >0 = only events within N miles of a pin.
   newsNearMiles: 0 | 100 | 250 | 500;
   setNewsNearMiles: (v: 0 | 100 | 250 | 500) => void;
@@ -48,6 +54,7 @@ export const useLayersStore = create<LayersState>()(
         hurricanes: true,
         lightning: false,
         fires: false,
+        ngfs: false,
         smoke: false,
         aqi: false,
         fuel: false,
@@ -105,6 +112,10 @@ export const useLayersStore = create<LayersState>()(
       setShipNames: (v) => set({ shipNames: v }),
       firesNearMiles: 0,
       setFiresNearMiles: (v) => set({ firesNearMiles: v }),
+      ngfsHours: 1,
+      setNgfsHours: (v) => set({ ngfsHours: v }),
+      ngfsShowOther: false,
+      setNgfsShowOther: (v) => set({ ngfsShowOther: v }),
       newsNearMiles: 0,
       setNewsNearMiles: (v) => set({ newsNearMiles: v }),
       satelliteGroup: 'stations',
@@ -130,6 +141,8 @@ export const useLayersStore = create<LayersState>()(
         shipPaths: state.shipPaths,
         shipNames: state.shipNames,
         firesNearMiles: state.firesNearMiles,
+        ngfsHours: state.ngfsHours,
+        ngfsShowOther: state.ngfsShowOther,
         newsNearMiles: state.newsNearMiles,
         satelliteGroup: state.satelliteGroup,
         earthquakeMagnitude: state.earthquakeMagnitude,
@@ -153,6 +166,9 @@ export const useLayersStore = create<LayersState>()(
             newsMap: false,
             intel: false,
           },
+          // The server only serves these windows; a stale or hand-edited value
+          // would otherwise be refused (400) on every poll.
+          ngfsHours: ([1, 3, 6] as const).includes(p.ngfsHours as 1) ? p.ngfsHours! : current.ngfsHours,
         } as LayersState;
       },
     }
