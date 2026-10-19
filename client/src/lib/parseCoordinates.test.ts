@@ -83,6 +83,7 @@ describe('parseCoordinates', () => {
   it('reads Yandex links longitude-first', () => {
     expect(parseCoordinates('https://yandex.ru/maps/?ll=37.617300%2C55.755800&z=16')).toEqual({ lat: 55.7558, lon: 37.6173 });
     expect(parseCoordinates('https://yandex.com/maps/213/moscow/?pt=37.6173,55.7558&z=12')).toEqual({ lat: 55.7558, lon: 37.6173 });
+    expect(parseCoordinates('https://maps.yandex.ru/?ll=37.6173%2C55.7558&z=12')).toEqual({ lat: 55.7558, lon: 37.6173 });
   });
 
   it('leaves place names, addresses, postal codes and road numbers to the geocoder', () => {

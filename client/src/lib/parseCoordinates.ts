@@ -38,7 +38,7 @@ const URL_PATTERNS: RegExp[] = [
 ];
 
 // Yandex writes its points longitude first (ll=37.6173,55.7558 is Moscow).
-const YANDEX_RE = new RegExp(String.raw`^(?:https?://)?(?:www\.)?yandex\.[a-z.]+/maps.*[?&](?:pt|ll)=(${NUM})${SEP}(${NUM})`, 'i');
+const YANDEX_RE = new RegExp(String.raw`^(?:https?://)?(?:www\.|maps\.)?yandex\.[a-z.]+/.*[?&](?:pt|ll)=(${NUM})${SEP}(${NUM})`, 'i');
 
 function parseMapUrl(s: string): LatLon | null {
   if (!/^(?:https?:\/\/|www\.|maps\.|geo:)/i.test(s)) return null;
