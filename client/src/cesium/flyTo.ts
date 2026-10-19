@@ -136,15 +136,15 @@ export function zoomForHeight(heightMeters: number): number {
 
 /**
  * What the camera is looking at, as a geocoder bias: the point under the
- * centre of the view and a zoom level. Null when the whole globe is in view
- * (nothing to prefer) or the camera state is unusable.
+ * centre of the view and a zoom level. Sent even with the whole globe in
+ * view — the server ignores it then, except for "near me" searches. Null when
+ * the camera state is unusable.
  */
 export function cameraFocus(viewer: Cesium.Viewer): GeocodeBias | null {
   const { camera, scene } = viewer;
   const height = camera.positionCartographic?.height;
   if (height === undefined || !Number.isFinite(height)) return null;
   const zoom = zoomForHeight(height);
-  if (zoom <= 4) return null;
   const canvas = scene.canvas;
   const hit = camera.pickEllipsoid(
     new Cesium.Cartesian2(canvas.clientWidth / 2, canvas.clientHeight / 2),

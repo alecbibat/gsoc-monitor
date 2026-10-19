@@ -7,9 +7,9 @@ import geocodeRouter, {
   type Candidate,
   type FetchJson,
   cleanQuery,
+  codeToken,
   coverage,
   createGeocoder,
-  unexplained,
   normalizeNominatim,
   normalizePhoton,
   parseBias,
@@ -17,6 +17,8 @@ import geocodeRouter, {
   sanitizeBbox,
   termsFor,
   tokenize,
+  unexplained,
+  wantsNearby,
 } from './geocode';
 
 // ── Fixtures (trimmed real payloads) ──────────────────────────────────────────
@@ -104,6 +106,25 @@ describe('cleanQuery', () => {
     expect(cleanQuery('Near North Side')).toBe('Near North Side');
     expect(cleanQuery('near me')).toBe('near me');
   });
+
+  it('says when the query asked for the nearest one', () => {
+    expect(wantsNearby('starbucks near me')).toBe(true);
+    expect(wantsNearby('nearest  hospital')).toBe(true);
+    expect(wantsNearby('starbucks  seattle')).toBe(false);
+    expect(wantsNearby('Near North Side')).toBe(false);
+  });
+});
+
+describe('codeToken', () => {
+  it('spots a bare code, or a code named as an airport', () => {
+    expect(codeToken('LAX')).toBe('lax');
+    expect(codeToken('jfk airport')).toBe('jfk');
+    expect(codeToken('KLAX')).toBe('klax');
+    expect(codeToken('nyc')).toBe('nyc');
+    expect(codeToken('pittsburgh')).toBeNull();
+    expect(codeToken('pizza hut')).toBeNull();
+    expect(codeToken('i')).toBeNull();
+  });
 });
 
 describe('tokenize', () => {
@@ -164,7 +185,38 @@ describe('rankByCoverage', () => {
       id, name: id, context: '', category: null, lat: 0, lon: 0, bbox: null, kind: 'city', fullMatch: false, source: 'photon',
     },
     terms,
-    regionTerms: [],
+    regionTerms: terms,
+    codeTerms: [],
+  });
+
+  it('moves up only a result that explains the missing words by where it is', () => {
+    // "münchen": Photon's top is Munich (matched by its local name, returned
+    // in English); a Berlin street that merely contains the word stays below.
+    const ranked = rankByCoverage('münchen', [
+      { ...c('munich', termsFor(['Munich', 'Bavaria', 'Germany'], 'DE')), regionTerms: termsFor(['Munich', 'Bavaria', 'Germany'], 'DE') },
+      { ...c('street', termsFor(['Münchener Straße', 'Berlin', 'Germany'], 'DE')), regionTerms: termsFor(['Berlin', 'Germany'], 'DE') },
+    ]);
+    expect(ranked.map((r) => r.place.id)).toEqual(['munich', 'street']);
+    expect(ranked[0].place.fullMatch).toBe(false);
+  });
+
+  it("doesn't read a half-typed last word as a region code while suggesting", () => {
+    // Paused at "new or" on the way to "new orleans".
+    const ranked = rankByCoverage(
+      'new or',
+      [c('nola', termsFor(['New Orleans', 'Louisiana'], 'US', 'Louisiana')), c('newport', termsFor(['Newport', 'Oregon'], 'US', 'Oregon'))],
+      'suggest'
+    );
+    expect(ranked.map((r) => r.place.id)).toEqual(['nola', 'newport']);
+    // Not sure enough for Enter to skip the full search.
+    expect(ranked.every((r) => !r.place.fullMatch)).toBe(true);
+    // As a finished query, "or" is Oregon.
+    expect(rankByCoverage('new or', ranked)[0].place.id).toBe('newport');
+  });
+
+  it('never marks a code-like suggestion as a sure thing', () => {
+    const [top] = rankByCoverage('lax', [c('lax-village', termsFor(['Lax', 'Valais', 'Switzerland'], 'CH'))], 'suggest');
+    expect(top.place.fullMatch).toBe(false);
   });
 
   it('lifts a full match over a partial one and keeps provider order among equals', () => {
@@ -440,7 +492,7 @@ describe('createGeocoder', () => {
 
   it('does not let one ranking leak into the cached copy another request ranks', async () => {
     const { search } = fakeUpstreams({ photon: () => photonCollection(SPRINGFIELD_MO, SPRINGFIELD_IL) });
-    const a = await search('springfield il', 'suggest', null);
+    const a = await search('springfield il', 'search', null);
     const b = await search('springfield', 'suggest', null);
     expect(a.map((r) => r.id)).toEqual(['photon:R2', 'photon:R1']);
     expect(b.map((r) => r.id)).toEqual(['photon:R1', 'photon:R2']);
@@ -504,6 +556,73 @@ describe('createGeocoder', () => {
     const out = await geocode('pittsburgh ohio', 'search', null);
     expect(calls).toEqual(['photon.komoot.io']);
     expect(out).toMatchObject({ degraded: true, results: [{ id: 'photon:R130034' }] });
+  });
+
+  it('answers an airport code with the airport, which only Nominatim indexes by code', async () => {
+    const laxVillage = photonFeature(7.9, 46.38, {
+      osm_type: 'N', osm_id: 11, osm_key: 'place', osm_value: 'village', type: 'city',
+      name: 'Lax', state: 'Valais', country: 'Switzerland', countrycode: 'CH',
+    });
+    const laxAirport = {
+      osm_type: 'way', osm_id: 22, lat: '33.9425', lon: '-118.4081', category: 'aeroway', type: 'aerodrome',
+      addresstype: 'aeroway', name: 'Los Angeles International Airport',
+      display_name: 'Los Angeles International Airport, Los Angeles, California, United States',
+      address: { city: 'Los Angeles', state: 'California', country: 'United States', country_code: 'us' },
+      namedetails: { name: 'Los Angeles International Airport', iata: 'LAX', icao: 'KLAX' },
+    };
+    const { calls, search } = fakeUpstreams({ photon: () => photonCollection(laxVillage), nominatim: () => [laxAirport] });
+    const results = await search('LAX', 'search', null);
+    expect(results[0]).toMatchObject({ id: 'nominatim:W22', kind: 'poi', category: 'Aerodrome' });
+    expect(results.map((r) => r.id)).toContain('photon:N11');
+    expect(calls.some((u) => u.includes('namedetails=1'))).toBe(true);
+  });
+
+  it('keeps Nominatim alternatives in the list even when Photon fills it', async () => {
+    const streets = Array.from({ length: 8 }, (_, i) =>
+      photonFeature(-80 + i * 0.01, 40.44, {
+        osm_type: 'W', osm_id: 100 + i, osm_key: 'highway', osm_value: 'residential', type: 'street',
+        name: 'Pennsylvania Avenue', city: 'Pittsburgh', state: 'Pennsylvania', country: 'United States', countrycode: 'US',
+      })
+    );
+    const dcAve = {
+      osm_type: 'way', osm_id: 6, lat: '38.8964', lon: '-77.0262', category: 'highway', type: 'primary',
+      addresstype: 'road', name: 'Pennsylvania Avenue Northwest',
+      display_name: 'Pennsylvania Avenue Northwest, Washington, District of Columbia, 20004, United States',
+      address: { road: 'Pennsylvania Avenue Northwest', city: 'Washington', state: 'District of Columbia', country: 'United States', country_code: 'us' },
+    };
+    // Neither explains "xyzzy", so Photon's nearby streets lead — but
+    // Nominatim's answer still makes the list.
+    const { search } = fakeUpstreams({ photon: () => photonCollection(...streets), nominatim: () => [dcAve] });
+    const results = await search('pennsylvania avenue xyzzy', 'search', { lat: 40.44, lon: -79.99, zoom: 13 });
+    expect(results).toHaveLength(6);
+    expect(results[0].source).toBe('photon');
+    expect(results.map((r) => r.id)).toContain('nominatim:W6');
+
+    // A street quadrant says which city, like a state code does.
+    const quadrant = fakeUpstreams({ photon: () => photonCollection(...streets), nominatim: () => [dcAve] });
+    const [top] = await quadrant.search('pennsylvania ave nw', 'search', { lat: 40.44, lon: -79.99, zoom: 13 });
+    expect(top.id).toBe('nominatim:W6');
+  });
+
+  it('finds a place by a local name Nominatim knows it by', async () => {
+    const munich = photonFeature(11.5755, 48.1372, {
+      osm_type: 'R', osm_id: 62428, osm_key: 'place', osm_value: 'city', type: 'city',
+      name: 'Munich', state: 'Bavaria', country: 'Germany', countrycode: 'DE',
+    });
+    const street = photonFeature(13.33, 52.49, {
+      osm_type: 'W', osm_id: 9, osm_key: 'highway', osm_value: 'residential', type: 'street',
+      name: 'Münchener Straße', city: 'Berlin', state: 'Berlin', country: 'Germany', countrycode: 'DE',
+    });
+    const nomMunich = {
+      osm_type: 'relation', osm_id: 62428, lat: '48.1372', lon: '11.5755', category: 'boundary', type: 'administrative',
+      addresstype: 'city', name: 'Munich', display_name: 'Munich, Bavaria, Germany',
+      address: { city: 'Munich', state: 'Bavaria', country: 'Germany', country_code: 'de' },
+      namedetails: { name: 'München', 'name:en': 'Munich' },
+    };
+    const { search } = fakeUpstreams({ photon: () => photonCollection(munich, street), nominatim: () => [nomMunich] });
+    const results = await search('münchen', 'search', { lat: 52.52, lon: 13.4, zoom: 12 });
+    expect(results[0].name).toBe('Munich');
+    expect(results.filter((r) => r.name === 'Munich')).toHaveLength(1); // same relation, deduped
   });
 
   it('throws only when both providers fail', async () => {
@@ -580,6 +699,19 @@ describe('GET /api/geocode', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect((await res.json()).results).toHaveLength(1);
+  });
+
+  it('biases "near me" to the view even from the zoomed-out globe', async () => {
+    upstream = () => Response.json(photonCollection(STARBUCKS));
+    await realFetch(`${base}?q=${encodeURIComponent('starbucks near me')}&mode=suggest&lat=38&lon=-95&zoom=3`);
+    const photon = new URL(seen[0].url);
+    expect(photon.searchParams.get('q')).toBe('starbucks');
+    expect(photon.searchParams.get('zoom')).toBe('5');
+    expect(photon.searchParams.get('lat')).toBe('38');
+    // Without "near me", the zoomed-out view prefers nothing.
+    seen.length = 0;
+    await realFetch(`${base}?q=route-test-unbiased&mode=suggest&lat=38&lon=-95&zoom=3`);
+    expect(new URL(seen[0].url).searchParams.get('lat')).toBeNull();
   });
 
   it('answers 502 when every provider fails', async () => {

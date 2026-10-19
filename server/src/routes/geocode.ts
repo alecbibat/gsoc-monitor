@@ -57,18 +57,23 @@ export interface Bias {
 }
 
 // A result plus the words it can account for (its names, address, region
-// codes and their abbreviations) — the input to query-coverage ranking — and
-// the subset that only says where it is (city, county, state, country).
+// codes and their abbreviations) — the input to query-coverage ranking — the
+// subset that only says where it is (city, county, state, country), and the
+// codes it goes by (an airport's IATA/ICAO code, a short name like "NYC").
 export interface Candidate {
   place: Place;
   terms: string[];
   regionTerms: string[];
+  codeTerms: string[];
 }
 
 export type FetchJson = (url: string, timeoutMs: number) => Promise<unknown>;
 
 const SUGGEST_LIMIT = 6;
 const SEARCH_LIMIT = 6;
+// When Photon's answer leads, this many of the search's rows still go to
+// Nominatim's, so its different reading of the query stays one pick away.
+const NOMINATIM_ALTERNATIVES = 2;
 // Both modes ask Photon for the same count, so the Enter-press search for a
 // query reuses the cached suggestions fetch instead of making a second one.
 const PHOTON_LIMIT = 8;
@@ -92,6 +97,11 @@ export function cleanQuery(raw: string): string {
   return stripped || collapsed;
 }
 
+/** The query asks for the nearest one ("starbucks near me", "nearest hospital"). */
+export function wantsNearby(raw: string): boolean {
+  return cleanQuery(raw) !== raw.replace(/\s+/g, ' ').trim();
+}
+
 /** Lowercased, accent-folded word tokens. */
 export function tokenize(s: string): string[] {
   return s
@@ -101,6 +111,8 @@ export function tokenize(s: string): string[] {
     .split(/[^\p{L}\p{N}]+/u)
     .filter(Boolean);
 }
+
+const QUADRANTS = new Set(['nw', 'ne', 'sw', 'se']);
 
 // Words a place's label never needs to account for — except "in" and "on"
 // as the last word, where they're Indiana and Ontario ("gary in").
@@ -219,14 +231,21 @@ function wordMatches(word: string, terms: string[]): boolean {
   return false;
 }
 
-function queryWords(query: string): string[] {
-  const words = tokenize(query);
+// While typing, a last word of one or two letters is unfinished as often as
+// it's a code: "new or" is on its way to "new orleans", not Oregon.
+function halfTypedCode(words: string[], mode: SearchMode): boolean {
+  return mode === 'suggest' && words.length > 1 && words[words.length - 1].length <= 2;
+}
+
+function queryWords(query: string, mode: SearchMode = 'search'): string[] {
+  let words = tokenize(query);
+  if (halfTypedCode(words, mode)) words = words.slice(0, -1);
   return words.filter((w, i) => !STOPWORDS.has(w) || (i === words.length - 1 && TRAILING_CODES.has(w)));
 }
 
 /** Fraction (0–1) of the query's words this result accounts for. */
-export function coverage(query: string, terms: string[]): number {
-  const words = queryWords(query);
+export function coverage(query: string, terms: string[], mode: SearchMode = 'search'): number {
+  const words = queryWords(query, mode);
   if (words.length === 0) return 1;
   let hit = 0;
   for (const w of words) if (wordMatches(w, terms)) hit++;
@@ -234,25 +253,51 @@ export function coverage(query: string, terms: string[]): number {
 }
 
 /** The query's words this result doesn't account for. */
-export function unexplained(query: string, terms: string[]): string[] {
-  return queryWords(query).filter((w) => !wordMatches(w, terms));
+export function unexplained(query: string, terms: string[], mode: SearchMode = 'search'): string[] {
+  return queryWords(query, mode).filter((w) => !wordMatches(w, terms));
 }
 
 /**
- * Stable re-rank by coverage: the provider's own order (prominence, nearness)
- * stands among results that explain the query equally well, but one that
- * leaves words unexplained — Springfield, MO for "springfield il" — drops
- * below one that doesn't. Stamps each place's fullMatch.
+ * A query that is (or names) a code — "lax", "jfk airport", "nyc" — returns
+ * that code. Photon doesn't index IATA/ICAO codes or short names, so it
+ * answers these with whatever is literally called "Lax"; Nominatim does.
  */
-export function rankByCoverage(query: string, candidates: Candidate[]): Candidate[] {
-  return candidates
-    .map((c, i) => {
-      const cov = coverage(query, c.terms);
-      c.place.fullMatch = cov === 1;
-      return { c, cov, i };
-    })
-    .sort((a, b) => b.cov - a.cov || a.i - b.i)
-    .map((x) => x.c);
+export function codeToken(query: string): string | null {
+  const words = queryWords(query);
+  if (words.length === 1 && /^[a-z]{2,4}$/.test(words[0])) return words[0];
+  if (words.length === 2) {
+    const i = words.findIndex((w) => w === 'airport' || w === 'intl' || w === 'international');
+    const other = words[1 - i];
+    if (i >= 0 && /^[a-z]{3,4}$/.test(other)) return other;
+  }
+  return null;
+}
+
+/**
+ * The provider's own order (prominence, nearness) stands, with one
+ * exception: when the top result leaves part of the query unexplained and a
+ * later one explains more of it by where it is — Springfield, IL for
+ * "springfield il" — that one moves up. Only a "where" can promote: a later
+ * result that merely contains a word literally (a "Münchener Straße" for
+ * "münchen", when the top result is Munich by its local name) doesn't.
+ * Stamps each place's fullMatch: whether the query is fully accounted for,
+ * so the box can fly on Enter without asking again.
+ */
+export function rankByCoverage(query: string, candidates: Candidate[], mode: SearchMode = 'search'): Candidate[] {
+  const covs = candidates.map((c) => coverage(query, c.terms, mode));
+  // Suggestions for a code, or with a half-typed code at the end, are only
+  // guesses: Enter should run the full search (which can ask Nominatim).
+  const unsure = mode === 'suggest' && (codeToken(query) !== null || halfTypedCode(tokenize(query), mode));
+  candidates.forEach((c, i) => {
+    c.place.fullMatch = !unsure && covs[i] === 1;
+  });
+  if (candidates.length < 2 || covs[0] === 1) return candidates;
+  const missing = unexplained(query, candidates[0].terms, mode);
+  const k = candidates.findIndex(
+    (c, i) => i > 0 && covs[i] > covs[0] && missing.some((w) => wordMatches(w, c.regionTerms))
+  );
+  if (k < 0) return candidates;
+  return [candidates[k], ...candidates.slice(0, k), ...candidates.slice(k + 1)];
 }
 
 // ── Bounding boxes ───────────────────────────────────────────────────────────
@@ -503,6 +548,8 @@ export function normalizePhoton(data: unknown): Candidate[] {
         cc,
         kind === 'state' ? p.name : p.state
       ),
+      // Photon returns no code tags.
+      codeTerms: [],
     });
   }
   return out;
@@ -523,7 +570,12 @@ interface NominatimItem {
   // [minLat, maxLat, minLon, maxLon] as strings
   boundingbox?: string[];
   address?: Record<string, string>;
+  // Every name tag: name:xx translations, alt/old/short names, iata/icao codes.
+  namedetails?: Record<string, string> | null;
 }
+
+// Name tags that are codes or short forms people search by.
+const CODE_TAGS = new Set(['iata', 'icao', 'faa', 'short_name', 'alt_short_name', 'official_short_name', 'alt_name']);
 
 function nominatimKind(item: NominatimItem, named: boolean, hasHouseNumber: boolean): PlaceKind {
   const at = item.addresstype;
@@ -560,6 +612,7 @@ export function normalizeNominatim(data: unknown): Candidate[] {
       kind === 'country' ? null : a.country,
     ]);
     const osmLetter = item.osm_type ? item.osm_type[0].toUpperCase() : '';
+    const names = item.namedetails && typeof item.namedetails === 'object' ? item.namedetails : {};
     out.push({
       place: {
         id: `nominatim:${osmLetter}${item.osm_id ?? `${lat},${lon}`}`,
@@ -573,12 +626,26 @@ export function normalizeNominatim(data: unknown): Candidate[] {
         fullMatch: false,
         source: 'nominatim',
       },
-      terms: termsFor([item.display_name, ownName, humanize(item.type), a.postcode], cc, kind === 'state' ? name : a.state),
-      regionTerms: termsFor(
-        [REGION_KINDS.has(kind) ? name : null, a.city, a.town, a.village, a.hamlet, a.municipality, a.suburb, a.county, a.state, a.country],
+      // All of its names, not just the English one asked for: a search for
+      // "München" or "Bombay" matched it by one of the others.
+      terms: termsFor(
+        [item.display_name, ownName, humanize(item.type), a.postcode, ...Object.values(names)],
         cc,
         kind === 'state' ? name : a.state
       ),
+      regionTerms: termsFor(
+        [
+          ...(REGION_KINDS.has(kind) ? [name, ...Object.values(names)] : []),
+          a.city, a.town, a.village, a.hamlet, a.municipality, a.suburb, a.county, a.state, a.country,
+        ],
+        cc,
+        kind === 'state' ? name : a.state
+      ),
+      codeTerms: Object.entries(names)
+        .filter(([tag]) => CODE_TAGS.has(tag))
+        .flatMap(([, v]) => String(v).split(';'))
+        .map((v) => tokenize(v).join(' '))
+        .filter(Boolean),
     });
   }
   return out;
@@ -637,6 +704,7 @@ function nominatimUrl(q: string, bias: Bias | null): string {
     format: 'jsonv2',
     limit: String(SEARCH_LIMIT),
     addressdetails: '1',
+    namedetails: '1',
     'accept-language': 'en',
     q,
   });
@@ -716,9 +784,10 @@ export function createGeocoder(deps: GeocodeDeps = {}) {
     const q = cleanQuery(rawQuery);
 
     if (mode === 'suggest') {
-      const ranked = rankByCoverage(q, copy(await photon(q, bias)));
+      const ranked = rankByCoverage(q, copy(await photon(q, bias)), 'suggest');
       return { results: ranked.slice(0, SUGGEST_LIMIT).map((c) => c.place), degraded: false };
     }
+    const code = codeToken(q);
 
     let fromPhoton: Candidate[] = [];
     let photonError: unknown = null;
@@ -728,7 +797,9 @@ export function createGeocoder(deps: GeocodeDeps = {}) {
       photonError = err;
     }
     const best = fromPhoton[0];
-    if (best?.place.fullMatch) {
+    // A code needs Nominatim's opinion even when Photon found something
+    // literally named that ("Lax", Switzerland, for "lax").
+    if (best?.place.fullMatch && !code) {
       return { results: fromPhoton.slice(0, SEARCH_LIMIT).map((c) => c.place), degraded: false };
     }
 
@@ -739,6 +810,9 @@ export function createGeocoder(deps: GeocodeDeps = {}) {
     } catch (err) {
       nominatimError = err;
     }
+    // The result that goes by the code itself (LAX the airport) answers it.
+    const coded = code ? fromNominatim.find((c) => c.codeTerms.includes(code)) : undefined;
+    if (coded) fromNominatim = [coded, ...fromNominatim.filter((c) => c !== coded)];
     // Nothing to show and a provider failed: that's an outage, not "no such
     // place" — Photon might well have found it.
     if (!best && fromNominatim.length === 0 && (photonError || nominatimError)) {
@@ -765,20 +839,24 @@ export function createGeocoder(deps: GeocodeDeps = {}) {
     const nomBest = fromNominatim[0];
     const nearView = (p: Place) =>
       !bias || distanceKm(bias.lat, bias.lon, p.lat, p.lon) <= 4 * viewRadiusKm(bias.zoom);
+    // A street quadrant ("pennsylvania ave nw") says which city as surely as
+    // a state code does: the local streets don't carry it.
+    const saysWhere = (w: string) =>
+      wordMatches(w, nomBest.regionTerms) || (QUADRANTS.has(w) && wordMatches(w, nomBest.terms));
     const nominatimLeads =
       nomBest !== undefined &&
       (!best ||
+        coded !== undefined ||
         (coverage(q, nomBest.terms) > coverage(q, best.terms) &&
-          (unexplained(q, best.terms).some((w) => wordMatches(w, nomBest.regionTerms)) ||
-            nearView(nomBest.place) ||
-            !nearView(best.place))));
+          (unexplained(q, best.terms).some(saysWhere) || nearView(nomBest.place) || !nearView(best.place))));
 
     if (nominatimLeads) {
       push(fromNominatim);
       push(fromPhoton);
     } else {
-      push(fromPhoton);
+      push(fromPhoton.slice(0, SEARCH_LIMIT - Math.min(NOMINATIM_ALTERNATIVES, fromNominatim.length)));
       push(fromNominatim);
+      push(fromPhoton);
     }
     return { results: merged.slice(0, SEARCH_LIMIT), degraded: Boolean(photonError || nominatimError) };
   };
@@ -795,7 +873,11 @@ export function createGeocodeRouter(deps: GeocodeDeps = {}) {
       return;
     }
     const mode: SearchMode = req.query.mode === 'suggest' ? 'suggest' : 'search';
-    const bias = parseBias(req.query.lat, req.query.lon, req.query.zoom);
+    // "near me" from a zoomed-out globe still means near what's in view: the
+    // view's centre, at the widest radius Photon honours (zoom 5).
+    const bias =
+      parseBias(req.query.lat, req.query.lon, req.query.zoom) ??
+      (wantsNearby(q) ? parseBias(req.query.lat, req.query.lon, '5') : null);
 
     try {
       const { results, degraded } = await search(q, mode, bias);
