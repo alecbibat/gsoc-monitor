@@ -58,11 +58,13 @@ export interface Bias {
 
 // A result plus the words it can account for (its names, address, region
 // codes and their abbreviations) — the input to query-coverage ranking — the
-// subset that only says where it is (city, county, state, country), and the
-// codes it goes by (an airport's IATA/ICAO code, a short name like "NYC").
+// words of its own name and street, the subset that says where it is (the
+// places that contain it: city, county, state, country — never its own
+// name), and the codes it goes by (an airport's IATA/ICAO code, "NYC").
 export interface Candidate {
   place: Place;
   terms: string[];
+  nameTerms: string[];
   regionTerms: string[];
   codeTerms: string[];
 }
@@ -209,11 +211,12 @@ function editDistance(a: string, b: string, max: number): number {
 // A query word matches a term it equals or begins (the last word is usually
 // half-typed), or — at four letters and up — one it misspells: within one edit
 // of the term or of the term's same-length prefix (two edits at eight+).
-// Numbers (house numbers, ZIP codes) and one- or two-letter words must match
-// exactly: those are codes ("il", "nw"), and as prefixes they'd match
-// anything — "il" begins "Île-de-France".
-function wordMatches(word: string, terms: string[]): boolean {
-  if (word.length <= 2) return terms.includes(word);
+// Numbers (house numbers, ZIP codes) must match exactly. So must one- and
+// two-letter words, except against the place's own name: they're codes
+// ("il", "nw"), and as a prefix of a region they'd match anything — "il"
+// begins "Île-de-France" — but "new or" is on its way to New Orleans.
+function wordMatches(word: string, terms: string[], nameTerms: string[] = []): boolean {
+  if (word.length <= 2) return terms.includes(word) || nameTerms.some((t) => t.startsWith(word));
   const numeric = /^\d+$/.test(word);
   const maxEdits = word.length >= 8 ? 2 : word.length >= 4 ? 1 : 0;
   for (const term of terms) {
@@ -244,17 +247,17 @@ function queryWords(query: string, mode: SearchMode = 'search'): string[] {
 }
 
 /** Fraction (0–1) of the query's words this result accounts for. */
-export function coverage(query: string, terms: string[], mode: SearchMode = 'search'): number {
+export function coverage(query: string, terms: string[], mode: SearchMode = 'search', nameTerms: string[] = []): number {
   const words = queryWords(query, mode);
   if (words.length === 0) return 1;
   let hit = 0;
-  for (const w of words) if (wordMatches(w, terms)) hit++;
+  for (const w of words) if (wordMatches(w, terms, nameTerms)) hit++;
   return hit / words.length;
 }
 
 /** The query's words this result doesn't account for. */
-export function unexplained(query: string, terms: string[], mode: SearchMode = 'search'): string[] {
-  return queryWords(query, mode).filter((w) => !wordMatches(w, terms));
+export function unexplained(query: string, terms: string[], mode: SearchMode = 'search', nameTerms: string[] = []): string[] {
+  return queryWords(query, mode).filter((w) => !wordMatches(w, terms, nameTerms));
 }
 
 /**
@@ -277,14 +280,15 @@ export function codeToken(query: string): string | null {
  * The provider's own order (prominence, nearness) stands, with one
  * exception: when the top result leaves part of the query unexplained and a
  * later one explains more of it by where it is — Springfield, IL for
- * "springfield il" — that one moves up. Only a "where" can promote: a later
- * result that merely contains a word literally (a "Münchener Straße" for
- * "münchen", when the top result is Munich by its local name) doesn't.
+ * "springfield il" — that one moves up. Only a "where" can promote, word for
+ * word: a later result that merely contains the word (a "Münchener Straße"
+ * or the town of Münchenstein for "münchen", when the top result is Munich
+ * by its local name) doesn't.
  * Stamps each place's fullMatch: whether the query is fully accounted for,
  * so the box can fly on Enter without asking again.
  */
 export function rankByCoverage(query: string, candidates: Candidate[], mode: SearchMode = 'search'): Candidate[] {
-  const covs = candidates.map((c) => coverage(query, c.terms, mode));
+  const covs = candidates.map((c) => coverage(query, c.terms, mode, c.nameTerms));
   // Suggestions for a code, or with a half-typed code at the end, are only
   // guesses: Enter should run the full search (which can ask Nominatim).
   const unsure = mode === 'suggest' && (codeToken(query) !== null || halfTypedCode(tokenize(query), mode));
@@ -292,9 +296,10 @@ export function rankByCoverage(query: string, candidates: Candidate[], mode: Sea
     c.place.fullMatch = !unsure && covs[i] === 1;
   });
   if (candidates.length < 2 || covs[0] === 1) return candidates;
-  const missing = unexplained(query, candidates[0].terms, mode);
+  const missing = unexplained(query, candidates[0].terms, mode, candidates[0].nameTerms);
+  // Whole words only: "munchen" doesn't make Münchenstein's canton a "where".
   const k = candidates.findIndex(
-    (c, i) => i > 0 && covs[i] > covs[0] && missing.some((w) => wordMatches(w, c.regionTerms))
+    (c, i) => i > 0 && covs[i] > covs[0] && missing.some((w) => c.regionTerms.includes(w))
   );
   if (k < 0) return candidates;
   return [candidates[k], ...candidates.slice(0, k), ...candidates.slice(k + 1)];
@@ -449,8 +454,11 @@ function joinContext(name: string, parts: Array<string | undefined | null>): str
 
 const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
 
-// Kinds whose own name is a "where" (a city, a state), not a "what".
-const REGION_KINDS = new Set<PlaceKind>(['country', 'state', 'county', 'city', 'locality']);
+/** The places containing this one: its address parts, minus itself (a city's address names the city). */
+function enclosing(name: string, parts: Array<string | undefined>): string[] {
+  const own = name.trim().toLowerCase();
+  return parts.filter((p): p is string => Boolean(p) && p!.trim().toLowerCase() !== own);
+}
 
 // ── Photon ───────────────────────────────────────────────────────────────────
 
@@ -543,10 +551,11 @@ export function normalizePhoton(data: unknown): Candidate[] {
         cc,
         kind === 'state' ? p.name : p.state
       ),
+      nameTerms: [name, p.street].flatMap((t) => (t ? tokenize(t) : [])),
       regionTerms: termsFor(
-        [REGION_KINDS.has(kind) ? p.name : null, p.locality, p.district, p.city, p.county, p.state, p.country],
+        enclosing(name, [p.locality, p.district, p.city, p.county, p.state, p.country]),
         cc,
-        kind === 'state' ? p.name : p.state
+        kind === 'state' ? undefined : p.state
       ),
       // Photon returns no code tags.
       codeTerms: [],
@@ -633,13 +642,11 @@ export function normalizeNominatim(data: unknown): Candidate[] {
         cc,
         kind === 'state' ? name : a.state
       ),
+      nameTerms: [name, a.road, ...Object.values(names)].flatMap((t) => (t ? tokenize(t) : [])),
       regionTerms: termsFor(
-        [
-          ...(REGION_KINDS.has(kind) ? [name, ...Object.values(names)] : []),
-          a.city, a.town, a.village, a.hamlet, a.municipality, a.suburb, a.county, a.state, a.country,
-        ],
+        enclosing(name, [a.city, a.town, a.village, a.hamlet, a.municipality, a.suburb, a.county, a.state, a.country]),
         cc,
-        kind === 'state' ? name : a.state
+        kind === 'state' ? undefined : a.state
       ),
       codeTerms: Object.entries(names)
         .filter(([tag]) => CODE_TAGS.has(tag))
@@ -842,13 +849,15 @@ export function createGeocoder(deps: GeocodeDeps = {}) {
     // A street quadrant ("pennsylvania ave nw") says which city as surely as
     // a state code does: the local streets don't carry it.
     const saysWhere = (w: string) =>
-      wordMatches(w, nomBest.regionTerms) || (QUADRANTS.has(w) && wordMatches(w, nomBest.terms));
+      nomBest.regionTerms.includes(w) || (QUADRANTS.has(w) && wordMatches(w, nomBest.terms));
     const nominatimLeads =
       nomBest !== undefined &&
       (!best ||
         coded !== undefined ||
-        (coverage(q, nomBest.terms) > coverage(q, best.terms) &&
-          (unexplained(q, best.terms).some(saysWhere) || nearView(nomBest.place) || !nearView(best.place))));
+        (coverage(q, nomBest.terms, 'search', nomBest.nameTerms) > coverage(q, best.terms, 'search', best.nameTerms) &&
+          (unexplained(q, best.terms, 'search', best.nameTerms).some(saysWhere) ||
+            nearView(nomBest.place) ||
+            !nearView(best.place))));
 
     if (nominatimLeads) {
       push(fromNominatim);

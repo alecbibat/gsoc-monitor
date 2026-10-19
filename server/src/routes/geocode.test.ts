@@ -180,12 +180,14 @@ describe('coverage', () => {
 });
 
 describe('rankByCoverage', () => {
-  const c = (id: string, terms: string[]): Candidate => ({
+  // A place named `name` inside `regions`.
+  const c = (id: string, name: string, regions: string[], cc = 'US', state?: string): Candidate => ({
     place: {
-      id, name: id, context: '', category: null, lat: 0, lon: 0, bbox: null, kind: 'city', fullMatch: false, source: 'photon',
+      id, name, context: '', category: null, lat: 0, lon: 0, bbox: null, kind: 'city', fullMatch: false, source: 'photon',
     },
-    terms,
-    regionTerms: terms,
+    terms: termsFor([name, ...regions], cc, state),
+    nameTerms: tokenize(name),
+    regionTerms: termsFor(regions, cc, state),
     codeTerms: [],
   });
 
@@ -193,37 +195,49 @@ describe('rankByCoverage', () => {
     // "münchen": Photon's top is Munich (matched by its local name, returned
     // in English); a Berlin street that merely contains the word stays below.
     const ranked = rankByCoverage('münchen', [
-      { ...c('munich', termsFor(['Munich', 'Bavaria', 'Germany'], 'DE')), regionTerms: termsFor(['Munich', 'Bavaria', 'Germany'], 'DE') },
-      { ...c('street', termsFor(['Münchener Straße', 'Berlin', 'Germany'], 'DE')), regionTerms: termsFor(['Berlin', 'Germany'], 'DE') },
+      c('munich', 'Munich', ['Bavaria', 'Germany'], 'DE'),
+      c('street', 'Münchener Straße', ['Berlin', 'Germany'], 'DE'),
+      // A town named for it: its own name isn't a "where".
+      c('town', 'Münchenstein', ['Basel-Landschaft', 'Switzerland'], 'CH'),
     ]);
-    expect(ranked.map((r) => r.place.id)).toEqual(['munich', 'street']);
+    expect(ranked.map((r) => r.place.id)).toEqual(['munich', 'street', 'town']);
     expect(ranked[0].place.fullMatch).toBe(false);
   });
 
   it("doesn't read a half-typed last word as a region code while suggesting", () => {
     // Paused at "new or" on the way to "new orleans".
-    const ranked = rankByCoverage(
-      'new or',
-      [c('nola', termsFor(['New Orleans', 'Louisiana'], 'US', 'Louisiana')), c('newport', termsFor(['Newport', 'Oregon'], 'US', 'Oregon'))],
-      'suggest'
-    );
-    expect(ranked.map((r) => r.place.id)).toEqual(['nola', 'newport']);
-    // Not sure enough for Enter to skip the full search.
-    expect(ranked.every((r) => !r.place.fullMatch)).toBe(true);
-    // As a finished query, "or" is Oregon.
-    expect(rankByCoverage('new or', ranked)[0].place.id).toBe('newport');
+    const places = () => [
+      c('nola', 'New Orleans', ['Louisiana'], 'US', 'Louisiana'),
+      c('newport', 'Newport', ['Oregon'], 'US', 'Oregon'),
+    ];
+    const suggested = rankByCoverage('new or', places(), 'suggest');
+    expect(suggested.map((r) => r.place.id)).toEqual(['nola', 'newport']);
+    // Not sure enough for Enter to skip the full search…
+    expect(suggested.every((r) => !r.place.fullMatch)).toBe(true);
+    // …and the full search agrees: "or" begins New Orleans' own name.
+    const searched = rankByCoverage('new or', places());
+    expect(searched.map((r) => r.place.id)).toEqual(['nola', 'newport']);
+    expect(searched[0].place.fullMatch).toBe(true);
+  });
+
+  it('still reads a finished two-letter code that begins no word of the top name', () => {
+    const ranked = rankByCoverage('portland or', [
+      c('maine', 'Portland', ['Cumberland County', 'Maine'], 'US', 'Maine'),
+      c('oregon', 'Portland', ['Multnomah County', 'Oregon'], 'US', 'Oregon'),
+    ]);
+    expect(ranked.map((r) => r.place.id)).toEqual(['oregon', 'maine']);
   });
 
   it('never marks a code-like suggestion as a sure thing', () => {
-    const [top] = rankByCoverage('lax', [c('lax-village', termsFor(['Lax', 'Valais', 'Switzerland'], 'CH'))], 'suggest');
+    const [top] = rankByCoverage('lax', [c('lax-village', 'Lax', ['Valais', 'Switzerland'], 'CH')], 'suggest');
     expect(top.place.fullMatch).toBe(false);
   });
 
   it('lifts a full match over a partial one and keeps provider order among equals', () => {
     const ranked = rankByCoverage('springfield il', [
-      c('mo', termsFor(['Springfield', 'Missouri'], 'US', 'Missouri')),
-      c('ma', termsFor(['Springfield', 'Massachusetts'], 'US', 'Massachusetts')),
-      c('il', termsFor(['Springfield', 'Illinois'], 'US', 'Illinois')),
+      c('mo', 'Springfield', ['Missouri'], 'US', 'Missouri'),
+      c('ma', 'Springfield', ['Massachusetts'], 'US', 'Massachusetts'),
+      c('il', 'Springfield', ['Illinois'], 'US', 'Illinois'),
     ]);
     expect(ranked.map((r) => r.place.id)).toEqual(['il', 'mo', 'ma']);
     expect(ranked.map((r) => r.place.fullMatch)).toEqual([true, false, false]);
