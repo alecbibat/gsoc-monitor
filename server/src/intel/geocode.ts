@@ -1,5 +1,6 @@
 import { cache } from '../cache';
 import { config } from '../config';
+import { nominatimTurn } from '../nominatimGate';
 
 // Server-side place-name → coordinates for intel items that arrive without
 // coordinates (news headlines, social posts). Nominatim's usage policy is ~1
@@ -44,6 +45,7 @@ export async function geocodePlace(
       keyFor(trimmed),
       GEO_TTL_MS,
       async () => {
+        await nominatimTurn();
         const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(trimmed)}`;
         const r = await fetch(url, {
           headers: { 'User-Agent': config.nwsUserAgent },

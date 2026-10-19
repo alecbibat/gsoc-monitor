@@ -11,7 +11,7 @@ Global Situational & Operational Conditions Monitor — a real-time 3D globe das
 - **Live flights** — adsb.fi ADS-B (free, no key), plane icons rotated to heading, favorites list, auto-refresh when camera moves.
 - **Satellites** — CelesTrak TLE + satellite.js SGP4 propagation; real-time orbits for Space Stations / Brightest / GPS / Weather / Starlink groups, click any satellite to trace its orbit ring and read live position, altitude, speed, and orbital elements.
 - **Time zones** — real zone polygons (timezone-boundary-builder / OpenStreetMap, ODbL) with a live clock on every zone, to the second, daylight-saving aware; boundaries are rebuilt from a release with `npm run build:timezones`.
-- **Search** — geocode (Nominatim), raw lat/lon input, auto-fly to results.
+- **Search** — Google-Maps-style place search: type a city, state, country, address or business and press Enter to fly there and drop a pin. Suggestions appear as you type and favor what's in view; typos and half-typed words are tolerated (Photon, with Nominatim as fallback). Also takes lat/lon in decimal or degrees-minutes-seconds, and pasted Google Maps / Apple Maps / OpenStreetMap links.
 - **Dockable panels** — any entity click opens a draggable/resizable detail window. Only one is open at a time: the next click replaces it, unless you lock a window (the padlock next to its close button), in which case it stays put and several can be kept open together. Windows you open on purpose rather than by clicking the map (the sidebar widgets, Property Watch pop-outs, fuel-zone results) start locked.
 
 ## Quick start (local dev)
@@ -43,7 +43,8 @@ npm run dev:client
 | RainViewer (radar) | No key needed | Public manifest + tile CDN. The free tier serves one fixed palette (the colour-scheme parameter is ignored) and currently no nowcast frames; the layer shows forecast frames automatically if they return. Tiles stop at zoom 7 (deeper requests get a "Zoom Level Not Supported" placeholder), so the layer caps there and Cesium magnifies those tiles when you zoom in further. |
 | NOAA/CIMSS NGFS (heat detections) | No key needed | Fetched server-side from CIMSS's public NGFS RealEarth service (`re-ngfs-pub.ssec.wisc.edu`), which only answers a viewer session (cookie + session handshake), so browsers can't call it directly. Each 5-minute GOES scan is downloaded once and cached for 6 h; nothing is polled while nobody has the layer open. `NWS_USER_AGENT` identifies the app. |
 | NASA GIBS (Earth basemap) | No key needed | Public WMTS tiles of the daily MODIS Terra/Aqua true-color mosaic, fetched straight from the browser (no server involvement). |
-| Nominatim (geocoding) | No key needed | Uses OSM data; `NWS_USER_AGENT` string is also used here as User-Agent per their policy. |
+| Photon (search) | No key needed | komoot's public OpenStreetMap geocoder (`photon.komoot.io`) — the search box's primary source, including suggestions as you type. Fair use: results are cached server-side for 24 h. |
+| Nominatim (geocoding) | No key needed | Uses OSM data; `NWS_USER_AGENT` string is also used here as User-Agent per their policy. Search fallback (never for as-you-type suggestions, which its policy forbids) and the intel feed's place lookups, sharing one 1 request/second gate. |
 
 ## Deploy to Heroku
 

@@ -7,24 +7,28 @@ interface CacheEntry<T> {
  * Minimal in-memory TTL cache. Good enough for a single-dyno deployment;
  * if this ever runs across multiple dynos, swap for a shared store (e.g. Redis).
  */
-class TtlCache {
+export class TtlCache {
   private store = new Map<string, CacheEntry<unknown>>();
   // Entries expire lazily on read, so a key that's never read again (per-query
   // geocodes, per-coordinate forecasts/routes) would otherwise sit in memory
   // forever on a small dyno. Cap the map with insertion-order eviction and
   // sweep expired entries periodically.
-  private readonly maxEntries = 2000;
+  private readonly maxEntries: number;
   // Last successful value per key, retained *past* its TTL so a failed refresh
   // can degrade to slightly-stale data instead of erroring. Bounded so a
   // high-cardinality key space (e.g. per-query geocoding) can't grow forever.
   private lastGood = new Map<string, unknown>();
-  private readonly maxLastGood = 500;
+  private readonly maxLastGood: number;
   // Concurrent misses on the same key share one upstream fetch instead of
   // stampeding it (several dashboards polling the same route collide at every
   // TTL expiry — costly against rate-limited/paid upstreams).
   private inflight = new Map<string, Promise<unknown>>();
 
-  constructor() {
+  // A high-churn key space (search-as-you-type geocoding) gets an instance of
+  // its own, so its keys can't push everyone else's entries out of this one.
+  constructor(opts?: { maxEntries?: number; maxLastGood?: number }) {
+    this.maxEntries = opts?.maxEntries ?? 2000;
+    this.maxLastGood = opts?.maxLastGood ?? 500;
     const sweep = setInterval(() => {
       const now = Date.now();
       for (const [key, entry] of this.store) {
