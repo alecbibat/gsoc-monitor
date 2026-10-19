@@ -1,5 +1,5 @@
-async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, init);
   if (!res.ok) {
     throw new Error(`Request to ${path} failed: ${res.status}`);
   }
@@ -56,10 +56,20 @@ export const api = {
       trackedTails: string[];
       events: import('../types').FlightEvent[];
     }>('/api/flights/registrations'),
-  geocode: (q: string) =>
-    getJson<Array<{ lat: string; lon: string; display_name: string; boundingbox: string[] }>>(
-      `/api/geocode?q=${encodeURIComponent(q)}`
-    ),
+  geocode: (
+    q: string,
+    opts: { mode: 'suggest' | 'search'; bias?: import('../types').GeocodeBias | null; signal?: AbortSignal }
+  ) => {
+    const qs = new URLSearchParams({ q, mode: opts.mode });
+    if (opts.bias) {
+      qs.set('lat', opts.bias.lat.toFixed(3));
+      qs.set('lon', opts.bias.lon.toFixed(3));
+      qs.set('zoom', String(opts.bias.zoom));
+    }
+    return getJson<{ results: import('../types').GeocodePlace[] }>(`/api/geocode?${qs}`, {
+      signal: opts.signal,
+    });
+  },
   ships: () => getJson<import('../types').ShipsResponse>('/api/ships'),
   satellites: (group: import('../types').SatelliteGroup) =>
     getJson<import('../types').SatellitesResponse>(`/api/satellites?group=${group}`),

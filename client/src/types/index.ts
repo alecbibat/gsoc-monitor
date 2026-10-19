@@ -773,3 +773,36 @@ export interface LightningHistoryResponse {
   connected: boolean; // collector's live connection state
   updated: number; // epoch seconds
 }
+
+// Place search (/api/geocode) — mirrors server/src/routes/geocode.ts.
+export type PlaceKind =
+  | 'country'
+  | 'state'
+  | 'county'
+  | 'city'
+  | 'locality'
+  | 'street'
+  | 'address'
+  | 'poi'
+  | 'other';
+
+export interface GeocodePlace {
+  id: string;
+  name: string;
+  context: string;
+  category: string | null;
+  lat: number;
+  lon: number;
+  /** [west, south, east, north] to frame, or null to frame the point by kind. */
+  bbox: [number, number, number, number] | null;
+  kind: PlaceKind;
+  /** Every word of the query is accounted for by this result. */
+  fullMatch: boolean;
+  source: 'photon' | 'nominatim';
+}
+
+export interface GeocodeBias {
+  lat: number;
+  lon: number;
+  zoom: number;
+}

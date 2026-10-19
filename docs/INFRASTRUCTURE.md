@@ -153,7 +153,7 @@ and Nominatim policy), `SHIPS_SCRAPE_CRUISEMAPPER`, `SHIPS_POLL_MINUTES`,
 | `/api/earthquakes` | earthquake.usgs.gov |
 | `/api/radar` | api.rainviewer.com (manifest only; tiles load in the browser from tilecache.rainviewer.com) |
 | `/api/flights` | opendata.adsb.fi |
-| `/api/geocode` | nominatim.openstreetmap.org |
+| `/api/geocode` | photon.komoot.io (primary, incl. suggestions), nominatim.openstreetmap.org (Enter-search fallback only) |
 | `/api/satellites` | celestrak.org |
 | `/api/rivers` | api.water.noaa.gov |
 | `/api/flood` (zone · precip · discharge) | hazards.fema.gov (FEMA NFHL), api.open-meteo.com, flood-api.open-meteo.com |
