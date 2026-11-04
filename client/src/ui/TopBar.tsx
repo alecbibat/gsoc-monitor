@@ -11,6 +11,8 @@ import { PinsWatchCluster } from '../screensaver/PinsWatchCluster';
 import { useMeasureStore } from '../measure/measureStore';
 import { selectActiveCrisisCount, useCrisisStore } from '../crisis/crisisStore';
 import { UserMenu } from '../auth/UserMenu';
+import { useAlertNotifyStore } from '../notify/alertNotifyStore';
+import { NOTIFY_RADIUS_MI } from '../notify/pinAlertMatch';
 import {
   fullscreenElement,
   fullscreenSupported,
@@ -412,6 +414,43 @@ function MeasureButton() {
   );
 }
 
+// On/off for the NWS-alert-near-a-pin notifications (screen flash + popup).
+function NotifyButton() {
+  const enabled = useAlertNotifyStore((s) => s.enabled);
+  const toggle = useAlertNotifyStore((s) => s.toggle);
+  return (
+    <button
+      onClick={toggle}
+      aria-pressed={enabled}
+      className={`pointer-events-auto flex items-center justify-center rounded-lg border p-2 shadow-panel backdrop-blur-sm transition-all ${
+        enabled
+          ? 'border-accent/40 bg-accent/10 text-accent'
+          : 'border-white/10 bg-ink-900/80 text-white/40 hover:text-white/70'
+      }`}
+      title={
+        enabled
+          ? `Alert notifications on: the screen flashes and a popup opens when a new NWS alert comes within ${NOTIFY_RADIUS_MI} mi of a property. Click to turn off.`
+          : 'Alert notifications off. Click to turn on.'
+      }
+      aria-label={enabled ? 'Turn off alert notifications' : 'Turn on alert notifications'}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+        {!enabled && <line x1="3" y1="3" x2="21" y2="21" />}
+      </svg>
+    </button>
+  );
+}
+
 function CrisisButton() {
   const toggle       = useCrisisStore((s) => s.toggle);
   const open         = useCrisisStore((s) => s.open);
@@ -464,7 +503,8 @@ function CrisisButton() {
 
 // Mobile-only overflow menu collecting the utility buttons that would otherwise
 // wrap the top bar across several rows on a phone: camera reset, full screen,
-// screenshot and measure. Desktop keeps them as individual buttons.
+// screenshot, measure and alert notifications. Desktop keeps them as
+// individual buttons.
 function MobileToolsMenu() {
   const [open, setOpen] = useState(false);
   // The dropdown (and the FullscreenButton in it) unmounts in the same click
@@ -518,6 +558,7 @@ function MobileToolsMenu() {
             <FullscreenButton onUnsupported={showFsHint} />
             <ScreenshotButton />
             <MeasureButton />
+            <NotifyButton />
           </div>
         </>
       )}
@@ -584,16 +625,18 @@ export function TopBar() {
   const sidebarCollapsed = useSidebarDockStore((s) => s.collapsed);
 
   // The pins tour strips the chrome down to the essentials: tour controls
-  // (mute + the Screensaver toggle) and fullscreen on the left, and the clock
-  // card on the right, which carries the Property Watch instrument cluster
-  // (severity meter + rotating ledger). The centre stays clear — hazard
-  // geography is drawn on the globe itself between visits by PinsOverviewSitrep.
+  // (mute + the Screensaver toggle), fullscreen and the alert-notification
+  // switch on the left, and the clock card on the right, which carries the
+  // Property Watch instrument cluster (severity meter + rotating ledger). The
+  // centre stays clear — hazard geography is drawn on the globe itself
+  // between visits by PinsOverviewSitrep.
   if (screensaverActive && screensaverMode === 'pins') {
     return (
       <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex items-start justify-between gap-3 px-4 pt-safe md:px-6">
         <div className="flex shrink-0 items-center gap-2">
           <ScreensaverControls />
           <FullscreenButton />
+          <NotifyButton />
         </div>
         <div className="shrink-0">
           <ScreensaverClockCard />
@@ -637,6 +680,7 @@ export function TopBar() {
             <FullscreenButton />
             <ScreenshotButton />
             <MeasureButton />
+            <NotifyButton />
           </div>
           <CrisisButton />
           <UserMenu />

@@ -70,6 +70,7 @@ import { useCrisisStore } from './crisis/crisisStore';
 import { useCrisisMapFrameStore } from './ui/uiStore';
 import { useRiskReportStore } from './riskreport/riskReportStore';
 import { AuthGate } from './auth/AuthGate';
+import { AlertNotifier } from './notify/AlertNotifier';
 import { lazyWithReload } from './lib/lazyWithReload';
 
 // Detect share link — renders a completely separate read-only view. Lazy so the
@@ -251,6 +252,7 @@ export default function App() {
         <CrisisLayerPopup />
         <IncidentSync />
         <RiskReportGate />
+        <AlertNotifier />
       </div>
     </CesiumContext.Provider>
     </AuthGate>
