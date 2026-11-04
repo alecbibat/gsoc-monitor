@@ -8,9 +8,9 @@
 // resolution produces and the helpers every consumer shares.
 //
 // The per-incident record is only the SPARSE state map on the incident
-// (`Incident.checklists`): itemId → { checked, at, by }. Untouched items have
-// no entry, so old incidents need no migration and template wording can evolve
-// without touching stored data (state keys by stable item id).
+// (`Incident.checklists`): itemId → { status, checked, at, by }. Untouched
+// items have no entry, so old incidents need no migration and template wording
+// can evolve without touching stored data (state keys by stable item id).
 //
 // This module is value-imported by the public share page, so it must stay
 // free of crisisStore (and any other heavy import) — see the share-bundle
@@ -48,16 +48,63 @@ export interface ChecklistTemplate {
   roles: ChecklistRoleDef[];
 }
 
+/** Where an item stands. A click moves it forward; any status can be set from its menu. */
+export type ChecklistStatus = 'not-started' | 'in-progress' | 'completed';
+
+export const CHECKLIST_STATUSES: { id: ChecklistStatus; label: string }[] = [
+  { id: 'not-started', label: 'Not started' },
+  { id: 'in-progress', label: 'In progress' },
+  { id: 'completed', label: 'Completed' },
+];
+
+export function isChecklistStatus(v: unknown): v is ChecklistStatus {
+  return v === 'not-started' || v === 'in-progress' || v === 'completed';
+}
+
 /** One item's live state. Absent from the map = never touched. */
 export interface ChecklistItemState {
+  /**
+   * True exactly when the item is completed. Kept alongside `status` so the
+   * progress counts, the after-action record and any client from before
+   * statuses existed all keep reading completion the way they always have.
+   */
   checked: boolean;
-  /** ISO timestamp of the LAST check/uncheck (server-stamped on sync). */
+  /** Absent on entries written before statuses existed — see itemStatus. */
+  status?: ChecklistStatus;
+  /** ISO timestamp of the LAST change (server-stamped on sync). */
   at: string;
-  /** Display name of whoever toggled it, when known. */
+  /** Display name of whoever changed it, when known. */
   by?: string;
 }
 
 export type ChecklistStateMap = Record<string, ChecklistItemState>;
+
+/**
+ * An item's status. Entries from before statuses existed (or carrying a
+ * status this build doesn't know) fall back to their checked flag: checked is
+ * completed, unchecked is not started.
+ */
+export function itemStatus(state: Pick<ChecklistItemState, 'checked' | 'status'> | undefined): ChecklistStatus {
+  if (!state) return 'not-started';
+  if (isChecklistStatus(state.status)) return state.status;
+  return state.checked ? 'completed' : 'not-started';
+}
+
+/**
+ * Where a plain click takes an item: not started → in progress → completed.
+ * A click on a completed item does nothing (null) — undoing a completion is a
+ * deliberate choice made from the item's status menu, not a stray click.
+ */
+export function nextClickStatus(current: ChecklistStatus): ChecklistStatus | null {
+  if (current === 'not-started') return 'in-progress';
+  if (current === 'in-progress') return 'completed';
+  return null;
+}
+
+/** The stored entry for setting an item to `status` now. */
+export function checklistEntry(status: ChecklistStatus, at: string, by?: string): ChecklistItemState {
+  return { checked: status === 'completed', status, at, ...(by ? { by } : {}) };
+}
 
 export const CHECKLIST_PHASES: { id: ChecklistPhaseId; label: string }[] = [
   { id: 'immediate', label: 'Immediate — first minutes' },
@@ -65,14 +112,19 @@ export const CHECKLIST_PHASES: { id: ChecklistPhaseId; label: string }[] = [
   { id: 'demob', label: 'Stabilization / Demobilization' },
 ];
 
-/** Type guard for state maps arriving in share snapshots (untrusted JSON). */
+/**
+ * Type guard for state maps arriving in share snapshots (untrusted JSON). A
+ * status this build doesn't know is let through — itemStatus reads it by its
+ * checked flag — so a newer server can't blank an older page's checklist.
+ */
 export function isChecklistStateMap(v: unknown): v is ChecklistStateMap {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
   return Object.values(v as Record<string, unknown>).every(
     (s) =>
       !!s && typeof s === 'object' && !Array.isArray(s) &&
       typeof (s as ChecklistItemState).checked === 'boolean' &&
-      typeof (s as ChecklistItemState).at === 'string'
+      typeof (s as ChecklistItemState).at === 'string' &&
+      ((s as ChecklistItemState).status === undefined || typeof (s as ChecklistItemState).status === 'string')
   );
 }
 
@@ -102,34 +154,42 @@ export function foldChecklistResponse(
   return merged;
 }
 
-/** Checked/total across one role, for the progress chips. */
-export function roleProgress(role: ChecklistRoleDef, state: ChecklistStateMap): { done: number; total: number } {
+/** Completed / in-progress / total across one role, for the progress chips. */
+export function roleProgress(
+  role: ChecklistRoleDef,
+  state: ChecklistStateMap
+): { done: number; inProgress: number; total: number } {
   let done = 0;
+  let inProgress = 0;
   let total = 0;
   for (const ph of role.phases) {
     for (const item of ph.items) {
       total += 1;
-      if (state[item.id]?.checked) done += 1;
+      const st = itemStatus(state[item.id]);
+      if (st === 'completed') done += 1;
+      else if (st === 'in-progress') inProgress += 1;
     }
   }
-  return { done, total };
+  return { done, inProgress, total };
 }
 
-/** Checked/total across every role, plus how many roles are fully done. */
+/** Completed / in-progress / total across every role, plus how many roles are fully done. */
 export function checklistProgress(
   template: ChecklistTemplate,
   state: ChecklistStateMap
-): { done: number; total: number; rolesDone: number } {
+): { done: number; inProgress: number; total: number; rolesDone: number } {
   let done = 0;
+  let inProgress = 0;
   let total = 0;
   let rolesDone = 0;
   for (const role of template.roles) {
     const p = roleProgress(role, state);
     done += p.done;
+    inProgress += p.inProgress;
     total += p.total;
     if (p.total > 0 && p.done === p.total) rolesDone += 1;
   }
-  return { done, total, rolesDone };
+  return { done, inProgress, total, rolesDone };
 }
 
 /** The slice of an org-chart assignment the role preference needs. */

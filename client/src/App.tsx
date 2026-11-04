@@ -5,6 +5,7 @@ import { CesiumContext } from './cesium/CesiumContext';
 import { CesiumGlobe } from './cesium/CesiumGlobe';
 import { EarthquakeLayer } from './layers/earthquakes/EarthquakeLayer';
 import { AlertsLayer } from './layers/alerts/AlertsLayer';
+import { WarnLayer } from './layers/warn/WarnLayer';
 import { RadarLayer } from './layers/radar/RadarLayer';
 import { RadarTimeline } from './layers/radar/RadarTimeline';
 import { EarthTimeBar } from './ui/EarthTimeBar';
@@ -70,6 +71,7 @@ import { useCrisisStore } from './crisis/crisisStore';
 import { useCrisisMapFrameStore } from './ui/uiStore';
 import { useRiskReportStore } from './riskreport/riskReportStore';
 import { AuthGate } from './auth/AuthGate';
+import { AlertNotifier } from './notify/AlertNotifier';
 import { lazyWithReload } from './lib/lazyWithReload';
 
 // Detect share link — renders a completely separate read-only view. Lazy so the
@@ -179,6 +181,7 @@ export default function App() {
           <RadarLayer />
           <EarthquakeLayer />
           <AlertsLayer />
+          <WarnLayer />
           <HurricaneLayer />
           <FireLayer />
           <NgfsLayer />
@@ -251,6 +254,7 @@ export default function App() {
         <CrisisLayerPopup />
         <IncidentSync />
         <RiskReportGate />
+        <AlertNotifier />
       </div>
     </CesiumContext.Provider>
     </AuthGate>

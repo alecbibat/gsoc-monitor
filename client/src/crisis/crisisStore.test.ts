@@ -364,23 +364,25 @@ describe('moveRole', () => {
 });
 
 describe('ICS checklists', () => {
-  it('records checked with a timestamp, and unchecking re-stamps it', () => {
+  it('records each status with a timestamp — completed exactly when checked', () => {
     const st = useCrisisStore.getState();
     st.createIncident();
-    st.toggleChecklistItem('ic-imm-1', true);
-    const first = active().checklists!['ic-imm-1'];
-    expect(first.checked).toBe(true);
-    expect(Number.isNaN(Date.parse(first.at))).toBe(false);
-    st.toggleChecklistItem('ic-imm-1', false);
-    const second = active().checklists!['ic-imm-1'];
-    expect(second.checked).toBe(false);
-    expect(Number.isNaN(Date.parse(second.at))).toBe(false);
+    st.setChecklistItemStatus('ic-imm-1', 'in-progress');
+    const started = active().checklists!['ic-imm-1'];
+    expect(started).toMatchObject({ status: 'in-progress', checked: false });
+    expect(Number.isNaN(Date.parse(started.at))).toBe(false);
+    st.setChecklistItemStatus('ic-imm-1', 'completed');
+    expect(active().checklists!['ic-imm-1']).toMatchObject({ status: 'completed', checked: true });
+    st.setChecklistItemStatus('ic-imm-1', 'not-started');
+    const reset = active().checklists!['ic-imm-1'];
+    expect(reset).toMatchObject({ status: 'not-started', checked: false });
+    expect(Number.isNaN(Date.parse(reset.at))).toBe(false);
   });
 
   it('keeps the map sparse — untouched items have no entry', () => {
     const st = useCrisisStore.getState();
     st.createIncident();
-    st.toggleChecklistItem('safety-imm-1', true);
+    st.setChecklistItemStatus('safety-imm-1', 'completed');
     expect(Object.keys(active().checklists!)).toEqual(['safety-imm-1']);
   });
 
@@ -390,7 +392,7 @@ describe('ICS checklists', () => {
     st.standDownIncident(id, 'done');
     st.openIncident(id);
     const before = active();
-    st.toggleChecklistItem('ic-imm-1', true);
+    st.setChecklistItemStatus('ic-imm-1', 'completed');
     expect(active()).toBe(before);
   });
 
@@ -407,7 +409,7 @@ describe('ICS checklists', () => {
     const st = useCrisisStore.getState();
     st.createIncident();
     expect(extractPublicState(active()).checklists).toEqual({});
-    st.toggleChecklistItem('ic-imm-1', true);
+    st.setChecklistItemStatus('ic-imm-1', 'completed');
     expect(extractPublicState(active()).checklists!['ic-imm-1'].checked).toBe(true);
     // Pre-feature incidents lack the key entirely — still concrete on publish.
     const { checklists: _c, ...legacy } = active();

@@ -24,7 +24,8 @@ export type LayerId =
   | 'precip'
   | 'wildfires'
   | 'outages'
-  | 'intel';
+  | 'intel'
+  | 'warn';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
@@ -514,6 +515,53 @@ export interface OutagesResponse {
   sources: OutageSourceStatus[];
   updated: number;
   error?: string;
+}
+
+// --- Wireless Emergency Alerts (PBS WARN) -----------------------------------
+// Mirrors server/src/routes/warn.ts.
+export type WeaClass = 'presidential' | 'imminent-threat' | 'public-safety' | 'amber';
+
+export interface WarnCircle {
+  lon: number;
+  lat: number;
+  radiusKm: number;
+}
+
+export interface WarnAlert {
+  id: string;
+  capId: string;
+  event: string;
+  sender: string;
+  weaClass: WeaClass;
+  category: string | null;
+  severity: string | null;
+  urgency: string | null;
+  certainty: string | null;
+  responseType: string | null;
+  msgType: 'alert' | 'update';
+  sent: string | null;
+  expires: string | null;
+  /** The WEA as it appeared on phones (the 90/360-character message). */
+  weaText: string | null;
+  weaLongText: string | null;
+  headline: string | null;
+  description: string | null;
+  instruction: string | null;
+  spanishText: string | null;
+  areaDesc: string | null;
+  /** 5-digit county FIPS codes the alert was sent to. */
+  counties: string[];
+  /** Alert areas as rings of [lon, lat]. */
+  polygons: number[][][];
+  circles: WarnCircle[];
+  /** Issued by the NWS — the NWS alerts layer draws it too. */
+  nws: boolean;
+}
+
+export interface WarnFeed {
+  alerts: WarnAlert[];
+  heartbeat: string | null;
+  fetchedAt: string;
 }
 
 // --- Rivers & floods (NOAA NWPS) -------------------------------------------

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Rnd } from 'react-rnd';
 import { usePanelStore, type PanelData, type DockZone, ZONES, ZONE_LABELS, dockPos } from './panelStore';
 import { LockButton } from './LockButton';
+import { useSidebarDockStore } from '../ui/uiStore';
 
 interface PanelProps {
   panel: PanelData;
@@ -88,6 +89,18 @@ export function Panel({ panel, children, accentClass = 'border-accent/40' }: Pan
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, [panel.dockedTo, panel.id, panel.width, panel.height, updateRect]);
+
+  // ...and the left-hand ones when the sidebar collapses or reopens, so they
+  // follow its edge instead of covering it or leaving a gap.
+  const sidebarCollapsed = useSidebarDockStore((s) => s.collapsed);
+  const seenCollapsed = useRef(sidebarCollapsed);
+  useEffect(() => {
+    if (seenCollapsed.current === sidebarCollapsed) return;
+    seenCollapsed.current = sidebarCollapsed;
+    if (panel.dockedTo === 'tl' || panel.dockedTo === 'bl') {
+      updateRect(panel.id, dockPos(panel.dockedTo, panel.width, panel.height));
+    }
+  }, [sidebarCollapsed, panel.dockedTo, panel.id, panel.width, panel.height, updateRect]);
 
   return (
     <>

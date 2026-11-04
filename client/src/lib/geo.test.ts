@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { haversineMeters, metersToMiles, MILES_TO_M, pointInRing, pointInRings } from './geo';
+import {
+  circleRing, distanceToRingsMeters, haversineMeters, metersToMiles, MILES_TO_M, pointInRing, pointInRings,
+} from './geo';
 
 describe('metersToMiles', () => {
   it('converts exactly one mile', () => {
@@ -91,5 +93,60 @@ describe('pointInRings', () => {
 
   it('is false for an empty ring list', () => {
     expect(pointInRings(0.5, 0.5, [])).toBe(false);
+  });
+});
+
+describe('distanceToRingsMeters', () => {
+  // A 1°×1° box around (−105.5, 39.5).
+  const box = [[-106, 39], [-105, 39], [-105, 40], [-106, 40], [-106, 39]];
+
+  it('measures to the nearest edge from outside', () => {
+    // Half a degree of latitude north of the top edge ≈ 55.6 km.
+    const d = distanceToRingsMeters(-105.5, 40.5, [box]);
+    expect(d).toBeGreaterThan(55_000);
+    expect(d).toBeLessThan(56_200);
+  });
+
+  it('agrees with the great-circle distance to a corner', () => {
+    const d = distanceToRingsMeters(-104.8, 40.2, [box]);
+    const gc = haversineMeters(40.2, -104.8, 40, -105);
+    expect(Math.abs(d - gc) / gc).toBeLessThan(0.01);
+  });
+
+  it('measures from inside to the nearest edge too', () => {
+    expect(distanceToRingsMeters(-105.9, 39.5, [box])).toBeLessThan(9_000);
+  });
+
+  it('closes an unclosed ring', () => {
+    const open = box.slice(0, 4); // no repeat of the first vertex
+    expect(distanceToRingsMeters(-106.1, 39.5, [open])).toBeLessThan(9_000);
+  });
+
+  it('wraps across the antimeridian', () => {
+    const aleutian = [[179.5, 51], [179.9, 51], [179.9, 52], [179.5, 52], [179.5, 51]];
+    // 0.2° of longitude east of the box's east edge, on the other side of 180.
+    const d = distanceToRingsMeters(-179.9, 51.5, [aleutian]);
+    expect(d).toBeLessThan(15_000);
+  });
+
+  it('is infinite with nothing to measure to', () => {
+    expect(distanceToRingsMeters(0, 0, [])).toBe(Infinity);
+  });
+});
+
+describe('circleRing', () => {
+  it('puts every point the radius away from the centre, and closes the ring', () => {
+    const ring = circleRing(-87.6222, 33.2461, 1_901, 32);
+    expect(ring).toHaveLength(33);
+    expect(ring[32]).toEqual(ring[0]);
+    for (const [lon, lat] of ring) {
+      expect(haversineMeters(33.2461, -87.6222, lat, lon)).toBeCloseTo(1_901, 0);
+    }
+    expect(pointInRing(-87.6222, 33.2461, ring)).toBe(true);
+  });
+
+  it('stays in range across the antimeridian', () => {
+    const ring = circleRing(179.99, 52, 5_000);
+    expect(ring.every(([lon]) => lon >= -180 && lon <= 180)).toBe(true);
   });
 });

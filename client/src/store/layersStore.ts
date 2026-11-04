@@ -21,6 +21,9 @@ interface LayersState {
   setShipPaths: (v: boolean) => void;
   shipNames: boolean;
   setShipNames: (v: boolean) => void;
+  // PBS WARN: leave out the WEAs the NWS issued (the NWS layer draws those).
+  warnHideNws: boolean;
+  setWarnHideNws: (v: boolean) => void;
   firesNearMiles: 0 | 5 | 50 | 100 | 200;
   setFiresNearMiles: (v: 0 | 5 | 50 | 100 | 200) => void;
   // NGFS heat detections: lookback window, and whether NGFS's non-wildland
@@ -74,6 +77,7 @@ export const useLayersStore = create<LayersState>()(
         wildfires: false,
         outages: false,
         intel: false,
+        warn: false,
       },
       basemap: 'dark',
       toggleLayer: (id) =>
@@ -110,6 +114,8 @@ export const useLayersStore = create<LayersState>()(
       setShipPaths: (v) => set({ shipPaths: v }),
       shipNames: true,
       setShipNames: (v) => set({ shipNames: v }),
+      warnHideNws: false,
+      setWarnHideNws: (v) => set({ warnHideNws: v }),
       firesNearMiles: 0,
       setFiresNearMiles: (v) => set({ firesNearMiles: v }),
       ngfsHours: 1,
@@ -140,6 +146,7 @@ export const useLayersStore = create<LayersState>()(
         shipFavorites: state.shipFavorites,
         shipPaths: state.shipPaths,
         shipNames: state.shipNames,
+        warnHideNws: state.warnHideNws,
         firesNearMiles: state.firesNearMiles,
         ngfsHours: state.ngfsHours,
         ngfsShowOther: state.ngfsShowOther,

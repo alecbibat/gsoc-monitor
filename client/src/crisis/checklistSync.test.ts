@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CHECKLIST_AUTO_RETRY_MS, inflightChecklistIds, mergeChecklists, toggleChecklistItem } from './checklistSync';
+import { CHECKLIST_AUTO_RETRY_MS, inflightChecklistIds, mergeChecklists, setChecklistItemStatus } from './checklistSync';
 import { useCrisisStore } from './crisisStore';
-import type { ChecklistStateMap } from './checklistTemplate';
+import type { ChecklistStateMap, ChecklistStatus } from './checklistTemplate';
 
 const at = (m: number) => `2026-08-19T10:${String(m).padStart(2, '0')}:00.000Z`;
 
@@ -31,11 +31,13 @@ describe('mergeChecklists', () => {
   });
 });
 
-// ── toggleChecklistItem: result, rollback, one automatic re-send ────────────
+// ── setChecklistItemStatus: result, rollback, one automatic re-send ────────────
 
-describe('toggleChecklistItem', () => {
+describe('setChecklistItemStatus', () => {
   const fetchMock = vi.fn();
-  const serverMap = (checked: boolean): ChecklistStateMap => ({ 'ic-imm-1': { checked, at: at(30), by: 'Server' } });
+  const serverMap = (status: ChecklistStatus): ChecklistStateMap => ({
+    'ic-imm-1': { checked: status === 'completed', status, at: at(30), by: 'Server' },
+  });
   const json = (status: number, body: unknown) =>
     Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }));
   const incident = () => {
@@ -58,16 +60,27 @@ describe('toggleChecklistItem', () => {
   });
 
   it('adopts the server-stamped entry on success', async () => {
-    fetchMock.mockReturnValueOnce(json(200, { checklists: serverMap(true) }));
-    const result = await toggleChecklistItem(incident(), 'ic-imm-1', true);
+    fetchMock.mockReturnValueOnce(json(200, { checklists: serverMap('completed') }));
+    const result = await setChecklistItemStatus(incident(), 'ic-imm-1', 'completed');
     expect(result).toEqual({ ok: true });
-    expect(itemState()).toEqual(serverMap(true)['ic-imm-1']);
+    expect(itemState()).toEqual(serverMap('completed')['ic-imm-1']);
     expect(inflightChecklistIds(incident().id).size).toBe(0);
+  });
+
+  it('posts the status, holding it optimistically until the server answers', async () => {
+    let answer!: (r: Response) => void;
+    fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { answer = resolve; }));
+    const pending = setChecklistItemStatus(incident(), 'ic-imm-1', 'in-progress');
+    expect(itemState()).toMatchObject({ status: 'in-progress', checked: false });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ status: 'in-progress' });
+    answer(new Response(JSON.stringify({ checklists: serverMap('in-progress') }), { status: 200 }));
+    expect(await pending).toEqual({ ok: true });
+    expect(itemState()).toEqual(serverMap('in-progress')['ic-imm-1']);
   });
 
   it('rolls back a rejected toggle and reports it without lighting the global sync indicator', async () => {
     fetchMock.mockReturnValueOnce(json(409, { error: 'Incident is archived' }));
-    const result = await toggleChecklistItem(incident(), 'ic-imm-1', true);
+    const result = await setChecklistItemStatus(incident(), 'ic-imm-1', 'completed');
     expect(result).toMatchObject({ ok: false, superseded: false, status: 409, retryable: false });
     expect(!result.ok && !result.superseded && result.message).toMatch(/stood down/);
     expect(itemState()).toBeUndefined();
@@ -79,21 +92,21 @@ describe('toggleChecklistItem', () => {
     vi.useFakeTimers();
     fetchMock
       .mockReturnValueOnce(Promise.reject(new TypeError('Failed to fetch')))
-      .mockReturnValueOnce(json(200, { checklists: serverMap(true) }));
-    const pending = toggleChecklistItem(incident(), 'ic-imm-1', true);
+      .mockReturnValueOnce(json(200, { checklists: serverMap('completed') }));
+    const pending = setChecklistItemStatus(incident(), 'ic-imm-1', 'completed');
     await vi.advanceTimersByTimeAsync(CHECKLIST_AUTO_RETRY_MS - 1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(itemState()?.checked).toBe(true);
+    expect(itemState()?.status).toBe('completed');
     await vi.advanceTimersByTimeAsync(1);
     expect(await pending).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(itemState()).toEqual(serverMap(true)['ic-imm-1']);
+    expect(itemState()).toEqual(serverMap('completed')['ic-imm-1']);
   });
 
   it('gives up after the one re-send, rolls back, and offers a manual retry', async () => {
     vi.useFakeTimers();
     fetchMock.mockImplementation(() => json(503, { error: 'Service Unavailable' }));
-    const pending = toggleChecklistItem(incident(), 'ic-imm-1', true);
+    const pending = setChecklistItemStatus(incident(), 'ic-imm-1', 'completed');
     await vi.advanceTimersByTimeAsync(CHECKLIST_AUTO_RETRY_MS);
     const result = await pending;
     expect(result).toMatchObject({ ok: false, superseded: false, status: 503, retryable: true });
@@ -106,15 +119,15 @@ describe('toggleChecklistItem', () => {
     vi.useFakeTimers();
     fetchMock
       .mockReturnValueOnce(Promise.reject(new TypeError('Failed to fetch')))       // check: fails
-      .mockReturnValueOnce(json(200, { checklists: serverMap(false) }));            // uncheck: lands
-    const first = toggleChecklistItem(incident(), 'ic-imm-1', true);
+      .mockReturnValueOnce(json(200, { checklists: serverMap('not-started') }));            // uncheck: lands
+    const first = setChecklistItemStatus(incident(), 'ic-imm-1', 'completed');
     await vi.advanceTimersByTimeAsync(0);
-    const second = toggleChecklistItem(incident(), 'ic-imm-1', false);
+    const second = setChecklistItemStatus(incident(), 'ic-imm-1', 'not-started');
     expect(await second).toEqual({ ok: true });
     await vi.advanceTimersByTimeAsync(CHECKLIST_AUTO_RETRY_MS);
     expect(await first).toEqual({ ok: false, superseded: true });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(itemState()).toEqual(serverMap(false)['ic-imm-1']);
+    expect(itemState()).toEqual(serverMap('not-started')['ic-imm-1']);
     expect(inflightChecklistIds(incident().id).size).toBe(0);
   });
 });

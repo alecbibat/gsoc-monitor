@@ -4,6 +4,8 @@ import { useLayersStore } from '../store/layersStore';
 import { useFlightsStatus } from '../layers/flights/flightsStore';
 import { FlightGroupControls, loadFlightActivity } from '../layers/flights/FlightGroupControls';
 import { useAlertsStatus } from '../layers/alerts/alertsStore';
+import { useWarnStatus } from '../layers/warn/warnStore';
+import { WARN_FETCH_STALE_MS, WARN_HEARTBEAT_STALE_MS } from '../layers/warn/warnMeta';
 import { useEarthquakesStatus } from '../layers/earthquakes/earthquakesStore';
 import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { useLightningStatus } from '../layers/lightning/lightningStore';
@@ -44,7 +46,7 @@ import { useRadarStore, radarStatusText } from '../layers/radar/radarStore';
 import { PrecipControls } from '../layers/precip/PrecipControls';
 import { usePrecipStore, QPF_PERIOD_LABEL } from '../layers/precip/precipStore';
 import { LightningControls } from '../layers/lightning/LightningControls';
-import { useUiStore } from './uiStore';
+import { useSidebarDockStore, useUiStore } from './uiStore';
 import type { SatelliteGroup } from '../types';
 
 const MAGNITUDES: Array<{ value: '1.0' | '2.5' | '4.5' | 'significant'; label: string }> = [
@@ -105,6 +107,8 @@ export function Sidebar() {
   const setShipPaths = useLayersStore((s) => s.setShipPaths);
   const shipNames = useLayersStore((s) => s.shipNames);
   const setShipNames = useLayersStore((s) => s.setShipNames);
+  const warnHideNws = useLayersStore((s) => s.warnHideNws);
+  const setWarnHideNws = useLayersStore((s) => s.setWarnHideNws);
   const firesNearMiles = useLayersStore((s) => s.firesNearMiles);
   const setFiresNearMiles = useLayersStore((s) => s.setFiresNearMiles);
   const ngfsHours = useLayersStore((s) => s.ngfsHours);
@@ -121,6 +125,9 @@ export function Sidebar() {
     useShallow((s) => ({ count: s.count, total: s.total, error: s.error }))
   );
   const alertsStatus = useAlertsStatus(useShallow((s) => ({ count: s.count, error: s.error })));
+  const warnStatus = useWarnStatus(
+    useShallow((s) => ({ count: s.count, hiddenNws: s.hiddenNws, heartbeat: s.heartbeat, fetchedAt: s.fetchedAt, error: s.error }))
+  );
   const earthquakesCount = useEarthquakesStatus((s) => s.count);
   const earthquakesError = useEarthquakesStatus((s) => s.error);
   const hurricanesStatus = useHurricanesStatus(
@@ -244,6 +251,8 @@ export function Sidebar() {
   const chromeHidden = screensaverActive || hoverEngaged;
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
   const setSidebarOpen = useUiStore((s) => s.setSidebarOpen);
+  const collapsed = useSidebarDockStore((s) => s.collapsed);
+  const toggleCollapsed = useSidebarDockStore((s) => s.toggleCollapsed);
   const viewer = useCesiumViewer();
   const locationsActive = (active as Record<string, boolean>).locations ?? true;
 
@@ -292,6 +301,24 @@ export function Sidebar() {
     setSidebarOpen(false);
   }
 
+  function warnStatusText() {
+    if (warnStatus.error) return warnStatus.error;
+    // The proxy serves its last good answer through upstream failures.
+    const fetched = warnStatus.fetchedAt ? Date.parse(warnStatus.fetchedAt) : NaN;
+    if (Number.isFinite(fetched) && Date.now() - fetched > WARN_FETCH_STALE_MS) {
+      return `PBS WARN unreachable — showing alerts as of ${new Date(fetched).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    }
+    const n = warnStatus.count;
+    const base = `${n} active alert${n === 1 ? '' : 's'} sent to phones · PBS WARN`;
+    // PBS's backend checks in every few seconds; an old heartbeat means its
+    // feed (and so this list) may be behind.
+    const hb = warnStatus.heartbeat ? Date.parse(warnStatus.heartbeat) : NaN;
+    if (Number.isFinite(hb) && Date.now() - hb > WARN_HEARTBEAT_STALE_MS) {
+      return `${base} · PBS feed stale since ${new Date(hb).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    }
+    return base;
+  }
+
   function satellitesStatusText() {
     if (satellitesStatus.error) return satellitesStatus.error;
     if (satellitesStatus.loading) return 'Loading orbital data…';
@@ -302,13 +329,14 @@ export function Sidebar() {
     return `${shown} satellites · live`;
   }
 
-  // On md+ the sidebar is always docked. On small screens it's an off-canvas
-  // drawer toggled by the TopBar hamburger. The screensaver hides it entirely.
+  // On small screens it's an off-canvas drawer toggled by the TopBar
+  // hamburger. On md+ it's docked unless the operator tucked it away with the
+  // edge tab. The screensaver hides it entirely.
   const translate = chromeHidden
     ? '-translate-x-full'
-    : sidebarOpen
-      ? 'translate-x-0'
-      : '-translate-x-full md:translate-x-0';
+    : `${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} ${
+        collapsed ? 'md:-translate-x-full' : 'md:translate-x-0'
+      }`;
 
   return (
     <>
@@ -323,6 +351,22 @@ export function Sidebar() {
       <div
         className={`pointer-events-auto absolute left-0 top-0 z-50 flex h-full w-72 max-w-[85vw] flex-col border-r border-white/10 bg-ink-900/95 pt-drawer shadow-panel backdrop-blur-sm transition-transform duration-500 ease-in-out md:z-10 md:max-w-none md:bg-ink-900/85 md:pt-drawer-md ${translate}`}
       >
+        {/* Collapse / reopen tab (md+). It hangs off the sidebar's right edge,
+            so when the sidebar slides away the tab stays on screen at the left
+            edge as the way back in. */}
+        {!chromeHidden && (
+          <button
+            onClick={toggleCollapsed}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? 'Show the menu' : 'Collapse the menu'}
+            title={collapsed ? 'Show the menu' : 'Collapse the menu'}
+            className="absolute left-full top-1/2 hidden h-16 w-6 -translate-y-1/2 items-center justify-center rounded-r-lg border border-l-0 border-white/10 bg-ink-900/90 text-white/55 shadow-panel backdrop-blur-sm transition hover:bg-ink-700 hover:text-white md:flex"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <polyline points={collapsed ? '9 6 15 12 9 18' : '15 6 9 12 15 18'} />
+            </svg>
+          </button>
+        )}
         {/* Mobile-only close button. */}
         <button
           onClick={() => setSidebarOpen(false)}
@@ -334,7 +378,7 @@ export function Sidebar() {
           </svg>
         </button>
         <div className="hud-scroll flex-1 overflow-y-auto px-2 pb-4">
-          {/* Screensaver modes — mobile only; desktop has them in the TopBar. */}
+          {/* Screensaver toggle — mobile only; desktop has it in the TopBar. */}
           <div className="md:hidden">
             <Section title="Screensaver">
               <div className="px-1 pb-1">
@@ -383,6 +427,30 @@ export function Sidebar() {
             onToggle={() => toggleLayer('alerts')}
             statusText={alertsStatus.error ?? `${alertsStatus.count} active alerts`}
           />
+          <LayerToggle
+            label="Wireless Emergency Alerts (PBS WARN)"
+            active={active.warn}
+            onToggle={() => toggleLayer('warn')}
+            statusText={warnStatusText()}
+          >
+            <label className="flex items-center gap-2 pt-1 text-[11px] text-white/60">
+              <input
+                type="checkbox"
+                checked={warnHideNws}
+                onChange={(e) => setWarnHideNws(e.target.checked)}
+                className="accent-accent"
+              />
+              Hide NWS-issued alerts
+              {warnHideNws && warnStatus.hiddenNws > 0 && (
+                <span className="text-white/35">({warnStatus.hiddenNws} hidden)</span>
+              )}
+            </label>
+            <p className="pt-1.5 text-[10px] leading-relaxed text-white/30">
+              Every Wireless Emergency Alert in force: NWS and USGS warnings plus state and local
+              alerts — AMBER, evacuations, police activity, 911 outages. Dashed outline = the area
+              phones were alerted in. From PBS WARN (FEMA IPAWS).
+            </p>
+          </LayerToggle>
           <LayerToggle
             label="Earthquakes (USGS)"
             active={active.earthquakes}

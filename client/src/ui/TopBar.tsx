@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { SearchBar } from './SearchBar';
-import { WidgetLauncher } from '../widgets/WidgetLauncher';
 import { ScreensaverControls } from './ScreensaverControls';
 import { InfoPanel } from './InfoPanel';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { resetCamera } from '../cesium/flyTo';
 import { useTrackedHistory } from './useTrackedHistory';
-import { useUiStore } from './uiStore';
+import { useSidebarDockStore, useUiStore } from './uiStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { PinsWatchCluster } from '../screensaver/PinsWatchCluster';
 import { useMeasureStore } from '../measure/measureStore';
 import { selectActiveCrisisCount, useCrisisStore } from '../crisis/crisisStore';
 import { UserMenu } from '../auth/UserMenu';
+import { useAlertNotifyStore } from '../notify/alertNotifyStore';
+import { NOTIFY_RADIUS_MI } from '../notify/pinAlertMatch';
 import {
   fullscreenElement,
   fullscreenSupported,
@@ -413,6 +414,43 @@ function MeasureButton() {
   );
 }
 
+// On/off for the NWS-alert-near-a-pin notifications (screen flash + popup).
+function NotifyButton() {
+  const enabled = useAlertNotifyStore((s) => s.enabled);
+  const toggle = useAlertNotifyStore((s) => s.toggle);
+  return (
+    <button
+      onClick={toggle}
+      aria-pressed={enabled}
+      className={`pointer-events-auto flex items-center justify-center rounded-lg border p-2 shadow-panel backdrop-blur-sm transition-all ${
+        enabled
+          ? 'border-accent/40 bg-accent/10 text-accent'
+          : 'border-white/10 bg-ink-900/80 text-white/40 hover:text-white/70'
+      }`}
+      title={
+        enabled
+          ? `Alert notifications on: the screen flashes and a popup opens when a new NWS alert comes within ${NOTIFY_RADIUS_MI} mi of a property. Click to turn off.`
+          : 'Alert notifications off. Click to turn on.'
+      }
+      aria-label={enabled ? 'Turn off alert notifications' : 'Turn on alert notifications'}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+        {!enabled && <line x1="3" y1="3" x2="21" y2="21" />}
+      </svg>
+    </button>
+  );
+}
+
 function CrisisButton() {
   const toggle       = useCrisisStore((s) => s.toggle);
   const open         = useCrisisStore((s) => s.open);
@@ -465,7 +503,8 @@ function CrisisButton() {
 
 // Mobile-only overflow menu collecting the utility buttons that would otherwise
 // wrap the top bar across several rows on a phone: camera reset, full screen,
-// screenshot and measure. Desktop keeps them as individual buttons.
+// screenshot, measure and alert notifications. Desktop keeps them as
+// individual buttons.
 function MobileToolsMenu() {
   const [open, setOpen] = useState(false);
   // The dropdown (and the FullscreenButton in it) unmounts in the same click
@@ -519,6 +558,7 @@ function MobileToolsMenu() {
             <FullscreenButton onUnsupported={showFsHint} />
             <ScreenshotButton />
             <MeasureButton />
+            <NotifyButton />
           </div>
         </>
       )}
@@ -576,24 +616,27 @@ function TrackedCounter() {
 }
 
 export function TopBar() {
-  // The widgets/search/info cluster isn't useful mid-tour, so it fades out
+  // The search/info cluster isn't useful mid-tour, so it fades out
   // while a screensaver runs. visibility (not display) keeps its layout box,
   // so the left cluster's badges can never wrap into the vacated space, and
   // the search bar keeps its state for when the tour stops.
   const screensaverActive = useScreensaverStore((s) => s.active);
   const screensaverMode = useScreensaverStore((s) => s.mode);
+  const sidebarCollapsed = useSidebarDockStore((s) => s.collapsed);
 
   // The pins tour strips the chrome down to the essentials: tour controls
-  // (mute + mode dropdown) and fullscreen on the left, and the clock card on
-  // the right, which carries the Property Watch instrument cluster (severity
-  // meter + rotating ledger). The centre stays clear — hazard geography is
-  // drawn on the globe itself between visits by PinsOverviewSitrep.
+  // (mute + the Screensaver toggle), fullscreen and the alert-notification
+  // switch on the left, and the clock card on the right, which carries the
+  // Property Watch instrument cluster (severity meter + rotating ledger). The
+  // centre stays clear — hazard geography is drawn on the globe itself
+  // between visits by PinsOverviewSitrep.
   if (screensaverActive && screensaverMode === 'pins') {
     return (
       <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex items-start justify-between gap-3 px-4 pt-safe md:px-6">
         <div className="flex shrink-0 items-center gap-2">
           <ScreensaverControls />
           <FullscreenButton />
+          <NotifyButton />
         </div>
         <div className="shrink-0">
           <ScreensaverClockCard />
@@ -604,14 +647,19 @@ export function TopBar() {
 
   return (
     <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col gap-2 pb-3 pl-safe pr-safe pt-safe md:flex-row md:items-start md:justify-between md:gap-4 md:pb-4">
-      {/* Left: identity + camera controls + screensaver modes */}
+      {/* Left: identity + camera controls + screensaver toggle */}
       <div className="flex flex-wrap items-center gap-2 md:gap-3 lg:flex-nowrap lg:items-start">
         {/* On lg+ the docked sidebar (w-72) sits under this bar, so the brand
             gets a slot spanning the sidebar's width: the badges after it then
             start past the sidebar's right edge instead of straddling its
             border. Slot = 18rem sidebar − 0.75rem bar padding, so with the
-            lg:gap-3 the first badge lands 0.75rem right of the edge. */}
-        <div className="contents lg:flex lg:w-[calc(18rem-0.75rem)] lg:shrink-0 lg:items-center">
+            lg:gap-3 the first badge lands 0.75rem right of the edge. With the
+            sidebar collapsed there is nothing to clear, so no slot. */}
+        <div
+          className={`contents lg:flex lg:shrink-0 lg:items-center ${
+            sidebarCollapsed ? '' : 'lg:w-[calc(18rem-0.75rem)]'
+          }`}
+        >
           <HamburgerButton />
           <div className="pointer-events-auto flex items-center gap-2 rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 shadow-panel backdrop-blur-sm">
             <span className="h-2 w-2 animate-pulse rounded-full bg-accent-ok shadow-glow" />
@@ -632,21 +680,23 @@ export function TopBar() {
             <FullscreenButton />
             <ScreenshotButton />
             <MeasureButton />
+            <NotifyButton />
           </div>
           <CrisisButton />
           <UserMenu />
-          {/* Screensaver modes — desktop only; mobile gets them in the drawer. */}
+          {/* Screensaver toggle — desktop only; mobile gets it in the drawer. */}
           <ScreensaverControls className="hidden md:flex" />
         </div>
       </div>
-      {/* Right: widgets + search, with the info button tucked under the search */}
+      {/* Right: search, with the info button tucked under it. (The Watch / News /
+          Intel launcher is hidden for now — WidgetLauncher is kept so it can be
+          put back; News still opens from the ticker.) */}
       <div
         className={`flex w-full flex-col items-end gap-2 transition-[opacity,visibility] duration-500 md:w-auto ${
           screensaverActive ? 'invisible opacity-0' : 'visible opacity-100'
         }`}
       >
         <div className="flex w-full flex-wrap items-center justify-end gap-2 md:gap-3">
-          <WidgetLauncher />
           <div className="pointer-events-auto w-full sm:w-auto">
             <SearchBar />
           </div>

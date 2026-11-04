@@ -1,3 +1,7 @@
+import { feature as topoFeature, mesh as topoMesh } from 'topojson-client';
+import type { GeometryCollection, GeometryObject, Topology } from 'topojson-specification';
+import countiesTopoUrl from 'us-atlas/counties-10m.json?url';
+
 // Shared NWS active-alerts data + geometry resolution. Used by both AlertsLayer
 // (which draws the polygons) and the proximity widget (which point-tests
 // properties against the same polygons), so the map and the watch list always
@@ -20,16 +24,23 @@ const ALERTS_PROXY = '/api/alerts/active';
 // proxy rather than stall the 60s poll loop indefinitely.
 const ALERTS_TIMEOUT_MS = 20_000;
 
-// Static US county polygons keyed by 5-digit FIPS (the dataset the proven
-// weather-leaflet app uses). Most non-storm NWS alerts ship geometry: null and
-// only reference county SAME codes, which we resolve against these polygons.
-const COUNTY_GEOJSON =
-  'https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json';
-// A blackholed county host (DROP, no RST) would otherwise only fail at the OS
-// connect timeout (~2 min on Linux/ChromeOS), holding up every alerts redraw,
-// proximity scan and risk report that awaits it. Bound only the wait for
-// response headers: once the server answers, a slow body is left to finish.
+// Static US county polygons keyed by 5-digit FIPS: the Census-derived us-atlas
+// TopoJSON, bundled with the app so no third-party host sits in the path. Most
+// non-storm NWS alerts ship geometry: null and only reference county SAME
+// codes, which we resolve against these polygons. Being a topology, neighbouring
+// counties share their border arcs exactly, which is what lets an alert's
+// counties merge into one outer outline (alertOutline) — the per-county GeoJSON
+// used before had independently simplified borders that never lined up.
+// A stalled same-origin download still shouldn't hold up every alerts redraw,
+// proximity scan and risk report that awaits it: bound the wait for headers.
 const COUNTY_HEADERS_TIMEOUT_MS = 20_000;
+// FIPS codes the Census retired that an older NWS county table might still
+// send, mapped to their successors (renames and a city–county merger).
+const RETIRED_FIPS: Record<string, string> = {
+  '02270': '02158', // Wade Hampton → Kusilvak Census Area, AK (2015)
+  '46113': '46102', // Shannon → Oglala Lakota County, SD (2015)
+  '51515': '51019', // Bedford city → Bedford County, VA (2013)
+};
 
 export interface RawAlert {
   id?: string;
@@ -44,9 +55,16 @@ export interface RawAlert {
     certainty?: string;
     urgency?: string;
     senderName?: string;
+    sent?: string;
     effective?: string;
     expires?: string;
     areaDesc?: string;
+    /** CAP status: "Actual", or "Exercise" / "System" / "Test" / "Draft". */
+    status?: string;
+    /** CAP msgType: "Alert" (new), "Update", "Cancel", "Ack", "Error". */
+    messageType?: string;
+    /** Earlier messages this one updates or cancels; `identifier` matches their `properties.id`. */
+    references?: { identifier?: string; sent?: string }[];
     geocode?: { SAME?: string[]; UGC?: string[] };
     /**
      * CAP parameters as NWS sends them — string arrays keyed by name, e.g.
@@ -157,33 +175,65 @@ function extractRings(geometry: GeoJSON.Geometry | null | undefined): number[][]
   return [];
 }
 
-// Load the county polygons once and index them by FIPS id. Memoised across the
+/** The county topology plus the per-county polygons built from it. */
+export interface CountyAtlas {
+  /** County polygons by 5-digit FIPS. */
+  geometries: Map<string, GeoJSON.Geometry>;
+  topology: Topology;
+  /** Each county's topology object (its arcs), by FIPS — for merged outlines. */
+  objects: Map<string, GeometryObject>;
+}
+
+export function countyAtlasFromTopology(topology: Topology): CountyAtlas {
+  const collection = topology.objects.counties as GeometryCollection;
+  const geometries = new Map<string, GeoJSON.Geometry>();
+  const objects = new Map<string, GeometryObject>();
+  for (const obj of collection.geometries) {
+    if (obj.id == null) continue;
+    const fips = String(obj.id);
+    objects.set(fips, obj);
+    const geom = (topoFeature(topology, obj) as GeoJSON.Feature).geometry;
+    if (geom) geometries.set(fips, geom);
+  }
+  return { geometries, topology, objects };
+}
+
+// Load the county topology once and index it by FIPS id. Memoised across the
 // app's lifetime; a failed load is allowed to retry on the next refresh.
-let countyPromise: Promise<Map<string, GeoJSON.Geometry>> | null = null;
-export function loadCounties(): Promise<Map<string, GeoJSON.Geometry>> {
-  if (!countyPromise) {
+let atlasPromise: Promise<CountyAtlas> | null = null;
+export function loadCountyAtlas(): Promise<CountyAtlas> {
+  if (!atlasPromise) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), COUNTY_HEADERS_TIMEOUT_MS);
-    countyPromise = fetch(COUNTY_GEOJSON, { signal: ctrl.signal })
+    atlasPromise = fetch(countiesTopoUrl, { signal: ctrl.signal })
       .then((r) => {
         clearTimeout(timer); // headers arrived — never abort the body download
-        if (!r.ok) throw new Error(`county geojson ${r.status}`);
-        return r.json() as Promise<GeoJSON.FeatureCollection>;
+        if (!r.ok) throw new Error(`county topology ${r.status}`);
+        return r.json() as Promise<Topology>;
       })
-      .then((data) => {
-        const map = new Map<string, GeoJSON.Geometry>();
-        for (const f of data.features) {
-          if (f.id != null && f.geometry) map.set(String(f.id), f.geometry);
-        }
-        return map;
-      })
+      .then(countyAtlasFromTopology)
       .catch((err) => {
         clearTimeout(timer);
-        countyPromise = null;
+        atlasPromise = null;
         throw err;
       });
   }
-  return countyPromise;
+  return atlasPromise;
+}
+
+/** County polygons by 5-digit FIPS (see loadCountyAtlas). */
+export function loadCounties(): Promise<Map<string, GeoJSON.Geometry>> {
+  return loadCountyAtlas().then((atlas) => atlas.geometries);
+}
+
+/** The 5-digit county FIPS codes an alert names through its SAME codes, deduped. */
+export function alertCountyFips(alert: RawAlert): string[] {
+  const out = new Set<string>();
+  for (const code of alert.properties.geocode?.SAME ?? []) {
+    const fips = code.length === 6 ? code.slice(1) : code; // SAME -> 5-digit FIPS
+    out.add(RETIRED_FIPS[fips] ?? fips);
+  }
+  return [...out];
 }
 
 export function alertRings(
@@ -197,12 +247,44 @@ export function alertRings(
   // ...otherwise fall back to the counties named by its SAME (county FIPS) codes.
   if (!counties) return [];
   const rings: number[][][] = [];
-  for (const code of alert.properties.geocode?.SAME ?? []) {
-    const fips = code.length === 6 ? code.slice(1) : code; // SAME -> 5-digit FIPS
+  for (const fips of alertCountyFips(alert)) {
     const geom = counties.get(fips);
     if (geom) for (const ring of extractRings(geom)) rings.push(ring);
   }
   return rings;
+}
+
+// Merged county outlines, keyed by the sorted FIPS list: many alerts share a
+// county set, and the 60 s redraw re-asks for every alert each time.
+const outlineCache = new Map<string, number[][][]>();
+const OUTLINE_CACHE_MAX = 2_000;
+
+/**
+ * An alert's border as lines of [lon, lat]: its own polygon's rings, or for a
+ * county-based alert the outer outline of its counties merged — the borders
+ * between two of its own counties cancel out, so a 40-county warning gets one
+ * clean perimeter instead of a mesh of county lines. Empty when the alert has
+ * neither geometry nor a county the atlas knows.
+ */
+export function alertOutline(alert: RawAlert, atlas: CountyAtlas | null): number[][][] {
+  const own = extractRings(alert.geometry);
+  if (own.length) return own;
+  if (!atlas) return [];
+  const fips = alertCountyFips(alert).filter((f) => atlas.objects.has(f)).sort();
+  if (fips.length === 0) return [];
+  const key = fips.join(',');
+  const hit = outlineCache.get(key);
+  if (hit) return hit;
+  // mesh() over just these counties with "a === b" keeps the arcs only one of
+  // them uses: the perimeter (and any holes), never a shared inner border.
+  const lines = topoMesh(
+    atlas.topology,
+    { type: 'GeometryCollection', geometries: fips.map((f) => atlas.objects.get(f)!) },
+    (a, b) => a === b
+  ).coordinates;
+  if (outlineCache.size >= OUTLINE_CACHE_MAX) outlineCache.clear();
+  outlineCache.set(key, lines);
+  return lines;
 }
 
 async function fetchAlertsFrom(url: string): Promise<RawAlert[]> {
@@ -270,4 +352,25 @@ export async function fetchActiveAlerts(): Promise<RawAlert[]> {
     const proxyReason = err instanceof Error ? err.message : 'unreachable';
     throw new Error(`direct: ${directReason} · proxy: ${proxyReason}`);
   }
+}
+
+// The map layer and the pin notifier each poll the national feed every minute;
+// one multi-MB download serves both when their polls land within this window.
+const SHARED_MAX_AGE_MS = 30_000;
+let shared: { at: number; promise: Promise<RawAlert[]> } | null = null;
+
+/**
+ * fetchActiveAlerts, shared: a call within SHARED_MAX_AGE_MS of the last one
+ * gets the same (possibly still in-flight) result. A failure is forgotten at
+ * once, so the next caller retries instead of re-reading the error.
+ */
+export function fetchActiveAlertsShared(now = Date.now()): Promise<RawAlert[]> {
+  if (shared && now - shared.at < SHARED_MAX_AGE_MS) return shared.promise;
+  const promise = fetchActiveAlerts();
+  const entry = { at: now, promise };
+  shared = entry;
+  promise.catch(() => {
+    if (shared === entry) shared = null;
+  });
+  return promise;
 }

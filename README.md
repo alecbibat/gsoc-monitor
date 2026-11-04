@@ -7,7 +7,9 @@ Global Situational & Operational Conditions Monitor — a real-time 3D globe das
 - **3D globe** — CesiumJS with starfield, real sun lighting (day/night terminator), dark/light/satellite/topo basemaps plus an Earth map type: NASA's daily MODIS true-color mosaic with an AM/PM (Terra/Aqua) toggle and a date picker back to Feb 2000.
 - **Precipitation radar** — RainViewer's global composite as a looping 2-hour animation of 10-minute frames: a scrubbable timeline with play/pause, a 30/60/120-min window and opacity control. Tiles render as served (no client-side repainting); place labels stay on top.
 - **Earthquakes** — USGS live feed, magnitude-scaled colored points, click for details panel.
-- **NWS Weather Alerts** — every active alert, including zone/county-based ones (winter, heat, flood, red-flag) resolved to polygons server-side; severity-coded overlays with full alert text in click panels.
+- **NWS Weather Alerts** — every active alert, including zone/county-based ones (winter, heat, flood, red-flag) resolved to their counties; hazard-coloured fills weighted by severity, with a cased border around each alert (a county-based alert gets one outline around all its counties) and full alert text in click panels.
+- **Alert notifications** — when a new NWS alert covers a property pin or comes within 15 miles of one, the screen flashes and a popup opens in the middle of the screen with the affected locations and a *Show on map* button. The bell in the top bar turns them on and off (per browser; on by default). Updates of an alert already shown only notify for locations they newly reach.
+- **Wireless Emergency Alerts (PBS WARN)** — every WEA in force, as PBS WARN broadcasts and maps them: NWS and USGS warnings plus state and local alerts (AMBER, evacuations, police activity, 911 outages). Drawn as the area phones were alerted in, with a dashed border coloured by alert class and a marker; the click panel shows the exact message sent to phones.
 - **Live flights** — adsb.fi ADS-B (free, no key), plane icons rotated to heading, favorites list, auto-refresh when camera moves.
 - **Satellites** — CelesTrak TLE + satellite.js SGP4 propagation; real-time orbits for Space Stations / Brightest / GPS / Weather / Starlink groups, click any satellite to trace its orbit ring and read live position, altitude, speed, and orbital elements.
 - **Time zones** — real zone polygons (timezone-boundary-builder / OpenStreetMap, ODbL) with a live clock on every zone, to the second, daylight-saving aware; boundaries are rebuilt from a release with `npm run build:timezones`.
@@ -44,6 +46,8 @@ npm run dev:client
 | NOAA/CIMSS NGFS (heat detections) | No key needed | Fetched server-side from CIMSS's public NGFS RealEarth service (`re-ngfs-pub.ssec.wisc.edu`), which only answers a viewer session (cookie + session handshake), so browsers can't call it directly. Each 5-minute GOES scan is downloaded once and cached for 6 h; nothing is polled while nobody has the layer open. `NWS_USER_AGENT` identifies the app. |
 | NASA GIBS (Earth basemap) | No key needed | Public WMTS tiles of the daily MODIS Terra/Aqua true-color mosaic, fetched straight from the browser (no server involvement). |
 | Photon (search) | No key needed | komoot's public OpenStreetMap geocoder (`photon.komoot.io`) — the search box's primary source, including suggestions as you type. Fair use: results are cached server-side for 24 h. |
+| PBS WARN (Wireless Emergency Alerts) | No key needed | Fetched server-side (`/api/warn/active`) from the API behind [warn.pbs.org](https://warn.pbs.org) — the same requests its map makes. It is undocumented, so it can change without notice; failures show on the layer and the last good answer is served meanwhile. Proxied because its CORS header is inconsistent, and cached 45 s so every viewer shares one request. Credit: "Wireless Emergency Alerts broadcast by PBS". (FEMA's own feeds don't fit a live layer: OpenFEMA's IPAWS archive is published 24 h late, and IPAWS-OPEN needs a FEMA-issued PIN.) |
+| US county outlines | Bundled | Census-derived TopoJSON from the [`us-atlas`](https://github.com/topojson/us-atlas) package (ISC), shipped with the client: resolves county-based NWS alerts and merges each alert's counties into one outline. |
 | Nominatim (geocoding) | No key needed | Uses OSM data; `NWS_USER_AGENT` string is also used here as User-Agent per their policy. Search fallback (never for as-you-type suggestions, which its policy forbids) and the intel feed's place lookups, sharing one 1 request/second gate. |
 
 ## Deploy to Heroku
@@ -135,8 +139,14 @@ default* removes it. Saves carry the revision they were based on, so two
 admins can't silently overwrite each other, and open incidents and share links
 pick up changes live.
 
+Each checklist item is **Not started**, **In progress** or **Completed**. A
+click moves it forward (a second click completes it); right-click — or a long
+press on a touch screen — opens a menu that sets any status, which is also how
+a completed item is reopened. Every change is stamped with who and when, on the
+editor and the share page alike, and progress counts only completed items.
+
 Checklist and intake state is keyed by stable item ids. If an incident's type
-or property changes, or an admin removes an item, anything already checked or
+or property changes, or an admin removes an item, anything already worked or
 answered stays visible (read-only) under *Earlier checklist items* / *Other
 answers*, so the record an after-action review relies on is never lost. When
 editing defaults in code, append new lines rather than reordering: ids are
@@ -219,4 +229,4 @@ The architecture is designed for easy extension. For each new layer:
 4. Add a proxy route under `server/src/routes/`
 5. Add a toggle to `Sidebar.tsx`
 
-Shipped since: hurricanes (NOAA NHC), lightning (Blitzortung — the server records every strike around the clock, flagging any blind spot such as a restart's minute or two, and the globe opens on the last 24 h as age-colored X marks with live strikes on top), FIRMS fire hotspots, ships (AISStream), satellite tracker (CelesTrak TLE + satellite.js), the Earth map type (NASA MODIS Terra/Aqua daily true color via GIBS — AM/PM passes, date-steppable back to 2000), NOAA NGFS heat detections (GOES-East/West fire detections from the Next Generation Fire System every 5 minutes, drawn as each detection's ~2–5 km satellite pixel and colored by how recently it was hot over the past 1/3/6 h).
+Shipped since: Wireless Emergency Alerts (PBS WARN — every WEA in force, from the API behind warn.pbs.org), hurricanes (NOAA NHC), lightning (Blitzortung — the server records every strike around the clock, flagging any blind spot such as a restart's minute or two, and the globe opens on the last 24 h as age-colored X marks with live strikes on top), FIRMS fire hotspots, ships (AISStream), satellite tracker (CelesTrak TLE + satellite.js), the Earth map type (NASA MODIS Terra/Aqua daily true color via GIBS — AM/PM passes, date-steppable back to 2000), NOAA NGFS heat detections (GOES-East/West fire detections from the Next Generation Fire System every 5 minutes, drawn as each detection's ~2–5 km satellite pixel and colored by how recently it was hot over the past 1/3/6 h).

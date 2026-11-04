@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { PanelKind } from '../types';
+import { useSidebarDockStore } from '../ui/uiStore';
 
 export type DockZone = 'tr' | 'br' | 'tl' | 'bl';
 
@@ -13,17 +14,20 @@ export const ZONE_LABELS: Record<DockZone, string> = {
 };
 
 const SIDEBAR_W = 288;
+// What stays on screen of a collapsed sidebar: its reopen tab.
+const SIDEBAR_TAB_W = 24;
 const TOPBAR_H = 80;
 const EDGE_MARGIN = 20;
 
 export function dockPos(zone: DockZone, w: number, h: number): { x: number; y: number } {
   const W = typeof window !== 'undefined' ? window.innerWidth : 1200;
   const H = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const left = (useSidebarDockStore.getState().collapsed ? SIDEBAR_TAB_W : SIDEBAR_W) + EDGE_MARGIN;
   switch (zone) {
     case 'tr': return { x: W - w - EDGE_MARGIN, y: TOPBAR_H + EDGE_MARGIN };
     case 'br': return { x: W - w - EDGE_MARGIN, y: H - h - EDGE_MARGIN };
-    case 'tl': return { x: SIDEBAR_W + EDGE_MARGIN, y: TOPBAR_H + EDGE_MARGIN };
-    case 'bl': return { x: SIDEBAR_W + EDGE_MARGIN, y: H - h - EDGE_MARGIN };
+    case 'tl': return { x: left, y: TOPBAR_H + EDGE_MARGIN };
+    case 'bl': return { x: left, y: H - h - EDGE_MARGIN };
   }
 }
 
