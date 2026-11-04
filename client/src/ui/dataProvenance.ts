@@ -323,7 +323,7 @@ export const BASEMAP_PROVENANCE: Record<BasemapId, Provenance> = {
     name: 'Dark Basemap',
     icon: '🗺',
     source: 'Esri Dark Gray Canvas',
-    method: 'Esri “dark gray canvas” raster tiles — a muted reference basemap with a separate place-label overlay.',
+    method: 'Esri “dark gray canvas” raster tiles — a muted reference basemap whose tiles carry the country, state and water names. City names are drawn on top as vector labels from Natural Earth (public domain) and GeoNames (CC BY 4.0).',
     trust: 'Esri’s standard dark reference basemap, from the same provider as the satellite imagery.',
     url: 'https://www.arcgis.com',
   },
@@ -331,7 +331,7 @@ export const BASEMAP_PROVENANCE: Record<BasemapId, Provenance> = {
     name: 'Light Basemap',
     icon: '🗺',
     source: 'Esri Light Gray Canvas',
-    method: 'Esri “light gray canvas” raster tiles — a muted reference basemap with a separate place-label overlay.',
+    method: 'Esri “light gray canvas” raster tiles — a muted reference basemap whose tiles carry the country, state and water names. City names are drawn on top as vector labels from Natural Earth (public domain) and GeoNames (CC BY 4.0).',
     trust: 'Esri’s standard light reference basemap, from the same provider as the satellite imagery.',
     url: 'https://www.arcgis.com',
   },
@@ -340,7 +340,7 @@ export const BASEMAP_PROVENANCE: Record<BasemapId, Provenance> = {
     icon: '🛰',
     source: 'Esri World Imagery',
     method:
-      'High-resolution aerial/satellite imagery (Esri, Maxar, Earthstar) with an Esri boundary + place-label overlay.',
+      'High-resolution aerial/satellite imagery (Esri, Maxar, Earthstar). Country and state/province borders are drawn as vector lines from Natural Earth; place names come from Natural Earth (public domain) and GeoNames (CC BY 4.0).',
     trust: 'Esri’s standard imagery basemap, sourced from commercial and government providers.',
     url: 'https://www.esri.com',
   },
@@ -357,7 +357,7 @@ export const BASEMAP_PROVENANCE: Record<BasemapId, Provenance> = {
     icon: '🌍',
     source: 'NASA EOSDIS GIBS — MODIS Terra & Aqua',
     method:
-      'True-color imagery from NASA’s polar-orbiting Terra (≈10:30 AM local pass) and Aqua (≈1:30 PM local pass) satellites, mosaicked into a global daily image and tiled by NASA’s Global Imagery Browse Services. The AM/PM toggle switches satellites; the date can step back through the archive (Terra from Feb 2000, Aqua from Jul 2002). Today’s image fills in swath by swath as the satellites orbit — dark wedges are simply not-yet-imaged.',
+      'True-color imagery from NASA’s polar-orbiting Terra (≈10:30 AM local pass) and Aqua (≈1:30 PM local pass) satellites, mosaicked into a global daily image and tiled by NASA’s Global Imagery Browse Services. The AM/PM toggle switches satellites; the date can step back through the archive (Terra from Feb 2000, Aqua from Jul 2002). Today’s image fills in swath by swath as the satellites orbit — dark wedges are simply not-yet-imaged. Borders and place names are drawn on top as vector layers from Natural Earth (public domain) and GeoNames (CC BY 4.0).',
     trust:
       'NASA’s operational EOSDIS imagery service — the same source behind NASA Worldview and Zoom Earth’s HD satellite view.',
     url: 'https://worldview.earthdata.nasa.gov',

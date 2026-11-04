@@ -2,7 +2,8 @@ import * as Cesium from 'cesium';
 import { useEffect, useRef, useState } from 'react';
 import { BASEMAPS } from './basemaps';
 import { useEarthBasemapStore } from './earthBasemap';
-import { setLabelOverlay } from './labelOverlay';
+import { createPlaceLabels, type PlaceLabelsHandle } from './placeLabels';
+import { createBoundaryLines, type BoundaryLinesHandle } from './boundaryLines';
 import { getPanelData } from './entityPanelLink';
 import { useLayersStore } from '../store/layersStore';
 import { usePanelStore } from '../panels/panelStore';
@@ -28,29 +29,6 @@ function applyAdjust(
   if (adjust.contrast != null) layer.contrast = adjust.contrast;
   if (adjust.saturation != null) layer.saturation = adjust.saturation;
   if (adjust.gamma != null) layer.gamma = adjust.gamma;
-}
-
-// Place-label overlays fade out as the camera descends so town names stop
-// scaling up and overlapping terrain at close range, and fade back in for the
-// regional/global view where they add context. A smooth alpha ramp (rather than
-// a hard show/hide) removes the pop at the boundary.
-//
-// During the pins screensaver the fade happens far higher up, so the cinematic
-// close-ups carry no resizing labels at all while the zoomed-out overview keeps
-// them — labels fade out early in the descent, while they're still tiny.
-const LABELS_FADE = { near: 55_000,  far: 80_000 };       // normal browsing
-const PINS_FADE   = { near: 500_000, far: 1_500_000 };    // pins screensaver
-
-// Overlay alpha (0–1) for a camera height within a fade band.
-function labelAlphaAt(height: number, band: { near: number; far: number }): number {
-  if (height >= band.far) return 1;
-  if (height <= band.near) return 0;
-  return (height - band.near) / (band.far - band.near);
-}
-
-function currentLabelBand(): { near: number; far: number } {
-  const ss = useScreensaverStore.getState();
-  return ss.active && ss.mode === 'pins' ? PINS_FADE : LABELS_FADE;
 }
 
 // Automatic GPU recovery reloads the page to get a fresh graphics process. On a
@@ -88,8 +66,8 @@ export function CesiumGlobe({ children, onReady }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
   const baseLayerRef = useRef<Cesium.ImageryLayer | null>(null);
-  const overlayLayerRef = useRef<Cesium.ImageryLayer | null>(null);
-  const overlaySrcRef = useRef<object | null>(null); // identity of the BASEMAPS overlay source behind overlayLayerRef
+  const placeLabelsRef = useRef<PlaceLabelsHandle | null>(null);
+  const bordersRef = useRef<BoundaryLinesHandle | null>(null);
   const basemap = useLayersStore((s) => s.basemap);
   // The Earth map type bakes its date + AM/PM pass into the provider URL, so
   // stepping either one must rebuild the base imagery. Collapsed to '' for the
@@ -360,8 +338,6 @@ export function CesiumGlobe({ children, onReady }: Props) {
       // Drop layer refs so the rebuilt viewer starts from a clean slate rather
       // than trying to remove imagery layers that belonged to the dead viewer.
       baseLayerRef.current = null;
-      overlayLayerRef.current = null;
-      overlaySrcRef.current = null;
       // Don't destroy yet. Layers still hold this viewer through App's context and
       // release their resources on it in the next commit. A destroyed viewer throws
       // on touch, and that would unmount the whole React root. Take it out of
@@ -400,72 +376,60 @@ export function CesiumGlobe({ children, onReady }: Props) {
     if (!viewer) return;
     const layers = viewer.imageryLayers;
     const def = BASEMAPS[basemap];
-
     const prevBase = baseLayerRef.current;
-    const prevOverlay = overlayLayerRef.current;
 
-    // Add the new base imagery at the bottom of the stack and its label
-    // overlay at the very top, so the final order is base → data layers
-    // (weather etc.) → place labels. Labels above weather keeps city names
-    // legible under weather imagery.
+    // Add the new base imagery at the bottom of the stack, under the data
+    // layers (weather etc.). Place names are vector primitives (below), drawn
+    // over every imagery layer, so they stay legible on top of radar too.
     const baseLayer = layers.addImageryProvider(def.build());
     applyAdjust(baseLayer, def.adjust);
-
-    // Satellite and Earth share the same static Esri label source; a date/pass
-    // step or a satellite<->earth swap only changes the base, so keep the live
-    // label layer (and its loaded tiles) instead of rebuilding it.
-    const reusedOverlay =
-      def.overlay && prevOverlay && overlaySrcRef.current === def.overlay ? prevOverlay : null;
-    let overlayLayer: Cesium.ImageryLayer | null = null;
-    if (def.overlay) {
-      overlayLayer = reusedOverlay ?? layers.addImageryProvider(def.overlay.build());
-      if (!reusedOverlay) applyAdjust(overlayLayer, def.overlay.adjust);
-      // Match the new overlay to the current zoom so swapping basemaps while
-      // zoomed in doesn't briefly flash labels back on.
-      const h = viewer.camera.positionCartographic?.height ?? Number.POSITIVE_INFINITY;
-      overlayLayer.alpha = labelAlphaAt(h, currentLabelBand());
-      overlayLayer.show = overlayLayer.alpha > 0.001;
-      // Raise even when reused: Precip/Fuel add at the top of the stack and may
-      // sit above the labels; a rebuilt overlay always went back over them.
-      layers.raiseToTop(overlayLayer);
-    }
     layers.lowerToBottom(baseLayer);
-    setLabelOverlay(viewer, overlayLayer);
 
-    // Remove the previous layers only after the new ones are in place so the
-    // swap doesn't flash the empty globe.
-    if (prevOverlay && prevOverlay !== reusedOverlay) layers.remove(prevOverlay, true);
+    // Remove the previous base only after the new one is in place so the swap
+    // doesn't flash the empty globe.
     if (prevBase) layers.remove(prevBase, true);
 
     baseLayerRef.current = baseLayer;
-    overlayLayerRef.current = overlayLayer;
-    overlaySrcRef.current = def.overlay ?? null;
     viewer.scene.requestRender();
   }, [viewer, basemap, earthKey]);
 
-  // Smoothly fade the place-label overlay with camera height. Driven from
-  // preRender so the alpha ramps every frame during programmatic flights (pin
-  // fly-tos, screensaver tours) and interactive zoom — no pop, no stepping.
+  // Vector place names (countries, states/provinces, cities, water), one
+  // engine per viewer; the map type only picks the palette, or none for map
+  // types whose tiles print their own names.
   useEffect(() => {
     if (!viewer) return;
-    const scene = viewer.scene;
-
-    const sync = () => {
-      const overlay = overlayLayerRef.current;
-      if (!overlay) return;
-      const h = viewer.camera.positionCartographic?.height ?? Number.POSITIVE_INFINITY;
-      const a = labelAlphaAt(h, currentLabelBand());
-      if (Math.abs(a - overlay.alpha) > 0.001) {
-        overlay.alpha = a;
-        overlay.show = a > 0.001;
-      }
+    const engine = createPlaceLabels(viewer);
+    const def = BASEMAPS[useLayersStore.getState().basemap];
+    engine.setTheme(def.labels ?? null, def.cityLabelsOnly);
+    placeLabelsRef.current = engine;
+    return () => {
+      engine.destroy();
+      placeLabelsRef.current = null;
     };
-
-    const off = scene.preRender.addEventListener(sync);
-    sync();
-    return () => off();
   }, [viewer]);
 
+  useEffect(() => {
+    const def = BASEMAPS[basemap];
+    placeLabelsRef.current?.setTheme(def.labels ?? null, def.cityLabelsOnly);
+  }, [viewer, basemap]);
+
+  // Country and state/province borders over the map types that want them.
+  // Built on first use and then only shown or hidden: building the geometry
+  // is a few hundred milliseconds of main-thread work on a thin client, too
+  // much to repeat on every map-type switch.
+  const wantBorders = !!BASEMAPS[basemap].borders;
+  useEffect(() => {
+    if (!viewer) return;
+    return () => {
+      bordersRef.current?.destroy();
+      bordersRef.current = null;
+    };
+  }, [viewer]);
+  useEffect(() => {
+    if (!viewer) return;
+    if (wantBorders && !bordersRef.current) bordersRef.current = createBoundaryLines(viewer);
+    bordersRef.current?.setShow(wantBorders);
+  }, [viewer, wantBorders]);
 
   // Render quality: graduated trade of anti-aliasing, terrain detail,
   // resolution and atmosphere/lighting for frame rate, driven by the quality
