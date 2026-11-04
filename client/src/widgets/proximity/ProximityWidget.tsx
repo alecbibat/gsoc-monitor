@@ -165,7 +165,7 @@ export function ProximityWidget() {
               <HazardRows hazards={p} radiusMi={radiusMi} />
             </button>
 
-            {/* Pop out into its own dockable window */}
+            {/* Pop out into its own floating window */}
             <button
               onClick={() => popOut(p)}
               title="Pop out to window"

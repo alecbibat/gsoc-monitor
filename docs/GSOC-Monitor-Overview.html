@@ -296,7 +296,7 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
     <div class="arrow">&#8594;</div>
     <div class="node"><h5 style="color:var(--yellow)">Node/Express + Postgres</h5><p>29 proxy routes with TTL caches that serve last-known-good data when upstreams fail; background collectors for lightning, ships, rivers, wind &amp; OSINT; keys held server-side.</p></div>
     <div class="arrow">&#8594;</div>
-    <div class="node"><h5 style="color:var(--blue)">React + CesiumJS client</h5><p>25+ layers on a 3D globe, dockable panels, dashboards, crisis tools, and screensaver tours — adaptive from ops wall display down to a phone.</p></div>
+    <div class="node"><h5 style="color:var(--blue)">React + CesiumJS client</h5><p>25+ layers on a 3D globe, floating panels, dashboards, crisis tools, and screensaver tours — adaptive from ops wall display down to a phone.</p></div>
   </div>
 
   <div class="tax">
@@ -304,7 +304,7 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
   </div>
 
   <div class="cards">
-    <div class="card"><h4>Click anything, get a panel</h4><p>Every feature on the globe — a quake, an alert polygon, a ship, a satellite, a river gauge — opens a draggable, resizable detail panel; 20 panel kinds, color-accented by category, with snap-to-dock zones. Where several features overlap, a picker lists everything under the cursor.</p></div>
+    <div class="card"><h4>Click anything, get a panel</h4><p>Every feature on the globe — a quake, an alert polygon, a ship, a satellite, a river gauge — opens a draggable, resizable detail panel; 20 panel kinds, color-accented by category. Where several features overlap, a picker lists everything under the cursor.</p></div>
     <div class="card"><h4>Layer console with live status</h4><p>A sectioned sidebar toggles every layer and shows a live one-line status straight from its store — "412 strikes/min · live", "3 active systems", "7/7 ships tracked" — plus inline controls: magnitude chips, satellite groups, flood-stage filters, proximity radii. All state persists across reloads.</p></div>
     <div class="card"><h4>Provenance built in</h4><p>An "i" button documents every active layer: who provides the data, how it is gathered, and why it can be trusted, with a canonical link — USGS to Blitzortung. The trust story travels with the map.</p></div>
     <div class="card"><h4>Kiosk-grade self-recovery</h4><p>Built for unattended wall displays: dual GPU watchdogs detect WebGL context loss or silent frame stalls, classify the GPU, rebuild the viewer up to 4 times behind a "Restarting graphics…" overlay, and auto-reload with a bounded budget so broken hardware can't loop forever.</p></div>
@@ -447,7 +447,7 @@ h3.sub-head .accent-dot { color: var(--accent, var(--blue)); }
   <div class="cards">
     <div class="card"><h4>18-feed power-outage aggregation</h4><p>One toggle lights up live outages across ~19 states from three families of public feeds — state-EM ArcGIS services, the KUBRA Storm Center data behind major utilities' own maps (Oncor, Georgia Power, Evergy…), and NISC co-ops. Each outage carries customers affected, elapsed time, restoration ETA ("overdue 30m" turns red), and cause. No API keys; each source fails independently.</p></div>
     <div class="card"><h4>One-click emergency briefing</h4><p>Click a property pin and the app builds a live safety briefing: road distance and drive time to the nearest police and fire stations, A/B/C options for the 3 nearest hospitals and hotels, and turn-by-turn routes drawn on the globe as animated pulse lines via a custom GLSL shader — with Google Maps handoff and share links.</p></div>
-    <div class="card"><h4>Property watch proximity scanner</h4><p>Cross-references all 30 properties against FIRMS fire detections, active NWS alerts (true point-in-polygon tests), and USGS earthquakes at a 25/50/100-mile radius — listing only properties with something nearby, ranked worst-first, with countdown-to-expiry alert chips. Pops out into independently-refreshing dockable windows.</p></div>
+    <div class="card"><h4>Property watch proximity scanner</h4><p>Cross-references all 30 properties against FIRMS fire detections, active NWS alerts (true point-in-polygon tests), and USGS earthquakes at a 25/50/100-mile radius — listing only properties with something nearby, ranked worst-first, with countdown-to-expiry alert chips. Pops out into independently-refreshing floating windows.</p></div>
     <div class="card"><h4>Downloadable PNG hazard report</h4><p>Any property panel exports a polished report card — gradient header, live watch status, color-barred alert cards, fire rows with distance and radiative power, quake rows with magnitude badges, or a green all-clear — rendered on a 2× retina canvas, dated, and ready to paste into an incident channel.</p></div>
   </div>
 
