@@ -2,11 +2,13 @@ import * as Cesium from 'cesium';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LightningFieldResponse, LightningMarks, LightningStatusLite } from '../../types/lightning';
 import { LIGHTNING_STAGES, STAGE_ENDS_S } from './lightningPalette';
+import { RING_LIFE_MS } from './strikeRings';
 import { qLat, qLon, tickOf } from './strikeKey';
 
-// The engine end to end against a stand-in viewer (real Cesium billboards and
-// math, no WebGL), a mocked /field and a fake socket: what's drawn, the live →
-// field hand-over, the window filter, expiry, stale responses and teardown.
+// The engine end to end against a stand-in viewer (real Cesium billboards,
+// points and math, no WebGL), a mocked /field and a fake socket: what's drawn,
+// the live → field hand-over, the window filter, expiry, stale responses,
+// new-strike rings and teardown.
 
 vi.mock('../../api/lightningApi', () => ({ fetchLightningField: vi.fn() }));
 import { fetchLightningField } from '../../api/lightningApi';
@@ -78,15 +80,19 @@ function response(field: Pt[], fresh: Pt[]): LightningFieldResponse {
   };
 }
 
+// What the engine adds to scene.primitives, in order: the field Xs, the live
+// Xs, then the new-strike rings.
+type Collection = Cesium.BillboardCollection | Cesium.PointPrimitiveCollection;
+
 // A viewer looking down on Oklahoma from 2,000 km.
 function fakeViewer() {
-  const primitives: Cesium.BillboardCollection[] = [];
+  const primitives: Collection[] = [];
   const carto = Cesium.Cartographic.fromDegrees(-97, 35, 2e6);
   let rect = Cesium.Rectangle.fromDegrees(-110, 25, -85, 45);
   const scene = {
     primitives: {
-      add: (p: Cesium.BillboardCollection) => (primitives.push(p), p),
-      remove: (p: Cesium.BillboardCollection) => {
+      add: (p: Collection) => (primitives.push(p), p),
+      remove: (p: Collection) => {
         primitives.splice(primitives.indexOf(p), 1);
         p.destroy();
         return true;
@@ -120,11 +126,13 @@ function fakeViewer() {
   };
 }
 
-const shown = (c: Cesium.BillboardCollection) => {
+const shown = (c: Collection) => {
   let n = 0;
   for (let i = 0; i < c.length; i++) if (c.get(i).show) n++;
   return n;
 };
+// Each ring is three points: two dark casings and the white ring between them.
+const ringsShown = (c: Cesium.PointPrimitiveCollection) => shown(c) / 3;
 // Stage sizes are all distinct, so a billboard's width names its stage.
 const stageOf = (bb: Cesium.Billboard) => LIGHTNING_STAGES.findIndex((s) => s.sizePx === bb.width);
 const shownStages = (c: Cesium.BillboardCollection) => {
@@ -184,8 +192,16 @@ describe('lightning engine', () => {
     const v = fakeViewer();
     const stop = startLightning(v.viewer, variant);
     await flush();
-    const [fieldBbs, liveBbs] = v.primitives;
-    return { ...v, stop, fieldBbs, liveBbs };
+    const [fieldBbs, liveBbs, rings] = collections(v.primitives);
+    return { ...v, stop, fieldBbs, liveBbs, rings };
+  }
+
+  function collections(primitives: Collection[]) {
+    return [
+      primitives[0] as Cesium.BillboardCollection,
+      primitives[1] as Cesium.BillboardCollection,
+      primitives[2] as Cesium.PointPrimitiveCollection,
+    ] as const;
   }
 
   it('asks for the snapped view box with the variant budgets', async () => {
@@ -277,7 +293,7 @@ describe('lightning engine', () => {
       Promise.resolve(response([{ tMs: T0 - 3 * HOUR, lat: 45.5, lon: 10.5 }], []))
     );
     const stop = startLightning(v.viewer, 'app');
-    const [fieldBbs] = v.primitives;
+    const [fieldBbs] = collections(v.primitives);
     v.setRect(5, 40, 15, 50);
     v.camera.moveEnd.raiseEvent();
     await vi.advanceTimersByTimeAsync(750);
@@ -337,7 +353,7 @@ describe('lightning engine', () => {
     const v = fakeViewer();
     const stop = startLightning(v.viewer, 'app');
     await flush();
-    const [, liveBbs] = v.primitives;
+    const [, liveBbs] = collections(v.primitives);
     const ws = FakeSocket.all[0];
     const quiet = keepSocketAlive();
     expect(useLightningStatus.getState().connected).toBe(true);
@@ -354,6 +370,71 @@ describe('lightning engine', () => {
     expect(st.ratePerMin).toBeGreaterThanOrEqual(2 + 5); // ours + the keep-alive frames so far
     expect(st.liveSource).toBe('browser');
     quiet();
+    stop();
+  });
+
+  it('rings a socket strike that lands in view while it is news, and lets the ring fade out', async () => {
+    serve([], []);
+    const v = fakeViewer();
+    const stop = startLightning(v.viewer, 'app');
+    await flush();
+    const [, liveBbs, rings] = collections(v.primitives);
+    const ws = FakeSocket.all[0];
+    const quiet = keepSocketAlive();
+    ws.strike(35, -97, Date.now() - 2_000);
+    ws.strike(-35, 83, Date.now() - 2_000); // the far side of the planet: no ring
+    ws.strike(36, -98, Date.now() - 45_000); // in view but delivered late: an X, no ring
+    expect(shown(liveBbs)).toBe(3);
+    expect(ringsShown(rings)).toBe(1);
+
+    const ring = rings.get(2); // the white ring of the first ring's three points
+    const [size0, alpha0] = [ring.pixelSize, ring.outlineColor.alpha];
+    await vi.advanceTimersByTimeAsync(RING_LIFE_MS / 2);
+    expect(ring.pixelSize).toBeGreaterThan(size0);
+    expect(ring.outlineColor.alpha).toBeLessThan(alpha0);
+    await vi.advanceTimersByTimeAsync(RING_LIFE_MS / 2 + 50);
+    expect(ringsShown(rings)).toBe(0);
+
+    // The next strike reuses the finished ring's points.
+    ws.strike(35.1, -97.1, Date.now() - 1_000);
+    expect(ringsShown(rings)).toBe(1);
+    expect(rings.length).toBe(3);
+    quiet();
+    stop();
+  });
+
+  it("rings the fresh list's new strikes only while it stands in for the socket", async () => {
+    // The first answer's fresh strikes (one 10 s old, in view) are backfill.
+    const { rings, setRect, camera, stop } = await startWithField();
+    expect(ringsShown(rings)).toBe(0);
+
+    // 30 s without the socket: the fresh list is now the live feed, polled
+    // every 10 s, and what it adds since the last poll is news.
+    await vi.advanceTimersByTimeAsync(29_000);
+    serve(FIELD, [...FRESH, { tMs: Date.now() - 3_000, lat: 35.8, lon: -97.8 }]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(useLightningStatus.getState().liveSource).toBe('server');
+    expect(ringsShown(rings)).toBe(1); // just the new one: the rest were already drawn
+    await vi.advanceTimersByTimeAsync(RING_LIFE_MS);
+    expect(ringsShown(rings)).toBe(0);
+
+    // A pan to new ground: the first answer there is backfill again…
+    setRect(-100, 32, -94, 38);
+    // Every answer from here brings a strike from 2 s before it was asked for.
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(response([], [{ tMs: Date.now() - 2_000, lat: 34.6, lon: -96.6 }]))
+    );
+    camera.moveEnd.raiseEvent();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(fetchMock.mock.lastCall![0].bbox).toEqual([-100, 32, -94, 38]);
+    expect(ringsShown(rings)).toBe(0);
+    // …and the next poll of that box (every 10 s now) rings what it brings.
+    let rung = 0;
+    for (let s = 0; s < 11 && rung === 0; s++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      rung = ringsShown(rings);
+    }
+    expect(rung).toBe(1);
     stop();
   });
 
@@ -377,12 +458,13 @@ describe('lightning engine', () => {
   });
 
   it('tears everything down and resets the store', async () => {
-    const { stop, primitives, fieldBbs, liveBbs } = await startWithField();
+    const { stop, primitives, fieldBbs, liveBbs, rings } = await startWithField();
     const ws = FakeSocket.all[0];
     stop();
     expect(primitives).toHaveLength(0);
     expect(fieldBbs.isDestroyed()).toBe(true);
     expect(liveBbs.isDestroyed()).toBe(true);
+    expect(rings.isDestroyed()).toBe(true);
     expect(ws.closed).toBe(true);
     const st = useLightningStatus.getState();
     expect(st.server).toBeNull();
@@ -400,7 +482,7 @@ describe('lightning engine', () => {
     startLightning(v.viewer, 'app')();
     const stop = startLightning(v.viewer, 'app');
     await flush();
-    expect(v.primitives).toHaveLength(2);
+    expect(v.primitives).toHaveLength(3);
     expect(v.primitives[0].length).toBe(4);
     expect(useLightningStatus.getState().field.marks).toBe(4);
     stop();

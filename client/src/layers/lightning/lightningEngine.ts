@@ -9,8 +9,9 @@ import { LivePool, type LiveEntry, type LivePoolCaps } from './livePool';
 import { MARK_EXPIRED, MARK_HIDDEN, diffField, fieldMarkState } from './fieldModel';
 import { viewBoxFor, type ViewBox } from './viewBox';
 import { createServerClock } from './clock';
-import { RateWindow, decideLiveSource } from './liveFeed';
+import { RateWindow, decideLiveSource, socketSilent } from './liveFeed';
 import { createBoltAnimator } from './boltAnimation';
+import { createStrikeRings } from './strikeRings';
 import { startBlitzortungSocket } from './blitzortungSocket';
 import { XBillboardPool, styleX } from './xBillboards';
 
@@ -23,7 +24,9 @@ import { XBillboardPool, styleX } from './xBillboards';
 //           Blitzortung socket (with the bolt animation when in view) plus
 //           each /field response's `fresh` list, which fills the first two
 //           minutes on load and stands in for the socket when it's down.
-//           Always white; retired at 2 min.
+//           Always white; retired at 2 min. A strike that is news when it
+//           lands in view also gets a ring that pops out of its X
+//           (strikeRings.ts), sized to read even from a whole-globe view.
 //   FIELD — the server's stable sample of the view box's last 24 h. Marks
 //           don't reshuffle between polls, so each refresh is a small diff.
 //           A mark whose strike is also live stays hidden (its "twin") and
@@ -42,12 +45,14 @@ interface VariantConfig {
   /** Newest strikes of the last 2 min in the box. */
   freshBudget: number;
   liveCaps: LivePoolCaps;
+  /** New-strike rings on screen at once (the oldest makes way). */
+  ringCap: number;
 }
 
 // The share page's globe is smaller and often on weaker machines.
 export const LIGHTNING_VARIANTS: Record<LightningVariant, VariantConfig> = {
-  app: { fieldBudget: 16_000, freshBudget: 4_000, liveCaps: { near: 4_000, far: 800 } },
-  share: { fieldBudget: 10_000, freshBudget: 2_500, liveCaps: { near: 2_500, far: 500 } },
+  app: { fieldBudget: 16_000, freshBudget: 4_000, liveCaps: { near: 4_000, far: 800 }, ringCap: 96 },
+  share: { fieldBudget: 10_000, freshBudget: 2_500, liveCaps: { near: 2_500, far: 500 }, ringCap: 48 },
 };
 
 const TICK_MS = 1_000; // stage-step / cleanup cadence (colours change over minutes, not frames)
@@ -59,6 +64,9 @@ const LIVE_HOLD_MS = LIVE_HOLD_S * 1000;
 // The bolt is a "just happened" cue; a strike the relay delivered late (or one
 // the fresh list backfills) only gets its X.
 const BOLT_MAX_AGE_S = 20;
+// So is the ring, with room for the server fallback's lag: its strikes arrive
+// in a batch per 10 s poll, a few seconds behind the collector.
+const RING_MAX_AGE_S = 30;
 // A poll that finds a request for the same box in flight lets it finish rather
 // than aborting it (a slow server would otherwise never complete one) — unless
 // it looks hung.
@@ -97,6 +105,8 @@ export function startLightning(viewer: Cesium.Viewer, variant: LightningVariant)
   const liveBbs = new Cesium.BillboardCollection({ scene: viewer.scene });
   viewer.scene.primitives.add(fieldBbs);
   viewer.scene.primitives.add(liveBbs);
+  // After the Xs, so the rings draw over the field.
+  const rings = createStrikeRings(viewer, cfg.ringCap);
   const fieldPool = new XBillboardPool(fieldBbs);
   const livePool = new XBillboardPool(liveBbs);
   const live = new LivePool<Cesium.Billboard>(cfg.liveCaps);
@@ -216,12 +226,15 @@ export function startLightning(viewer: Cesium.Viewer, variant: LightningVariant)
     return true;
   };
 
-  const mergeFresh = (marks: DecodedMark[], nowMs: number): boolean => {
+  /** `ring`: these are news (the fresh list is the live feed) — ring the recent ones in view. */
+  const mergeFresh = (marks: DecodedMark[], nowMs: number, ring: boolean): boolean => {
     let changed = false;
     for (const mk of marks) {
       if (live.has(mk.key) || nowMs - mk.tMs >= LIVE_HOLD_MS) continue;
       const near = bolts.inView(mk.lon, mk.lat);
-      if (addLive(mk.key, mk.tMs, mk.lon, mk.lat, near) && near) changed = true;
+      if (!addLive(mk.key, mk.tMs, mk.lon, mk.lat, near) || !near) continue;
+      changed = true;
+      if (ring && nowMs - mk.tMs < RING_MAX_AGE_S * 1000) rings.spawn(mk.lon, mk.lat);
     }
     return changed;
   };
@@ -246,9 +259,10 @@ export function startLightning(viewer: Cesium.Viewer, variant: LightningVariant)
       // Off-screen arrivals request no render: nobody can see them change, and
       // the next frame anything else asks for draws them.
       if (!addLive(s.key, s.tMs, s.lon, s.lat, near) || !near) return;
-      // The dramatic descending bolt + red impact flash — only where the
-      // camera can actually see it, and only while it's news.
+      // The descending bolt and the ring around the landing — only where the
+      // camera can actually see them, and only while it's news.
       if (ageS < BOLT_MAX_AGE_S) bolts.spawn(s.lon, s.lat);
+      if (ageS < RING_MAX_AGE_S) rings.spawn(s.lon, s.lat);
       requestRenderSoon();
     },
   });
@@ -274,13 +288,20 @@ export function startLightning(viewer: Cesium.Viewer, variant: LightningVariant)
   let lastFieldOkAt: number | null = null;
   let lastFieldFailed = false;
   let serverCollectorUp = false;
+  let appliedBoxKey: string | null = null;
 
-  const applyResponse = (resp: LightningFieldResponse, fetchStart: number, fetchEnd: number) => {
+  const applyResponse = (resp: LightningFieldResponse, fetchStart: number, fetchEnd: number, boxKey: string) => {
     clock.observe(resp.now, fetchStart, fetchEnd);
     checkServerStageEnds(resp.stageEndsS);
     const nowMs = clock.now();
     let changed = applyField(decodeMarks(resp.field), nowMs);
-    if (mergeFresh(decodeMarks(resp.fresh), nowMs)) changed = true;
+    // While the socket is silent the fresh list is the live feed, so what it
+    // adds since the last poll of this box is the news and gets the rings. Not
+    // the first answer for a box (page load, a pan to new ground): backfill.
+    const ringFresh =
+      socketSilent({ nowMs: Date.now(), startedMs, socketLastStrikeMs }) && boxKey === appliedBoxKey;
+    appliedBoxKey = boxKey;
+    if (mergeFresh(decodeMarks(resp.fresh), nowMs, ringFresh)) changed = true;
 
     lastFieldOkAt = Date.now();
     lastFieldFailed = false;
@@ -323,7 +344,7 @@ export function startLightning(viewer: Cesium.Viewer, variant: LightningVariant)
         // Superseded (aborted) or overtaken by a newer request: drop it.
         if (cancelled || req.ctrl.signal.aborted || seq < appliedSeq) return;
         appliedSeq = seq;
-        applyResponse(resp, fetchStart, Date.now());
+        applyResponse(resp, fetchStart, Date.now(), box.key);
       })
       .catch((err: unknown) => {
         // Before the error branch: an aborted, superseded request isn't a feed error.
@@ -444,6 +465,7 @@ export function startLightning(viewer: Cesium.Viewer, variant: LightningVariant)
     offMoveEnd();
     unsubWindow();
     bolts.destroy();
+    rings.destroy();
     live.clear();
     field.clear();
     if (!viewer.isDestroyed()) {

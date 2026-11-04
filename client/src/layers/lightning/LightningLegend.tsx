@@ -1,4 +1,4 @@
-import { LEGEND_ITEMS, LEGEND_NOTE, LIGHTNING_STAGES, xGlyphSvg } from './lightningPalette';
+import { LEGEND_ITEMS, LEGEND_NOTE, LIGHTNING_STAGES, ringGlyphSvg, xGlyphSvg } from './lightningPalette';
 import { KeySteps, ageLabel, type KeyStep } from '../legendKeys';
 
 // Strike-age key for the lightning layer: one X per colour stage, the same
@@ -6,6 +6,7 @@ import { KeySteps, ageLabel, type KeyStep } from '../legendKeys';
 // Store-free: the full key behind the map legend panel's row (MapLegends), and
 // under the share-link globe.
 const SWATCHES = LEGEND_ITEMS.map((item) => ({ ...item, svg: xGlyphSvg(item.color, 12) }));
+const RING_SVG = ringGlyphSvg(12);
 
 export function LightningLegend() {
   return (
@@ -19,6 +20,10 @@ export function LightningLegend() {
             {s.label}
           </div>
         ))}
+      </div>
+      <div className="flex items-center gap-1.5 text-[10px] text-white/50">
+        <span className="flex h-3 w-3 shrink-0" dangerouslySetInnerHTML={{ __html: RING_SVG }} />
+        Ring: a strike just landed in view
       </div>
       <p className="text-[9px] leading-snug text-white/35">{LEGEND_NOTE}</p>
     </div>
