@@ -1,9 +1,10 @@
-import { LEGEND_ITEMS, LEGEND_NOTE, xGlyphSvg } from './lightningPalette';
+import { LEGEND_ITEMS, LEGEND_NOTE, LIGHTNING_STAGES, xGlyphSvg } from './lightningPalette';
+import { KeySteps, ageLabel, type KeyStep } from '../legendKeys';
 
 // Strike-age key for the lightning layer: one X per colour stage, the same
 // table (lightningPalette.ts) the globe draws from, so the legend can't drift.
-// Store-free: shown as a floating map card (see MapLegends) and under the
-// share-link globe.
+// Store-free: the full key behind the map legend panel's row (MapLegends), and
+// under the share-link globe.
 const SWATCHES = LEGEND_ITEMS.map((item) => ({ ...item, svg: xGlyphSvg(item.color, 12) }));
 
 export function LightningLegend() {
@@ -22,4 +23,18 @@ export function LightningLegend() {
       <p className="text-[9px] leading-snug text-white/35">{LEGEND_NOTE}</p>
     </div>
   );
+}
+
+// Compact key: each stage's X over the age it lasts until ("<10m" for the
+// 2–10 min stage), from the same stage ends; the exact range is its title.
+const STEPS: KeyStep[] = SWATCHES.map((s, i) => ({
+  id: s.label,
+  symbol: <span className="flex h-3 w-3" dangerouslySetInnerHTML={{ __html: s.svg }} />,
+  label: `<${ageLabel(LIGHTNING_STAGES[i].endS / 60)}`,
+  title: s.label,
+}));
+
+// One-line key for the map legend panel's collapsed row.
+export function LightningLegendCompact() {
+  return <KeySteps steps={STEPS} />;
 }

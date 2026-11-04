@@ -25,12 +25,14 @@ export function drynessLabel(d: number | null): string {
   return d === 3 ? 'Very dry' : d === 2 ? 'Dry' : d === 1 ? 'Normal' : '—';
 }
 
-export const OUTLOOK_LEGEND: Array<{ hex: string; label: string }> = [
-  { hex: '#ff0000', label: 'Sig. fire potential — Ignition' },
-  { hex: '#ff8c00', label: 'Sig. fire potential — Critical' },
-  { hex: '#d9b46f', label: 'Very dry fuels' },
-  { hex: '#ffff40', label: 'Dry fuels' },
-  { hex: '#5fb336', label: 'Normal fuels' },
+// `short` names each in the map legend's compact key (the same wording
+// outlookStyle and drynessLabel use).
+export const OUTLOOK_LEGEND: Array<{ hex: string; label: string; short: string }> = [
+  { hex: '#ff0000', label: 'Sig. fire potential — Ignition', short: 'Ignition' },
+  { hex: '#ff8c00', label: 'Sig. fire potential — Critical', short: 'Critical' },
+  { hex: '#d9b46f', label: 'Very dry fuels', short: 'Very dry' },
+  { hex: '#ffff40', label: 'Dry fuels', short: 'Dry' },
+  { hex: '#5fb336', label: 'Normal fuels', short: 'Normal' },
 ];
 
 // "YYYY-MM-DD" → "Mon, Jun 30" (parsed as UTC so the calendar day can't shift).

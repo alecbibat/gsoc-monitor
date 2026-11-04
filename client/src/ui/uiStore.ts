@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { LayerId } from '../types';
 
 // Small UI-chrome store: the mobile sidebar drawer state.
 interface UiState {
@@ -50,6 +51,28 @@ export const useSectionsStore = create<SectionsState>()(
         set((s) => ({ collapsed: { ...s.collapsed, [key]: isCollapsed } })),
     }),
     { name: 'gsoc-sidebar-sections' }
+  )
+);
+
+// The map legend panel (MapLegends, bottom-right HUD): tucked down to its
+// "Legend" pill, and which layers' rows show the full legend instead of the
+// compact key. Persisted so the panel comes back the way the operator left it.
+interface MapLegendState {
+  minimized: boolean;
+  expanded: Partial<Record<LayerId, boolean>>;
+  setMinimized: (minimized: boolean) => void;
+  toggleExpanded: (id: LayerId) => void;
+}
+
+export const useMapLegendStore = create<MapLegendState>()(
+  persist(
+    (set) => ({
+      minimized: false,
+      expanded: {},
+      setMinimized: (minimized) => set({ minimized }),
+      toggleExpanded: (id) => set((s) => ({ expanded: { ...s.expanded, [id]: !s.expanded[id] } })),
+    }),
+    { name: 'gsoc-map-legend' }
   )
 );
 

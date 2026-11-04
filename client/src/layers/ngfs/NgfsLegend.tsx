@@ -1,4 +1,5 @@
 import { NGFS_AGE_CLASSES, NGFS_LEGEND_NOTE, NGFS_OTHER } from './ngfsMeta';
+import { KeySteps, Swatch, ageLabel, type KeyStep } from '../legendKeys';
 
 const swatch = (color: string, fill: number) => ({
   backgroundColor: `${color}${Math.round(fill * 255).toString(16).padStart(2, '0')}`,
@@ -6,8 +7,8 @@ const swatch = (color: string, fill: number) => ({
 });
 
 // Detection-age key for the NGFS layer, from the same table the globe draws
-// with (ngfsMeta.ts). Store-free: shown as a floating map card (MapLegends)
-// and under the share-link globe.
+// with (ngfsMeta.ts). Store-free: the full key behind the map legend panel's
+// row (MapLegends), and under the share-link globe.
 export function NgfsLegend() {
   return (
     <div className="space-y-1.5 pt-1">
@@ -28,4 +29,29 @@ export function NgfsLegend() {
       <p className="text-[9px] leading-snug text-white/35">{NGFS_LEGEND_NOTE}</p>
     </div>
   );
+}
+
+// Compact key: each age class over the age it lasts until ("<1h"); the open
+// last class reads from the previous bound ("3h+"). The exact range is the
+// title. Non-wildland heat closes the row, as in the full key.
+const STEPS: KeyStep[] = [
+  ...NGFS_AGE_CLASSES.map((c, i) => ({
+    id: c.label,
+    symbol: <Swatch style={swatch(c.color, c.fill)} />,
+    label: Number.isFinite(c.maxMin)
+      ? `<${ageLabel(c.maxMin)}`
+      : `${ageLabel(NGFS_AGE_CLASSES[i - 1]?.maxMin ?? 0)}+`,
+    title: c.label,
+  })),
+  {
+    id: 'other',
+    symbol: <Swatch style={swatch(NGFS_OTHER.color, NGFS_OTHER.fill)} />,
+    label: 'Non-wildland',
+    title: `${NGFS_OTHER.label}: industry, flares, volcanoes (when shown)`,
+  },
+];
+
+// One-line key for the map legend panel's collapsed row.
+export function NgfsLegendCompact() {
+  return <KeySteps steps={STEPS} />;
 }

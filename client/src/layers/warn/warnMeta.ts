@@ -2,25 +2,30 @@ import type { WeaClass } from '../../types';
 
 // Wireless Emergency Alert classes as the WEA system defines them, with the
 // colour the PBS WARN layer draws each in. Shared by the layer, its legend and
-// its detail panel. Store-free and static.
-export const WEA_CLASSES: Record<WeaClass, { label: string; color: string; note: string }> = {
+// its detail panel. Store-free and static. `short` names the class in the map
+// legend's compact key.
+export const WEA_CLASSES: Record<WeaClass, { label: string; short: string; color: string; note: string }> = {
   'imminent-threat': {
     label: 'Imminent threat',
+    short: 'Imminent',
     color: '#ff3366',
     note: 'Extreme or severe threats to life: NWS warnings, USGS earthquake warnings, local evacuations',
   },
   'public-safety': {
     label: 'Public safety',
+    short: 'Public safety',
     color: '#c084fc',
     note: 'Local agencies: road closures, police activity, boil-water and 911 outages',
   },
   amber: {
     label: 'AMBER alert',
+    short: 'AMBER',
     color: '#ffbf00',
     note: 'Child abduction',
   },
   presidential: {
     label: 'National alert',
+    short: 'National',
     color: '#f8fafc',
     note: 'Issued by the President or FEMA',
   },

@@ -1,5 +1,5 @@
 // Lightning symbology — the single source of truth for every place a strike is
-// drawn: the globe (live + 24 h field), the map legend card, the share-globe
+// drawn: the globe (live + 24 h field), the map legend panel, the share-globe
 // legend, and the risk report's legend and canvas map. The server's display
 // sampler uses the same stage ends (server/src/lightning/constants.ts); every
 // /field response carries them so a mismatch is caught at runtime too.
