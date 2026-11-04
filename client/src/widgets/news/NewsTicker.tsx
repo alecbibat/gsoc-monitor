@@ -3,6 +3,7 @@ import { api } from '../../api/client';
 import { usePanelStore } from '../../panels/panelStore';
 import { useScreensaverStore } from '../../screensaver/screensaverStore';
 import { useNewsStore } from './newsStore';
+import { useSidebarDockStore } from '../../ui/uiStore';
 import { startVisiblePolling } from '../../lib/poll';
 
 // A horizontally-scrolling headline ticker pinned to the bottom of the screen.
@@ -43,6 +44,7 @@ export function NewsTicker() {
   const newsPanelOpen = usePanelStore((s) => s.panels.some((p) => p.kind === 'news-feed'));
   const openPanel = usePanelStore((s) => s.open);
   const screensaverActive = useScreensaverStore((s) => s.active);
+  const sidebarCollapsed = useSidebarDockStore((s) => s.collapsed);
   const screensaverMode = useScreensaverStore((s) => s.mode);
 
   const inPins = screensaverActive && screensaverMode === 'pins';
@@ -96,11 +98,11 @@ export function NewsTicker() {
 
   return (
     <div
-      className={`fixed bottom-0 left-0 right-0 z-10 ${
+      className={`fixed bottom-0 left-0 right-0 z-10 transition-[left] duration-500 ease-in-out ${
         // Inset for the docked sidebar only when it's actually present (desktop,
-        // outside the screensaver). During the pins screensaver the sidebar is
-        // hidden, so span the full width — very left to very right.
-        screensaverActive ? '' : 'md:left-72'
+        // outside the screensaver, not collapsed). During the pins screensaver
+        // the sidebar is hidden, so span the full width — very left to very right.
+        screensaverActive || sidebarCollapsed ? '' : 'md:left-72'
       }`}
     >
       <div className="flex min-h-[2.25rem] items-center border-t border-white/10 bg-ink-900/85 pb-safe backdrop-blur-sm">

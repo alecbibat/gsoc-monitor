@@ -38,7 +38,9 @@ function loadVoicePref(): boolean {
 
 export const useScreensaverStore = create<ScreensaverState>((set, get) => ({
   active: false,
-  mode: 'global',
+  // The Screensaver button only runs the pins tour; the other modes' controllers
+  // stay mounted but have no UI entry point.
+  mode: 'pins',
   phase: 'rotating',
   currentPoi: null,
   newsPoiQueue: [],

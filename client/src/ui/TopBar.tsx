@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { SearchBar } from './SearchBar';
-import { WidgetLauncher } from '../widgets/WidgetLauncher';
 import { ScreensaverControls } from './ScreensaverControls';
 import { InfoPanel } from './InfoPanel';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { resetCamera } from '../cesium/flyTo';
 import { useTrackedHistory } from './useTrackedHistory';
-import { useUiStore } from './uiStore';
+import { useSidebarDockStore, useUiStore } from './uiStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { PinsWatchCluster } from '../screensaver/PinsWatchCluster';
 import { useMeasureStore } from '../measure/measureStore';
@@ -576,18 +575,19 @@ function TrackedCounter() {
 }
 
 export function TopBar() {
-  // The widgets/search/info cluster isn't useful mid-tour, so it fades out
+  // The search/info cluster isn't useful mid-tour, so it fades out
   // while a screensaver runs. visibility (not display) keeps its layout box,
   // so the left cluster's badges can never wrap into the vacated space, and
   // the search bar keeps its state for when the tour stops.
   const screensaverActive = useScreensaverStore((s) => s.active);
   const screensaverMode = useScreensaverStore((s) => s.mode);
+  const sidebarCollapsed = useSidebarDockStore((s) => s.collapsed);
 
   // The pins tour strips the chrome down to the essentials: tour controls
-  // (mute + mode dropdown) and fullscreen on the left, and the clock card on
-  // the right, which carries the Property Watch instrument cluster (severity
-  // meter + rotating ledger). The centre stays clear — hazard geography is
-  // drawn on the globe itself between visits by PinsOverviewSitrep.
+  // (mute + the Screensaver toggle) and fullscreen on the left, and the clock
+  // card on the right, which carries the Property Watch instrument cluster
+  // (severity meter + rotating ledger). The centre stays clear — hazard
+  // geography is drawn on the globe itself between visits by PinsOverviewSitrep.
   if (screensaverActive && screensaverMode === 'pins') {
     return (
       <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex items-start justify-between gap-3 px-4 pt-safe md:px-6">
@@ -604,14 +604,19 @@ export function TopBar() {
 
   return (
     <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col gap-2 pb-3 pl-safe pr-safe pt-safe md:flex-row md:items-start md:justify-between md:gap-4 md:pb-4">
-      {/* Left: identity + camera controls + screensaver modes */}
+      {/* Left: identity + camera controls + screensaver toggle */}
       <div className="flex flex-wrap items-center gap-2 md:gap-3 lg:flex-nowrap lg:items-start">
         {/* On lg+ the docked sidebar (w-72) sits under this bar, so the brand
             gets a slot spanning the sidebar's width: the badges after it then
             start past the sidebar's right edge instead of straddling its
             border. Slot = 18rem sidebar − 0.75rem bar padding, so with the
-            lg:gap-3 the first badge lands 0.75rem right of the edge. */}
-        <div className="contents lg:flex lg:w-[calc(18rem-0.75rem)] lg:shrink-0 lg:items-center">
+            lg:gap-3 the first badge lands 0.75rem right of the edge. With the
+            sidebar collapsed there is nothing to clear, so no slot. */}
+        <div
+          className={`contents lg:flex lg:shrink-0 lg:items-center ${
+            sidebarCollapsed ? '' : 'lg:w-[calc(18rem-0.75rem)]'
+          }`}
+        >
           <HamburgerButton />
           <div className="pointer-events-auto flex items-center gap-2 rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 shadow-panel backdrop-blur-sm">
             <span className="h-2 w-2 animate-pulse rounded-full bg-accent-ok shadow-glow" />
@@ -635,18 +640,19 @@ export function TopBar() {
           </div>
           <CrisisButton />
           <UserMenu />
-          {/* Screensaver modes — desktop only; mobile gets them in the drawer. */}
+          {/* Screensaver toggle — desktop only; mobile gets it in the drawer. */}
           <ScreensaverControls className="hidden md:flex" />
         </div>
       </div>
-      {/* Right: widgets + search, with the info button tucked under the search */}
+      {/* Right: search, with the info button tucked under it. (The Watch / News /
+          Intel launcher is hidden for now — WidgetLauncher is kept so it can be
+          put back; News still opens from the ticker.) */}
       <div
         className={`flex w-full flex-col items-end gap-2 transition-[opacity,visibility] duration-500 md:w-auto ${
           screensaverActive ? 'invisible opacity-0' : 'visible opacity-100'
         }`}
       >
         <div className="flex w-full flex-wrap items-center justify-end gap-2 md:gap-3">
-          <WidgetLauncher />
           <div className="pointer-events-auto w-full sm:w-auto">
             <SearchBar />
           </div>

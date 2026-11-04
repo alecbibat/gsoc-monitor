@@ -44,7 +44,7 @@ import { useRadarStore, radarStatusText } from '../layers/radar/radarStore';
 import { PrecipControls } from '../layers/precip/PrecipControls';
 import { usePrecipStore, QPF_PERIOD_LABEL } from '../layers/precip/precipStore';
 import { LightningControls } from '../layers/lightning/LightningControls';
-import { useUiStore } from './uiStore';
+import { useSidebarDockStore, useUiStore } from './uiStore';
 import type { SatelliteGroup } from '../types';
 
 const MAGNITUDES: Array<{ value: '1.0' | '2.5' | '4.5' | 'significant'; label: string }> = [
@@ -244,6 +244,8 @@ export function Sidebar() {
   const chromeHidden = screensaverActive || hoverEngaged;
   const sidebarOpen = useUiStore((s) => s.sidebarOpen);
   const setSidebarOpen = useUiStore((s) => s.setSidebarOpen);
+  const collapsed = useSidebarDockStore((s) => s.collapsed);
+  const toggleCollapsed = useSidebarDockStore((s) => s.toggleCollapsed);
   const viewer = useCesiumViewer();
   const locationsActive = (active as Record<string, boolean>).locations ?? true;
 
@@ -302,13 +304,14 @@ export function Sidebar() {
     return `${shown} satellites · live`;
   }
 
-  // On md+ the sidebar is always docked. On small screens it's an off-canvas
-  // drawer toggled by the TopBar hamburger. The screensaver hides it entirely.
+  // On small screens it's an off-canvas drawer toggled by the TopBar
+  // hamburger. On md+ it's docked unless the operator tucked it away with the
+  // edge tab. The screensaver hides it entirely.
   const translate = chromeHidden
     ? '-translate-x-full'
-    : sidebarOpen
-      ? 'translate-x-0'
-      : '-translate-x-full md:translate-x-0';
+    : `${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} ${
+        collapsed ? 'md:-translate-x-full' : 'md:translate-x-0'
+      }`;
 
   return (
     <>
@@ -323,6 +326,22 @@ export function Sidebar() {
       <div
         className={`pointer-events-auto absolute left-0 top-0 z-50 flex h-full w-72 max-w-[85vw] flex-col border-r border-white/10 bg-ink-900/95 pt-drawer shadow-panel backdrop-blur-sm transition-transform duration-500 ease-in-out md:z-10 md:max-w-none md:bg-ink-900/85 md:pt-drawer-md ${translate}`}
       >
+        {/* Collapse / reopen tab (md+). It hangs off the sidebar's right edge,
+            so when the sidebar slides away the tab stays on screen at the left
+            edge as the way back in. */}
+        {!chromeHidden && (
+          <button
+            onClick={toggleCollapsed}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? 'Show the menu' : 'Collapse the menu'}
+            title={collapsed ? 'Show the menu' : 'Collapse the menu'}
+            className="absolute left-full top-1/2 hidden h-16 w-6 -translate-y-1/2 items-center justify-center rounded-r-lg border border-l-0 border-white/10 bg-ink-900/90 text-white/55 shadow-panel backdrop-blur-sm transition hover:bg-ink-700 hover:text-white md:flex"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <polyline points={collapsed ? '9 6 15 12 9 18' : '15 6 9 12 15 18'} />
+            </svg>
+          </button>
+        )}
         {/* Mobile-only close button. */}
         <button
           onClick={() => setSidebarOpen(false)}
@@ -334,7 +353,7 @@ export function Sidebar() {
           </svg>
         </button>
         <div className="hud-scroll flex-1 overflow-y-auto px-2 pb-4">
-          {/* Screensaver modes — mobile only; desktop has them in the TopBar. */}
+          {/* Screensaver toggle — mobile only; desktop has it in the TopBar. */}
           <div className="md:hidden">
             <Section title="Screensaver">
               <div className="px-1 pb-1">

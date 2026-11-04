@@ -14,6 +14,26 @@ export const useUiStore = create<UiState>((set) => ({
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
 }));
 
+// Desktop (md+) sidebar tucked away with its edge tab — persisted so the map
+// comes back the way the operator left it. Mobile ignores it: there the
+// sidebar is the off-canvas drawer the hamburger opens (sidebarOpen above).
+interface SidebarDockState {
+  collapsed: boolean;
+  setCollapsed: (collapsed: boolean) => void;
+  toggleCollapsed: () => void;
+}
+
+export const useSidebarDockStore = create<SidebarDockState>()(
+  persist(
+    (set) => ({
+      collapsed: false,
+      setCollapsed: (collapsed) => set({ collapsed }),
+      toggleCollapsed: () => set((s) => ({ collapsed: !s.collapsed })),
+    }),
+    { name: 'gsoc-sidebar-dock' }
+  )
+);
+
 // Collapsed/expanded state of the sidebar's sections, persisted so the menu
 // comes back the way the operator left it. Keyed by section title (titles are
 // stable identifiers in Sidebar); absent key = the section's default state.
