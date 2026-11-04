@@ -9,9 +9,10 @@ import { useMapLegendStore } from './uiStore';
 // above the wind probe readout, with a row for each active layer that has a
 // symbology key. A row is the layer's name over its compact one-line key;
 // clicking it swaps in the full legend (notes, full wording), and the header
-// tucks the whole panel down to a "Legend" pill. Both are persisted. The
-// stack's max-height caps the panel, so its rows scroll under the header
-// instead of covering the globe (min-h-0 lets it shrink).
+// tucks the whole panel down to a "Legend" pill. Both are persisted. A layer
+// with live controls (the radar loop's player) shows them under its key in
+// either state. The stack's max-height caps the panel, so its rows scroll
+// under the header instead of covering the globe (min-h-0 lets it shrink).
 export function MapLegends() {
   const active = useLayersStore((s) => s.active);
   // Screensaver / hover modes collapse the chrome (and draw their own context
@@ -83,7 +84,7 @@ export function MapLegendPanel({
       </button>
       {!minimized && (
         <div className="hud-scroll min-h-0 overflow-y-auto overscroll-contain">
-          {legends.map(({ id, title, hint, Legend, Compact }) => {
+          {legends.map(({ id, title, hint, Legend, Compact, Controls }) => {
             const open = !!expanded[id];
             return (
               <div key={id} className="border-t border-white/6 px-3 py-1.5">
@@ -113,6 +114,7 @@ export function MapLegendPanel({
                     <Compact />
                   </div>
                 )}
+                {Controls && <Controls />}
               </div>
             );
           })}

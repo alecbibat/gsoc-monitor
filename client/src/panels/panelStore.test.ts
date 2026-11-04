@@ -115,20 +115,13 @@ describe('re-opening an already open panel', () => {
     expect(byId(widget.id).locked).toBe(false);
   });
 
-  it('keeps its position and dock state', () => {
+  it('keeps where it was moved to and its size', () => {
     const s = usePanelStore.getState();
     s.open(quake(1));
-    s.dock('quake-1', 'bl');
-    const before = byId('quake-1');
+    s.updateRect('quake-1', { x: 40, y: 500, width: 420, height: 300 });
     s.open(quake(1));
     const after = byId('quake-1');
-    expect(after.dockedTo).toBe('bl');
-    expect([after.x, after.y, after.width, after.height]).toEqual([
-      before.x,
-      before.y,
-      before.width,
-      before.height,
-    ]);
+    expect([after.x, after.y, after.width, after.height]).toEqual([40, 500, 420, 300]);
   });
 });
 
@@ -204,14 +197,14 @@ describe('placement', () => {
     expect(posOf('quake-2')).toEqual(slot(1));
   });
 
-  it('treats a slot as taken when a locked panel is docked a few pixels off it', () => {
-    // Docked top-right is (W-380, 100): 4px right and 12px below slot 0 — an
-    // exact-match check would put the new popup right on top of it.
+  it('treats a slot as taken when a locked panel was nudged a few pixels off it', () => {
+    // 4px right and 12px below slot 0: an exact-match check would put the new
+    // popup right on top of it.
     const s = usePanelStore.getState();
     s.open(quake(1));
     s.toggleLock('quake-1');
-    s.dock('quake-1', 'tr');
-    expect(posOf('quake-1')).toEqual([1280 - 360 - 20, 80 + 20]);
+    const [x0, y0] = slot(0);
+    s.updateRect('quake-1', { x: x0 + 4, y: y0 + 12 });
     s.open(quake(2));
     expect(posOf('quake-2')).toEqual(slot(1));
   });

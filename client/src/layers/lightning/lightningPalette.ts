@@ -115,6 +115,16 @@ export function xGlyphSvg(color: string, px = 12): string {
   );
 }
 
+/** Inline SVG for the ring that marks a strike as it lands (strikeRings.ts), for legends. */
+export function ringGlyphSvg(px = 12): string {
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="0 0 16 16" aria-hidden="true">` +
+    `<circle cx="8" cy="8" r="5.75" fill="none" stroke="rgba(0,0,0,0.5)" stroke-width="3.5"/>` +
+    `<circle cx="8" cy="8" r="5.75" fill="none" stroke="#e6f6ff" stroke-width="1.75"/>` +
+    `</svg>`
+  );
+}
+
 /** Draw one strike X on a 2D canvas (the risk report's map), centred on x/y. */
 export function drawStrikeX(
   ctx: CanvasRenderingContext2D,

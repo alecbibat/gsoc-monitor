@@ -44,6 +44,24 @@ describe('MapLegendPanel', () => {
     expect(html).toContain('>Very dry<');
   });
 
+  it("shows a layer's live controls under its key, whether the row is compact or full", () => {
+    const withControls = [
+      { id: 'radar' as const, title: 'Radar', Legend: () => <i>full key</i>, Compact: () => <i>one-line key</i>, Controls: () => <b>player</b> },
+      { id: 'lightning' as const, title: 'Lightning', Legend: () => <i>full</i>, Compact: () => <i>compact</i> },
+    ];
+    const html = (expanded: Partial<Record<LayerId, boolean>>) =>
+      renderToStaticMarkup(
+        <MapLegendPanel legends={withControls} minimized={false} expanded={expanded} onMinimizedChange={noop} onToggleRow={noop} />
+      );
+    expect(html({})).toMatch(/one-line key<\/i><\/div><b>player<\/b>/);
+    expect(html({ radar: true })).toMatch(/full key<\/i><b>player<\/b>/);
+    expect(html({}).match(/<b>player<\/b>/g)).toHaveLength(1);
+    const minimized = renderToStaticMarkup(
+      <MapLegendPanel legends={withControls} minimized expanded={{}} onMinimizedChange={noop} onToggleRow={noop} />
+    );
+    expect(minimized).not.toContain('player');
+  });
+
   it('minimizes to a pill counting the hidden keys', () => {
     const html = render({ minimized: true });
     expect(html).toContain('Legend');

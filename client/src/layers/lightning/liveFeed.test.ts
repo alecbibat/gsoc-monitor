@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RateWindow, SOCKET_FALLBACK_MS, decideLiveSource, relayBackoffMs } from './liveFeed';
+import { RateWindow, SOCKET_FALLBACK_MS, decideLiveSource, relayBackoffMs, socketSilent } from './liveFeed';
 
 describe('relay backoff', () => {
   it('doubles from 3 s and caps at 60 s', () => {
@@ -51,6 +51,14 @@ describe('live source', () => {
     expect(at(SOCKET_FALLBACK_MS - 1).source).toBe('browser');
     expect(at(SOCKET_FALLBACK_MS)).toEqual({ source: 'server', fastPoll: true });
     expect(at(SOCKET_FALLBACK_MS, false)).toEqual({ source: 'offline', fastPoll: true });
+  });
+
+  it('calls the socket silent after 30 s without a strike, counting from mount when it never delivered', () => {
+    expect(socketSilent({ nowMs: started + SOCKET_FALLBACK_MS - 1, startedMs: started, socketLastStrikeMs: null })).toBe(false);
+    expect(socketSilent({ nowMs: started + SOCKET_FALLBACK_MS, startedMs: started, socketLastStrikeMs: null })).toBe(true);
+    const last = started + 60_000;
+    expect(socketSilent({ nowMs: last + SOCKET_FALLBACK_MS - 1, startedMs: started, socketLastStrikeMs: last })).toBe(false);
+    expect(socketSilent({ nowMs: last + SOCKET_FALLBACK_MS, startedMs: started, socketLastStrikeMs: last })).toBe(true);
   });
 
   it('does not claim the server during the first 30 s of a load', () => {

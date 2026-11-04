@@ -1,35 +1,5 @@
 import { create } from 'zustand';
 import type { PanelKind } from '../types';
-import { useSidebarDockStore } from '../ui/uiStore';
-
-export type DockZone = 'tr' | 'br' | 'tl' | 'bl';
-
-export const ZONES: DockZone[] = ['tr', 'br', 'tl', 'bl'];
-
-export const ZONE_LABELS: Record<DockZone, string> = {
-  tr: 'Dock top-right',
-  br: 'Dock bottom-right',
-  tl: 'Dock top-left',
-  bl: 'Dock bottom-left',
-};
-
-const SIDEBAR_W = 288;
-// What stays on screen of a collapsed sidebar: its reopen tab.
-const SIDEBAR_TAB_W = 24;
-const TOPBAR_H = 80;
-const EDGE_MARGIN = 20;
-
-export function dockPos(zone: DockZone, w: number, h: number): { x: number; y: number } {
-  const W = typeof window !== 'undefined' ? window.innerWidth : 1200;
-  const H = typeof window !== 'undefined' ? window.innerHeight : 800;
-  const left = (useSidebarDockStore.getState().collapsed ? SIDEBAR_TAB_W : SIDEBAR_W) + EDGE_MARGIN;
-  switch (zone) {
-    case 'tr': return { x: W - w - EDGE_MARGIN, y: TOPBAR_H + EDGE_MARGIN };
-    case 'br': return { x: W - w - EDGE_MARGIN, y: H - h - EDGE_MARGIN };
-    case 'tl': return { x: left, y: TOPBAR_H + EDGE_MARGIN };
-    case 'bl': return { x: left, y: H - h - EDGE_MARGIN };
-  }
-}
 
 export interface PanelData {
   id: string;
@@ -42,7 +12,6 @@ export interface PanelData {
   width: number;
   height: number;
   z: number;
-  dockedTo: DockZone | null;
   // Panels are "one at a time" by default: opening a new one closes every
   // panel that isn't locked. The lock button in the header flips this so a
   // window survives further clicks on the map.
@@ -55,7 +24,7 @@ export interface PanelData {
 // for a deliberately launched tool (the sidebar widgets) that should stay put.
 export type PanelOpenData = Omit<
   PanelData,
-  'x' | 'y' | 'width' | 'height' | 'z' | 'dockedTo' | 'locked'
+  'x' | 'y' | 'width' | 'height' | 'z' | 'locked'
 > & { locked?: boolean };
 
 interface PanelsState {
@@ -68,8 +37,6 @@ interface PanelsState {
   setLocked: (id: string, locked: boolean) => void;
   toggleLock: (id: string) => void;
   updateRect: (id: string, rect: Partial<Pick<PanelData, 'x' | 'y' | 'width' | 'height'>>) => void;
-  dock: (id: string, zone: DockZone) => void;
-  undock: (id: string, x?: number, y?: number) => void;
 }
 
 const DEFAULT_WIDTH = 360;
@@ -107,8 +74,8 @@ function compactZ(panels: PanelData[], topZ: number): { panels: PanelData[]; top
 // Cascade slots step down-left from the top-right corner. Take the first
 // slot no surviving panel is sitting in, so a fresh popup never lands on top
 // of a locked one; fall back to counting when all are taken. "Sitting in"
-// means within one cascade step — a panel docked top-right or nudged by hand
-// is a few pixels off the exact slot but still covers it.
+// means within one cascade step — a panel nudged by hand is a few pixels off
+// the exact slot but still covers it.
 function cascadeSlot(n: number): { x: number; y: number } {
   const margin = 24;
   const x =
@@ -164,7 +131,7 @@ export const usePanelStore = create<PanelsState>((set, get) => ({
     set({
       panels: [
         ...kept,
-        { ...panel, x, y, width: DEFAULT_WIDTH, height, z: nextZ, dockedTo: null, locked },
+        { ...panel, x, y, width: DEFAULT_WIDTH, height, z: nextZ, locked },
       ],
       topZ: nextZ,
     });
@@ -192,21 +159,4 @@ export const usePanelStore = create<PanelsState>((set, get) => ({
     set({
       panels: get().panels.map((p) => (p.id === id ? { ...p, ...rect } : p)),
     }),
-  dock: (id, zone) => {
-    set({
-      panels: get().panels.map((p) => {
-        if (p.id !== id) return p;
-        return { ...p, ...dockPos(zone, p.width, p.height), dockedTo: zone };
-      }),
-    });
-  },
-  undock: (id, x?, y?) => {
-    set({
-      panels: get().panels.map((p) =>
-        p.id === id
-          ? { ...p, dockedTo: null, ...(x !== undefined && y !== undefined ? { x, y } : {}) }
-          : p
-      ),
-    });
-  },
 }));

@@ -2,7 +2,8 @@ import { useRadarStore } from './radarStore';
 import { RADAR_WINDOWS, windowLabel } from './radarTimeline';
 
 // Sidebar controls under the radar toggle: history window and opacity.
-// Playback and scrubbing live on the map itself (RadarTimeline).
+// Playback and scrubbing live in the radar's row of the map legend
+// (RadarPlayer).
 export function RadarControls() {
   const windowMinutes = useRadarStore((s) => s.windowMinutes);
   const setWindowMinutes = useRadarStore((s) => s.setWindowMinutes);

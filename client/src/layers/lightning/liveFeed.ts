@@ -58,6 +58,14 @@ export class RateWindow {
  */
 export const SOCKET_FALLBACK_MS = 30_000;
 
+/**
+ * The socket has delivered nothing for SOCKET_FALLBACK_MS (counted from mount
+ * when it never has): the /field poll is now the only way live strikes arrive.
+ */
+export function socketSilent(p: { nowMs: number; startedMs: number; socketLastStrikeMs: number | null }): boolean {
+  return p.nowMs - (p.socketLastStrikeMs ?? p.startedMs) >= SOCKET_FALLBACK_MS;
+}
+
 export interface LiveSourceDecision {
   source: LiveSource;
   /** Poll /field on the fast cadence so its `fresh` list stands in for the socket. */
@@ -80,8 +88,7 @@ export function decideLiveSource(p: {
   socketLastStrikeMs: number | null;
   serverLive: boolean;
 }): LiveSourceDecision {
-  const quietMs = p.nowMs - (p.socketLastStrikeMs ?? p.startedMs);
-  if (quietMs < SOCKET_FALLBACK_MS) {
+  if (!socketSilent(p)) {
     return { source: p.socketLastStrikeMs !== null ? 'browser' : 'offline', fastPoll: false };
   }
   return { source: p.serverLive ? 'server' : 'offline', fastPoll: true };

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 
 // True when the viewport is phone-sized (below Tailwind's `md` breakpoint).
-// On mobile the floating/dockable panel UX is replaced by a full-width,
-// swipeable card deck, and the drag-to-dock zones are dropped entirely.
+// On mobile the floating panel UX is replaced by a full-width, swipeable
+// card deck.
 const QUERY = '(max-width: 767px)';
 
 export function useIsMobile(): boolean {

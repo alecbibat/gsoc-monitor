@@ -4,10 +4,10 @@ import { PanelErrorBoundary } from './PanelErrorBoundary';
 import { PanelContent, panelAccent } from './PanelContent';
 import { LockButton } from './LockButton';
 
-// Mobile replacement for the floating/dockable panels. Open panels become a
+// Mobile replacement for the floating panels. Open panels become a
 // full-width bottom-sheet card; when more than one is open they're laid out as
 // horizontal pages you swipe between, with dots to jump directly. There are no
-// drag/resize/dock affordances here — those don't belong on a touch screen.
+// drag/resize affordances here — those don't belong on a touch screen.
 export function MobilePanelDeck() {
   const panels = usePanelStore((s) => s.panels);
   const close = usePanelStore((s) => s.close);

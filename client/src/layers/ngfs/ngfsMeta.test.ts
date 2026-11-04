@@ -271,7 +271,7 @@ describe('panel data', () => {
 });
 
 describe('refreshedNgfsPanels', () => {
-  const base = { x: 0, y: 0, width: 300, height: 400, z: 3, dockedTo: null, locked: true };
+  const base = { x: 0, y: 0, width: 300, height: 400, z: 3, locked: true };
   const panel = (id: string, kind: PanelData['kind'], payload: Record<string, unknown> = {}): PanelData => ({
     ...base,
     id,

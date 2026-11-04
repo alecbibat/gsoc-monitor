@@ -24,8 +24,8 @@ export function PanelManager() {
 
   if (panels.length === 0) return null;
 
-  // On phones, floating/dockable windows are replaced by a single swipeable
-  // card deck (no drag, resize, or dock zones).
+  // On phones, floating windows are replaced by a single swipeable card deck
+  // (no drag or resize).
   if (isMobile) {
     return (
       <Suspense fallback={null}>
