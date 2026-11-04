@@ -110,6 +110,7 @@ export const api = {
   fireOutlook: () => getJson<import('../types').FireOutlookResponse>('/api/fire-outlook'),
   jtwcInvests: () => getJson<import('../types').JtwcInvestsResponse>('/api/jtwc-invests'),
   outages: () => getJson<import('../types').OutagesResponse>('/api/outages'),
+  warn: () => getJson<import('../types').WarnFeed>('/api/warn/active'),
   riverDetail: (lid: string) =>
     getJson<import('../types').RiverDetail>(`/api/rivers/${encodeURIComponent(lid)}`),
   windForecast: (lat: number, lon: number) =>

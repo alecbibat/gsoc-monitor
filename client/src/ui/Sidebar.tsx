@@ -4,6 +4,8 @@ import { useLayersStore } from '../store/layersStore';
 import { useFlightsStatus } from '../layers/flights/flightsStore';
 import { FlightGroupControls, loadFlightActivity } from '../layers/flights/FlightGroupControls';
 import { useAlertsStatus } from '../layers/alerts/alertsStore';
+import { useWarnStatus } from '../layers/warn/warnStore';
+import { WARN_HEARTBEAT_STALE_MS } from '../layers/warn/warnMeta';
 import { useEarthquakesStatus } from '../layers/earthquakes/earthquakesStore';
 import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { useLightningStatus } from '../layers/lightning/lightningStore';
@@ -105,6 +107,8 @@ export function Sidebar() {
   const setShipPaths = useLayersStore((s) => s.setShipPaths);
   const shipNames = useLayersStore((s) => s.shipNames);
   const setShipNames = useLayersStore((s) => s.setShipNames);
+  const warnHideNws = useLayersStore((s) => s.warnHideNws);
+  const setWarnHideNws = useLayersStore((s) => s.setWarnHideNws);
   const firesNearMiles = useLayersStore((s) => s.firesNearMiles);
   const setFiresNearMiles = useLayersStore((s) => s.setFiresNearMiles);
   const ngfsHours = useLayersStore((s) => s.ngfsHours);
@@ -121,6 +125,9 @@ export function Sidebar() {
     useShallow((s) => ({ count: s.count, total: s.total, error: s.error }))
   );
   const alertsStatus = useAlertsStatus(useShallow((s) => ({ count: s.count, error: s.error })));
+  const warnStatus = useWarnStatus(
+    useShallow((s) => ({ count: s.count, hiddenNws: s.hiddenNws, heartbeat: s.heartbeat, error: s.error }))
+  );
   const earthquakesCount = useEarthquakesStatus((s) => s.count);
   const earthquakesError = useEarthquakesStatus((s) => s.error);
   const hurricanesStatus = useHurricanesStatus(
@@ -294,6 +301,19 @@ export function Sidebar() {
     setSidebarOpen(false);
   }
 
+  function warnStatusText() {
+    if (warnStatus.error) return warnStatus.error;
+    const n = warnStatus.count;
+    const base = `${n} active alert${n === 1 ? '' : 's'} sent to phones · PBS WARN`;
+    // PBS's backend checks in every few seconds; an old heartbeat means its
+    // feed (and so this list) may be behind.
+    const hb = warnStatus.heartbeat ? Date.parse(warnStatus.heartbeat) : NaN;
+    if (Number.isFinite(hb) && Date.now() - hb > WARN_HEARTBEAT_STALE_MS) {
+      return `${base} · PBS feed stale since ${new Date(hb).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    }
+    return base;
+  }
+
   function satellitesStatusText() {
     if (satellitesStatus.error) return satellitesStatus.error;
     if (satellitesStatus.loading) return 'Loading orbital data…';
@@ -402,6 +422,30 @@ export function Sidebar() {
             onToggle={() => toggleLayer('alerts')}
             statusText={alertsStatus.error ?? `${alertsStatus.count} active alerts`}
           />
+          <LayerToggle
+            label="Wireless Emergency Alerts (PBS WARN)"
+            active={active.warn}
+            onToggle={() => toggleLayer('warn')}
+            statusText={warnStatusText()}
+          >
+            <label className="flex items-center gap-2 pt-1 text-[11px] text-white/60">
+              <input
+                type="checkbox"
+                checked={warnHideNws}
+                onChange={(e) => setWarnHideNws(e.target.checked)}
+                className="accent-accent"
+              />
+              Hide NWS-issued alerts
+              {warnHideNws && warnStatus.hiddenNws > 0 && (
+                <span className="text-white/35">({warnStatus.hiddenNws} hidden)</span>
+              )}
+            </label>
+            <p className="pt-1.5 text-[10px] leading-relaxed text-white/30">
+              Every Wireless Emergency Alert in force: NWS and USGS warnings plus state and local
+              alerts — AMBER, evacuations, police activity, 911 outages. Dashed outline = the area
+              phones were alerted in. From PBS WARN (FEMA IPAWS).
+            </p>
+          </LayerToggle>
           <LayerToggle
             label="Earthquakes (USGS)"
             active={active.earthquakes}

@@ -71,3 +71,27 @@ export function distanceToRingsMeters(lon: number, lat: number, rings: number[][
   }
   return best;
 }
+
+/**
+ * A circle on the globe as a closed ring of [lon, lat] points: `steps` points
+ * at `radiusM` from the centre along every bearing (spherical destination
+ * formula), the first repeated at the end.
+ */
+export function circleRing(lon: number, lat: number, radiusM: number, steps = 64): number[][] {
+  const toRad = Math.PI / 180;
+  const d = radiusM / EARTH_RADIUS_M;
+  const lat1 = lat * toRad;
+  const lon1 = lon * toRad;
+  const ring: number[][] = [];
+  for (let i = 0; i < steps; i++) {
+    const brng = (i / steps) * 2 * Math.PI;
+    const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(brng));
+    const lon2 = lon1 + Math.atan2(
+      Math.sin(brng) * Math.sin(d) * Math.cos(lat1),
+      Math.cos(d) - Math.sin(lat1) * Math.sin(lat2)
+    );
+    ring.push([((((lon2 / toRad) + 540) % 360) - 180), lat2 / toRad]);
+  }
+  ring.push(ring[0]);
+  return ring;
+}

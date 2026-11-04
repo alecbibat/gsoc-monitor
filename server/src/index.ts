@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import { config } from './config';
 import { migrate } from './migrate';
 import alertsRouter from './routes/alerts';
+import warnRouter from './routes/warn';
 import earthquakesRouter from './routes/earthquakes';
 import radarRouter from './routes/radar';
 import flightsRouter, { initFlightsTracker } from './routes/flights';
@@ -150,6 +151,7 @@ function main() {
 
   // Live data layers
   app.use('/api/alerts', alertsRouter);
+  app.use('/api/warn', warnRouter);
   app.use('/api/earthquakes', earthquakesRouter);
   app.use('/api/radar', radarRouter);
   app.use('/api/flights', flightsRouter);

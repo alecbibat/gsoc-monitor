@@ -5,6 +5,7 @@ import { CesiumContext } from './cesium/CesiumContext';
 import { CesiumGlobe } from './cesium/CesiumGlobe';
 import { EarthquakeLayer } from './layers/earthquakes/EarthquakeLayer';
 import { AlertsLayer } from './layers/alerts/AlertsLayer';
+import { WarnLayer } from './layers/warn/WarnLayer';
 import { RadarLayer } from './layers/radar/RadarLayer';
 import { RadarTimeline } from './layers/radar/RadarTimeline';
 import { EarthTimeBar } from './ui/EarthTimeBar';
@@ -180,6 +181,7 @@ export default function App() {
           <RadarLayer />
           <EarthquakeLayer />
           <AlertsLayer />
+          <WarnLayer />
           <HurricaneLayer />
           <FireLayer />
           <NgfsLayer />

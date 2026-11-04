@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  distanceToRingsMeters, haversineMeters, metersToMiles, MILES_TO_M, pointInRing, pointInRings,
+  circleRing, distanceToRingsMeters, haversineMeters, metersToMiles, MILES_TO_M, pointInRing, pointInRings,
 } from './geo';
 
 describe('metersToMiles', () => {
@@ -131,5 +131,22 @@ describe('distanceToRingsMeters', () => {
 
   it('is infinite with nothing to measure to', () => {
     expect(distanceToRingsMeters(0, 0, [])).toBe(Infinity);
+  });
+});
+
+describe('circleRing', () => {
+  it('puts every point the radius away from the centre, and closes the ring', () => {
+    const ring = circleRing(-87.6222, 33.2461, 1_901, 32);
+    expect(ring).toHaveLength(33);
+    expect(ring[32]).toEqual(ring[0]);
+    for (const [lon, lat] of ring) {
+      expect(haversineMeters(33.2461, -87.6222, lat, lon)).toBeCloseTo(1_901, 0);
+    }
+    expect(pointInRing(-87.6222, 33.2461, ring)).toBe(true);
+  });
+
+  it('stays in range across the antimeridian', () => {
+    const ring = circleRing(179.99, 52, 5_000);
+    expect(ring.every(([lon]) => lon >= -180 && lon <= 180)).toBe(true);
   });
 });
