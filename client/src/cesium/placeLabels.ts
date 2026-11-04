@@ -94,10 +94,11 @@ const THEMES: Record<LabelTheme, ThemePaint> = {
       city3: css('#4d545e'),
     },
   },
-  // Photographic imagery is busy at every scale, so a heavier halo.
+  // Photographic imagery is busy at every scale (and the daily Earth map is
+  // bright with cloud and snow), so a heavier halo.
   imagery: {
-    halo: css('rgba(0,0,0,0.8)'),
-    haloWidth: 3.5,
+    halo: css('rgba(0,0,0,0.88)'),
+    haloWidth: 4,
     dotOutline: css('rgba(0,0,0,0.85)'),
     fill: {
       country: css('#ffffff'),
