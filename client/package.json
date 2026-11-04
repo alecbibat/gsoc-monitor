@@ -20,6 +20,7 @@
     "satellite.js": "^5.0.0",
     "three": "^0.160.1",
     "topojson-client": "^3.1.0",
+    "us-atlas": "3.0.1",
     "zustand": "^4.5.4"
   },
   "devDependencies": {

@@ -8,48 +8,75 @@ import { useAlertsStatus } from './alertsStore';
 import { useScreensaverStore } from '../../screensaver/screensaverStore';
 import { startVisiblePolling } from '../../lib/poll';
 import {
-  fetchActiveAlerts,
-  loadCounties,
+  fetchActiveAlertsShared,
+  loadCountyAtlas,
   alertRings,
+  alertOutline,
   alertColorHex,
   severityRank,
+  type CountyAtlas,
   type RawAlert,
 } from './alertsData';
+import { alertPanelData } from './alertPanel';
 
-// Each alert ring entity stashes its un-highlighted base colour so the highlight
-// effect can toggle between resting and lit-up styling without re-deriving it.
+// Each alert entity (fill polygon or border line) stashes its un-highlighted
+// styling inputs so the highlight effect can toggle between resting and lit-up
+// styling without re-deriving them.
 interface AlertEntity extends Cesium.Entity {
   gsocAlertColor?: Cesium.Color;
-  gsocLit?: boolean; // lit state currently applied to this polygon's styling
+  gsocFillAlpha?: number; // resting fill opacity (fill polygons only)
+  gsocLit?: boolean; // lit state currently applied to this entity's styling
 }
 
-// Resting vs. highlighted fill opacity. Highlighted fills are translucent on
+// Resting fill opacity by severity, so warnings read louder than advisories.
+// A lit (panel open) fill adds FILL_LIT_BOOST and stays translucent on
 // purpose: where two highlighted alerts overlap, their fills stack and the
 // shared area reads as a more intense colour — the "addition" of both areas.
-const FILL_REST = 0.28;
-const FILL_LIT = 0.5;
+const FILL_REST: Record<string, number> = { Extreme: 0.42, Severe: 0.38, Moderate: 0.32 };
+const FILL_REST_DEFAULT = 0.26; // Minor / Unknown
+const FILL_LIT_BOOST = 0.22;
 
-// Re-style the alert polygons: alerts whose info panel is open get a brighter
-// fill and a white-tinged outline; the rest return to resting styling.
+// Borders are ground-clamped polylines. Cesium drops `outline` on polygons
+// clamped to the ground (with a one-time console warning) and WebGL caps plain
+// line widths at 1 px on most platforms, so the polygons used to have no edge
+// at all. A bright core in the alert's colour inside a dark casing reads on the
+// dark, light and satellite basemaps alike. zIndex 1 keeps every border above
+// every fill (both share the data source's ordered ground collection).
+const EDGE_CASING = Cesium.Color.BLACK.withAlpha(0.75);
+const EDGE_WIDTH = { rest: 5, lit: 7 }; // px, casing included
+const EDGE_CASING_WIDTH = { rest: 2, lit: 3 }; // px, both sides together
+const EDGE_Z = 1;
+
+function fillMaterial(base: Cesium.Color, restAlpha: number, lit: boolean): Cesium.ColorMaterialProperty {
+  return new Cesium.ColorMaterialProperty(base.withAlpha(lit ? restAlpha + FILL_LIT_BOOST : restAlpha));
+}
+
+function edgeMaterial(base: Cesium.Color, lit: boolean): Cesium.PolylineOutlineMaterialProperty {
+  return new Cesium.PolylineOutlineMaterialProperty({
+    color: lit ? Cesium.Color.lerp(base, Cesium.Color.WHITE, 0.55, new Cesium.Color()) : base.withAlpha(1),
+    outlineColor: EDGE_CASING,
+    outlineWidth: lit ? EDGE_CASING_WIDTH.lit : EDGE_CASING_WIDTH.rest,
+  });
+}
+
+// Re-style the alert entities: alerts whose info panel is open get a brighter
+// fill and a wider, white-tinged border; the rest return to resting styling.
 function applyAlertHighlights(ds: Cesium.CustomDataSource, openIds: Set<string>) {
   for (const entity of ds.entities.values) {
     const link = getPanelData(entity);
     const alertEntity = entity as AlertEntity;
     const base = alertEntity.gsocAlertColor;
-    if (!link || link.kind !== 'alerts' || !base || !entity.polygon) continue;
+    if (!link || link.kind !== 'alerts' || !base) continue;
     const lit = openIds.has(link.id);
     // Unchanged: leave the properties alone. Any property assignment makes
     // Cesium rebuild this entity's ground-primitive batch.
     if (alertEntity.gsocLit === lit) continue;
-    entity.polygon.material = new Cesium.ColorMaterialProperty(
-      base.withAlpha(lit ? FILL_LIT : FILL_REST)
-    );
-    entity.polygon.outlineColor = new Cesium.ConstantProperty(
-      lit
-        ? Cesium.Color.lerp(base, Cesium.Color.WHITE, 0.55, new Cesium.Color()).withAlpha(1)
-        : base.withAlpha(0.9)
-    );
-    entity.polygon.outlineWidth = new Cesium.ConstantProperty(lit ? 3 : 2);
+    if (entity.polygon) {
+      entity.polygon.material = fillMaterial(base, alertEntity.gsocFillAlpha ?? FILL_REST_DEFAULT, lit);
+    } else if (entity.polyline) {
+      entity.polyline.material = edgeMaterial(base, lit);
+      entity.polyline.width = new Cesium.ConstantProperty(lit ? EDGE_WIDTH.lit : EDGE_WIDTH.rest);
+    }
     alertEntity.gsocLit = lit;
   }
 }
@@ -123,14 +150,14 @@ export function AlertsLayer() {
       // Counties are a best-effort enhancement (they fill in non-storm alerts
       // that lack their own polygon). Never let a county-file hiccup take down
       // the whole layer — fall back to drawing only alerts that ship geometry.
-      const countiesPromise = loadCounties().catch((err) => {
+      const countiesPromise: Promise<CountyAtlas | null> = loadCountyAtlas().catch((err) => {
         console.warn('NWS alerts: county geometry unavailable', err);
         return null;
       });
 
       let alerts: RawAlert[];
       try {
-        alerts = await fetchActiveAlerts();
+        alerts = await fetchActiveAlertsShared();
       } catch (err) {
         if (cancelled) return;
         console.error('NWS alerts fetch failed', err);
@@ -166,54 +193,57 @@ export function AlertsLayer() {
         );
 
         ds.entities.removeAll();
+        // One collection-changed notification for the whole redraw instead of
+        // one per entity.
+        ds.entities.suspendEvents();
         let drawn = 0;
-        for (const alert of sorted) {
-          const rings = alertRings(alert, counties);
-          if (rings.length === 0) continue;
-          const p = alert.properties;
-          const color = Cesium.Color.fromCssColorString(
-            alertColorHex(p.event ?? '', p.severity ?? 'Unknown')
-          );
-          const id = p.id ?? alert.id ?? `${drawn}`;
-          const lit = openIds.has(`alert-${id}`);
+        try {
+          for (const alert of sorted) {
+            const rings = alertRings(alert, counties?.geometries ?? null);
+            if (rings.length === 0) continue;
+            const p = alert.properties;
+            const color = Cesium.Color.fromCssColorString(
+              alertColorHex(p.event ?? '', p.severity ?? 'Unknown')
+            );
+            const restAlpha = FILL_REST[p.severity ?? ''] ?? FILL_REST_DEFAULT;
+            const id = p.id ?? alert.id ?? `${drawn}`;
+            const panel = alertPanelData(alert, id);
+            const lit = openIds.has(panel.id);
 
-          rings.forEach((ring, idx) => {
-            const positions = Cesium.Cartesian3.fromDegreesArray(ring.flat());
-            const entity = ds.entities.add({
-              id: `alert-${id}-${idx}`,
-              polygon: {
-                hierarchy: new Cesium.PolygonHierarchy(positions),
-                material: color.withAlpha(lit ? FILL_LIT : FILL_REST),
-                outline: true,
-                outlineColor: lit
-                  ? Cesium.Color.lerp(color, Cesium.Color.WHITE, 0.55, new Cesium.Color()).withAlpha(1)
-                  : color.withAlpha(0.9),
-                outlineWidth: lit ? 3 : 2,
-              },
+            rings.forEach((ring, idx) => {
+              const entity = ds.entities.add({
+                id: `alert-${id}-${idx}`,
+                polygon: {
+                  hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(ring.flat())),
+                  material: fillMaterial(color, restAlpha, lit),
+                },
+              });
+              (entity as AlertEntity).gsocAlertColor = color;
+              (entity as AlertEntity).gsocFillAlpha = restAlpha;
+              (entity as AlertEntity).gsocLit = lit;
+              attachPanelData(entity, panel);
             });
-            (entity as AlertEntity).gsocAlertColor = color;
-            (entity as AlertEntity).gsocLit = lit;
-            attachPanelData(entity, {
-              id: `alert-${id}`,
-              kind: 'alerts',
-              title: p.event ?? 'Alert',
-              subtitle: p.areaDesc ?? '',
-              payload: {
-                event: p.event ?? 'Alert',
-                headline: p.headline ?? null,
-                description: p.description ?? '',
-                instruction: p.instruction ?? null,
-                severity: p.severity ?? 'Unknown',
-                urgency: p.urgency ?? 'Unknown',
-                certainty: p.certainty ?? 'Unknown',
-                senderName: p.senderName ?? '',
-                effective: p.effective ?? '',
-                expires: p.expires ?? '',
-                areaDesc: p.areaDesc ?? '',
-              },
+
+            alertOutline(alert, counties).forEach((line, idx) => {
+              if (line.length < 2) return;
+              const entity = ds.entities.add({
+                id: `alert-${id}-edge-${idx}`,
+                polyline: {
+                  positions: Cesium.Cartesian3.fromDegreesArray(line.flat()),
+                  clampToGround: true,
+                  width: lit ? EDGE_WIDTH.lit : EDGE_WIDTH.rest,
+                  material: edgeMaterial(color, lit),
+                  zIndex: EDGE_Z,
+                },
+              });
+              (entity as AlertEntity).gsocAlertColor = color;
+              (entity as AlertEntity).gsocLit = lit;
+              attachPanelData(entity, panel);
             });
-          });
-          drawn++;
+            drawn++;
+          }
+        } finally {
+          ds.entities.resumeEvents();
         }
 
         useAlertsStatus.getState().setStatus({ count: drawn, error: null });
