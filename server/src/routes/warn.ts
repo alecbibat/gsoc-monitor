@@ -49,6 +49,8 @@ export interface WarnAlert {
   responseType: string | null;
   /** An alert, or an update replacing an earlier version. */
   msgType: 'alert' | 'update';
+  /** On an update: the id (message number) of the version it replaces. */
+  referencedId: string | null;
   sent: string | null;
   expires: string | null;
   /** The WEA as it appeared on phones (the 90/360-character message). */
@@ -177,6 +179,7 @@ export function normalizeWarnAlert(raw: unknown, now = Date.now()): WarnAlert | 
     certainty: str(raw.certainty),
     responseType: str(raw.response_type),
     msgType: raw.msg_type,
+    referencedId: str(raw.cmac_referenced_message_number),
     sent: str(raw.sent),
     expires,
     weaText: pickText(raw.texts, 'cmac_short_text'),

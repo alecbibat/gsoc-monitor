@@ -56,6 +56,9 @@ export const api = {
       trackedTails: string[];
       events: import('../types').FlightEvent[];
     }>('/api/flights/registrations'),
+  flightEvents: () =>
+    getJson<{ events: import('../types').FlightEventWithModel[] }>('/api/flights/events'),
+  shipEvents: () => getJson<{ events: import('../types').ShipPortEvent[] }>('/api/ships/events'),
   geocode: (
     q: string,
     opts: { mode: 'suggest' | 'search'; bias?: import('../types').GeocodeBias | null; signal?: AbortSignal }

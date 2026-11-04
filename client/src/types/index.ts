@@ -108,8 +108,22 @@ export interface FlightTrackPoint {
 // Which tracked roster an aircraft belongs to.
 export type FlightGroupId = 'company' | 'hurricane-hunters' | 'fire-tankers';
 
-// A takeoff or landing the tracker witnessed. Coordinates are raw; the client
-// resolves them to a nearby city for display.
+// The airport a takeoff or landing used, as the server named it.
+export interface FlightEventAirport {
+  ident: string;
+  iata: string | null;
+  name: string;
+  municipality: string | null;
+  /** US state / Canadian province, else ISO country. */
+  region: string;
+  /** ISO country. */
+  country: string;
+  distanceKm: number;
+}
+
+// A takeoff or landing the tracker witnessed, named by the nearest airport
+// with a jet-length runway (null when none is in range; absent on events the
+// server recorded before airports were named).
 export interface FlightEvent {
   id: string;
   reg: string;
@@ -118,6 +132,29 @@ export interface FlightEvent {
   lat: number;
   lon: number;
   t: number;
+  airport?: FlightEventAirport | null;
+}
+
+/** /api/flights/events: the feed with each airframe's model. */
+export interface FlightEventWithModel extends FlightEvent {
+  model: string | null;
+}
+
+// A Windstar ship arriving at or leaving a port (server/src/routes/ships.ts).
+export interface ShipPortEvent {
+  id: string;
+  mmsi: string;
+  name: string;
+  kind: 'arrival' | 'departure';
+  port: { name: string; country: string; locode: string | null; distanceKm: number } | null;
+  lat: number;
+  lon: number;
+  /** When it happened, as near as the position fixes tell. */
+  t: number;
+  /** When the server saw it — with two-hourly fixes, possibly well after t. */
+  detectedAt: number;
+  /** AIS destination at the time: on a departure, the next port. */
+  destination: string | null;
 }
 
 // Static airframe identity looked up from registry/photo services, served
@@ -539,6 +576,8 @@ export interface WarnAlert {
   certainty: string | null;
   responseType: string | null;
   msgType: 'alert' | 'update';
+  /** On an update: the id (message number) of the version it replaces. */
+  referencedId: string | null;
   sent: string | null;
   expires: string | null;
   /** The WEA as it appeared on phones (the 90/360-character message). */

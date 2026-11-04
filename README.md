@@ -8,7 +8,14 @@ Global Situational & Operational Conditions Monitor — a real-time 3D globe das
 - **Precipitation radar** — RainViewer's global composite as a looping 2-hour animation of 10-minute frames. Play/pause, a scrub bar and the shown frame's time sit in the radar's row of the map legend; the sidebar sets a 30/60/120-min window and opacity. Tiles render as served (no client-side repainting); place labels stay on top.
 - **Earthquakes** — USGS live feed, magnitude-scaled colored points, click for details panel.
 - **NWS Weather Alerts** — every active alert, including zone/county-based ones (winter, heat, flood, red-flag) resolved to their counties; hazard-coloured fills weighted by severity, with a cased border around each alert (a county-based alert gets one outline around all its counties) and full alert text in click panels.
-- **Alert notifications** — when a new NWS alert covers a property pin or comes within 15 miles of one, the screen flashes and a popup opens in the middle of the screen with the affected locations and a *Show on map* button. The bell in the top bar turns them on and off (per browser; on by default). Updates of an alert already shown only notify for locations they newly reach.
+- **Alert notifications** — the screen flashes and a popup opens in the middle of it, with a *Show on map* button, when:
+  - a new NWS alert covers a property pin or comes within 15 miles of one, listing the locations it reaches;
+  - a Wireless Emergency Alert (PBS WARN) goes out to phones within 50 miles of a pin, quoting the message sent;
+  - an M4.5 or stronger earthquake strikes within 50 miles of a pin;
+  - one of the three company aircraft takes off or lands, naming the airport;
+  - a Windstar ship arrives in or leaves a port, naming the port and, on departure, where it's bound. Ship positions land about every two hours, so these can trail the ship by that much.
+
+  The bell in the top bar opens the settings: a master switch and one per kind, saved per browser and all on by default. Nothing pops for what was already going on when the page opened. Updates of an alert already shown only notify for locations they newly reach, and an NWS warning that also went out to phones pops once. When several are waiting the popup counts them (*1 of 3*) and shows the most urgent next.
 - **Wireless Emergency Alerts (PBS WARN)** — every WEA in force, as PBS WARN broadcasts and maps them: NWS and USGS warnings plus state and local alerts (AMBER, evacuations, police activity, 911 outages). Drawn as the area phones were alerted in, with a dashed border coloured by alert class and a marker; the click panel shows the exact message sent to phones.
 - **Live flights** — adsb.fi ADS-B (free, no key), plane icons rotated to heading, favorites list, auto-refresh when camera moves.
 - **Satellites** — CelesTrak TLE + satellite.js SGP4 propagation; real-time orbits for Space Stations / Brightest / GPS / Weather / Starlink groups, click any satellite to trace its orbit ring and read live position, altitude, speed, and orbital elements.
@@ -47,6 +54,7 @@ npm run dev:client
 | NASA GIBS (Earth basemap) | No key needed | Public WMTS tiles of the daily MODIS Terra/Aqua true-color mosaic, fetched straight from the browser (no server involvement). |
 | Photon (search) | No key needed | komoot's public OpenStreetMap geocoder (`photon.komoot.io`) — the search box's primary source, including suggestions as you type. Fair use: results are cached server-side for 24 h. |
 | PBS WARN (Wireless Emergency Alerts) | No key needed | Fetched server-side (`/api/warn/active`) from the API behind [warn.pbs.org](https://warn.pbs.org) — the same requests its map makes. It is undocumented, so it can change without notice; failures show on the layer and the last good answer is served meanwhile. Proxied because its CORS header is inconsistent, and cached 45 s so every viewer shares one request. Credit: "Wireless Emergency Alerts broadcast by PBS". (FEMA's own feeds don't fit a live layer: OpenFEMA's IPAWS archive is published 24 h late, and IPAWS-OPEN needs a FEMA-issued PIN.) |
+| Airports and ports | Bundled | Name where the company aircraft take off and land, and the ports Windstar ships call at. Airports: [OurAirports](https://ourairports.com/data/) (public domain). Ports: [UN/LOCODE](https://unece.org/trade/uncefact/unlocode) (UNECE), with [GeoNames](https://www.geonames.org) coordinates (CC BY 4.0) for ports UN/LOCODE lists without any. Rebuilt with `npm run build:nav-places` (see below). |
 | US county outlines | Bundled | Census-derived TopoJSON from the [`us-atlas`](https://github.com/topojson/us-atlas) package (ISC), shipped with the client: resolves county-based NWS alerts and merges each alert's counties into one outline. |
 | Nominatim (geocoding) | No key needed | Uses OSM data; `NWS_USER_AGENT` string is also used here as User-Agent per their policy. Search fallback (never for as-you-type suggestions, which its policy forbids) and the intel feed's place lookups, sharing one 1 request/second gate. |
 
@@ -219,6 +227,32 @@ in two zones), and writes the TopoJSON plus
 shown in the UI). It takes a minute or two and ~6 GB of RAM. Re-run it after a
 tz database release that moves a border; clocks and daylight-saving rules come
 from each browser's own tz database and need no rebuild.
+
+## Refreshing the airport and port lists
+
+Company-aircraft and Windstar popups name the airport or port from two lists
+shipped with the server, `server/src/data/airports.ts` and
+`server/src/data/ports.ts`, generated by:
+
+```bash
+npm i --no-save all-the-cities@3.1.0
+```
+
+```bash
+npm run build:nav-places
+```
+
+The script downloads OurAirports' airports and runways (public domain) and
+keeps open airports with a runway of at least 4,000 ft, the field length the
+company jets need, so a takeoff names the airport rather than a grass strip
+beside it. Ports come from UN/LOCODE's port locations (UNECE, read from the
+[datasets/un-locode](https://github.com/datasets/un-locode) mirror, since
+unece.org sits behind a bot check). UN/LOCODE has no coordinates for about a
+fifth of its ports; those take the coordinates of the same-named GeoNames town
+in the same country (CC BY 4.0, from the `all-the-cities` package). Windstar's
+tender anchorages and bays, which neither list names, are kept in the script's
+`WINDSTAR_PORTS` and win over a nearby gazetteer port. When Windstar adds a port
+of call the lists don't name, add it there and re-run.
 
 ## Adding more layers
 

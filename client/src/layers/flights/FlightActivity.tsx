@@ -17,9 +17,15 @@ const lineCache = new Map<string, string>();
 function eventLine(e: FlightEvent): string {
   let line = lineCache.get(e.id);
   if (line === undefined) {
-    const verb = e.kind === 'takeoff' ? '↑ departed' : '↓ landed';
-    const near = nearestMajorCity(e.lat, e.lon);
-    const place = near ? ` near ${near.city.name}, ${near.city.region}` : '';
+    const verb = e.kind === 'takeoff' ? '↑ departed' : e.airport ? '↓ landed at' : '↓ landed';
+    // The airport the server named, else the nearest city.
+    let place = '';
+    if (e.airport) {
+      place = ` ${e.airport.name.replace(/\s+(International\s+)?Airport$/i, '')} (${e.airport.iata ?? e.airport.ident})`;
+    } else {
+      const near = nearestMajorCity(e.lat, e.lon);
+      place = near ? ` near ${near.city.name}, ${near.city.region}` : '';
+    }
     const time = new Date(e.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     line = `${e.reg} ${verb}${place} · ${time}`;
     if (lineCache.size > 400) lineCache.clear();

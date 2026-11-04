@@ -1,15 +1,16 @@
-// Which NWS alerts are NEW and close to one of our pins — the decision behind
-// the flash-and-popup notification. Pure (no store, no Cesium, no fetch), so
-// the rules are testable on their own; AlertNotifier feeds it each poll.
+// Which alerts are NEW and close to one of our pins — the decision behind the
+// flash-and-popup notification. Pure (no store, no Cesium, no fetch), so the
+// rules are testable on their own; AlertNotifier feeds it each poll.
 
 import { LOCATION_GROUPS } from '../layers/locations/locations';
-import { MILES_TO_M, distanceToRingsMeters, metersToMiles, pointInRings } from '../lib/geo';
-import type { RawAlert } from '../layers/alerts/alertsData';
+import { MILES_TO_M, distanceToRingsMeters, haversineMeters, metersToMiles, pointInRings } from '../lib/geo';
+import { alertColorHex, severityRank, type RawAlert } from '../layers/alerts/alertsData';
+import type { NwsNotice } from './notices';
 
-/** An alert within this distance of a pin (or covering it) notifies. */
+/** An NWS alert within this distance of a pin (or covering it) notifies. */
 export const NOTIFY_RADIUS_MI = 15;
 
-/** How long an alert that left the feed is remembered, so a feed blip can't re-announce it. */
+/** How long an item that left its feed is remembered, so a feed blip can't re-announce it. */
 export const SEEN_TTL_MS = 6 * 60 * 60_000;
 
 export interface PinRef {
@@ -23,23 +24,12 @@ export interface PinRef {
 
 export interface PinHit {
   pin: PinRef;
-  /** 0 when the pin is inside the alert's area. */
+  /** 0 when the pin is inside the area. */
   distanceMi: number;
 }
 
-export interface AlertNotice {
-  id: string;
-  alert: RawAlert;
-  /** Pins within the radius, nearest first. */
-  hits: PinHit[];
-  /** An update of an alert already on the map that now reaches a pin it didn't. */
-  isUpdate: boolean;
-  /** [west, south, east, north] around the alert's area and the pins it reaches. */
-  bbox: [number, number, number, number];
-}
-
 interface SeenEntry {
-  /** Keys of the pins this alert was within range of. */
+  /** Keys of the pins the item was within range of. */
   pins: string[];
   lastSeen: number;
 }
@@ -50,7 +40,7 @@ export const ALL_PINS: PinRef[] = LOCATION_GROUPS.flatMap((g) =>
   g.locations.map((l) => ({ key: `${g.id}::${l.name}`, name: l.name, groupName: g.name, lat: l.lat, lon: l.lon }))
 );
 
-function ringsBbox(rings: number[][][]): [number, number, number, number] {
+export function ringsBbox(rings: number[][][]): [number, number, number, number] {
   let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
   for (const ring of rings) {
     for (const [lon, lat] of ring) {
@@ -71,7 +61,7 @@ export function pinsNearRings(rings: number[][][], pins: readonly PinRef[], radi
   const padLat = radiusM / 111_000;
   const hits: PinHit[] = [];
   for (const pin of pins) {
-    // Cheap reject first: the pin is nowhere near the alert's bounding box.
+    // Cheap reject first: the pin is nowhere near the area's bounding box.
     const padLon = padLat / Math.max(Math.cos((pin.lat * Math.PI) / 180), 0.05);
     if (pin.lat < s - padLat || pin.lat > n + padLat) continue;
     if (e - w < 180 && (pin.lon < w - padLon || pin.lon > e + padLon)) continue;
@@ -82,8 +72,43 @@ export function pinsNearRings(rings: number[][][], pins: readonly PinRef[], radi
   return hits.sort((a, b) => a.distanceMi - b.distanceMi);
 }
 
-function noticeBbox(rings: number[][][], hits: PinHit[]): [number, number, number, number] {
-  let [w, s, e, n] = ringsBbox(rings);
+/**
+ * Pins within `radiusMi` of a circle's edge (or inside it): a point is a
+ * circle of radius 0. Nearest first.
+ */
+export function pinsNearCircle(
+  lat: number,
+  lon: number,
+  radiusM: number,
+  pins: readonly PinRef[],
+  radiusMi: number
+): PinHit[] {
+  const reachM = radiusMi * MILES_TO_M;
+  const hits: PinHit[] = [];
+  for (const pin of pins) {
+    const d = Math.max(0, haversineMeters(pin.lat, pin.lon, lat, lon) - radiusM);
+    if (d <= reachM) hits.push({ pin, distanceMi: metersToMiles(d) });
+  }
+  return hits.sort((a, b) => a.distanceMi - b.distanceMi);
+}
+
+/** Several hit lists as one: each pin once, at its nearest distance. */
+export function mergeHits(...lists: PinHit[][]): PinHit[] {
+  const best = new Map<string, PinHit>();
+  for (const list of lists) {
+    for (const h of list) {
+      const prev = best.get(h.pin.key);
+      if (!prev || h.distanceMi < prev.distanceMi) best.set(h.pin.key, h);
+    }
+  }
+  return [...best.values()].sort((a, b) => a.distanceMi - b.distanceMi);
+}
+
+export function hitsBbox(
+  base: [number, number, number, number],
+  hits: PinHit[]
+): [number, number, number, number] {
+  let [w, s, e, n] = base;
   for (const { pin } of hits) {
     w = Math.min(w, pin.lon);
     e = Math.max(e, pin.lon);
@@ -93,16 +118,75 @@ function noticeBbox(rings: number[][][], hits: PinHit[]): [number, number, numbe
   return [w, s, e, n];
 }
 
+export interface FreshItem<T> {
+  item: T;
+  id: string;
+  hits: PinHit[];
+  /** It updates an item already seen (that now reaches a pin it didn't). */
+  isUpdate: boolean;
+}
+
 /**
- * One poll's worth of alerts in, the notices to show out — plus the updated
+ * The core of every "new X near a pin" rule, given one poll's items and the
  * memory of what has been seen. The first poll (`baseline`) only records:
- * notifications are for alerts that appear while the dashboard is watching,
- * not for everything already in effect when it opens. After that an alert is
- * news when its id is new AND it reaches a pin. An Update that references an
- * alert already seen only counts for pins that earlier version didn't reach,
- * so NWS re-issuing a warning every half hour doesn't re-alarm the room.
- * Test/exercise messages and cancellations never notify.
+ * notifications are for things that appear while the dashboard is watching,
+ * not for everything already in effect when it opens. After that an item is
+ * news when its id is new AND it reaches a pin. An update that references an
+ * item already seen only counts for pins that earlier version didn't reach,
+ * so a re-issued warning doesn't re-alarm the room. Items `skip` rejects are
+ * neither announced nor remembered.
  */
+export function detectNewNear<T>(opts: {
+  items: readonly T[];
+  idOf: (item: T) => string | null | undefined;
+  hitsOf: (item: T) => PinHit[];
+  refsOf?: (item: T) => readonly string[];
+  skip?: (item: T) => boolean;
+  seen: SeenMap;
+  baseline: boolean;
+  now: number;
+}): { fresh: FreshItem<T>[]; seen: SeenMap } {
+  const { items, idOf, hitsOf, refsOf, skip, seen, baseline, now } = opts;
+  const next = new Map<string, SeenEntry>();
+  for (const [id, entry] of seen) {
+    if (now - entry.lastSeen < SEEN_TTL_MS) next.set(id, entry);
+  }
+  // Pass 1: remember every item in this poll, measuring the unseen ones.
+  const measured: { item: T; id: string; hits: PinHit[] }[] = [];
+  for (const item of items) {
+    const id = idOf(item);
+    if (!id) continue;
+    const known = next.get(id);
+    if (known) {
+      next.set(id, { pins: known.pins, lastSeen: now });
+      continue;
+    }
+    if (skip?.(item)) continue;
+    const hits = hitsOf(item);
+    next.set(id, { pins: hits.map((h) => h.pin.key), lastSeen: now });
+    if (hits.length > 0) measured.push({ item, id, hits });
+  }
+  if (baseline) return { fresh: [], seen: next };
+
+  // Pass 2: references resolve against everything seen so far — this poll
+  // included, so an original and its update arriving together notify once.
+  const fresh: FreshItem<T>[] = [];
+  for (const { item, id, hits } of measured) {
+    let isUpdate = false;
+    const reached = new Set<string>();
+    for (const ref of refsOf?.(item) ?? []) {
+      const prior = ref !== id ? next.get(ref) : undefined;
+      if (!prior) continue;
+      isUpdate = true;
+      for (const key of prior.pins) reached.add(key);
+    }
+    if (hits.every((h) => reached.has(h.pin.key))) continue;
+    fresh.push({ item, id, hits, isUpdate });
+  }
+  return { fresh, seen: next };
+}
+
+/** NWS alerts that are new and within NOTIFY_RADIUS_MI of a pin. */
 export function detectNewAlertNotices(opts: {
   alerts: readonly RawAlert[];
   ringsOf: (alert: RawAlert) => number[][][];
@@ -111,45 +195,39 @@ export function detectNewAlertNotices(opts: {
   now: number;
   pins?: readonly PinRef[];
   radiusMi?: number;
-}): { notices: AlertNotice[]; seen: SeenMap } {
-  const { alerts, ringsOf, seen, baseline, now, pins = ALL_PINS, radiusMi = NOTIFY_RADIUS_MI } = opts;
-  const next = new Map<string, SeenEntry>();
-  for (const [id, entry] of seen) {
-    if (now - entry.lastSeen < SEEN_TTL_MS) next.set(id, entry);
-  }
-  // Pass 1: remember every alert in this poll, measuring the unseen ones.
-  const fresh: { id: string; alert: RawAlert; rings: number[][][]; hits: PinHit[] }[] = [];
-  for (const alert of alerts) {
+}): { notices: NwsNotice[]; seen: SeenMap } {
+  const { alerts, ringsOf, pins = ALL_PINS, radiusMi = NOTIFY_RADIUS_MI } = opts;
+  const rings = new Map<RawAlert, number[][][]>();
+  const ringsFor = (a: RawAlert) => {
+    let r = rings.get(a);
+    if (!r) rings.set(a, (r = ringsOf(a)));
+    return r;
+  };
+  const { fresh, seen } = detectNewNear({
+    items: alerts,
+    idOf: (a) => a.properties.id ?? a.id,
+    hitsOf: (a) => pinsNearRings(ringsFor(a), pins, radiusMi),
+    refsOf: (a) => (a.properties.references ?? []).map((r) => r.identifier).filter((x): x is string => !!x),
+    // Tests, exercises and cancellations never notify.
+    skip: (a) => (!!a.properties.status && a.properties.status !== 'Actual') || a.properties.messageType === 'Cancel',
+    seen: opts.seen,
+    baseline: opts.baseline,
+    now: opts.now,
+  });
+  const notices = fresh.map(({ item: alert, id, hits, isUpdate }): NwsNotice => {
     const p = alert.properties;
-    const id = p.id ?? alert.id;
-    if (!id) continue;
-    const known = next.get(id);
-    if (known) {
-      next.set(id, { pins: known.pins, lastSeen: now });
-      continue;
-    }
-    if ((p.status && p.status !== 'Actual') || p.messageType === 'Cancel') continue;
-    const rings = ringsOf(alert);
-    const hits = pinsNearRings(rings, pins, radiusMi);
-    next.set(id, { pins: hits.map((h) => h.pin.key), lastSeen: now });
-    if (hits.length > 0) fresh.push({ id, alert, rings, hits });
-  }
-  if (baseline) return { notices: [], seen: next };
-
-  // Pass 2: references resolve against everything seen so far — this poll
-  // included, so an original and its update arriving together notify once.
-  const notices: AlertNotice[] = [];
-  for (const { id, alert, rings, hits } of fresh) {
-    let referencesSeen = false;
-    const reached = new Set<string>();
-    for (const ref of alert.properties.references ?? []) {
-      const prior = ref.identifier && ref.identifier !== id ? next.get(ref.identifier) : undefined;
-      if (!prior) continue;
-      referencesSeen = true;
-      for (const key of prior.pins) reached.add(key);
-    }
-    if (hits.every((h) => reached.has(h.pin.key))) continue;
-    notices.push({ id, alert, hits, isUpdate: referencesSeen, bbox: noticeBbox(rings, hits) });
-  }
-  return { notices, seen: next };
+    return {
+      category: 'nws',
+      key: `nws:${id}`,
+      aliases: [`nws:${id}`],
+      id,
+      color: alertColorHex(p.event ?? '', p.severity ?? 'Unknown'),
+      rank: 10 + severityRank(p.severity),
+      alert,
+      hits,
+      isUpdate,
+      bbox: hitsBbox(ringsBbox(ringsFor(alert)), hits),
+    };
+  });
+  return { notices, seen };
 }

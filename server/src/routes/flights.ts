@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { pool } from '../db';
 import { config } from '../config';
 import { fetchAircraftInfo, type AircraftInfo } from '../aircraftInfo';
+import { nearestAirport } from '../navPlaces';
 
 const router = Router();
 
@@ -231,8 +232,21 @@ export function decimateTrail(
 
 // --- Takeoff / landing events ------------------------------------------------
 // Every grounded↔airborne transition the tracker witnesses becomes a feed
-// event ("N10AZ departed …"). The client resolves the coordinates to a nearby
-// city for display, so events carry only raw state.
+// event ("N10AZ departed Centennial (KAPA)"), named by the nearest airport
+// with a jet-length runway; the client falls back to a nearby city when no
+// airport is in range.
+export interface EventAirport {
+  ident: string;
+  iata: string | null;
+  name: string;
+  municipality: string | null;
+  /** US state / Canadian province, else ISO country. */
+  region: string;
+  /** ISO country. */
+  country: string;
+  distanceKm: number;
+}
+
 export interface FlightEvent {
   id: string;
   reg: string;
@@ -241,6 +255,16 @@ export interface FlightEvent {
   lat: number;
   lon: number;
   t: number;
+  /** Null when no listed airport is in range; absent on events from older snapshots. */
+  airport?: EventAirport | null;
+}
+
+/** The airport an event at this position used (see nearestAirport). Exported for tests. */
+export function eventAirport(lat: number, lon: number): EventAirport | null {
+  const n = nearestAirport(lat, lon);
+  if (!n) return null;
+  const { ident, iata, name, municipality, region, country } = n.place;
+  return { ident, iata, name, municipality, region, country, distanceKm: Math.round(n.distanceKm * 10) / 10 };
 }
 
 const events: FlightEvent[] = [];
@@ -310,6 +334,7 @@ function recordFlightEvent(reg: string, e: PendingTransition): void {
     lat: e.lat,
     lon: e.lon,
     t: e.sinceT,
+    airport: eventAirport(e.lat, e.lon),
   });
   if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS);
   snapshotDirty = true;
@@ -472,9 +497,10 @@ async function loadSnapshot(attempts = 5): Promise<void> {
         // Same merge discipline as the trails: a live poll may have recorded
         // events while this load was retrying — prepend the persisted feed.
         const cutoffEvents = Date.now() - 7 * 24 * 60 * 60_000;
-        const restoredEvents = (snap.events ?? []).filter(
-          (e) => tails.has(e?.reg) && typeof e?.t === 'number' && e.t >= cutoffEvents
-        );
+        const restoredEvents = (snap.events ?? [])
+          .filter((e) => tails.has(e?.reg) && typeof e?.t === 'number' && e.t >= cutoffEvents)
+          // Events saved before airports were named get theirs now.
+          .map((e) => (e.airport === undefined || (e.airport && !e.airport.country) ? { ...e, airport: eventAirport(e.lat, e.lon) } : e));
         const oldestLive = events[0]?.t ?? Infinity;
         const merged = [...restoredEvents.filter((e) => e.t < oldestLive), ...events];
         events.length = 0;
@@ -684,6 +710,23 @@ router.get('/registrations', async (_req, res) => {
     trackedTails: [...TRACKED_TAILS],
     // Newest first; the sidebar feed only shows a handful.
     events: events.slice(-40).reverse(),
+  });
+});
+
+// The takeoff/landing feed on its own, newest first, with each airframe's
+// model — for the alert notifier, which polls whether or not the Flights layer
+// is shown. Unlike /registrations it doesn't count as someone watching the map,
+// so it never holds the tracker at its fast cadence.
+router.get('/events', (_req, res) => {
+  res.json({
+    events: events
+      .slice(-40)
+      .reverse()
+      .map((e) => {
+        const info = aircraft.get(e.reg);
+        const model = info ? [info.manufacturer, info.model].filter(Boolean).join(' ') || null : null;
+        return { ...e, model };
+      }),
   });
 });
 
