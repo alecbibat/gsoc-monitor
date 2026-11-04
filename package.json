@@ -19,7 +19,8 @@
     "test": "npm run test -w client && npm run test -w server",
     "build:timezones": "node scripts/build-timezones.mjs",
     "build:place-labels": "node scripts/build-place-labels.mjs",
-    "build:boundaries": "node scripts/build-boundaries.mjs"
+    "build:boundaries": "node scripts/build-boundaries.mjs",
+    "build:nav-places": "node scripts/build-nav-places.mjs"
   },
   "devDependencies": {
     "fflate": "^0.8.3",

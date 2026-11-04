@@ -16,6 +16,7 @@ const alert: Omit<WarnAlert, 'polygons' | 'circles'> = {
   certainty: 'Observed',
   responseType: 'Monitor',
   msgType: 'alert',
+  referencedId: null,
   sent: '2026-11-03T15:46:35.925Z',
   expires: '2026-11-04T14:35:00Z',
   weaText: 'Park Co.OHS: 911 lines are down. Emergencies call 307-219-1891 Powell, 307-254-0226 Cody.',

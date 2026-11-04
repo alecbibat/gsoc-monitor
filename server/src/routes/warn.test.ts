@@ -84,6 +84,7 @@ describe('normalizeWarnAlert', () => {
       // The placeholder area description is dropped.
       areaDesc: null,
       nws: false,
+      referencedId: null,
     });
     expect(a.polygons).toHaveLength(1);
     expect(a.polygons[0][0]).toEqual([-93.3833225, 31.8772061]);
@@ -101,6 +102,11 @@ describe('normalizeWarnAlert', () => {
     expect(a.circles).toEqual([{ lon: -87.6222, lat: 33.2461, radiusKm: 1.901 }]);
     expect(a.weaClass).toBe('imminent-threat');
     expect(a.nws).toBe(true);
+  });
+
+  it('links an update to the version it replaces', () => {
+    const upd = normalizeWarnAlert({ ...roadClosure, msg_type: 'update', cmac_message_number: 'b4335000', cmac_referenced_message_number: 'b4334831' }, NOW)!;
+    expect(upd).toMatchObject({ id: 'b4335000', msgType: 'update', referencedId: 'b4334831' });
   });
 
   it('classes AMBER alerts', () => {

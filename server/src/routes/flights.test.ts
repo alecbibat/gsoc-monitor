@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   advanceTransition,
+  eventAirport,
   decimateTrail,
   iconExpired,
   recordTrackPoint,
@@ -152,5 +153,21 @@ describe('decimateTrail', () => {
     expect(out[out.length - 1]).toBe(pts[pts.length - 1]);
     // Still time-ordered after the stride.
     for (let i = 1; i < out.length; i++) expect(out[i].t).toBeGreaterThan(out[i - 1].t);
+  });
+});
+
+describe('eventAirport', () => {
+  it('names the airport a takeoff or landing used', () => {
+    // First airborne fix ~2 km past Centennial's runway end.
+    expect(eventAirport(39.585, -104.835)).toMatchObject({
+      ident: 'KAPA',
+      iata: 'APA',
+      name: 'Centennial Airport',
+      region: 'CO',
+    });
+  });
+
+  it('is null away from any listed airport', () => {
+    expect(eventAirport(40, -150)).toBeNull();
   });
 });

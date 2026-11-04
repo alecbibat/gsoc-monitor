@@ -3,6 +3,7 @@ import WebSocket from 'ws';
 import fs from 'fs';
 import path from 'path';
 import { config } from '../config';
+import { advancePortCall, type PortCallState, type PortRef } from '../portCalls';
 
 const router = Router();
 
@@ -253,6 +254,56 @@ function recordHistory(mmsi: string, lat: number, lon: number, t: number): void 
   while (h.length > MAX_TRACK_POINTS || (h.length > 0 && h[0].t < cutoff)) h.shift();
 }
 
+// --- Port calls ---------------------------------------------------------------
+// Arrivals and departures, read from each fleet ship's fixes as they land (see
+// ../portCalls for the rules), for the alert notifier's "arrived at / departed"
+// popups. Kept in the position snapshot with each ship's state, so a restart
+// neither loses recent calls nor re-announces one.
+export interface ShipPortEvent {
+  id: string;
+  mmsi: string;
+  name: string;
+  kind: 'arrival' | 'departure';
+  port: PortRef | null;
+  lat: number;
+  lon: number;
+  /** When it happened, as near as the fixes tell (epoch ms). */
+  t: number;
+  /** When the server saw it — with two-hourly fixes, possibly well after t. */
+  detectedAt: number;
+  /** AIS destination at the time: on a departure, the next port. */
+  destination: string | null;
+}
+
+const portCalls = new Map<string, PortCallState>();
+const portEvents: ShipPortEvent[] = [];
+const MAX_PORT_EVENTS = 100;
+const PORT_EVENT_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+const PORT_STATE_MAX_AGE_MS = 12 * 60 * 60_000;
+
+function trackPortCall(v: VesselData): void {
+  const ship = FLEET.find((s) => s.mmsi === v.mmsi);
+  if (!ship) return;
+  const r = advancePortCall(portCalls.get(v.mmsi), {
+    lat: v.latitude,
+    lon: v.longitude,
+    t: v.updatedAt,
+    speedKt: v.speedKt,
+    navStatus: v.navStatus,
+    destination: v.destination,
+  });
+  portCalls.set(v.mmsi, r.state);
+  if (!r.emit) return;
+  portEvents.push({
+    id: `${v.mmsi}-${r.emit.kind}-${r.emit.t}`,
+    mmsi: v.mmsi,
+    name: ship.name,
+    ...r.emit,
+    detectedAt: Date.now(),
+  });
+  if (portEvents.length > MAX_PORT_EVENTS) portEvents.splice(0, portEvents.length - MAX_PORT_EVENTS);
+}
+
 // --- Position snapshot (last-known persistence) -----------------------------
 // Written to disk after every successful poll so the fleet stays on the map
 // across server restarts and Heroku deploys. The snapshot file lives at
@@ -266,6 +317,9 @@ const SNAPSHOT_PATH =
 interface Snapshot {
   tracked: VesselData[];
   history: { mmsi: string; pts: TrackPoint[] }[];
+  /** Absent in snapshots written before port calls were tracked. */
+  portCalls?: { mmsi: string; state: PortCallState }[];
+  portEvents?: ShipPortEvent[];
   savedAt: number;
 }
 
@@ -279,6 +333,8 @@ function saveSnapshot(): void {
     const snap: Snapshot = {
       tracked: [...tracked.values()],
       history: [...history.entries()].map(([mmsi, pts]) => ({ mmsi, pts })),
+      portCalls: [...portCalls.entries()].map(([mmsi, state]) => ({ mmsi, state })),
+      portEvents: [...portEvents],
       savedAt: Date.now(),
     };
     fs.writeFileSync(SNAPSHOT_PATH, JSON.stringify(snap));
@@ -308,6 +364,24 @@ function loadSnapshot(): void {
     }
     for (const { mmsi, pts } of snap.history ?? []) {
       if (pts.length > 0 && FLEET_MMSIS.includes(mmsi)) history.set(mmsi, pts);
+    }
+    // A ship's port-call state is only worth resuming while recent: after a
+    // long gap its next fix would announce a departure from a port it left
+    // hours ago. Older states are dropped; the next fix starts afresh.
+    const stateCutoff = Date.now() - PORT_STATE_MAX_AGE_MS;
+    for (const { mmsi, state } of snap.portCalls ?? []) {
+      if (
+        FLEET_MMSIS.includes(mmsi) &&
+        state &&
+        (state.phase === 'in-port' || state.phase === 'at-sea') &&
+        (state.last?.t ?? 0) >= stateCutoff
+      ) {
+        portCalls.set(mmsi, state);
+      }
+    }
+    const eventCutoff = Date.now() - PORT_EVENT_MAX_AGE_MS;
+    for (const e of snap.portEvents ?? []) {
+      if (FLEET_MMSIS.includes(e?.mmsi) && typeof e.t === 'number' && e.t >= eventCutoff) portEvents.push(e);
     }
     snapshotLoadedCount = [...tracked.keys()].length;
     snapshotLoadedAgeMin = Math.round(ageMs / 60_000);
@@ -412,6 +486,7 @@ function handleMessage(raw: string) {
     if (isAllowed(mmsi, record.imo)) {
       tracked.set(mmsi, record);
       recordHistory(mmsi, lat, lon, now);
+      trackPortCall(record);
     }
   } else if (type === 'ShipStaticData') {
     staticReports++;
@@ -843,6 +918,7 @@ function applyPaidPosition(r: PaidPosition) {
   // merges against this data instead of an older snapshot of the ship.
   if (vessels.has(mmsi)) vessels.set(mmsi, record);
   recordHistory(mmsi, r.lat, r.lon, now);
+  trackPortCall(record);
 }
 
 async function pollPaidPositions() {
@@ -947,6 +1023,11 @@ router.get('/', (_req, res) => {
     matched: allowedMmsis.size,
     total: ALLOWED_IMOS.size,
   });
+});
+
+// GET /api/ships/events — recent fleet arrivals and departures, newest first.
+router.get('/events', (_req, res) => {
+  res.json({ events: portEvents.slice(-50).reverse() });
 });
 
 function wsStateName(): string {

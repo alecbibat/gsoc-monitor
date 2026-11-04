@@ -1,32 +1,122 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
-import { flyToBoundingBox } from '../cesium/flyTo';
-import {
-  alertColorHex, alertRings, fetchActiveAlertsShared, loadCountyAtlas, severityRank,
-} from '../layers/alerts/alertsData';
+import { flyToBoundingBox, flyToLonLat } from '../cesium/flyTo';
+import { alertRings, fetchActiveAlertsShared, loadCountyAtlas } from '../layers/alerts/alertsData';
 import { alertPanelData } from '../layers/alerts/alertPanel';
+import { WEA_CLASSES } from '../layers/warn/warnMeta';
+import { api } from '../api/client';
 import { startVisiblePolling } from '../lib/poll';
 import { usePanelStore } from '../panels/panelStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { useLayersStore } from '../store/layersStore';
 import { useCrisisStore } from '../crisis/crisisStore';
 import { useCrisisDockStore } from '../ui/uiStore';
+import type { EarthquakeFeature, LayerId } from '../types';
 import { useAlertNotifyStore } from './alertNotifyStore';
-import { NOTIFY_RADIUS_MI, detectNewAlertNotices, type AlertNotice, type SeenMap } from './pinAlertMatch';
+import { NOTIFY_RADIUS_MI, detectNewAlertNotices, type PinHit, type SeenMap } from './pinAlertMatch';
+import {
+  QUAKE_NOTIFY_RADIUS_MI, WARN_NOTIFY_RADIUS_MI,
+  detectFlightNotices, detectQuakeNotices, detectShipNotices, detectWarnNotices,
+  type SeenIds,
+} from './detectors';
+import type { Notice, NoticeCategory } from './notices';
 
-// ── NWS alert notifications ──────────────────────────────────────────────────
-// While notifications are on, poll the national feed (shared with the map
-// layer, so one download serves both) and, when a new alert covers or comes
-// within 15 mi of a property pin, flash the screen and put a popup in the
-// middle of it until someone acknowledges it. Runs whether or not the NWS
-// layer is shown, and during the screensaver (the wall-display case).
+// ── Alert popups ─────────────────────────────────────────────────────────────
+// While notifications are on, each enabled source is polled on its own clock;
+// whatever it reports as new flashes the screen and queues a card in the
+// middle of it until someone acknowledges it. Sources:
+//   nws    — NWS alerts within 15 mi of a property (shares the map layer's download)
+//   warn   — Wireless Emergency Alerts (PBS WARN) within 50 mi
+//   quake  — M4.5+ earthquakes within 50 mi
+//   flight — the company aircraft's takeoffs and landings
+//   ship   — Windstar arrivals at and departures from port
+// Runs whether or not the matching map layers are shown, and during the
+// screensaver (the wall-display case).
 
-const POLL_MS = 60_000;
+/**
+ * One source's poll step. Built fresh each time the source is switched on, so
+ * its memory of what it has seen — and the first poll's baseline — starts over.
+ */
+type Step = (baseline: boolean) => Promise<Notice[]>;
 
-function usePinAlertPolling(enabled: boolean): void {
+const nwsStep = (): Step => {
+  let seen: SeenMap = new Map();
+  return async (baseline) => {
+    // Without the county outlines most alerts have no area to measure, and
+    // recording them as "seen, nowhere near" would swallow them for good — so
+    // a poll that can't load counties is skipped, not half-done.
+    const [alerts, atlas] = await Promise.all([fetchActiveAlertsShared(), loadCountyAtlas()]);
+    const out = detectNewAlertNotices({
+      alerts,
+      ringsOf: (a) => alertRings(a, atlas.geometries),
+      seen,
+      baseline,
+      now: Date.now(),
+    });
+    seen = out.seen;
+    return out.notices;
+  };
+};
+
+const warnStep = (): Step => {
+  let seen: SeenMap = new Map();
+  return async (baseline) => {
+    const feed = await api.warn();
+    const out = detectWarnNotices({ alerts: feed.alerts, seen, baseline, now: Date.now() });
+    seen = out.seen;
+    return out.notices;
+  };
+};
+
+const quakeStep = (): Step => {
+  let seen: SeenMap = new Map();
+  return async (baseline) => {
+    const fc = await api.earthquakes('4.5', 'day');
+    const out = detectQuakeNotices({
+      features: (fc.features ?? []) as unknown as EarthquakeFeature[],
+      seen,
+      baseline,
+      now: Date.now(),
+    });
+    seen = out.seen;
+    return out.notices;
+  };
+};
+
+const flightStep = (): Step => {
+  let seen: SeenIds = new Map();
+  return async (baseline) => {
+    const { events } = await api.flightEvents();
+    const out = detectFlightNotices({ events, seen, baseline, now: Date.now() });
+    seen = out.seen;
+    return out.notices;
+  };
+};
+
+const shipStep = (): Step => {
+  let seen: SeenIds = new Map();
+  return async (baseline) => {
+    const { events } = await api.shipEvents();
+    const out = detectShipNotices({ events, seen, baseline, now: Date.now() });
+    seen = out.seen;
+    return out.notices;
+  };
+};
+
+const SOURCES: Record<NoticeCategory, { makeStep: () => Step; everyMs: number }> = {
+  nws: { makeStep: nwsStep, everyMs: 60_000 },
+  warn: { makeStep: warnStep, everyMs: 60_000 },
+  quake: { makeStep: quakeStep, everyMs: 60_000 },
+  flight: { makeStep: flightStep, everyMs: 60_000 },
+  // Positions land about every two hours; every two minutes is plenty.
+  ship: { makeStep: shipStep, everyMs: 120_000 },
+};
+
+function useNoticeSource(category: NoticeCategory, on: boolean): void {
   useEffect(() => {
-    if (!enabled) return;
-    let seen: SeenMap = new Map();
+    if (!on) return;
+    const { makeStep, everyMs } = SOURCES[category];
+    const step = makeStep();
     let baselined = false;
     let cancelled = false;
     let busy = false;
@@ -34,43 +124,28 @@ function usePinAlertPolling(enabled: boolean): void {
       if (busy) return;
       busy = true;
       try {
-        // Without the county outlines most alerts have no area to measure,
-        // and recording them as "seen, nowhere near" would swallow them for
-        // good — so a poll that can't load counties is skipped, not half-done.
-        const [alerts, atlas] = await Promise.all([fetchActiveAlertsShared(), loadCountyAtlas()]);
+        const notices = await step(!baselined);
         if (cancelled) return;
-        const out = detectNewAlertNotices({
-          alerts,
-          ringsOf: (a) => alertRings(a, atlas.geometries),
-          seen,
-          baseline: !baselined,
-          now: Date.now(),
-        });
-        seen = out.seen;
         baselined = true;
-        if (out.notices.length > 0) {
-          const worst = out.notices.reduce((a, b) =>
-            severityRank(b.alert.properties.severity) > severityRank(a.alert.properties.severity) ? b : a
-          );
-          const p = worst.alert.properties;
-          useAlertNotifyStore.getState().push(out.notices, alertColorHex(p.event ?? '', p.severity ?? 'Unknown'));
-        }
+        if (notices.length > 0) useAlertNotifyStore.getState().push(notices);
       } catch (err) {
-        console.warn('[alert-notify] poll skipped:', err instanceof Error ? err.message : err);
+        console.warn(`[alert-notify] ${category} poll skipped:`, err instanceof Error ? err.message : err);
       } finally {
         busy = false;
       }
     };
-    const stop = startVisiblePolling(() => void tick(), POLL_MS);
+    const stop = startVisiblePolling(() => void tick(), everyMs);
     return () => {
       cancelled = true;
       stop();
     };
-  }, [enabled]);
+  }, [category, on]);
 }
 
-function fmtTime(iso: string | undefined): string | null {
-  if (!iso) return null;
+// ── Card ──────────────────────────────────────────────────────────────────────
+
+function fmtTime(iso: string | number | null | undefined): string | null {
+  if (iso === null || iso === undefined || iso === '') return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
   const sameDay = d.toDateString() === new Date().toDateString();
@@ -81,7 +156,7 @@ function fmtTime(iso: string | undefined): string | null {
   });
 }
 
-function fmtUntil(iso: string | undefined, now: number): string | null {
+function fmtUntil(iso: string | null | undefined, now: number): string | null {
   const t = iso ? Date.parse(iso) : NaN;
   if (Number.isNaN(t)) return null;
   const mins = Math.round((t - now) / 60_000);
@@ -91,25 +166,236 @@ function fmtUntil(iso: string | undefined, now: number): string | null {
   return mins % 60 ? `in ${h} h ${mins % 60} min` : `in ${h} h`;
 }
 
+const regionNames = (() => {
+  try {
+    return new Intl.DisplayNames(['en'], { type: 'region' });
+  } catch {
+    return null;
+  }
+})();
+
+/** "Spain" for "ES". */
+function countryName(code: string | null | undefined): string | null {
+  if (!code) return null;
+  try {
+    return regionNames?.of(code) ?? code;
+  } catch {
+    return code;
+  }
+}
+
+/** "Englewood, CO" in the US and Canada; "Nice, France" elsewhere. */
+function airportPlace(a: { municipality: string | null; region: string; country: string }): string | null {
+  const where = a.country === 'US' || a.country === 'CA' ? a.region : countryName(a.country);
+  return [a.municipality, where].filter(Boolean).join(', ') || null;
+}
+
+function headerText(n: Notice): string {
+  switch (n.category) {
+    case 'nws':
+      return n.isUpdate ? 'NWS alert update near your locations' : 'New NWS alert near your locations';
+    case 'warn':
+      return n.isUpdate ? 'Emergency alert update near your locations' : 'Emergency alert sent to phones near your locations';
+    case 'quake':
+      return 'Earthquake near your locations';
+    case 'flight':
+      return n.event.kind === 'takeoff' ? 'Company aircraft departed' : 'Company aircraft landed';
+    case 'ship':
+      return n.event.kind === 'arrival' ? 'Windstar ship arrived in port' : 'Windstar ship left port';
+  }
+}
+
 const MAX_PINS_LISTED = 6;
 
-function NoticeCard({ notice, index, total, onShow, onDismiss, onDismissAll, onTurnOff }: {
-  notice: AlertNotice;
+function PinList({ hits, radiusMi, color }: { hits: PinHit[]; radiusMi: number; color: string }) {
+  const listed = hits.slice(0, MAX_PINS_LISTED);
+  const more = hits.length - listed.length;
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">Within {radiusMi} mi</div>
+      <ul className="space-y-0.5">
+        {listed.map(({ pin, distanceMi }) => (
+          <li key={pin.key} className="flex items-baseline gap-2 text-[12.5px]">
+            <span aria-hidden className="text-white/40">📍</span>
+            <span className="min-w-0 flex-1 truncate text-white/90">
+              {pin.name} <span className="text-white/35">· {pin.groupName}</span>
+            </span>
+            <span
+              className={`shrink-0 text-[11px] font-semibold ${distanceMi === 0 ? '' : 'text-white/60'}`}
+              style={distanceMi === 0 ? { color } : undefined}
+            >
+              {distanceMi === 0 ? 'Inside alert area' : `${distanceMi.toFixed(1)} mi away`}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {more > 0 && <div className="mt-1 text-[11px] text-white/45">+{more} more location{more === 1 ? '' : 's'}</div>}
+    </div>
+  );
+}
+
+function Chips({ items }: { items: (string | null | undefined | false)[] }) {
+  const shown = items.filter((x): x is string => !!x);
+  if (shown.length === 0) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px] font-semibold uppercase tracking-wider">
+      {shown.map((c, i) => (
+        <span key={`${c}-${i}`} className="rounded bg-white/10 px-1.5 py-0.5 text-white/75">{c}</span>
+      ))}
+    </div>
+  );
+}
+
+function Title({ color, children }: { color: string; children: ReactNode }) {
+  return (
+    <h2 id="alert-notice-title" className="text-[22px] font-bold leading-tight" style={{ color }}>
+      {children}
+    </h2>
+  );
+}
+
+function Times({ items }: { items: [string, string | null][] }) {
+  const shown = items.filter(([, v]) => v);
+  if (shown.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-white/55">
+      {shown.map(([label, value]) => (
+        <span key={label}><span className="text-white/35">{label}</span> {value}</span>
+      ))}
+    </div>
+  );
+}
+
+function NoticeBody({ n, now }: { n: Notice; now: number }) {
+  switch (n.category) {
+    case 'nws': {
+      const p = n.alert.properties;
+      return (
+        <>
+          <div>
+            <Title color={n.color}>{p.event ?? 'NWS Alert'}</Title>
+            <Chips items={[p.severity, p.urgency, p.senderName]} />
+            {p.headline && <p className="mt-2 text-[12.5px] leading-snug text-white/80">{p.headline}</p>}
+          </div>
+          <PinList hits={n.hits} radiusMi={NOTIFY_RADIUS_MI} color={n.color} />
+          <Times
+            items={[
+              ['Issued', fmtTime(p.sent ?? p.effective)],
+              ['Expires', fmtTime(p.expires) && `${fmtTime(p.expires)}${fmtUntil(p.expires, now) ? ` (${fmtUntil(p.expires, now)})` : ''}`],
+            ]}
+          />
+          {p.areaDesc && <p className="line-clamp-2 text-[11px] leading-snug text-white/40">{p.areaDesc}</p>}
+        </>
+      );
+    }
+    case 'warn': {
+      const a = n.alert;
+      const cls = WEA_CLASSES[a.weaClass] ?? WEA_CLASSES['public-safety'];
+      return (
+        <>
+          <div>
+            <Title color={n.color}>{a.event}</Title>
+            <Chips items={[cls.label, a.severity, a.sender]} />
+          </div>
+          {a.weaText && (
+            <div className="rounded-lg border border-white/12 bg-white/[0.04] px-3 py-2">
+              <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-white/35">Sent to phones</div>
+              <p className="text-[13px] font-medium leading-snug text-white/90">{a.weaText}</p>
+            </div>
+          )}
+          <PinList hits={n.hits} radiusMi={WARN_NOTIFY_RADIUS_MI} color={n.color} />
+          <Times
+            items={[
+              ['Sent', fmtTime(a.sent)],
+              ['Expires', fmtTime(a.expires) && `${fmtTime(a.expires)}${fmtUntil(a.expires, now) ? ` (${fmtUntil(a.expires, now)})` : ''}`],
+            ]}
+          />
+        </>
+      );
+    }
+    case 'quake': {
+      const q = n.quake;
+      return (
+        <>
+          <div>
+            <Title color={n.color}>M{q.mag.toFixed(1)} earthquake</Title>
+            <Chips
+              items={[
+                q.depthKm !== null ? `${q.depthKm.toFixed(0)} km deep` : null,
+                q.tsunami === 1 && 'Tsunami flag',
+                q.status === 'reviewed' ? 'Reviewed' : q.status === 'automatic' ? 'Automatic' : null,
+              ]}
+            />
+            {q.place && <p className="mt-2 text-[12.5px] leading-snug text-white/80">{q.place}</p>}
+          </div>
+          <PinList hits={n.hits} radiusMi={QUAKE_NOTIFY_RADIUS_MI} color={n.color} />
+          <Times items={[['Occurred', fmtTime(q.time)], ['Felt reports', q.felt ? String(q.felt) : null]]} />
+        </>
+      );
+    }
+    case 'flight': {
+      const e = n.event;
+      const a = e.airport;
+      const verb = e.kind === 'takeoff' ? 'took off from' : 'landed at';
+      const where = a ? `${a.name} (${a.iata ?? a.ident})` : `${Math.abs(e.lat).toFixed(3)}°${e.lat >= 0 ? 'N' : 'S'} ${Math.abs(e.lon).toFixed(3)}°${e.lon >= 0 ? 'E' : 'W'}`;
+      const city = a ? airportPlace(a) : null;
+      return (
+        <>
+          <div>
+            <Title color={n.color}>
+              {e.reg} {verb} {where}
+            </Title>
+            <Chips items={[e.model, a ? a.ident : 'No listed airport nearby']} />
+            {city && <p className="mt-2 text-[12.5px] leading-snug text-white/80">{city}</p>}
+          </div>
+          <Times
+            items={[
+              [e.kind === 'takeoff' ? 'Wheels up' : 'Touched down', fmtTime(e.t)],
+              ['From the field', a && a.distanceKm >= 2 ? `${a.distanceKm.toFixed(1)} km` : null],
+            ]}
+          />
+        </>
+      );
+    }
+    case 'ship': {
+      const e = n.event;
+      const country = e.port ? countryName(e.port.country) : null;
+      const port = e.port ? `${e.port.name}${country ? `, ${country}` : ''}` : 'an unlisted port';
+      const lateBy = e.detectedAt - e.t;
+      return (
+        <>
+          <div>
+            <Title color={n.color}>
+              {e.name} {e.kind === 'arrival' ? 'arrived at' : 'departed'} {port}
+            </Title>
+            <Chips items={['Windstar', e.kind === 'departure' && e.destination ? `Bound for ${e.destination}` : null]} />
+          </div>
+          <Times
+            items={[
+              [e.kind === 'arrival' ? 'In port by' : 'Under way by', fmtTime(e.t)],
+              ['Reported', lateBy > 10 * 60_000 ? fmtTime(e.detectedAt) : null],
+            ]}
+          />
+          <p className="text-[10.5px] leading-snug text-white/35">
+            Ship positions update about every two hours, so this can trail the ship by that much.
+          </p>
+        </>
+      );
+    }
+  }
+}
+
+export function NoticeCard({ notice, index, total, now, onShow, onDismiss, onDismissAll, onTurnOff }: {
+  notice: Notice;
   index: number;
   total: number;
+  now: number;
   onShow: () => void;
   onDismiss: () => void;
   onDismissAll: () => void;
   onTurnOff: () => void;
 }) {
-  const p = notice.alert.properties;
-  const color = alertColorHex(p.event ?? '', p.severity ?? 'Unknown');
-  const issued = fmtTime(p.sent ?? p.effective);
-  const expires = fmtTime(p.expires);
-  const until = fmtUntil(p.expires, Date.now());
-  const listed = notice.hits.slice(0, MAX_PINS_LISTED);
-  const more = notice.hits.length - listed.length;
-
+  const color = notice.color;
   return (
     <div
       role="alert"
@@ -118,9 +404,11 @@ function NoticeCard({ notice, index, total, onShow, onDismiss, onDismissAll, onT
       style={{ borderColor: `${color}aa`, boxShadow: `0 0 0 1px ${color}55, 0 0 48px ${color}55, 0 24px 64px rgba(0,0,0,0.7)` }}
     >
       <div className="flex items-center gap-2 px-4 py-2" style={{ background: `${color}33`, borderBottom: `1px solid ${color}66` }}>
-        <span aria-hidden className="text-[15px]">⚠</span>
+        <span aria-hidden className="text-[15px]">
+          {notice.category === 'flight' ? '✈' : notice.category === 'ship' ? '⚓' : '⚠'}
+        </span>
         <span className="flex-1 text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color }}>
-          {notice.isUpdate ? 'NWS alert update near your locations' : 'New NWS alert near your locations'}
+          {headerText(notice)}
         </span>
         {total > 1 && (
           <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white/70">
@@ -130,45 +418,7 @@ function NoticeCard({ notice, index, total, onShow, onDismiss, onDismissAll, onT
       </div>
 
       <div className="space-y-3 px-4 py-3.5">
-        <div>
-          <h2 id="alert-notice-title" className="text-[22px] font-bold leading-tight" style={{ color }}>
-            {p.event ?? 'NWS Alert'}
-          </h2>
-          <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px] font-semibold uppercase tracking-wider">
-            {p.severity && <span className="rounded bg-white/10 px-1.5 py-0.5 text-white/75">{p.severity}</span>}
-            {p.urgency && <span className="rounded bg-white/10 px-1.5 py-0.5 text-white/75">{p.urgency}</span>}
-            {p.senderName && <span className="rounded bg-white/5 px-1.5 py-0.5 normal-case tracking-normal text-white/55">{p.senderName}</span>}
-          </div>
-          {p.headline && <p className="mt-2 text-[12.5px] leading-snug text-white/80">{p.headline}</p>}
-        </div>
-
-        <div className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
-            Within {NOTIFY_RADIUS_MI} mi
-          </div>
-          <ul className="space-y-0.5">
-            {listed.map(({ pin, distanceMi }) => (
-              <li key={pin.key} className="flex items-baseline gap-2 text-[12.5px]">
-                <span aria-hidden className="text-white/40">📍</span>
-                <span className="min-w-0 flex-1 truncate text-white/90">
-                  {pin.name} <span className="text-white/35">· {pin.groupName}</span>
-                </span>
-                <span className={`shrink-0 text-[11px] font-semibold ${distanceMi === 0 ? '' : 'text-white/60'}`} style={distanceMi === 0 ? { color } : undefined}>
-                  {distanceMi === 0 ? 'Inside alert area' : `${distanceMi.toFixed(1)} mi away`}
-                </span>
-              </li>
-            ))}
-          </ul>
-          {more > 0 && <div className="mt-1 text-[11px] text-white/45">+{more} more location{more === 1 ? '' : 's'}</div>}
-        </div>
-
-        {(issued || expires) && (
-          <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-white/55">
-            {issued && <span><span className="text-white/35">Issued</span> {issued}</span>}
-            {expires && <span><span className="text-white/35">Expires</span> {expires}{until ? ` (${until})` : ''}</span>}
-          </div>
-        )}
-        {p.areaDesc && <p className="line-clamp-2 text-[11px] leading-snug text-white/40">{p.areaDesc}</p>}
+        <NoticeBody n={notice} now={now} />
       </div>
 
       <div className="flex flex-wrap items-center gap-2 border-t border-white/8 px-4 py-2.5">
@@ -204,19 +454,38 @@ function NoticeCard({ notice, index, total, onShow, onDismiss, onDismissAll, onT
   );
 }
 
+// ── Show on map ───────────────────────────────────────────────────────────────
+
+function ensureLayer(id: LayerId): void {
+  const layers = useLayersStore.getState();
+  if (!layers.active[id]) layers.toggleLayer(id);
+}
+
+function padded([w, s, e, n]: [number, number, number, number]): [number, number, number, number] {
+  const padLon = Math.max((e - w) * 0.25, 0.25);
+  const padLat = Math.max((n - s) * 0.25, 0.25);
+  return [w - padLon, s - padLat, e + padLon, n + padLat];
+}
+
 export function AlertNotifier() {
   const viewer = useCesiumViewer();
   const enabled = useAlertNotifyStore((s) => s.enabled);
+  const categories = useAlertNotifyStore((s) => s.categories);
   const queue = useAlertNotifyStore((s) => s.queue);
   const flashSeq = useAlertNotifyStore((s) => s.flashSeq);
   const flashColor = useAlertNotifyStore((s) => s.flashColor);
-  usePinAlertPolling(enabled);
+  useNoticeSource('nws', enabled && categories.nws);
+  useNoticeSource('warn', enabled && categories.warn);
+  useNoticeSource('quake', enabled && categories.quake);
+  useNoticeSource('flight', enabled && categories.flight);
+  useNoticeSource('ship', enabled && categories.ship);
 
   // Re-render once a minute so "expires in …" stays true while a popup waits.
-  const [, setTick] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (queue.length === 0) return;
-    const id = window.setInterval(() => setTick((t) => t + 1), 60_000);
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => window.clearInterval(id);
   }, [queue.length]);
 
@@ -228,30 +497,85 @@ export function AlertNotifier() {
     if (!head) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
-      useAlertNotifyStore.getState().dismiss(head.id);
+      useAlertNotifyStore.getState().dismiss(head.key);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [head]);
 
-  const showOnMap = (n: AlertNotice) => {
+  const showOnMap = (n: Notice) => {
     const ss = useScreensaverStore.getState();
     if (ss.active) ss.stop();
-    const layers = useLayersStore.getState();
-    if (!layers.active.alerts) layers.toggleLayer('alerts');
     // The crisis workspace covers the map unless an incident's map dock is out.
     const crisis = useCrisisStore.getState();
     if (crisis.open && (crisis.activeIncidentId === null || useCrisisDockStore.getState().collapsed)) crisis.close();
-    if (viewer && !viewer.isDestroyed()) {
-      const [w, s, e, nn] = n.bbox;
-      const padLon = Math.max((e - w) * 0.25, 0.25);
-      const padLat = Math.max((nn - s) * 0.25, 0.25);
-      flyToBoundingBox(viewer, w - padLon, s - padLat, e + padLon, nn + padLat);
+    const live = viewer && !viewer.isDestroyed() ? viewer : null;
+    const panels = usePanelStore.getState();
+    // Windows opened on purpose start locked, like the other deliberately
+    // launched ones: the next click on the globe won't close them.
+    switch (n.category) {
+      case 'nws': {
+        ensureLayer('alerts');
+        if (live) flyToBoundingBox(live, ...padded(n.bbox));
+        panels.open({ ...alertPanelData(n.alert), locked: true });
+        break;
+      }
+      case 'warn': {
+        ensureLayer('warn');
+        if (live) flyToBoundingBox(live, ...padded(n.bbox));
+        const { polygons: _p, circles: _c, ...rest } = n.alert;
+        panels.open({
+          id: `warn-${n.alert.id}`,
+          kind: 'warn',
+          title: n.alert.event,
+          subtitle: n.alert.sender,
+          payload: rest as unknown as Record<string, unknown>,
+          locked: true,
+        });
+        break;
+      }
+      case 'quake': {
+        ensureLayer('earthquakes');
+        const q = n.quake;
+        if (live) {
+          let [w, s, e, nn] = [q.lon, q.lat, q.lon, q.lat];
+          for (const { pin } of n.hits) {
+            w = Math.min(w, pin.lon);
+            e = Math.max(e, pin.lon);
+            s = Math.min(s, pin.lat);
+            nn = Math.max(nn, pin.lat);
+          }
+          flyToBoundingBox(live, ...padded([w, s, e, nn]));
+        }
+        panels.open({
+          id: `eq-${q.id}`,
+          kind: 'earthquakes',
+          title: `M${q.mag.toFixed(1)} Earthquake`,
+          subtitle: q.place,
+          payload: {
+            mag: q.mag,
+            place: q.place,
+            time: q.time,
+            depthKm: q.depthKm,
+            url: q.url,
+            felt: q.felt,
+            tsunami: q.tsunami,
+            status: q.status,
+          },
+          locked: true,
+        });
+        break;
+      }
+      case 'flight':
+        ensureLayer('flights');
+        if (live) flyToLonLat(live, n.event.lon, n.event.lat, 60_000);
+        break;
+      case 'ship':
+        ensureLayer('ships');
+        if (live) flyToLonLat(live, n.event.lon, n.event.lat, 40_000);
+        break;
     }
-    // Opened on purpose, so it starts locked like the other deliberately
-    // launched windows: the next click on the globe won't close it.
-    usePanelStore.getState().open({ ...alertPanelData(n.alert), locked: true });
-    useAlertNotifyStore.getState().dismiss(n.id);
+    useAlertNotifyStore.getState().dismiss(n.key);
   };
 
   return (
@@ -267,12 +591,13 @@ export function AlertNotifier() {
       {head && (
         <div className="pointer-events-none fixed inset-0 z-[4600] flex items-center justify-center p-4">
           <NoticeCard
-            key={head.id}
+            key={head.key}
             notice={head}
             index={0}
             total={queue.length}
+            now={now}
             onShow={() => showOnMap(head)}
-            onDismiss={() => useAlertNotifyStore.getState().dismiss(head.id)}
+            onDismiss={() => useAlertNotifyStore.getState().dismiss(head.key)}
             onDismissAll={() => useAlertNotifyStore.getState().dismissAll()}
             onTurnOff={() => useAlertNotifyStore.getState().toggle()}
           />
