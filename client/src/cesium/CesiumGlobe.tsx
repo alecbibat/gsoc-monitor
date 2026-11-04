@@ -399,7 +399,8 @@ export function CesiumGlobe({ children, onReady }: Props) {
   useEffect(() => {
     if (!viewer) return;
     const engine = createPlaceLabels(viewer);
-    engine.setTheme(BASEMAPS[useLayersStore.getState().basemap].labels ?? null);
+    const def = BASEMAPS[useLayersStore.getState().basemap];
+    engine.setTheme(def.labels ?? null, def.cityLabelsOnly);
     placeLabelsRef.current = engine;
     return () => {
       engine.destroy();
@@ -408,7 +409,8 @@ export function CesiumGlobe({ children, onReady }: Props) {
   }, [viewer]);
 
   useEffect(() => {
-    placeLabelsRef.current?.setTheme(BASEMAPS[basemap].labels ?? null);
+    const def = BASEMAPS[basemap];
+    placeLabelsRef.current?.setTheme(def.labels ?? null, def.cityLabelsOnly);
   }, [viewer, basemap]);
 
   // Country and state/province borders over the map types that want them.

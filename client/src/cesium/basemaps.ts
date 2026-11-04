@@ -22,6 +22,10 @@ interface BasemapDef {
   // vector layer, which stays upright, sharp and one size at every zoom where
   // raster label tiles draped on the globe stretch, blur and resize.
   labels?: LabelTheme;
+  // Draw only city names as vector labels. Esri's gray canvas *base* tiles
+  // paint country, state and water names into the imagery itself (there is
+  // no label-free variant), so vector area names would print them twice.
+  cityLabelsOnly?: boolean;
   // Draw vector country and state/province borders (boundaryLines.ts). Only
   // the photographic map types need them; the canvas bases carry their own.
   borders?: boolean;
@@ -42,6 +46,7 @@ export const BASEMAPS: Record<BasemapId, BasemapDef> = {
         credit: new Cesium.Credit('Esri, HERE, Garmin, © OpenStreetMap contributors'),
       }),
     labels: 'dark',
+    cityLabelsOnly: true,
   },
   light: {
     label: 'Light',
@@ -53,6 +58,7 @@ export const BASEMAPS: Record<BasemapId, BasemapDef> = {
         credit: new Cesium.Credit('Esri, HERE, Garmin, © OpenStreetMap contributors'),
       }),
     labels: 'light',
+    cityLabelsOnly: true,
   },
   satellite: {
     label: 'Dark Sat',

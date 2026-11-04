@@ -35,8 +35,10 @@ import {
 export type LabelTheme = 'dark' | 'light' | 'imagery';
 
 export interface PlaceLabelsHandle {
-  // null hides every label (map types whose tiles carry their own names).
-  setTheme(theme: LabelTheme | null): void;
+  // null hides every label (map types whose tiles carry their own names);
+  // citiesOnly keeps country/state/water names off for bases that print
+  // those themselves.
+  setTheme(theme: LabelTheme | null, citiesOnly?: boolean): void;
   destroy(): void;
 }
 
@@ -232,6 +234,7 @@ export function createPlaceLabels(viewer: Cesium.Viewer): PlaceLabelsHandle {
 
   let destroyed = false;
   let theme: LabelTheme | null = null;
+  let citiesOnly = false;
   // Palette labels are painted with — the last real theme, so names still
   // fade out in their own colours after the theme is switched off.
   let paintTheme: LabelTheme | null = null;
@@ -396,6 +399,7 @@ export function createPlaceLabels(viewer: Cesium.Viewer): PlaceLabelsHandle {
       const centreX = centre ? centre.x : W / 2;
       let count = 0;
       for (const p of places) {
+        if (citiesOnly && p.row.kind !== 'p') continue;
         Cesium.Cartesian3.subtract(camPos, p.position, scratchToCam);
         const dist = Cesium.Cartesian3.magnitude(scratchToCam);
         if (dist <= 0) continue;
@@ -505,8 +509,9 @@ export function createPlaceLabels(viewer: Cesium.Viewer): PlaceLabelsHandle {
     });
 
   return {
-    setTheme(next) {
-      if (next === theme) return;
+    setTheme(next, nextCitiesOnly = false) {
+      if (next === theme && nextCitiesOnly === citiesOnly) return;
+      citiesOnly = nextCitiesOnly;
       const prev = theme;
       theme = next;
       if (next) {
