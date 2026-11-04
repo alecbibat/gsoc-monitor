@@ -84,7 +84,7 @@ describe('lightning palette', () => {
     expect(LEGEND_NOTE).not.toMatch(/every strike/i);
     expect(LEGEND_NOTE).toContain(`up to ${LIVE_HOLD_S / 60} min`);
     expect(LEGEND_NOTE).toMatch(/older ones are sampled/);
-    // Three short lines on the map's legend card.
+    // Three short lines in the map legend's expanded Lightning row.
     expect(LEGEND_NOTE.length).toBeLessThanOrEqual(125);
   });
 

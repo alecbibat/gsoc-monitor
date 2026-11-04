@@ -45,7 +45,7 @@ function Compass({ reading }: { reading: WindReading | null }) {
 }
 
 // Corner HUD card for the wind point-probe, rendered inside App's bottom-right
-// HUD stack (below any layer legend cards). Visible whenever the wind layer is
+// HUD stack (below the map legend panel). Visible whenever the wind layer is
 // on: hover the globe for a live reading, right-click to pin one.
 export function WindReadout() {
   const active = useLayersStore((s) => s.active.wind);

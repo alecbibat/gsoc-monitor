@@ -232,10 +232,10 @@ export default function App() {
         <ScreensaverToast />
         <MeasureOverlay />
         <FuelZoneOverlay />
-        {/* Bottom-right HUD stack: legend cards for active layers, then the
-            wind probe readout anchored at the bottom of the stack. Max height
-            keeps the whole stack on-screen (short viewports): the legend list
-            shrinks and scrolls, the readout keeps its natural size. */}
+        {/* Bottom-right HUD stack: the map legend panel for active layers,
+            then the wind probe readout anchored at the bottom of the stack.
+            Max height keeps the whole stack on-screen (short viewports): the
+            legend's rows shrink and scroll, the readout keeps its natural size. */}
         <div className="pointer-events-none absolute bottom-24 right-4 z-30 flex max-h-[calc(100%-7rem)] w-[230px] flex-col gap-2">
           <MapLegends />
           <WindReadout />
