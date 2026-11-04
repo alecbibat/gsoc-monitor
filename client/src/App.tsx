@@ -7,7 +7,6 @@ import { EarthquakeLayer } from './layers/earthquakes/EarthquakeLayer';
 import { AlertsLayer } from './layers/alerts/AlertsLayer';
 import { WarnLayer } from './layers/warn/WarnLayer';
 import { RadarLayer } from './layers/radar/RadarLayer';
-import { RadarTimeline } from './layers/radar/RadarTimeline';
 import { EarthTimeBar } from './ui/EarthTimeBar';
 import { FlightLayer } from './layers/flights/FlightLayer';
 import { HurricaneLayer } from './layers/hurricanes/HurricaneLayer';
@@ -241,11 +240,10 @@ export default function App() {
           <WindReadout />
           <TimeZonesCredit />
         </div>
-        {/* Bottom-center dock: the Earth date bar and the radar scrubber stack
-            here so both can be up at once without overlapping. */}
+        {/* Bottom-center: the Earth map type's date bar. (The radar loop's
+            player lives in its row of the map legend.) */}
         <div className="pointer-events-none absolute inset-x-0 bottom-5 z-30 flex flex-col items-center gap-2 px-4">
           <EarthTimeBar />
-          <RadarTimeline />
         </div>
         <HoverOverlay />
         <NewsTicker />

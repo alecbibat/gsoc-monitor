@@ -5,7 +5,7 @@ Global Situational & Operational Conditions Monitor — a real-time 3D globe das
 ## Phase 1 features
 
 - **3D globe** — CesiumJS with starfield, real sun lighting (day/night terminator), dark/light/satellite/topo basemaps plus an Earth map type: NASA's daily MODIS true-color mosaic with an AM/PM (Terra/Aqua) toggle and a date picker back to Feb 2000.
-- **Precipitation radar** — RainViewer's global composite as a looping 2-hour animation of 10-minute frames: a scrubbable timeline with play/pause, a 30/60/120-min window and opacity control. Tiles render as served (no client-side repainting); place labels stay on top.
+- **Precipitation radar** — RainViewer's global composite as a looping 2-hour animation of 10-minute frames. Play/pause, a scrub bar and the shown frame's time sit in the radar's row of the map legend; the sidebar sets a 30/60/120-min window and opacity. Tiles render as served (no client-side repainting); place labels stay on top.
 - **Earthquakes** — USGS live feed, magnitude-scaled colored points, click for details panel.
 - **NWS Weather Alerts** — every active alert, including zone/county-based ones (winter, heat, flood, red-flag) resolved to their counties; hazard-coloured fills weighted by severity, with a cased border around each alert (a county-based alert gets one outline around all its counties) and full alert text in click panels.
 - **Alert notifications** — when a new NWS alert covers a property pin or comes within 15 miles of one, the screen flashes and a popup opens in the middle of the screen with the affected locations and a *Show on map* button. The bell in the top bar turns them on and off (per browser; on by default). Updates of an alert already shown only notify for locations they newly reach.

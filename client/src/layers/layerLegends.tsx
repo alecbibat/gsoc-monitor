@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react';
 import type { LayerId } from '../types';
 import { RadarLegend, RadarLegendCompact } from './radar/RadarLegend';
+import { RadarPlayer } from './radar/RadarPlayer';
 import { PrecipLegend, PrecipLegendCompact } from './precip/PrecipLegend';
 import { LightningLegend, LightningLegendCompact } from './lightning/LightningLegend';
 import { FireOutlookLegend, FireOutlookLegendCompact } from './fireOutlook/FireOutlookLegend';
@@ -18,17 +19,23 @@ export interface LayerLegend {
   Legend: ComponentType;
   /** The same key in one line (see legendKeys.tsx). */
   Compact: ComponentType;
+  /**
+   * Live controls shown under the key on both surfaces (the radar loop's
+   * player). Unlike the keys these read the layer's store, so they render
+   * wherever that layer runs.
+   */
+  Controls?: ComponentType;
 }
 
 // Layers whose map symbology needs a color key. Legends live on the map, not in
 // the layer menu: the operator app shows them in one panel bottom-right
 // (MapLegends) — a row per active layer with its compact key, expandable to
 // the full one — and the share page lists the full keys under the globe
-// (CrisisShareGlobe). Every legend here must be store-free/static so it
-// renders on both surfaces.
+// (CrisisShareGlobe). Every key (Legend, Compact) must be store-free/static
+// so it renders on both surfaces; Controls are the one store-bound part.
 export const LAYER_LEGENDS: LayerLegend[] = [
   { id: 'warn', title: 'Wireless Emergency Alerts', Legend: WarnLegend, Compact: WarnLegendCompact },
-  { id: 'radar', title: 'Precipitation Radar', Legend: RadarLegend, Compact: RadarLegendCompact },
+  { id: 'radar', title: 'Precipitation Radar', Legend: RadarLegend, Compact: RadarLegendCompact, Controls: RadarPlayer },
   { id: 'precip', title: 'Precip Forecast (WPC)', hint: 'inches', Legend: PrecipLegend, Compact: PrecipLegendCompact },
   { id: 'lightning', title: 'Lightning', hint: 'strike age', Legend: LightningLegend, Compact: LightningLegendCompact },
   { id: 'ngfs', title: 'NGFS Heat Detections', hint: 'last detected', Legend: NgfsLegend, Compact: NgfsLegendCompact },

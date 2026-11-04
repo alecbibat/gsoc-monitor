@@ -23,7 +23,7 @@ function fmtDate(date: string): string {
 // Floating navigator for the Earth map type (zoom.earth's date bar): step
 // through the daily archive, toggle the AM (Terra) / PM (Aqua) pass, jump back
 // to today. Mounts only while the Earth basemap is selected, as a bare pill
-// that App's bottom-center dock positions.
+// that App positions bottom-center.
 export function EarthTimeBar() {
   const basemap = useLayersStore((s) => s.basemap);
   const date = useEarthBasemapStore((s) => s.date);

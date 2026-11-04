@@ -1,7 +1,8 @@
 import type { RadarFrame } from '../../types';
 
 // Pure timeline logic for the radar layer — no React or Cesium, so it's unit
-// testable and shared by the layer, the scrubber and the sidebar status line.
+// testable and shared by the layer, the legend's player and the sidebar status
+// line.
 
 export type RadarWindow = 30 | 60 | 120;
 export const RADAR_WINDOWS: RadarWindow[] = [30, 60, 120];
@@ -36,7 +37,7 @@ export function buildTimeline(
 
 // Index of the newest observed frame: where playback opens and where the
 // scrubber draws its "now" divider.
-export function nowIndex(timeline: TimelineFrame[]): number {
+export function nowIndex(timeline: readonly TimelineFrame[]): number {
   for (let i = timeline.length - 1; i >= 0; i--) {
     if (!timeline[i].forecast) return i;
   }
