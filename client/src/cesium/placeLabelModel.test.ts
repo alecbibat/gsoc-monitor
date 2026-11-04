@@ -68,7 +68,7 @@ describe('typography', () => {
   });
 
   it('sets area names in tracked capitals and leaves point names alone', () => {
-    expect(displayText(row({ kind: 's', name: 'Utah' }), 'state')).toBe('U T A H');
+    expect(displayText(row({ kind: 's', name: 'Utah' }), 'state')).toBe('U\u2009T\u2009A\u2009H');
     expect(displayText(row({ name: 'Salt Lake City' }), 'city2')).toBe('Salt Lake City');
     expect(displayText(row({ kind: 'w', name: 'Gulf of Mexico' }), 'water')).toBe('Gulf of Mexico');
   });

@@ -43,13 +43,14 @@ export interface PlaceLabelsHandle {
 const DATA_URL = '/data/place-labels.json';
 
 const FAMILY = 'Inter, system-ui, sans-serif';
+// Sized for wall displays read from across a room as much as for desks.
 const TIER_FONT: Record<LabelTier, { css: string; px: number }> = {
-  country: { css: `600 12.5px ${FAMILY}`, px: 12.5 },
-  state: { css: `600 10.5px ${FAMILY}`, px: 10.5 },
-  water: { css: `italic 500 11.5px ${FAMILY}`, px: 11.5 },
-  city1: { css: `600 14px ${FAMILY}`, px: 14 },
-  city2: { css: `500 12.5px ${FAMILY}`, px: 12.5 },
-  city3: { css: `500 11.5px ${FAMILY}`, px: 11.5 },
+  country: { css: `600 13px ${FAMILY}`, px: 13 },
+  state: { css: `600 11px ${FAMILY}`, px: 11 },
+  water: { css: `italic 500 12px ${FAMILY}`, px: 12 },
+  city1: { css: `600 14.5px ${FAMILY}`, px: 14.5 },
+  city2: { css: `500 13px ${FAMILY}`, px: 13 },
+  city3: { css: `500 12px ${FAMILY}`, px: 12 },
 };
 // Cities get a dot at their true position with the name set beside it, so a
 // name never hides what's at the spot it names. Areas (countries, states,
@@ -113,13 +114,13 @@ const THEMES: Record<LabelTheme, ThemePaint> = {
 // ground into the frame than a flat web map does at the same centre scale, and
 // collision culling keeps density in check, so names may come in a little early.
 const ZOOM_BIAS = -0.3;
-// A label fades up over this many zoom levels past its threshold, so a slow
-// zoom brings names in gradually instead of at an instant.
-const ZOOM_FADE_SPAN = 0.3;
 // Sine of the view's elevation above a place's horizon: names fade out between
 // these as they near the globe's limb, where the land compresses.
 const LIMB_HIDE = 0.06;
 const LIMB_FULL = 0.2;
+// Nearer the limb than this, a city's name goes on the side facing the
+// globe's centre first, so it lies over land rather than hanging into space.
+const LIMB_INWARD = 0.35;
 const MAX_LABELS = 240;
 const PLACE_INTERVAL_MS = 120; // re-place at most this often while moving
 const FADE_MS = 240;
@@ -248,6 +249,7 @@ export function createPlaceLabels(viewer: Cesium.Viewer): PlaceLabelsHandle {
 
   const scratchToCam = new Cesium.Cartesian3();
   const scratchWin = new Cesium.Cartesian2();
+  const scratchCentre = new Cesium.Cartesian2();
   const scratchFill = new Cesium.Color();
   const scratchHalo = new Cesium.Color();
 
@@ -281,15 +283,13 @@ export function createPlaceLabels(viewer: Cesium.Viewer): PlaceLabelsHandle {
   const onScreen = (b: Box, W: number, H: number) =>
     b.x0 >= EDGE_PX && b.y0 >= EDGE_PX && b.x1 <= W - EDGE_PX && b.y1 <= H - EDGE_PX;
 
-  // First side (if any) the label fits on, keeping a live city label on the
-  // side it already has so names don't flip about as the view moves.
-  const fit = (p: Place, x: number, y: number, W: number, H: number): Side | null => {
+  // First side (if any) the label fits on. A live city label keeps the side
+  // it already has so names don't flip about as the view moves; otherwise
+  // names go right of the dot, or toward the globe's centre near the limb.
+  const fit = (p: Place, x: number, y: number, W: number, H: number, inward: Side): Side | null => {
+    const first: Side = p.live && p.live.side !== SIDE_CENTER ? p.live.side : inward;
     const sides: Side[] =
-      p.dotPx === 0
-        ? [SIDE_CENTER]
-        : p.live?.side === SIDE_LEFT
-          ? [SIDE_LEFT, SIDE_RIGHT]
-          : [SIDE_RIGHT, SIDE_LEFT];
+      p.dotPx === 0 ? [SIDE_CENTER] : first === SIDE_LEFT ? [SIDE_LEFT, SIDE_RIGHT] : [SIDE_RIGHT, SIDE_LEFT];
     for (const side of sides) {
       const b = boxFor(p, x, y, side);
       if (onScreen(b, W, H) && grid.fits(b)) {
@@ -390,6 +390,9 @@ export function createPlaceLabels(viewer: Cesium.Viewer): PlaceLabelsHandle {
       // Ground metres per screen pixel, per metre of distance from the camera.
       const mppPerMetre = (2 * Math.tan(frustum.fovy / 2)) / H;
       const camPos = camera.positionWC;
+      // Where the globe's centre falls on screen, to point limb names inward.
+      const centre = Cesium.SceneTransforms.worldToWindowCoordinates(scene, Cesium.Cartesian3.ZERO, scratchCentre);
+      const centreX = centre ? centre.x : W / 2;
       let count = 0;
       for (const p of places) {
         Cesium.Cartesian3.subtract(camPos, p.position, scratchToCam);
@@ -406,10 +409,13 @@ export function createPlaceLabels(viewer: Cesium.Viewer): PlaceLabelsHandle {
           p.w = measureText(p.text, TIER_FONT[p.tier].css);
           p.h = TIER_FONT[p.tier].px * 1.2;
         }
-        const side = fit(p, win.x, win.y, W, H);
+        const inward: Side = sinElev < LIMB_INWARD && win.x > centreX ? SIDE_LEFT : SIDE_RIGHT;
+        const side = fit(p, win.x, win.y, W, H, inward);
         if (side === null) continue;
         const limb = clamp01((sinElev - LIMB_HIDE) / (LIMB_FULL - LIMB_HIDE));
-        show(p, side, band * limb * clamp01(past / ZOOM_FADE_SPAN));
+        // Fully opaque once placed (the time-based fade brings it in): a name
+        // left half-faded by its zoom threshold reads as a ghost, not a label.
+        show(p, side, band * limb);
         if (++count >= MAX_LABELS) break;
       }
     }

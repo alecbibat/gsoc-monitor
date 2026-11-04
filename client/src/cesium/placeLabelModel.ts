@@ -90,12 +90,13 @@ export function tierOf(row: PlaceRow): LabelTier {
 
 // Countries and states are set in spaced capitals, the cartographic convention
 // that separates area names from point names. Cesium labels have no
-// letter-spacing, so the tracking is a hair space (U+200A) between letters —
-// whitespace glyphs take up their measured width but draw nothing.
-const HAIR_SPACE = ' ';
+// letter-spacing, so the tracking is a thin space (U+2009) between letters —
+// whitespace glyphs take up their measured width but draw nothing. (A hair
+// space is too narrow to read as tracking at these sizes.)
+const TRACKING = '\u2009';
 export function displayText(row: PlaceRow, tier: LabelTier): string {
   if (tier === 'country' || tier === 'state') {
-    return Array.from(row.name.toUpperCase()).join(HAIR_SPACE);
+    return Array.from(row.name.toUpperCase()).join(TRACKING);
   }
   return row.name;
 }

@@ -53,6 +53,7 @@ const GEONAMES_URL = 'https://download.geonames.org/export/dump/cities15000.zip'
 
 const FIELDS = ['kind', 'name', 'lon', 'lat', 'minZoom', 'pop', 'flags', 'abbr'];
 const KIND_ORDER = { c: 0, s: 1, w: 2, p: 3 };
+const KIND_RANK_STATE = 100; // admin-1 tie-break: lower NE labelrank first
 // GeoNames rows are added (most important first) until the file reaches this size.
 const MAX_BYTES = 880_000;
 const ADMIN1_MAX_MIN_LABEL = 7; // keeps US/CA/AU (3.5), BR (3.7), CN/IN (4.6), RU (5), MX/DE (6.6), JP (7)
@@ -60,10 +61,15 @@ const PLACE_MAX_MIN_ZOOM = 10;
 const MARINE_MAX_MIN_LABEL = 6;
 const MARINE_MAX_SCALERANK = 4;
 const LAKE_MAX_SCALERANK = 4; // Great Lakes … Lake Powell, Lake Mead, Yellowstone Lake
-// Same-name labels closer than this are one feature (50 km between a state and
-// a city, for city-states such as Berlin or Mexico City).
+// Same-name labels closer than this are one feature. A state and the city it
+// is named after are merged (the city stays) only when the state is a city
+// (Berlin is not "City" in NE, but its point is 2 km from the city's) or the
+// two points nearly coincide; Chihuahua the state and the city both stay.
 const DUP_KM = 25;
-const DUP_KM_STATE_PLACE = 50;
+const CITY_STATE_KM = 50;
+const STATE_PLACE_KM = 10;
+const CITY_TYPES =
+  /city|metropol|capital|captial|federal (?:district|territory)|special district|urban prefecture|autonomous commune|administrative state|union territory|^municipality$/i;
 
 // NE's postal codes for Australia are two-letter internal codes ("NS", "VI").
 const AU_ABBR = {
@@ -195,8 +201,8 @@ class PointIndex {
   }
 }
 
-function row(kind, name, lon, lat, minZoom, { pop = 0, flags = 0, abbr = '', rank = 0 } = {}) {
-  return { kind, name, lon: r3(lon), lat: r3(lat), minZoom: r1(minZoom), pop, flags, abbr, rank, key: nameKey(name) };
+function row(kind, name, lon, lat, minZoom, { pop = 0, flags = 0, abbr = '', rank = 0, city = false } = {}) {
+  return { kind, name, lon: r3(lon), lat: r3(lat), minZoom: r1(minZoom), pop, flags, abbr, rank, city, key: nameKey(name) };
 }
 
 const valid = (r) =>
@@ -233,7 +239,7 @@ function admin1Rows(fc) {
     else if (p.iso_a2 === 'AU') abbr = AU_ABBR[name] ?? '';
     const lon = p.longitude ?? g?.coordinates?.[0];
     const lat = p.latitude ?? g?.coordinates?.[1];
-    out.push(row('s', name, lon, lat, p.min_label, { abbr, rank: p.area_sqkm ?? 0 }));
+    out.push(row('s', name, lon, lat, p.min_label, { abbr, rank: KIND_RANK_STATE - (p.labelrank ?? 9), city: CITY_TYPES.test(p.type_en ?? '') }));
   }
   return out;
 }
@@ -381,6 +387,12 @@ const compareRows = (a, b) =>
 // or state it is the whole of (Singapore, Berlin), a country over a state.
 const KEEP_ORDER = { p: 0, c: 1, s: 2, w: 3 };
 
+// How close two same-name labels must be to count as one.
+function mergeKm(a, b) {
+  if (a.kind === b.kind || !(a.kind === 's' || b.kind === 's') || !(a.kind === 'p' || b.kind === 'p')) return DUP_KM;
+  return (a.kind === 's' ? a : b).city ? CITY_STATE_KM : STATE_PLACE_KM;
+}
+
 function dedupe(rows) {
   const byKey = new Map();
   for (const r of rows) {
@@ -398,9 +410,7 @@ function dedupe(rows) {
       for (let j = i + 1; j < group.length; j++) {
         const other = group[j];
         if (dropped.has(other)) continue;
-        const pair = new Set([keep.kind, other.kind]);
-        const limit = pair.has('s') && pair.has('p') ? DUP_KM_STATE_PLACE : DUP_KM;
-        if (haversineKm(keep.lon, keep.lat, other.lon, other.lat) > limit) continue;
+        if (haversineKm(keep.lon, keep.lat, other.lon, other.lat) > mergeKm(keep, other)) continue;
         dropped.add(other);
         keep.minZoom = Math.min(keep.minZoom, other.minZoom);
         if (keep.kind === 'p' && other.kind === 'p') keep.flags |= other.flags;
@@ -429,7 +439,11 @@ function verify(text) {
     if (!Number.isInteger(pop) || pop < 0) problems.push(`row ${i} (${name}) pop ${pop}`);
     if (![0, 1, 2, 3].includes(flags) || typeof abbr !== 'string') problems.push(`row ${i} (${name}) flags/abbr`);
     const key = nameKey(String(name));
-    const dup = index.near(lon, lat, DUP_KM).find(({ row: o }) => o.key === key);
+    // A state and the city it is named after may be 10–25 km apart (mergeKm).
+    const statePlace = (o) => o.kind !== kind && [o.kind, kind].every((k) => k === 's' || k === 'p');
+    const dup = index
+      .near(lon, lat, DUP_KM)
+      .find(({ row: o, km }) => o.key === key && (!statePlace(o) || km <= STATE_PLACE_KM));
     if (dup) problems.push(`"${name}" (${kind}) is within ${dup.km.toFixed(1)} km of "${dup.row.name}" (${dup.row.kind})`);
     index.add({ lon, lat, key, name, kind });
   });
@@ -473,9 +487,15 @@ async function main() {
         bytes += add;
         keep.push(r);
       }
-      gnAdded = keep.length;
-      console.log(`GeoNames: ${extra.length} towns not in Natural Earth, kept ${keep.length} (down to minZoom ${keep.at(-1)?.minZoom}, pop ${keep.at(-1)?.pop})`);
-      lines = [...rows, ...keep].sort(compareRows).map(serialize);
+      // A town can still share its name with a province or country around it.
+      const merged = dedupe([...rows, ...keep]);
+      const fromGeonames = new Set(keep);
+      gnAdded = merged.rows.filter((r) => fromGeonames.has(r)).length;
+      console.log(
+        `GeoNames: ${extra.length} towns not in Natural Earth, kept ${gnAdded} ` +
+          `(down to minZoom ${keep.at(-1)?.minZoom}, pop ${keep.at(-1)?.pop}; merged ${merged.merges.length} more)`
+      );
+      lines = merged.rows.sort(compareRows).map(serialize);
     }
 
     const text = document(lines);
@@ -490,7 +510,7 @@ async function main() {
       zoom[kind] = [Math.min(zoom[kind]?.[0] ?? 99, mz), Math.max(zoom[kind]?.[1] ?? 0, mz)];
     }
     console.log(
-      `Wrote ${path.relative(ROOT, OUT)}: ${doc.rows.length} rows, ${(text.length / 1024).toFixed(0)} KB ` +
+      `Wrote ${path.relative(ROOT, OUT)}: ${doc.rows.length} rows, ${(Buffer.byteLength(text) / 1024).toFixed(0)} KB ` +
         `(${Object.keys(KIND_ORDER).map((k) => `${k} ${counts[k] ?? 0} @ z${zoom[k]?.join('–')}`).join(', ')}; ` +
         `${gnAdded} places from GeoNames)`
     );

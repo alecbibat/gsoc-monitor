@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BASEMAPS } from './basemaps';
 import { useEarthBasemapStore } from './earthBasemap';
 import { createPlaceLabels, type PlaceLabelsHandle } from './placeLabels';
-import { createBoundaryLines } from './boundaryLines';
+import { createBoundaryLines, type BoundaryLinesHandle } from './boundaryLines';
 import { getPanelData } from './entityPanelLink';
 import { useLayersStore } from '../store/layersStore';
 import { usePanelStore } from '../panels/panelStore';
@@ -67,6 +67,7 @@ export function CesiumGlobe({ children, onReady }: Props) {
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
   const baseLayerRef = useRef<Cesium.ImageryLayer | null>(null);
   const placeLabelsRef = useRef<PlaceLabelsHandle | null>(null);
+  const bordersRef = useRef<BoundaryLinesHandle | null>(null);
   const basemap = useLayersStore((s) => s.basemap);
   // The Earth map type bakes its date + AM/PM pass into the provider URL, so
   // stepping either one must rebuild the base imagery. Collapsed to '' for the
@@ -410,13 +411,22 @@ export function CesiumGlobe({ children, onReady }: Props) {
     placeLabelsRef.current?.setTheme(BASEMAPS[basemap].labels ?? null);
   }, [viewer, basemap]);
 
-  // Country and state/province borders over the photographic map types (the
-  // canvas bases draw their own).
+  // Country and state/province borders over the map types that want them.
+  // Built on first use and then only shown or hidden: building the geometry
+  // is a few hundred milliseconds of main-thread work on a thin client, too
+  // much to repeat on every map-type switch.
   const wantBorders = !!BASEMAPS[basemap].borders;
   useEffect(() => {
-    if (!viewer || !wantBorders) return;
-    const borders = createBoundaryLines(viewer);
-    return () => borders.destroy();
+    if (!viewer) return;
+    return () => {
+      bordersRef.current?.destroy();
+      bordersRef.current = null;
+    };
+  }, [viewer]);
+  useEffect(() => {
+    if (!viewer) return;
+    if (wantBorders && !bordersRef.current) bordersRef.current = createBoundaryLines(viewer);
+    bordersRef.current?.setShow(wantBorders);
   }, [viewer, wantBorders]);
 
   // Render quality: graduated trade of anti-aliasing, terrain detail,

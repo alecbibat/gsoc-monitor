@@ -18,6 +18,7 @@
     "lint": "npm run lint -w client && npm run lint -w server",
     "test": "npm run test -w client && npm run test -w server",
     "build:timezones": "node scripts/build-timezones.mjs",
+    "build:place-labels": "node scripts/build-place-labels.mjs",
     "build:boundaries": "node scripts/build-boundaries.mjs"
   },
   "devDependencies": {
