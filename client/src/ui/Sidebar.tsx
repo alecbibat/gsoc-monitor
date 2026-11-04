@@ -5,7 +5,7 @@ import { useFlightsStatus } from '../layers/flights/flightsStore';
 import { FlightGroupControls, loadFlightActivity } from '../layers/flights/FlightGroupControls';
 import { useAlertsStatus } from '../layers/alerts/alertsStore';
 import { useWarnStatus } from '../layers/warn/warnStore';
-import { WARN_HEARTBEAT_STALE_MS } from '../layers/warn/warnMeta';
+import { WARN_FETCH_STALE_MS, WARN_HEARTBEAT_STALE_MS } from '../layers/warn/warnMeta';
 import { useEarthquakesStatus } from '../layers/earthquakes/earthquakesStore';
 import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { useLightningStatus } from '../layers/lightning/lightningStore';
@@ -126,7 +126,7 @@ export function Sidebar() {
   );
   const alertsStatus = useAlertsStatus(useShallow((s) => ({ count: s.count, error: s.error })));
   const warnStatus = useWarnStatus(
-    useShallow((s) => ({ count: s.count, hiddenNws: s.hiddenNws, heartbeat: s.heartbeat, error: s.error }))
+    useShallow((s) => ({ count: s.count, hiddenNws: s.hiddenNws, heartbeat: s.heartbeat, fetchedAt: s.fetchedAt, error: s.error }))
   );
   const earthquakesCount = useEarthquakesStatus((s) => s.count);
   const earthquakesError = useEarthquakesStatus((s) => s.error);
@@ -303,6 +303,11 @@ export function Sidebar() {
 
   function warnStatusText() {
     if (warnStatus.error) return warnStatus.error;
+    // The proxy serves its last good answer through upstream failures.
+    const fetched = warnStatus.fetchedAt ? Date.parse(warnStatus.fetchedAt) : NaN;
+    if (Number.isFinite(fetched) && Date.now() - fetched > WARN_FETCH_STALE_MS) {
+      return `PBS WARN unreachable — showing alerts as of ${new Date(fetched).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    }
     const n = warnStatus.count;
     const base = `${n} active alert${n === 1 ? '' : 's'} sent to phones · PBS WARN`;
     // PBS's backend checks in every few seconds; an old heartbeat means its

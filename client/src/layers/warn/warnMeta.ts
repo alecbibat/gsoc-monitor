@@ -35,6 +35,9 @@ export const WARN_SITE = 'https://warn.pbs.org/';
 /** PBS's backend checks in every few seconds; past this its feed is stale (their map's own rule). */
 export const WARN_HEARTBEAT_STALE_MS = 2 * 60_000;
 
+/** The server caches 45 s; an answer older than this means it is serving its last good copy. */
+export const WARN_FETCH_STALE_MS = 5 * 60_000;
+
 // State and territory FIPS → USPS code, for naming the counties a WEA was sent to.
 export const STATE_ABBR: Record<string, string> = {
   '01': 'AL', '02': 'AK', '04': 'AZ', '05': 'AR', '06': 'CA', '08': 'CO', '09': 'CT', '10': 'DE',

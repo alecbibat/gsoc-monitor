@@ -222,16 +222,16 @@ export function AlertNotifier() {
 
   const head = queue[0];
 
-  // Escape acknowledges the notice on screen.
+  // Escape acknowledges the notice on screen — unless something else (a menu,
+  // a modal) already handled that Escape.
   useEffect(() => {
     if (!head) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.stopPropagation();
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
       useAlertNotifyStore.getState().dismiss(head.id);
     };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [head]);
 
   const showOnMap = (n: AlertNotice) => {

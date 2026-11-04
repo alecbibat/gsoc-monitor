@@ -111,10 +111,12 @@ export function WarnLayer() {
     const load = async () => {
       let alerts: WarnAlert[];
       let heartbeat: string | null;
+      let fetchedAt: string | null;
       try {
         const feed = await api.warn();
         alerts = feed.alerts;
         heartbeat = feed.heartbeat;
+        fetchedAt = feed.fetchedAt;
       } catch (err) {
         if (cancelled) return;
         console.warn('PBS WARN fetch failed', err);
@@ -130,6 +132,7 @@ export function WarnLayer() {
         count: shown.length,
         hiddenNws: live.length - shown.length,
         heartbeat,
+        fetchedAt,
         error: null,
       });
       const sig = `${hideNws ? 1 : 0}|${shown.map((a) => `${a.id}@${a.expires ?? ''}`).join(',')}`;
