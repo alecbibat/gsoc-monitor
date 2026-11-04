@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CHECKLIST_PHASES, checklistProgress, foldChecklistResponse, isChecklistStateMap,
-  preferredChecklistRole, roleProgress,
+  CHECKLIST_PHASES, checklistEntry, checklistProgress, foldChecklistResponse, isChecklistStateMap,
+  itemStatus, nextClickStatus, preferredChecklistRole, roleProgress,
   type ChecklistRoleDef, type ChecklistTemplate,
 } from './checklistTemplate';
 
@@ -33,31 +33,60 @@ describe('checklist phases', () => {
   });
 });
 
+describe('item status', () => {
+  it('reads a status, or an entry from before statuses by its checked flag', () => {
+    expect(itemStatus(undefined)).toBe('not-started');
+    expect(itemStatus({ checked: false, status: 'in-progress' })).toBe('in-progress');
+    expect(itemStatus({ checked: true })).toBe('completed');
+    expect(itemStatus({ checked: false })).toBe('not-started');
+    // A status this build doesn't know falls back to the flag.
+    expect(itemStatus({ checked: true, status: 'blocked' as never })).toBe('completed');
+  });
+
+  it('clicks forward — not started → in progress → completed — and stops there', () => {
+    expect(nextClickStatus('not-started')).toBe('in-progress');
+    expect(nextClickStatus('in-progress')).toBe('completed');
+    expect(nextClickStatus('completed')).toBeNull();
+  });
+
+  it('stores checked exactly when completed', () => {
+    expect(checklistEntry('completed', T0, 'Sam')).toEqual({ checked: true, status: 'completed', at: T0, by: 'Sam' });
+    expect(checklistEntry('in-progress', T0)).toEqual({ checked: false, status: 'in-progress', at: T0 });
+    expect(checklistEntry('not-started', T0)).toEqual({ checked: false, status: 'not-started', at: T0 });
+  });
+});
+
 describe('roleProgress', () => {
-  it('counts only checked items, ignoring unchecked-state entries', () => {
+  it('counts completed and in-progress items, ignoring reset entries and other roles', () => {
     const ic = tpl.roles[0];
-    expect(roleProgress(ic, {})).toEqual({ done: 0, total: 3 });
+    expect(roleProgress(ic, {})).toEqual({ done: 0, inProgress: 0, total: 3 });
     expect(roleProgress(ic, {
       'ic-1': { checked: true, at: T0 },
       'ic-2': { checked: false, at: T0 },
       'not-in-role': { checked: true, at: T0 },
-    })).toEqual({ done: 1, total: 3 });
+    })).toEqual({ done: 1, inProgress: 0, total: 3 });
+    expect(roleProgress(ic, {
+      'ic-1': checklistEntry('completed', T0),
+      'ic-2': checklistEntry('in-progress', T0),
+      'ic-3': checklistEntry('not-started', T0),
+    })).toEqual({ done: 1, inProgress: 1, total: 3 });
   });
 });
 
 describe('checklistProgress', () => {
   it('totals every role and counts the fully-done ones', () => {
-    expect(checklistProgress(tpl, {})).toEqual({ done: 0, total: 6, rolesDone: 0 });
+    expect(checklistProgress(tpl, {})).toEqual({ done: 0, inProgress: 0, total: 6, rolesDone: 0 });
     expect(checklistProgress(tpl, {
       'g-1': { checked: true, at: T0 },
       'g-2': { checked: true, at: T0 },
       'ic-1': { checked: true, at: T0 },
       's-1': { checked: false, at: T0 },
-    })).toEqual({ done: 3, total: 6, rolesDone: 1 });
+      'ic-2': checklistEntry('in-progress', T0),
+    })).toEqual({ done: 3, inProgress: 1, total: 6, rolesDone: 1 });
   });
 
   it('is zero for an empty template', () => {
-    expect(checklistProgress({ ...tpl, roles: [] }, {})).toEqual({ done: 0, total: 0, rolesDone: 0 });
+    expect(checklistProgress({ ...tpl, roles: [] }, {})).toEqual({ done: 0, inProgress: 0, total: 0, rolesDone: 0 });
   });
 });
 
@@ -102,6 +131,11 @@ describe('isChecklistStateMap', () => {
     expect(isChecklistStateMap([])).toBe(false);
     expect(isChecklistStateMap({ a: { checked: 'yes', at: 'x' } })).toBe(false);
     expect(isChecklistStateMap({ a: 'checked' })).toBe(false);
+    expect(isChecklistStateMap({ a: { checked: false, status: 'in-progress', at: 'x' } })).toBe(true);
+    // An unknown status from a newer server still passes (read by its flag)…
+    expect(isChecklistStateMap({ a: { checked: false, status: 'blocked', at: 'x' } })).toBe(true);
+    // …but a non-string one is malformed.
+    expect(isChecklistStateMap({ a: { checked: false, status: 3, at: 'x' } })).toBe(false);
   });
 });
 

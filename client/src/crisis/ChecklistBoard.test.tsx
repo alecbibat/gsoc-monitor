@@ -47,6 +47,31 @@ describe('ChecklistBoard', () => {
     expect(html).toContain('Sam');
   });
 
+  it('shows each item as a tri-state checkbox with its status and stamp', () => {
+    const html = renderToStaticMarkup(
+      <ChecklistBoard
+        template={tpl}
+        preferredRoleId="gsoc-support"
+        onSetStatus={() => {}}
+        state={{
+          'g-2': { checked: false, status: 'in-progress', at: '2026-08-19T00:00:00.000Z', by: 'Ana' },
+          't-1': { checked: true, status: 'completed', at: '2026-08-19T00:00:00.000Z' },
+        }}
+      />
+    );
+    expect(html).toContain('aria-checked="mixed"');
+    expect(html).toContain('aria-checked="true"');
+    expect(html).toContain('In progress since');
+    expect(html).toContain('1 in progress');
+    expect(html).toContain('right-click');
+  });
+
+  it('is inert and hint-free when read-only', () => {
+    const html = renderToStaticMarkup(<ChecklistBoard template={tpl} state={{}} onSetStatus={() => {}} disabled />);
+    expect(html).not.toContain('right-click');
+    expect(html).toContain('disabled=""');
+  });
+
   it('falls back to the first role for an unknown preference', () => {
     const html = renderToStaticMarkup(<ChecklistBoard template={tpl} state={{}} preferredRoleId="finance" />);
     expect(html).toContain('Assume command');
@@ -61,7 +86,7 @@ describe('ChecklistBoard', () => {
       />
     );
     expect(html).toContain('Earlier checklist items');
-    expect(html).toContain('1 item, 1 checked');
+    expect(html).toContain('1 item, 1 completed');
     expect(html).not.toContain('Old item'); // collapsed
   });
 

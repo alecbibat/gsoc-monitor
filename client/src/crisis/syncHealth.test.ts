@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { noteSaveStatus, useSyncHealth } from './syncHealth';
-import { toggleChecklistItem } from './checklistSync';
+import { setChecklistItemStatus } from './checklistSync';
 import { useCrisisStore } from './crisisStore';
 
 beforeEach(() => {
@@ -39,14 +39,14 @@ describe('checklist toggles report the sign-in state', () => {
 
   it('a 401 raises the signed-out notice; a later success clears it', async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Not signed in' }), { status: 401 }));
-    const failed = await toggleChecklistItem(incident(), 'ic-imm-1', true);
+    const failed = await setChecklistItemStatus(incident(), 'ic-imm-1', 'completed');
     expect(failed).toMatchObject({ ok: false, superseded: false, status: 401, retryable: true });
     expect(useSyncHealth.getState().authLapsed).toBe(true);
 
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
       checklists: { 'ic-imm-1': { checked: true, at: '2026-09-25T10:00:00.000Z', by: 'Ana' } },
     }), { status: 200 }));
-    expect(await toggleChecklistItem(incident(), 'ic-imm-1', true)).toEqual({ ok: true });
+    expect(await setChecklistItemStatus(incident(), 'ic-imm-1', 'completed')).toEqual({ ok: true });
     expect(useSyncHealth.getState().authLapsed).toBe(false);
   });
 });

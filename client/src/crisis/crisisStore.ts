@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { ShareLiveLayerId } from './shareLiveLayers';
 import { normalizeIncidentFields, incidentStatusDef, type IncidentStatus, type IncidentType } from './taxonomy';
-import type { ChecklistStateMap } from './checklistTemplate';
+import { checklistEntry, type ChecklistStateMap, type ChecklistStatus } from './checklistTemplate';
 import type { IntakeAnswers } from './intakeTemplate';
 import { incidentShipMmsis, shipListText } from './incidentShips';
 import { useAuthStore } from '../auth/authStore';
@@ -200,9 +200,9 @@ export interface Incident {
   // locationGroupId so a shore-side incident can still involve ships (and the
   // fleet itself can be the incident's property — see SHIP_GROUP_ID).
   shipMmsis?: string[];
-  // ICS role checklist state: SPARSE map of template item id → last toggle
-  // ({ checked, at, by }); untouched items have no entry. Like the action log
-  // it is EXCLUDED from blob sync (syncCanon/IncidentSync) — every toggle goes
+  // ICS role checklist state: SPARSE map of template item id → last change
+  // ({ status, checked, at, by }); untouched items have no entry. Like the action log
+  // it is EXCLUDED from blob sync (syncCanon/IncidentSync) — every change goes
   // through the per-item endpoints so concurrent responders (and share-link
   // viewers) can't overwrite each other. Optional because incidents persisted
   // before this feature lack the key.
@@ -607,9 +607,9 @@ interface CrisisState {
   ) => void;
   removeActionEntry: (id: string) => void;
 
-  // ICS checklists — optimistic local toggle (the sync layer posts it through
-  // the per-item endpoint; see checklistSync.ts) + server-authoritative apply.
-  toggleChecklistItem: (itemId: string, checked: boolean) => void;
+  // ICS checklists — optimistic local status change (the sync layer posts it
+  // through the per-item endpoint; see checklistSync.ts) + server-authoritative apply.
+  setChecklistItemStatus: (itemId: string, status: ChecklistStatus) => void;
   applyChecklistState: (incidentId: string, checklists: ChecklistStateMap) => void;
 
   // Intake questionnaire
@@ -1195,16 +1195,16 @@ export const useCrisisStore = create<CrisisState>()((set) => ({
       removeActionEntry: (id) =>
         set((s) => patchActiveEditable(s, (inc) => ({ ...inc, actionLog: inc.actionLog.filter((e) => e.id !== id) }))),
 
-      // Optimistic check/uncheck with a local timestamp; the sync layer's POST
+      // Optimistic status change with a local timestamp; the sync layer's POST
       // comes back with the server-stamped map and replaces this via
       // applyChecklistState. Excluded from serverCanon, so this never schedules
       // a blob PUT. patchActiveEditable keeps archived incidents frozen.
-      toggleChecklistItem: (itemId, checked) =>
+      setChecklistItemStatus: (itemId, status) =>
         set((s) => patchActiveEditable(s, (inc) => ({
           ...inc,
           checklists: {
             ...(inc.checklists ?? {}),
-            [itemId]: { checked, at: new Date().toISOString(), by: currentActor() },
+            [itemId]: checklistEntry(status, new Date().toISOString(), currentActor()),
           },
         }))),
 

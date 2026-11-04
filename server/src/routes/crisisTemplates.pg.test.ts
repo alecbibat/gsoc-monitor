@@ -320,6 +320,7 @@ describe.skipIf(!URL)('crisis templates on Postgres', () => {
     const token = '11111111-2222-3333-4444-888888888888';
     const incidentId = 'crisis-templates-toggle-test';
     let generalId = '';
+    let generalId2 = '';
     let foreignId = '';
 
     beforeAll(async () => {
@@ -328,6 +329,7 @@ describe.skipIf(!URL)('crisis templates on Postgres', () => {
       await pool.query('DELETE FROM incidents WHERE id = $1', [incidentId]);
       const cfg = (await call('GET', '/api/crisis-templates', { cookie: admin })).body as CrisisTemplatesConfig;
       generalId = block(cfg, '*|*')!.items[0].id;
+      generalId2 = block(cfg, '*|*')!.items[1].id;
       // A line only a Yellowstone incident shows — the incident is at Glacier.
       foreignId = block(cfg, '*|yellowstone')!.items[0].id;
       await pool.query('INSERT INTO incidents (id, data) VALUES ($1, $2)', [incidentId, JSON.stringify({ id: incidentId, checklists: {} })]);
@@ -354,13 +356,31 @@ describe.skipIf(!URL)('crisis templates on Postgres', () => {
       expect(Object.keys(await stored())).toEqual([generalId]);
     });
 
+    it('sets statuses: in progress, then completed, and back — re-asserting one changes nothing', async () => {
+      const set = (status: unknown) =>
+        call('POST', `/api/crisis/share/${token}/checklist/${generalId2}`, { cookie: member, body: { status } });
+      // "Not started" on an untouched item records nothing.
+      expect((await set('not-started')).body.checklists[generalId2]).toBeUndefined();
+      const started = await set('in-progress');
+      expect(started.status).toBe(200);
+      expect(started.body.checklists[generalId2]).toMatchObject({ checked: false, status: 'in-progress', by: 'Max Member' });
+      const again = await set('in-progress');
+      expect(again.body.checklists[generalId2].at).toBe(started.body.checklists[generalId2].at);
+      expect((await set('completed')).body.checklists[generalId2]).toMatchObject({ checked: true, status: 'completed' });
+      expect((await set('blocked')).status).toBe(400);
+      // A page from before statuses existed unchecks with { checked: false }.
+      const legacy = await call('POST', `/api/crisis/share/${token}/checklist/${generalId2}`, { cookie: member, body: { checked: false } });
+      expect(legacy.body.checklists[generalId2]).toMatchObject({ checked: false, status: 'not-started' });
+      expect((await stored())[generalId2]).toMatchObject({ checked: false, status: 'not-started' });
+    });
+
     it('refuses another scope\'s line, so it is neither stored nor read back as retired text', async () => {
       for (const id of [foreignId, 'x-not-a-line']) {
         const r = await toggle(id);
         expect(r.status).toBe(409);
         expect(r.body.error).toMatch(/not on this incident's current checklist/);
       }
-      expect(Object.keys(await stored())).toEqual([generalId]);
+      expect(Object.keys(await stored()).sort()).toEqual([generalId, generalId2].sort());
       const t = await call('GET', `/api/crisis/share/${token}/templates`, { cookie: member });
       expect(t.body.retiredChecklistItems).toEqual({});
     });

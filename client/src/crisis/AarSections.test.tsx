@@ -79,11 +79,11 @@ beforeEach(() => {
 });
 
 describe('ChecklistRecord', () => {
-  it('lists each role with done/total, who checked what and when, and what was left', () => {
+  it('lists each role with done/total, who completed what and when, and what was left', () => {
     const html = renderToStaticMarkup(<ChecklistRecord incident={incident({
       checklists: {
         'g-2': { checked: true, at: AT, by: 'Sam Ops' },
-        'g-3': { checked: false, at: AT, by: 'Lee' },          // checked, then cleared
+        'g-3': { checked: false, at: AT, by: 'Lee' },          // completed, then reset (pre-status entry)
         'f-1': { checked: true, at: AT, by: 'Kim' },           // flood item on a wildfire incident
       },
     })} />);
@@ -93,9 +93,9 @@ describe('ChecklistRecord', () => {
     expect(html).toContain('1/2 done');                  // GSOC
     expect(html).toContain('Open the incident log');
     expect(html).toContain('Sam Ops');
-    expect(html).toContain('Not checked (1)');
+    expect(html).toContain('Not completed (1)');
     expect(html).toContain('Brief the next shift');
-    expect(html).toMatch(/unchecked [^<]* by Lee/);
+    expect(html).toMatch(/reset [^<]* by Lee/);
     // State outside the current template stays on the record.
     expect(html).toContain('Earlier checklist items');
     expect(html).toContain('Check the river gauges');
@@ -103,9 +103,17 @@ describe('ChecklistRecord', () => {
     expect(html).toContain('Kim');
   });
 
-  it('says so when nothing was checked, instead of printing the whole template as undone', () => {
+  it('notes an item still in progress among the ones left', () => {
+    const html = renderToStaticMarkup(<ChecklistRecord incident={incident({
+      checklists: { 'g-3': { checked: false, status: 'in-progress', at: AT, by: 'Lee' } },
+    })} />);
+    expect(html).toContain('Not completed (2)');
+    expect(html).toMatch(/in progress since [^<]* by Lee/);
+  });
+
+  it('says so when nothing was worked, instead of printing the whole template as undone', () => {
     const html = renderToStaticMarkup(<ChecklistRecord incident={incident({ checklists: {} })} />);
-    expect(html).toContain('No checklist items were checked');
+    expect(html).toContain('No checklist items were worked');
     expect(html).not.toContain('Assume command');
   });
 

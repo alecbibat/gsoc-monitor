@@ -135,8 +135,14 @@ default* removes it. Saves carry the revision they were based on, so two
 admins can't silently overwrite each other, and open incidents and share links
 pick up changes live.
 
+Each checklist item is **Not started**, **In progress** or **Completed**. A
+click moves it forward (a second click completes it); right-click — or a long
+press on a touch screen — opens a menu that sets any status, which is also how
+a completed item is reopened. Every change is stamped with who and when, on the
+editor and the share page alike, and progress counts only completed items.
+
 Checklist and intake state is keyed by stable item ids. If an incident's type
-or property changes, or an admin removes an item, anything already checked or
+or property changes, or an admin removes an item, anything already worked or
 answered stays visible (read-only) under *Earlier checklist items* / *Other
 answers*, so the record an after-action review relies on is never lost. When
 editing defaults in code, append new lines rather than reordering: ids are

@@ -3,7 +3,7 @@ import { assignmentRoleTitle, useCrisisStore, type AarCorrectiveAction, type Inc
 import { COMPLEXITY_TYPES } from './crisisStore';
 import { buildSwimlane, computeAarMetrics, fmtSpan, type DurationBasis } from './aarMetrics';
 import { incidentTypeDef } from './taxonomy';
-import { roleProgress, type ChecklistItemState } from './checklistTemplate';
+import { itemStatus, roleProgress, type ChecklistItemState } from './checklistTemplate';
 import { answeredCount } from './intakeTemplate';
 import { IntakeTable } from './IntakeTable';
 import { useCrisisTemplates, useResolvedChecklist, useResolvedIntake, type TemplatesStatus } from './templates/templatesStore';
@@ -383,12 +383,12 @@ export function ChecklistRecord({ incident }: { incident: Incident }) {
       return {
         role,
         ...roleProgress(role, state),
-        // Checked items in the order they were done: the role's timeline.
+        // Completed items in the order they were done: the role's timeline.
         checked: items
-          .filter((it) => state[it.id]?.checked)
+          .filter((it) => itemStatus(state[it.id]) === 'completed')
           .map((it) => ({ item: it, s: state[it.id] }))
           .sort((a, b) => (Date.parse(a.s.at) || 0) - (Date.parse(b.s.at) || 0)),
-        open: items.filter((it) => !state[it.id]?.checked),
+        open: items.filter((it) => itemStatus(state[it.id]) !== 'completed'),
       };
     });
   }, [template, checklists]);
@@ -403,7 +403,7 @@ export function ChecklistRecord({ incident }: { incident: Incident }) {
         <SectionHeading title="ICS Checklist Record" />
         {touched
           ? <TemplatesPending what="checklist templates" status={status} error={error} reload={reload} />
-          : <RecordNote>No checklist items were checked during this incident.</RecordNote>}
+          : <RecordNote>No checklist items were worked during this incident.</RecordNote>}
       </div>
     );
   }
@@ -418,7 +418,7 @@ export function ChecklistRecord({ incident }: { incident: Incident }) {
         note={`${done} of ${total} items done · measured against the current checklist template`}
       />
       {!touched ? (
-        <RecordNote>No checklist items were checked during this incident ({total} in the current template).</RecordNote>
+        <RecordNote>No checklist items were worked during this incident ({total} in the current template).</RecordNote>
       ) : (
         <div className="space-y-3">
           {roles.map(({ role, done: d, total: t, checked, open }) => (
@@ -432,7 +432,7 @@ export function ChecklistRecord({ incident }: { incident: Incident }) {
                 </span>
               </div>
               {checked.length > 0 && (
-                <table className="w-full text-[11.5px]" aria-label={`${role.title}: checked items`}>
+                <table className="w-full text-[11.5px]" aria-label={`${role.title}: completed items`}>
                   <tbody>
                     {checked.map(({ item, s }) => (
                       <tr key={item.id} className="border-b border-white/5 align-top text-white/75 last:border-0">
@@ -446,15 +446,17 @@ export function ChecklistRecord({ incident }: { incident: Incident }) {
               )}
               {open.length > 0 && (
                 <p className="px-3 py-2 text-[10.5px] leading-relaxed text-white/45 print-muted">
-                  <span className="font-semibold text-white/55">Not checked ({open.length}):</span>{' '}
+                  <span className="font-semibold text-white/55">Not completed ({open.length}):</span>{' '}
                   {open.map((it, i) => {
                     const s = checklists?.[it.id];
+                    // Started but not finished, or reset after being worked:
+                    // either way, part of the record.
+                    const note = s && (itemStatus(s) === 'in-progress' ? 'in progress since' : 'reset');
                     return (
                       <span key={it.id}>
                         {i > 0 && <span aria-hidden className="text-white/20"> · </span>}
                         {it.text}
-                        {/* Checked once, then cleared: the reversal is part of the record. */}
-                        {s && <span className="italic text-white/30"> (unchecked {fmtTs(s.at)}{s.by ? ` by ${s.by}` : ''})</span>}
+                        {s && <span className="italic text-white/30"> ({note} {fmtTs(s.at)}{s.by ? ` by ${s.by}` : ''})</span>}
                       </span>
                     );
                   })}
@@ -482,7 +484,9 @@ export function ChecklistRecord({ incident }: { incident: Incident }) {
                     <tr key={e.id} className="border-b border-white/5 align-top text-white/70 last:border-0">
                       <td className="px-3 py-1.5">{e.text ?? <span className="italic text-white/35">Item no longer in the templates</span>}</td>
                       <td className="px-3 py-1.5 text-white/50">{roleName(e.roleId)}</td>
-                      <td className="px-3 py-1.5">{e.checked ? '✓ Checked' : 'Unchecked'}</td>
+                      <td className="px-3 py-1.5">
+                        {itemStatus(e) === 'completed' ? '✓ Completed' : itemStatus(e) === 'in-progress' ? 'In progress' : 'Not started'}
+                      </td>
                       <td className="px-3 py-1.5 text-right text-[10.5px] text-white/50"><StateStamp s={e} /></td>
                     </tr>
                   ))}

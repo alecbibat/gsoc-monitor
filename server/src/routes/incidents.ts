@@ -4,7 +4,7 @@ import { wrap } from '../asyncWrap';
 import { requireAuth } from '../middleware/auth';
 import { invalidIncidentReason, invalidLogEntryReason, ACTION_ENTRY_TYPES } from '../incidentTaxonomy';
 import { revokeShareLinksForIncident, updateShareChecklists } from './crisis';
-import { applyChecklistToggle, cleanActor, invalidToggleReason } from '../checklist';
+import { applyChecklistToggle, cleanActor, invalidToggleReason, requestedStatus } from '../checklist';
 import { broadcastIncident as broadcast, incidentSseClients as sseClients } from './incidentBus';
 
 const router = Router();
@@ -109,10 +109,10 @@ router.put('/:id', wrap(async (req: Request, res: Response) => {
 router.post('/:id/checklist/:itemId', wrap(async (req: Request, res: Response) => {
   const invalid = invalidToggleReason(req.params.itemId, req.body);
   if (invalid) { res.status(400).json({ error: invalid }); return; }
-  const body = req.body as { checked: boolean; by?: unknown };
+  const body = req.body as { checked?: unknown; status?: unknown; by?: unknown };
   const user = (req as Request & { user?: { name?: string } }).user;
   const by = cleanActor(body.by) ?? cleanActor(user?.name);
-  const result = await applyChecklistToggle(req.params.id, req.params.itemId, body.checked, by);
+  const result = await applyChecklistToggle(req.params.id, req.params.itemId, requestedStatus(body), by);
   if (!result.ok) { res.status(result.status).json({ error: result.error }); return; }
   if (result.changed) {
     broadcast('upsert', result.incident);

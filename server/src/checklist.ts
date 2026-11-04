@@ -2,22 +2,46 @@ import { pool } from './db';
 
 // ── ICS checklist state ──────────────────────────────────────────────────────
 //
-// Incidents carry a sparse `checklists` map (itemId → { checked, at, by }).
-// Like the action log, it never rides whole-blob writes: two responders (or a
-// responder and a share-link viewer) toggling different items inside the same
-// debounce window must not overwrite each other, so every toggle goes through
-// applyChecklistToggle below — a row-locked per-item mutation — and the blob
-// upserts in incidents.ts preserve the row's existing map.
+// Incidents carry a sparse `checklists` map (itemId → { status, checked, at,
+// by }). Like the action log, it never rides whole-blob writes: two responders
+// (or a responder and a share-link viewer) changing different items inside the
+// same debounce window must not overwrite each other, so every change goes
+// through applyChecklistToggle below — a row-locked per-item mutation — and
+// the blob upserts in incidents.ts preserve the row's existing map.
+//
+// An item is not started, in progress or completed. `checked` stays on every
+// entry (true exactly when completed) so progress counts and pages loaded
+// before statuses existed keep reading completion unchanged; entries written
+// before then carry only `checked`.
 //
 // Timestamps are stamped HERE, not taken from the client: the checked-at time
 // is the point of the feature, and share-side toggles arrive unauthenticated,
 // so a client-supplied clock is neither trusted nor needed.
 
+export type ChecklistStatus = 'not-started' | 'in-progress' | 'completed';
+
+const STATUSES: readonly ChecklistStatus[] = ['not-started', 'in-progress', 'completed'];
+
+function isStatus(v: unknown): v is ChecklistStatus {
+  return typeof v === 'string' && (STATUSES as readonly string[]).includes(v);
+}
+
 /** One item's state as stored in incidents.data.checklists. */
 export interface ChecklistItemState {
+  /** True exactly when the item is completed. */
   checked: boolean;
+  /** Absent on entries written before statuses existed. */
+  status?: ChecklistStatus;
   at: string;
   by?: string;
+}
+
+/** A stored entry's status; entries from before statuses read by their checked flag. */
+export function storedStatus(state: unknown): ChecklistStatus {
+  if (!state || typeof state !== 'object') return 'not-started';
+  const s = state as { checked?: unknown; status?: unknown };
+  if (isStatus(s.status)) return s.status;
+  return s.checked === true ? 'completed' : 'not-started';
 }
 
 // Item ids come from the crisis templates (e.g. "safety-imm-2",
@@ -36,13 +60,28 @@ const ITEM_ID_RE = /^[a-z][a-z0-9-]{0,63}$/;
 const MAX_ITEMS = 1500;
 const MAX_BY_LEN = 60;
 
+/**
+ * Why a checklist request is malformed, or null. The body names the status to
+ * set — { status: 'not-started' | 'in-progress' | 'completed' } — or, from a
+ * page loaded before statuses existed, { checked: boolean }.
+ */
 export function invalidToggleReason(itemId: unknown, body: unknown): string | null {
   if (typeof itemId !== 'string' || !ITEM_ID_RE.test(itemId)) return 'invalid item id';
   if (!body || typeof body !== 'object') return 'body must be a JSON object';
-  const b = body as { checked?: unknown; by?: unknown };
-  if (typeof b.checked !== 'boolean') return 'checked must be a boolean';
+  const b = body as { checked?: unknown; status?: unknown; by?: unknown };
+  if (b.status !== undefined) {
+    if (!isStatus(b.status)) return `status must be one of ${STATUSES.join(', ')}`;
+  } else if (typeof b.checked !== 'boolean') {
+    return 'checked must be a boolean';
+  }
   if (b.by !== undefined && b.by !== null && typeof b.by !== 'string') return 'by must be a string';
   return null;
+}
+
+/** The status a validated request body asks for (see invalidToggleReason). */
+export function requestedStatus(body: { checked?: unknown; status?: unknown }): ChecklistStatus {
+  if (isStatus(body.status)) return body.status;
+  return body.checked === true ? 'completed' : 'not-started';
 }
 
 /** Sanitized display name for the "by" attribution, or undefined. */
@@ -58,15 +97,15 @@ export type ToggleResult =
   | { ok: false; status: number; error: string };
 
 /**
- * Apply one check/uncheck to an incident's checklist map under a row lock and
- * return the merged incident. Idempotent: re-asserting the current checked
- * state changes nothing (so a retry or double-tap can't move the timestamp).
- * The caller is responsible for fanout (editor SSE + share snapshots).
+ * Set one item's status in an incident's checklist map under a row lock and
+ * return the merged incident. Idempotent: re-asserting the current status
+ * changes nothing (so a retry or double-tap can't move the timestamp). The
+ * caller is responsible for fanout (editor SSE + share snapshots).
  */
 export async function applyChecklistToggle(
   incidentId: string,
   itemId: string,
-  checked: boolean,
+  status: ChecklistStatus,
   by: string | undefined
 ): Promise<ToggleResult> {
   const client = await pool.connect();
@@ -92,7 +131,8 @@ export async function applyChecklistToggle(
         : {};
 
     const current = map[itemId];
-    if (current && typeof current === 'object' && current.checked === checked) {
+    // An untouched item is already "not started": setting that records nothing.
+    if (current && typeof current === 'object' ? storedStatus(current) === status : status === 'not-started') {
       await client.query('ROLLBACK');
       return { ok: true, changed: false, checklists: map, incident: data };
     }
@@ -101,7 +141,7 @@ export async function applyChecklistToggle(
       return { ok: false, status: 400, error: 'Checklist is full' };
     }
 
-    map[itemId] = { checked, at: new Date().toISOString(), ...(by ? { by } : {}) };
+    map[itemId] = { checked: status === 'completed', status, at: new Date().toISOString(), ...(by ? { by } : {}) };
     data.checklists = map;
     await client.query(
       'UPDATE incidents SET data = $1, updated_at = NOW() WHERE id = $2',

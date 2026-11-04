@@ -18,8 +18,8 @@ import { TYPE_STYLES, TimelineView, LogShowMore, DEFAULT_LOG_LIMIT, entryTypeOf 
 // the def lookups normalize them (contained → recovery, chemical → HazMat, …).
 import { incidentStatusDef, incidentTypeDef } from './taxonomy';
 import {
-  foldChecklistResponse, isChecklistStateMap,
-  type ChecklistItemState, type ChecklistStateMap,
+  checklistEntry, foldChecklistResponse, isChecklistStateMap,
+  type ChecklistItemState, type ChecklistStateMap, type ChecklistStatus,
 } from './checklistTemplate';
 import { isIntakeAnswers, answeredCount, type IntakeAnswers } from './intakeTemplate';
 // Templates: the pure model only. The editor's templatesStore (and any admin
@@ -533,9 +533,9 @@ export function CrisisShareView({ token }: { token: string }) {
   const [tab, setTab] = useState<'report' | 'iap' | 'checklists'>('report');
   const openedRef = useRef<Set<string>>(new Set(['report']));
   openedRef.current.add(tab);
-  // Optimistic overlay for this viewer's in-flight checklist toggles — an SSE
-  // update replaces the whole `data` object, so without the overlay a check
-  // would flicker off until its own fanout echo lands.
+  // Optimistic overlay for this viewer's in-flight checklist changes — an SSE
+  // update replaces the whole `data` object, so without the overlay a change
+  // would flicker back until its own fanout echo lands.
   const [pendingChk, setPendingChk] = useState<ChecklistStateMap>({});
   const [chkError, setChkError] = useState<string | null>(null);
   // Optional attribution for this viewer's toggles, remembered per browser.
@@ -791,23 +791,19 @@ export function CrisisShareView({ token }: { token: string }) {
     try { localStorage.setItem('gsoc-share-name', name); } catch { /* private mode */ }
   };
 
-  // Check/uncheck from the share page: optimistic overlay + POST to the
-  // token-gated toggle endpoint; the response (and the SSE fanout) carry the
-  // server-stamped authoritative map.
-  const toggleChecklist = (itemId: string, checked: boolean) => {
+  // Set an item's status from the share page: optimistic overlay + POST to
+  // the token-gated checklist endpoint; the response (and the SSE fanout)
+  // carry the server-stamped authoritative map.
+  const setChecklistStatus = (itemId: string, status: ChecklistStatus) => {
     const name = accountName ?? viewerName.trim();
-    const optimistic: ChecklistItemState = {
-      checked,
-      at: new Date().toISOString(),
-      ...(name ? { by: name } : {}),
-    };
+    const optimistic: ChecklistItemState = checklistEntry(status, new Date().toISOString(), name || undefined);
     setChkError(null);
     setPendingChk((p) => ({ ...p, [itemId]: optimistic }));
     const kq = viewKey ? `?k=${viewKey}` : '';
     fetch(`/api/crisis/share/${token}/checklist/${itemId}${kq}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ checked, ...(name ? { by: name } : {}) }),
+      body: JSON.stringify({ status, ...(name ? { by: name } : {}) }),
     })
       .then(async (res) => {
         if (!res.ok) {
@@ -815,7 +811,7 @@ export function CrisisShareView({ token }: { token: string }) {
           throw new Error(detail?.error || `HTTP ${res.status}`);
         }
         const { checklists } = (await res.json()) as { checklists: ChecklistStateMap };
-        // Fold, don't replace: the SSE fanout of a teammate's LATER toggle can
+        // Fold, don't replace: the SSE fanout of a teammate's LATER change can
         // land before this response (newest server stamp wins per item).
         setData((prev) => {
           if (!prev) return prev;
@@ -824,12 +820,12 @@ export function CrisisShareView({ token }: { token: string }) {
         });
       })
       .catch((e) => {
-        console.warn('[share] checklist toggle failed:', e);
+        console.warn('[share] checklist status change failed:', e);
         setChkError(`Could not save the change — ${(e as Error).message}. It may be read-only on this link.`);
       })
       .finally(() => {
         setPendingChk((p) => {
-          if (p[itemId] !== optimistic) return p; // a newer toggle took over
+          if (p[itemId] !== optimistic) return p; // a newer change took over
           const { [itemId]: _done, ...rest } = p;
           return rest;
         });
@@ -1323,16 +1319,16 @@ export function CrisisShareView({ token }: { token: string }) {
         </main>
       )}
 
-      {/* ── Checklists tab — ICS role checklists; checking an item records a
-          timestamp (and your name, if given) for the whole response to see ── */}
+      {/* ── Checklists tab — ICS role checklists; every status change records
+          a timestamp (and your name, if given) for the whole response to see ── */}
       {openedRef.current.has('checklists') && (
         <main className={`mx-auto max-w-5xl px-4 py-6 sm:px-8 sm:py-8 ${tab === 'checklists' ? '' : 'hidden'}`}>
           <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
             <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-white/60">ICS Role Checklists</h2>
-            <span className="text-[11px] text-white/35">Live for everyone on this link · each check is timestamped</span>
+            <span className="text-[11px] text-white/35">Live for everyone on this link · each change is timestamped</span>
             {accountName ? (
               <span className="ml-auto text-[10px] text-white/40">
-                Checks are recorded as <span className="text-white/70">{accountName}</span> (your account)
+                Changes are recorded as <span className="text-white/70">{accountName}</span> (your account)
               </span>
             ) : (
               <label className="ml-auto flex items-center gap-1.5 text-[10px] text-white/40">
@@ -1358,12 +1354,12 @@ export function CrisisShareView({ token }: { token: string }) {
             <ChecklistBoard
               template={checklistTpl}
               state={effectiveChecklists}
-              onToggle={toggleChecklist}
+              onSetStatus={setChecklistStatus}
               retired={retiredChk}
               footnote={
                 accountName ? undefined
-                : viewerName.trim() ? `Checks are recorded as ${viewerName.trim()}`
-                : 'Add your name above to attribute your checks (optional)'
+                : viewerName.trim() ? `Changes are recorded as ${viewerName.trim()}`
+                : 'Add your name above to attribute your changes (optional)'
               }
             />
           ) : tpl.key === tplKey && tpl.error ? (

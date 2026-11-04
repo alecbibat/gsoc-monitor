@@ -1,18 +1,20 @@
 import { useCrisisStore, type Incident } from './crisisStore';
-import { foldChecklistResponse, isChecklistStateMap, type ChecklistStateMap } from './checklistTemplate';
+import {
+  foldChecklistResponse, isChecklistStateMap, itemStatus, type ChecklistStateMap, type ChecklistStatus,
+} from './checklistTemplate';
 import { noteSaveStatus } from './syncHealth';
 
-// ── Checklist toggle sync (editor side) ──────────────────────────────────────
+// ── Checklist status sync (editor side) ──────────────────────────────────────
 //
 // Checklist state never rides the incident blob (syncCanon excludes it, the
-// server preserves its own map on blob writes): every check/uncheck is one
+// server preserves its own map on blob writes): every status change is one
 // POST to the per-item endpoint, which applies it under a row lock, stamps the
 // server-side timestamp, and fans out to editors' SSE and every live share
-// snapshot. Here we do the optimistic local flip, send the POST, and reconcile
-// with the server's authoritative map — keeping items whose own POST is still
-// in flight local, exactly like logSync does for action-log entries.
+// snapshot. Here we do the optimistic local change, send the POST, and
+// reconcile with the server's authoritative map — keeping items whose own POST
+// is still in flight local, exactly like logSync does for action-log entries.
 
-// In-flight toggle counts per incident+item (a fast double-tap overlaps).
+// In-flight change counts per incident+item (a fast double-click overlaps).
 const inflight = new Map<string, Map<string, number>>();
 
 function markInflight(incidentId: string, itemId: string, delta: 1 | -1): void {
@@ -23,7 +25,7 @@ function markInflight(incidentId: string, itemId: string, delta: 1 | -1): void {
   if (items.size === 0) inflight.delete(incidentId);
 }
 
-/** Item ids whose toggle is still in flight — those keep their LOCAL state. */
+/** Item ids whose change is still in flight — those keep their LOCAL state. */
 export function inflightChecklistIds(incidentId: string): ReadonlySet<string> {
   return new Set(inflight.get(incidentId)?.keys() ?? []);
 }
@@ -50,22 +52,22 @@ const currentChecklists = (incidentId: string): ChecklistStateMap =>
   useCrisisStore.getState().incidents.find((i) => i.id === incidentId)?.checklists ?? {};
 
 /**
- * How one toggle ended. A failure has already rolled the optimistic flip back
- * and carries a message for the caller to show next to the checklist (with a
- * Retry when `retryable`). It deliberately does NOT light the global sync
- * indicator: that one says "will retry", and it is the blob/log engines that
- * keep that promise — checklist state never rides the blob.
+ * How one status change ended. A failure has already rolled the optimistic
+ * change back and carries a message for the caller to show next to the
+ * checklist (with a Retry when `retryable`). It deliberately does NOT light
+ * the global sync indicator: that one says "will retry", and it is the
+ * blob/log engines that keep that promise — checklist state never rides the blob.
  */
 export type ChecklistToggleResult =
   | { ok: true }
-  /** A later toggle of the same item took over; its own result is the one that counts. */
+  /** A later change of the same item took over; its own result is the one that counts. */
   | { ok: false; superseded: true }
   | { ok: false; superseded: false; status: number | null; message: string; retryable: boolean };
 
 /** One automatic re-send after a transient failure, this long after it. */
 export const CHECKLIST_AUTO_RETRY_MS = 3_000;
 
-// The newest toggle per incident+item. An older toggle's failure (or pending
+// The newest change per incident+item. An older change's failure (or pending
 // auto-retry) must neither roll back nor re-send over it.
 const latestToggle = new Map<string, number>();
 let toggleSeq = 0;
@@ -74,14 +76,14 @@ type PostOutcome =
   | { ok: true; checklists: ChecklistStateMap }
   | { ok: false; status: number | null; error: string | null };
 
-async function postToggle(incidentId: string, itemId: string, checked: boolean): Promise<PostOutcome> {
+async function postStatus(incidentId: string, itemId: string, status: ChecklistStatus): Promise<PostOutcome> {
   let res: Response;
   try {
     res = await fetch(`/api/incidents/${incidentId}/checklist/${itemId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ checked }),
+      body: JSON.stringify({ status }),
     });
   } catch {
     return { ok: false, status: null, error: null };
@@ -115,21 +117,23 @@ function describeFailure(status: number | null, error: string | null): { message
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
- * Check/uncheck one item: optimistic store flip, then the per-item POST. On
+ * Set one item's status: optimistic store change, then the per-item POST. On
  * success the server's map (with its authoritative timestamp) replaces the
  * optimistic entry. A transient failure (offline, 5xx, the incident not
- * created server-side yet) is re-sent once after a few seconds — the toggle
+ * created server-side yet) is re-sent once after a few seconds — the change
  * is idempotent server-side, so a re-send can't move the timestamp — with the
- * optimistic state held meanwhile. A final failure rolls the flip back and
+ * optimistic state held meanwhile. A final failure rolls the change back and
  * resolves with what to tell the operator.
  */
-export function toggleChecklistItem(incident: Incident, itemId: string, checked: boolean): Promise<ChecklistToggleResult> {
+export function setChecklistItemStatus(incident: Incident, itemId: string, status: ChecklistStatus): Promise<ChecklistToggleResult> {
   const store = useCrisisStore.getState();
   const prior = incident.checklists?.[itemId];
-  store.toggleChecklistItem(itemId, checked);
-  // The store action is archive-frozen (patchActiveEditable) — if the flip
-  // didn't land, there is nothing to sync.
-  if (currentChecklists(incident.id)[itemId]?.checked !== checked) {
+  const before = currentChecklists(incident.id)[itemId];
+  store.setChecklistItemStatus(itemId, status);
+  // The store action is archive-frozen (patchActiveEditable) — if the change
+  // didn't land (no fresh entry with this status), there is nothing to sync.
+  const after = currentChecklists(incident.id)[itemId];
+  if (!after || after === before || itemStatus(after) !== status) {
     const archived = !!useCrisisStore.getState().incidents.find((i) => i.id === incident.id)?.archivedAt;
     return Promise.resolve({
       ok: false,
@@ -151,14 +155,14 @@ export function toggleChecklistItem(incident: Incident, itemId: string, checked:
 
   markInflight(incident.id, itemId, +1);
   const attempt = async (autoRetry: boolean): Promise<ChecklistToggleResult> => {
-    const out = await postToggle(incident.id, itemId, checked);
+    const out = await postStatus(incident.id, itemId, status);
     if (out.ok) {
       const newest = !superseded();
       settle();
-      // Adopt the server map, but keep any OTHER items (or a newer toggle of
+      // Adopt the server map, but keep any OTHER items (or a newer change of
       // this one) that are still in flight, and any item a later SSE upsert
       // already moved past this response (newest server stamp wins). An OLDER
-      // toggle of this item that is still pending doesn't hold it back: it
+      // change of this item that is still pending doesn't hold it back: it
       // will not re-send over this one.
       const keepLocal = new Set(inflightChecklistIds(incident.id));
       if (newest) keepLocal.delete(itemId);
@@ -174,11 +178,11 @@ export function toggleChecklistItem(incident: Incident, itemId: string, checked:
       return attempt(false);
     }
     settle();
-    // Roll the optimistic flip back so the box reflects what the server has.
+    // Roll the optimistic change back so the item reflects what the server has.
     const map = { ...currentChecklists(incident.id) };
     if (prior) map[itemId] = prior; else delete map[itemId];
     useCrisisStore.getState().applyChecklistState(incident.id, map);
-    console.warn(`[checklist-sync] toggle of ${itemId} failed:`, out.status ?? 'network', out.error ?? '');
+    console.warn(`[checklist-sync] status change of ${itemId} failed:`, out.status ?? 'network', out.error ?? '');
     return { ok: false, superseded: false, status: out.status, message: failure.message, retryable: failure.retryable };
   };
   return attempt(true);

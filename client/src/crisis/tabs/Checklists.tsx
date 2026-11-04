@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useActiveIncident, type Incident } from '../crisisStore';
 import { useAuthStore } from '../../auth/authStore';
-import { preferredChecklistRole } from '../checklistTemplate';
-import { toggleChecklistItem } from '../checklistSync';
+import { preferredChecklistRole, type ChecklistStatus } from '../checklistTemplate';
+import { setChecklistItemStatus } from '../checklistSync';
 import { ChecklistBoard } from '../ChecklistBoard';
 import { incidentTypeDef } from '../taxonomy';
 import { checklistScopes } from '../templates/model';
@@ -15,9 +15,10 @@ import {
 // ── Checklists tab (editor) ──────────────────────────────────────────────────
 // The operator-side ICS role checklists, resolved for this incident's type and
 // property from the admin-edited templates (General → Type → Property → Type +
-// Property). Every toggle records who and when (server-stamped) and shows up
-// live on the share page's Checklists tab — and share-link viewers' toggles
-// land here the same way.
+// Property). A click moves an item to in progress, a second to completed, and
+// right-click sets any status. Every change records who and when
+// (server-stamped) and shows up live on the share page's Checklists tab — and
+// share-link viewers' changes land here the same way.
 
 // The role this browser last worked — the fallback when the viewer holds no
 // role on the incident's org chart. Storage can throw (private mode, blocked
@@ -32,10 +33,10 @@ function rememberRole(roleId: string): void {
   try { localStorage.setItem(ROLE_KEY, roleId); } catch { /* storage unavailable */ }
 }
 
-/** The last toggle that failed for good (already rolled back by checklistSync). */
+/** The last status change that failed for good (already rolled back by checklistSync). */
 interface ToggleFailure {
   itemId: string;
-  checked: boolean;
+  status: ChecklistStatus;
   message: string;
   retryable: boolean;
 }
@@ -64,10 +65,10 @@ export function ChecklistsTab() {
     [template, inc?.assignments, user?.name, user?.email]
   );
 
-  // Toggle failures show here, not on the global sync indicator: its "will
-  // retry" is kept by the blob/log engines, while a toggle failure is final
-  // once reported (the flip is already rolled back). Cleared by the next
-  // successful toggle and on switching incidents; a result that lands after
+  // Status-change failures show here, not on the global sync indicator: its
+  // "will retry" is kept by the blob/log engines, while a failed change is
+  // final once reported (it is already rolled back). Cleared by the next
+  // successful change and on switching incidents; a result that lands after
   // the switch belongs to the other incident and is dropped.
   const [chkError, setChkError] = useState<ToggleFailure | null>(null);
   const incId = inc?.id;
@@ -75,11 +76,11 @@ export function ChecklistsTab() {
   incIdRef.current = incId;
   useEffect(() => { setChkError(null); }, [incId]);
 
-  const toggle = (target: Incident, itemId: string, checked: boolean) => {
-    void toggleChecklistItem(target, itemId, checked).then((r) => {
+  const setStatus = (target: Incident, itemId: string, status: ChecklistStatus) => {
+    void setChecklistItemStatus(target, itemId, status).then((r) => {
       if (incIdRef.current !== target.id) return;
       if (r.ok) setChkError(null);
-      else if (!r.superseded) setChkError({ itemId, checked, message: r.message, retryable: r.retryable });
+      else if (!r.superseded) setChkError({ itemId, status, message: r.message, retryable: r.retryable });
     });
   };
 
@@ -104,7 +105,7 @@ export function ChecklistsTab() {
             <span className="text-[11px] text-white/40">
               {frozen
                 ? 'Archived incident — the checklist record is frozen'
-                : 'Check items off as they are completed — each toggle is timestamped and visible on the share link'}
+                : 'Mark items in progress and completed as the response moves — each change is timestamped and visible on the share link'}
             </span>
           </div>
           <ScopeSummary scopes={scopes} className="mt-1.5" />
@@ -124,7 +125,7 @@ export function ChecklistsTab() {
           {chkError.retryable && !frozen && (
             <button
               type="button"
-              onClick={() => toggle(inc, chkError.itemId, chkError.checked)}
+              onClick={() => setStatus(inc, chkError.itemId, chkError.status)}
               className="shrink-0 rounded border border-red-300/30 px-2 py-0.5 text-[10px] text-red-200/90 transition hover:border-red-300/60"
             >
               Retry
@@ -138,12 +139,12 @@ export function ChecklistsTab() {
           key={inc.id}
           template={template}
           state={checklists ?? {}}
-          onToggle={(itemId, checked) => toggle(inc, itemId, checked)}
+          onSetStatus={(itemId, status) => setStatus(inc, itemId, status)}
           disabled={frozen}
           preferredRoleId={preferredRoleId}
           onRoleChange={rememberRole}
           retired={retired}
-          footnote={user && !frozen ? `Your checks are recorded as ${user.name}` : undefined}
+          footnote={user && !frozen ? `Your changes are recorded as ${user.name}` : undefined}
         />
       )}
     </div>

@@ -6,7 +6,7 @@ import { decideShareAccess, type ShareGateResult } from '../shareAccess';
 import { getShareFallback } from '../shareFallbackStore';
 import { wrap } from '../asyncWrap';
 import { normalizeIncidentTypeId } from '../incidentTaxonomy';
-import { applyChecklistToggle, cleanActor, invalidToggleReason, type ChecklistItemState } from '../checklist';
+import { applyChecklistToggle, cleanActor, invalidToggleReason, requestedStatus, type ChecklistItemState } from '../checklist';
 import { broadcastIncident } from './incidentBus';
 import { findIapForScope, sendPdf } from './iap';
 import { loadEffectiveConfig } from '../crisisTemplates/store';
@@ -404,9 +404,11 @@ export async function updateShareChecklists(
   }
 }
 
-// POST /api/crisis/share/:token/checklist/:itemId — check or uncheck one item
-// from the share page. Body: { checked: boolean, by?: string }. The timestamp
-// is stamped server-side; the response carries the authoritative map.
+// POST /api/crisis/share/:token/checklist/:itemId — set one item's status
+// from the share page. Body: { status: 'not-started' | 'in-progress' |
+// 'completed', by?: string } (or { checked: boolean } from a page loaded
+// before statuses existed). The timestamp is stamped server-side; the
+// response carries the authoritative map.
 router.post('/share/:token/checklist/:itemId', wrap(async (req: Request, res: Response) => {
   const { token, itemId } = req.params;
   const invalid = invalidToggleReason(itemId, req.body);
@@ -430,13 +432,13 @@ router.post('/share/:token/checklist/:itemId', wrap(async (req: Request, res: Re
     res.status(409).json({ error: 'That item is not on this incident\'s current checklist — reload to see the latest' }); return;
   }
 
-  const body = req.body as { checked: boolean; by?: unknown };
+  const body = req.body as { checked?: unknown; status?: unknown; by?: unknown };
   // A signed-in viewer's account name outranks the self-typed one the share
   // page used to rely on: the toggle lands in the incident's audit trail, and
   // an attested identity is worth more there than a text box. Both go through
   // cleanActor: a blank or control-character account name falls through.
   const by = cleanActor(gate.via === 'session' ? gate.viewer.name : undefined) ?? cleanActor(body.by) ?? 'Share viewer';
-  const result = await applyChecklistToggle(row.incident_id, itemId, body.checked, by);
+  const result = await applyChecklistToggle(row.incident_id, itemId, requestedStatus(body), by);
   if (!result.ok) { res.status(result.status).json({ error: result.error }); return; }
   if (result.changed) {
     broadcastIncident('upsert', result.incident);

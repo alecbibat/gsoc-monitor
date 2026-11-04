@@ -22,7 +22,7 @@
 import {
   CHECKLIST_PHASES,
   type ChecklistItemDef, type ChecklistPhaseId, type ChecklistRoleDef,
-  type ChecklistStateMap, type ChecklistTemplate,
+  type ChecklistStateMap, type ChecklistStatus, type ChecklistTemplate,
 } from '../checklistTemplate';
 import type { IntakeAnswers, IntakeGroupDef, IntakeTemplate } from '../intakeTemplate';
 
@@ -282,6 +282,8 @@ export interface RetiredChecklistEntry {
   text: string | null;
   roleId: string | null;
   checked: boolean;
+  /** Absent on entries written before checklist statuses existed. */
+  status?: ChecklistStatus;
   at: string;
   by?: string;
 }
@@ -309,7 +311,10 @@ export function retiredChecklistEntries(
     const k = known.get(id) ?? (config.retiredChecklistItems && Object.prototype.hasOwnProperty.call(config.retiredChecklistItems, id)
       ? config.retiredChecklistItems[id]
       : undefined);
-    out.push({ id, text: k?.text ?? null, roleId: k?.roleId ?? null, checked: s.checked, at: s.at, ...(s.by ? { by: s.by } : {}) });
+    out.push({
+      id, text: k?.text ?? null, roleId: k?.roleId ?? null, checked: s.checked,
+      ...(s.status ? { status: s.status } : {}), at: s.at, ...(s.by ? { by: s.by } : {}),
+    });
   }
   // Most recent first — the latest toggles are the ones someone is asking about.
   return out.sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0));
