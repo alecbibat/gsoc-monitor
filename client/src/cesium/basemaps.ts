@@ -1,6 +1,7 @@
 import * as Cesium from 'cesium';
 import type { BasemapId } from '../types';
 import { buildEarthProvider } from './earthBasemap';
+import type { LabelTheme } from './placeLabels';
 
 interface ImageryAdjust {
   brightness?: number;
@@ -9,40 +10,26 @@ interface ImageryAdjust {
   gamma?: number;
 }
 
-interface ImagerySource {
-  build: () => Cesium.ImageryProvider;
-  adjust?: ImageryAdjust;
-}
-
 interface BasemapDef {
   label: string;
   attribution: string;
   build: () => Cesium.ImageryProvider;
   // Optional ImageryLayer colour adjustments applied after the layer is added.
   adjust?: ImageryAdjust;
-  // Optional transparent place/boundary label overlay drawn directly above the
-  // base imagery. Kept as its own layer so it can be hidden when the camera
-  // zooms in — town names otherwise overlap nearby geographic features at
-  // close range. The base imagery here is a label-free variant, so hiding the
-  // overlay leaves clean terrain/imagery behind.
-  overlay?: ImagerySource;
+  // Palette for the vector place-name layer (placeLabels.ts) drawn over this
+  // map type. Omitted where the tiles already print their own names (topo).
+  // Where set, the base imagery is a label-free variant: names come from the
+  // vector layer, which stays upright, sharp and one size at every zoom where
+  // raster label tiles draped on the globe stretch, blur and resize.
+  labels?: LabelTheme;
+  // Draw vector country and state/province borders (boundaryLines.ts). Only
+  // the photographic map types need them; the canvas bases carry their own.
+  borders?: boolean;
 }
-
-// Esri's transparent boundaries + place labels (countries, states/provinces,
-// cities): light text with dark halos, designed to overlay photographic
-// imagery. Shared by the map types whose base is raw satellite imagery.
-const ESRI_LABELS: ImagerySource = {
-  build: () =>
-    new Cesium.UrlTemplateImageryProvider({
-      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
-      maximumLevel: 13,
-      credit: new Cesium.Credit('Esri'),
-    }),
-};
 
 export const BASEMAPS: Record<BasemapId, BasemapDef> = {
   // Dark/Light are Esri's gray canvas services — same keyless host as the
-  // World Imagery + labels services below. (Previously CARTO raster tiles,
+  // World Imagery service below. (Previously CARTO raster tiles,
   // which now watermark every request made without an API key.) Both canvas
   // services stop at LOD 16.
   dark: {
@@ -54,14 +41,7 @@ export const BASEMAPS: Record<BasemapId, BasemapDef> = {
         maximumLevel: 16,
         credit: new Cesium.Credit('Esri, HERE, Garmin, © OpenStreetMap contributors'),
       }),
-    overlay: {
-      build: () =>
-        new Cesium.UrlTemplateImageryProvider({
-          url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
-          maximumLevel: 16,
-          credit: new Cesium.Credit('Esri'),
-        }),
-    },
+    labels: 'dark',
   },
   light: {
     label: 'Light',
@@ -72,14 +52,7 @@ export const BASEMAPS: Record<BasemapId, BasemapDef> = {
         maximumLevel: 16,
         credit: new Cesium.Credit('Esri, HERE, Garmin, © OpenStreetMap contributors'),
       }),
-    overlay: {
-      build: () =>
-        new Cesium.UrlTemplateImageryProvider({
-          url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
-          maximumLevel: 16,
-          credit: new Cesium.Credit('Esri'),
-        }),
-    },
+    labels: 'light',
   },
   satellite: {
     label: 'Dark Sat',
@@ -92,7 +65,8 @@ export const BASEMAPS: Record<BasemapId, BasemapDef> = {
       }),
     // Darken Esri imagery into a muted "night satellite" look so overlays pop.
     adjust: { brightness: 0.68, contrast: 1.1, saturation: 0.75, gamma: 1.3 },
-    overlay: ESRI_LABELS,
+    labels: 'imagery',
+    borders: true,
   },
   earth: {
     label: 'Earth',
@@ -102,7 +76,8 @@ export const BASEMAPS: Record<BasemapId, BasemapDef> = {
     // store changes (see the EarthTimeBar navigator). True color as-shot — no
     // darkening, this map type IS the photograph.
     build: buildEarthProvider,
-    overlay: ESRI_LABELS,
+    labels: 'imagery',
+    borders: true,
   },
   topo: {
     label: 'Topographic',

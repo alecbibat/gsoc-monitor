@@ -130,10 +130,10 @@ const LON_MARGIN_FRACTION = 0.12;
 const LABEL_BOX_W_PX = 104;
 const LABEL_BOX_H_PX = 34;
 const MIN_STRETCH_LABEL_WIDTHS = 2;
-// Basemap place labels fade out as the camera descends (CesiumGlobe's fade
-// bands: far above the ground during the pins screensaver and hover orbit
-// so cinematic close-ups carry no text, only at street level otherwise); the
-// clocks follow the same rule while a screensaver or hover mode is running.
+// Place names (cesium/placeLabels.ts) clear off cinematic close-ups: far
+// above the ground during the pins screensaver and hover orbit. The clocks
+// follow that rule, and also hide near street level during the other
+// screensaver modes.
 const CLOSEUP_HIDE_PINS_M = 1_500_000;
 const CLOSEUP_HIDE_NORMAL_M = 80_000;
 // The rendered globe is a coarse mesh, so a label a few degrees past the
