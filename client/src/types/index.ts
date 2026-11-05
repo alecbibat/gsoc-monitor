@@ -748,6 +748,12 @@ export interface WarnAlert {
   nws: boolean;
 }
 
+/** What became of an NWS alert (server: /api/alerts/fate). */
+export type AlertFate =
+  | { id: string; status: 'not-replaced' }
+  | { id: string; status: 'replaced'; by: { id: string; messageType: string | null } }
+  | { id: string; status: 'cancelled'; by: { id: string; sent: string | null; description: string | null } };
+
 export interface WarnFeed {
   alerts: WarnAlert[];
   heartbeat: string | null;

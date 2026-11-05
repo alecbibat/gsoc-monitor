@@ -67,6 +67,35 @@ describe('WEA (PBS WARN) notices', () => {
     expect(third[0].isUpdate).toBe(true);
   });
 
+  it('announces a WEA update that changes the message or action at the pins it reaches', () => {
+    const area = { polygons: [box(-105.1, 39.9, -104.9, 40.1)] };
+    const v1 = wea('v1', { ...area, responseType: 'Shelter', weaText: 'Shelter in place.' });
+    const v2 = wea('v2', { ...area, msgType: 'update', referencedId: 'v1', responseType: 'AllClear', weaText: 'All clear. You may leave shelter.' });
+    const [, , second] = runWarn([[], [v1], [v2]]);
+    expect(second).toHaveLength(1);
+    expect(second[0]).toMatchObject({ key: 'warn:v2', isUpdate: true, newPins: [], endedAt: [] });
+    expect(second[0].changes.map((c) => [c.label, c.from, c.to])).toEqual([
+      ['Action', 'Shelter', 'AllClear'],
+      ['Message', 'Shelter in place.', 'All clear. You may leave shelter.'],
+    ]);
+  });
+
+  it('announces a WEA update that extends its expiry', () => {
+    const area = { polygons: [box(-105.1, 39.9, -104.9, 40.1)] };
+    const v1 = wea('v1', area);
+    const v2 = wea('v2', { ...area, msgType: 'update', referencedId: 'v1', expires: new Date(NOW + 6 * 60 * MIN).toISOString() });
+    expect(runWarn([[], [v1], [v2]])[2].map((n) => n.changes.map((c) => c.label))).toEqual([['Expires']]);
+  });
+
+  it('tells, in the calm colour, a pin a WEA update no longer covers', () => {
+    const v1 = wea('v1', { polygons: [box(-105.1, 39.9, -104.9, 40.1), box(-100.1, 40.9, -99.9, 41.1)] });
+    const v2 = wea('v2', { msgType: 'update', referencedId: 'v1', polygons: [box(-100.1, 40.9, -99.9, 41.1)] });
+    const [, , second] = runWarn([[], [v1], [v2]]);
+    expect(second).toHaveLength(1);
+    expect(second[0].endedAt.map((p) => p.key)).toEqual(['g::A']);
+    expect(second[0].color).toBe('#34d399');
+  });
+
   it('carries the NWS alert id as an alias for an NWS-issued WEA', () => {
     const n = wea('nws1', {
       nws: true,

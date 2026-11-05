@@ -57,6 +57,10 @@ export interface RawAlert {
     senderName?: string;
     sent?: string;
     effective?: string;
+    /** When the hazard begins; for one under way, NWS restates it as each version's issue time. */
+    onset?: string | null;
+    /** When the hazard ends (null: not given). Unlike `expires` — when this message lapses — it holds across re-issues. */
+    ends?: string | null;
     expires?: string;
     areaDesc?: string;
     /** CAP status: "Actual", or "Exercise" / "System" / "Test" / "Draft". */

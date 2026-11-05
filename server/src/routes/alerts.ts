@@ -62,6 +62,62 @@ router.get('/active', async (req, res, next) => {
   }
 });
 
+// ?id=urn:oid:… — what became of one alert: still in effect, replaced by a
+// later version, or cancelled. The active feed never lists a cancellation
+// (it drops the cancelled alert and the cancel message alike), so when an
+// alert that reached a property leaves the feed before its end, the pin
+// notifier asks here: NWS marks the original `replacedBy` the message that
+// ended it. Only an id of NWS's own form is looked up, and the replacing
+// message's URL is never followed as given — its id is checked the same way.
+const ALERT_ID_RE = /^urn:oid:2\.49\.0\.1\.840\.0\.[0-9a-f]{32,64}\.\d{1,4}\.\d{1,4}$/;
+const NWS_ALERT_BASE = 'https://api.weather.gov/alerts/';
+
+export type AlertFate =
+  | { id: string; status: 'not-replaced' }
+  | { id: string; status: 'replaced'; by: { id: string; messageType: string | null } }
+  | { id: string; status: 'cancelled'; by: { id: string; sent: string | null; description: string | null } };
+
+/** The urn an alert's `replacedBy` names, when it is one of NWS's own. */
+export function replacedById(replacedBy: unknown): string | null {
+  if (typeof replacedBy !== 'string') return null;
+  const urn = replacedBy.startsWith(NWS_ALERT_BASE) ? replacedBy.slice(NWS_ALERT_BASE.length) : replacedBy;
+  return ALERT_ID_RE.test(urn) ? urn : null;
+}
+
+async function nwsAlertProperties(id: string): Promise<Record<string, unknown>> {
+  const upstream = await fetch(`${NWS_ALERT_BASE}${id}`, {
+    headers: { 'User-Agent': config.nwsUserAgent, Accept: 'application/geo+json' },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!upstream.ok) throw new Error(`NWS alert lookup error: ${upstream.status}`);
+  const body = (await upstream.json()) as { properties?: Record<string, unknown> };
+  if (!body || typeof body.properties !== 'object' || body.properties === null) throw new Error('NWS alert has no properties');
+  return body.properties;
+}
+
+const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
+
+router.get('/fate', async (req, res) => {
+  const id = typeof req.query.id === 'string' && ALERT_ID_RE.test(req.query.id) ? req.query.id : null;
+  if (!id) {
+    res.status(400).json({ error: 'id must be an NWS alert id (urn:oid:2.49.0.1.840.0.…)' });
+    return;
+  }
+  try {
+    const fate = await cache.getOrFetch<AlertFate>(`alerts:fate:${id}`, 60_000, async () => {
+      const by = replacedById((await nwsAlertProperties(id)).replacedBy);
+      if (!by) return { id, status: 'not-replaced' };
+      const next = await nwsAlertProperties(by);
+      return next.messageType === 'Cancel'
+        ? { id, status: 'cancelled', by: { id: by, sent: str(next.sent), description: str(next.description) } }
+        : { id, status: 'replaced', by: { id: by, messageType: str(next.messageType) } };
+    });
+    res.json(fate);
+  } catch (err) {
+    res.status(502).json({ error: 'Failed to look up the NWS alert', detail: String(err) });
+  }
+});
+
 router.get('/active', async (_req, res) => {
   try {
     const body = await cache.getOrFetch<Buffer>(

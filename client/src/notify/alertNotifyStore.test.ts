@@ -3,7 +3,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { mergeNotifySettings, useAlertNotifyStore } from './alertNotifyStore';
 import { NoticeCard } from './AlertNotifier';
-import { FLIGHT_COLOR, SHIP_COLOR, type FlightNotice, type Notice, type QuakeNotice, type ShipNotice, type WarnNotice } from './notices';
+import {
+  ENDED_COLOR, FLIGHT_COLOR, SHIP_COLOR,
+  type FlightNotice, type Notice, type NwsNotice, type QuakeNotice, type ShipNotice, type WarnNotice,
+} from './notices';
 import type { PinHit } from './pinAlertMatch';
 
 const NOW = Date.parse('2026-11-04T18:00:00Z');
@@ -30,7 +33,8 @@ const quake: QuakeNotice = {
   quake: { id: 'us1', mag: 4.8, place: '20 km NE of Tusayan, Arizona', time: NOW - 300_000, lat: 36.1, lon: -111.9, depthKm: 10, url: '', felt: 12, tsunami: 0, status: 'reviewed' },
 };
 const warn = (key: string, aliases: string[] = []): WarnNotice => ({
-  category: 'warn', key, aliases, color: '#ff3366', rank: 14, hits: [HIT], isUpdate: false, bbox: [-112.2, 36, -112.1, 36.1],
+  category: 'warn', key, aliases, color: '#ff3366', rank: 14, hits: [HIT], isUpdate: false, changes: [], newPins: [], endedAt: [],
+  bbox: [-112.2, 36, -112.1, 36.1],
   alert: {
     id: key, capId: 'cap', event: 'Flash Flood Warning', sender: 'NWS Flagstaff AZ', weaClass: 'imminent-threat',
     category: 'met', severity: 'Extreme', urgency: 'Immediate', certainty: 'Likely', responseType: null, msgType: 'alert',
@@ -122,6 +126,69 @@ describe('NoticeCard', () => {
     expect(html).toContain('20 km NE of Tusayan, Arizona');
     expect(html).toContain('Within 50 mi');
     expect(html).toContain('23.4 mi away');
+  });
+
+  const PIN_B = { key: 'g::B', name: 'Phantom Ranch', groupName: 'Grand Canyon', lat: 36.1, lon: -112.09 };
+  const nws = (extra: Partial<NwsNotice> = {}): NwsNotice => ({
+    category: 'nws', key: 'nws:v2', aliases: ['nws:v2'], id: 'v2', color: '#00ff00', rank: 13,
+    alert: {
+      geometry: null,
+      properties: {
+        id: 'v2', event: 'Flood Warning', severity: 'Severe', urgency: 'Immediate', senderName: 'NWS Flagstaff AZ',
+        sent: new Date(NOW).toISOString(), ends: new Date(NOW + 30 * 3_600_000).toISOString(), expires: new Date(NOW + 6 * 3_600_000).toISOString(),
+      },
+    },
+    hits: [HIT], isUpdate: true, changes: [], newPins: [], endedAt: [], cancelled: null, bbox: [-112.2, 36, -112.1, 36.1],
+    ...extra,
+  });
+
+  it('says what changed in an NWS alert: old value struck, new value, newly reached pins marked', () => {
+    const html = render(
+      nws({
+        changes: [
+          { label: 'Certainty', from: 'Likely', to: 'Observed', kind: 'text' },
+          { label: 'Ends', from: new Date(NOW + 6 * 3_600_000).toISOString(), to: new Date(NOW + 30 * 3_600_000).toISOString(), kind: 'time' },
+        ],
+        hits: [HIT, { pin: PIN_B, distanceMi: 3.2 }],
+        newPins: ['g::B'],
+      })
+    );
+    expect(html).toContain('NWS alert changed near your locations');
+    expect(html).toContain('What changed');
+    expect(html).toMatch(/Certainty<\/dt><dd[^>]*><span[^>]*line-through[^>]*>Likely<\/span>.*Observed/);
+    expect(html).toContain('>Ends<');
+    expect(html).toContain('Now reaches');
+    expect(html).toMatch(/Phantom Ranch[^]*?>New</);
+    // The hazard's own end, not the message's expiry.
+    expect(html).toContain('>Ends</span>');
+    expect(html).not.toContain('>Expires</span>');
+  });
+
+  it('tells an NWS cancellation in the calm colour, with the pins it covered', () => {
+    const html = render(nws({ color: ENDED_COLOR, cancelled: { sent: new Date(NOW).toISOString(), text: 'The Flood Warning has been cancelled and is no longer in effect.' }, endedAt: [HIT.pin] }));
+    expect(html).toContain('NWS alert cancelled near your locations');
+    expect(html).toContain('Flood Warning cancelled');
+    expect(html).toContain('has been cancelled and is no longer in effect');
+    expect(html).toContain('Was in effect within 15 mi');
+    expect(html).toContain('✓');
+  });
+
+  it('lists the pins an NWS alert no longer covers', () => {
+    const html = render(nws({ color: ENDED_COLOR, hits: [{ pin: PIN_B, distanceMi: 0 }], endedAt: [HIT.pin] }));
+    expect(html).toContain('NWS alert no longer in effect at some of your locations');
+    expect(html).toMatch(/No longer in effect at<\/dt><dd[^>]*>Grand Canyon Village/);
+    expect(html).toContain('Still within 15 mi');
+  });
+
+  it('shows what a WEA said before its update', () => {
+    const update: WarnNotice = {
+      ...warn('warn:u'),
+      isUpdate: true,
+      changes: [{ label: 'Message', from: 'Shelter in place.', to: 'All clear.', kind: 'text' }],
+    };
+    const html = render(update);
+    expect(html).toContain('Emergency alert updated near your locations');
+    expect(html).toContain('Previously: “Shelter in place.”');
   });
 
   it('leads a WEA with the message sent to phones', () => {
