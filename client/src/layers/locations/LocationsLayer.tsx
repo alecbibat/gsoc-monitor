@@ -6,17 +6,25 @@ import { attachPanelData } from '../../cesium/entityPanelLink';
 import { LOCATION_GROUPS } from './locations';
 import { makePinIcon } from './pinIcon';
 import { useScreensaverStore } from '../../screensaver/screensaverStore';
+import { TERRAIN_MARKERS_ON_TOP_M, useGroundHeights } from '../../cesium/groundHeights';
+
+const ALL_LOCATIONS = LOCATION_GROUPS.flatMap((g) => g.locations);
+const LOCATIONS_KEY = ALL_LOCATIONS.map((l) => `${l.lon},${l.lat}`).join(';');
 
 export function LocationsLayer() {
   const viewer = useCesiumViewer();
   const active = useLayersStore((s) => s.active);
   const dsRef = useRef<Cesium.CustomDataSource | null>(null);
+  // One entity per location, in ALL_LOCATIONS order, so terrain heights can move them.
+  const entitiesRef = useRef<Cesium.Entity[]>([]);
+  const { terrain, heights } = useGroundHeights(viewer, ALL_LOCATIONS, LOCATIONS_KEY);
 
   useEffect(() => {
     if (!viewer) return;
     const ds = new Cesium.CustomDataSource('locations');
     viewer.dataSources.add(ds);
     dsRef.current = ds;
+    entitiesRef.current = [];
 
     for (const group of LOCATION_GROUPS) {
       const pin = makePinIcon(group.color);
@@ -28,10 +36,9 @@ export function LocationsLayer() {
           // (heightReference: CLAMP_TO_GROUND) must NOT be used here: clamped
           // billboards skip the globe-occlusion depth path whenever
           // depthTestAgainstTerrain is false (which this app always is), so
-          // far-side pins rendered straight through the planet. Trade-off:
-          // while the OSM-buildings layer swaps in world terrain, pins anchor
-          // at ellipsoid height rather than the mountain surface — but terrain
-          // depth is cleared in that mode too, so they stay visible.
+          // far-side pins rendered straight through the planet. With 3D
+          // terrain on, the effect below stands each pin on the sampled ground
+          // instead (see cesium/groundHeights.ts).
           position: Cesium.Cartesian3.fromDegrees(loc.lon, loc.lat, 0),
           billboard: {
             image: pin.url,
@@ -76,6 +83,7 @@ export function LocationsLayer() {
           },
         });
 
+        entitiesRef.current.push(entity);
         attachPanelData(entity, {
           kind: 'locations',
           id: `location:${group.id}:${loc.name}`,
@@ -98,8 +106,26 @@ export function LocationsLayer() {
     return () => {
       viewer.dataSources.remove(ds, true);
       dsRef.current = null;
+      entitiesRef.current = [];
     };
   }, [viewer]);
+
+  // Real terrain on: draw each pin over buildings from close range, and stand
+  // it on the ground under it once that's sampled. Flat globe: back to height
+  // 0 and the default depth test.
+  useEffect(() => {
+    if (!viewer) return;
+    const onTop = terrain ? TERRAIN_MARKERS_ON_TOP_M : undefined;
+    entitiesRef.current.forEach((entity, i) => {
+      const loc = ALL_LOCATIONS[i];
+      entity.position = new Cesium.ConstantPositionProperty(
+        Cesium.Cartesian3.fromDegrees(loc.lon, loc.lat, heights?.[i] ?? 0)
+      );
+      if (entity.billboard) entity.billboard.disableDepthTestDistance = new Cesium.ConstantProperty(onTop);
+      if (entity.label) entity.label.disableDepthTestDistance = new Cesium.ConstantProperty(onTop);
+    });
+    viewer.scene.requestRender();
+  }, [viewer, terrain, heights]);
 
   useEffect(() => {
     const ds = dsRef.current;

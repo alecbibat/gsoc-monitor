@@ -29,6 +29,10 @@ const GNPC = { operator: 'Glacier National Park Conservancy', refreshSec: 60, bu
 // a cellular link that can drop out.
 const YVO = { operator: 'USGS Yellowstone Volcano Observatory', refreshSec: 900, bustCache: true } as const;
 
+// The Grand Canyon Conservancy's live players (Pixelcaster) sit on a bare page
+// that keeps the browser's default 8 px white margin; the panel crops it off.
+const PIXELCASTER_PAGE_MARGIN = 8;
+
 export const WEBCAMS: readonly WebcamDef[] = [
   // ── Glacier ─────────────────────────────────────────────────────────────────
   { ...NPS, id: 'glac-apgar-lookout', parkCode: 'glac', name: 'Apgar Lookout', pageUrl: 'https://www.nps.gov/media/webcam/view.htm?id=81B4691B-1DD8-B71B-0BB9DBEE21A59335', kind: 'image', imageUrl: 'https://www.nps.gov/webcams-glac/ApgarLookout-01.jpg', lat: 48.507, lon: -114.034, approxLocation: true, note: 'From the Apgar Mountain fire lookout, northeast up Lake McDonald.' },
@@ -102,6 +106,7 @@ export const WEBCAMS: readonly WebcamDef[] = [
     kind: 'image',
     imageUrl: 'https://cdn.pixelcaster.com/public.pixelcaster.com/snapshots/grandcanyon-2/latest.jpg',
     embedUrl: 'https://pixelcaster.com/live/grandcanyon/cam2.html',
+    embedMarginPx: PIXELCASTER_PAGE_MARGIN,
     lat: 36.058,
     lon: -112.1426,
     approxLocation: true,
@@ -118,6 +123,7 @@ export const WEBCAMS: readonly WebcamDef[] = [
     kind: 'image',
     imageUrl: 'https://cdn.pixelcaster.com/public.pixelcaster.com/snapshots/grandcanyon-1/latest.jpg',
     embedUrl: 'https://pixelcaster.com/live/grandcanyon/cam1.html',
+    embedMarginPx: PIXELCASTER_PAGE_MARGIN,
     lat: 36.058,
     lon: -112.1426,
     approxLocation: true,
@@ -299,6 +305,9 @@ export function catalogProblems(list: readonly WebcamDef[]): string[] {
       problems.push(`${c.id}: a browser-direct camera needs an https image (the dashboard is served over https)`);
     }
     if (c.embedUrl !== undefined && !/^https:\/\//.test(c.embedUrl)) problems.push(`${c.id}: embedUrl must be https`);
+    if (c.embedMarginPx !== undefined && !(c.embedUrl && Number.isInteger(c.embedMarginPx) && c.embedMarginPx >= 0 && c.embedMarginPx <= 24)) {
+      problems.push(`${c.id}: embedMarginPx needs an embedUrl and 0–24 px`);
+    }
     if (!(Math.abs(c.lat) <= 90 && Math.abs(c.lon) <= 180) || (c.lat === 0 && c.lon === 0)) {
       problems.push(`${c.id}: bad coordinates`);
     }

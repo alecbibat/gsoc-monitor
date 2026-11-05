@@ -22,6 +22,7 @@ export function webcamInfo(cam: WebcamDef): WebcamInfo {
     pageUrl: cam.pageUrl,
     kind: cam.kind,
     embedUrl: cam.embedUrl ?? null,
+    embedMarginPx: cam.embedUrl ? (cam.embedMarginPx ?? 0) : 0,
     lat: cam.lat,
     lon: cam.lon,
     approxLocation: !!cam.approxLocation,
