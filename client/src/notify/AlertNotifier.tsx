@@ -1,7 +1,7 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { flyToBoundingBox, flyToLonLat } from '../cesium/flyTo';
-import { alertRings, fetchActiveAlertsShared, loadCountyAtlas } from '../layers/alerts/alertsData';
+import { alertRings, fetchActiveAlertsShared, loadCountyAtlas, type RawAlert } from '../layers/alerts/alertsData';
 import { alertPanelData } from '../layers/alerts/alertPanel';
 import { WEA_CLASSES } from '../layers/warn/warnMeta';
 import { api } from '../api/client';
@@ -17,20 +17,24 @@ import { parkFrame } from '../nps/flyToPark';
 import { openNpsPanel } from '../nps/openNpsPanel';
 import type { EarthquakeFeature, LayerId } from '../types';
 import { useAlertNotifyStore } from './alertNotifyStore';
-import { NOTIFY_RADIUS_MI, detectNewAlertNotices, type PinHit, type SeenMap } from './pinAlertMatch';
+import type { AlertChange } from './alertChanges';
+import {
+  NOTIFY_RADIUS_MI, detectNewAlertNotices, nwsAlertId, nwsCancelNotice, vanishedEarly, type PinHit, type SeenMap,
+} from './pinAlertMatch';
 import {
   QUAKE_NOTIFY_RADIUS_MI, WARN_NOTIFY_RADIUS_MI,
   detectFlightNotices, detectNpsNotices, detectQuakeNotices, detectShipNotices, detectWarnNotices,
   type NpsSeen, type SeenIds,
 } from './detectors';
-import type { Notice, NoticeCategory } from './notices';
+import { isEndedNotice, type Notice, type NoticeCategory, type NwsNotice, type WarnNotice } from './notices';
 
 // ── Alert popups ─────────────────────────────────────────────────────────────
 // While notifications are on, each enabled source is polled on its own clock;
 // whatever it reports as new flashes the screen and queues a card in the
 // middle of it until someone acknowledges it. Sources:
-//   nws    — NWS alerts within 15 mi of a property (shares the map layer's download)
-//   warn   — Wireless Emergency Alerts (PBS WARN) within 50 mi
+//   nws    — NWS alerts within 15 mi of a property (shares the map layer's download):
+//            new ones, changes to them there, and cancellations
+//   warn   — Wireless Emergency Alerts (PBS WARN) within 50 mi, and their updates
 //   quake  — M4.5+ earthquakes within 50 mi
 //   nps    — new or changed National Park Service alerts at the followed parks
 //   flight — the company aircraft's takeoffs and landings
@@ -44,24 +48,57 @@ import type { Notice, NoticeCategory } from './notices';
  */
 type Step = (baseline: boolean) => Promise<Notice[]>;
 
+/** Alerts that left the feed early, looked up a few per poll, each tried a few times. */
+const FATE_LOOKUPS_PER_POLL = 4;
+const FATE_TRIES = 3;
+
 const nwsStep = (): Step => {
   let seen: SeenMap = new Map();
+  // The last poll's alerts that reached a pin, to catch one that leaves the
+  // feed before its end; and those waiting for NWS to say why they left.
+  let near: RawAlert[] = [];
+  const leftEarly = new Map<string, { alert: RawAlert; tries: number }>();
   return async (baseline) => {
     // Without the county outlines most alerts have no area to measure, and
     // recording them as "seen, nowhere near" would swallow them for good — so
     // a poll that can't load counties is skipped, not half-done.
     const [alerts, atlas] = await Promise.all([fetchActiveAlertsShared(), loadCountyAtlas()]);
-    const out = detectNewAlertNotices({
-      alerts,
-      ringsOf: (a) => alertRings(a, atlas.geometries),
-      seen,
-      baseline,
-      now: Date.now(),
-    });
+    const now = Date.now();
+    const ringsOf = (a: RawAlert) => alertRings(a, atlas.geometries);
+    const out = detectNewAlertNotices({ alerts, ringsOf, seen, baseline, now });
     seen = out.seen;
-    return out.notices;
+    if (!baseline) {
+      for (const a of vanishedEarly(near, alerts, now)) leftEarly.set(nwsAlertId(a) ?? '', { alert: a, tries: 0 });
+    }
+    near = alerts.filter((a) => (seen.get(nwsAlertId(a) ?? '')?.pins.length ?? 0) > 0);
+    return [...out.notices, ...(await cancellations(leftEarly, ringsOf))];
   };
 };
+
+/**
+ * Asks NWS what became of alerts that left the feed before their end, and
+ * turns the cancelled ones into notices. A replaced one is told by its new
+ * version; one nothing replaced was a feed blip.
+ */
+async function cancellations(
+  leftEarly: Map<string, { alert: RawAlert; tries: number }>,
+  ringsOf: (a: RawAlert) => number[][][]
+): Promise<Notice[]> {
+  const notices: Notice[] = [];
+  for (const [id, entry] of [...leftEarly].slice(0, FATE_LOOKUPS_PER_POLL)) {
+    try {
+      const fate = await api.alertFate(id);
+      leftEarly.delete(id);
+      if (fate.status !== 'cancelled') continue;
+      const notice = nwsCancelNotice({ alert: entry.alert, cancel: fate.by, rings: ringsOf(entry.alert) });
+      if (notice) notices.push(notice);
+    } catch (err) {
+      if (++entry.tries >= FATE_TRIES) leftEarly.delete(id);
+      console.warn('[alert-notify] cancellation check failed:', err instanceof Error ? err.message : err);
+    }
+  }
+  return notices;
+}
 
 const warnStep = (): Step => {
   let seen: SeenMap = new Map();
@@ -213,9 +250,12 @@ function airportPlace(a: { municipality: string | null; region: string; country:
 function headerText(n: Notice): string {
   switch (n.category) {
     case 'nws':
-      return n.isUpdate ? 'NWS alert update near your locations' : 'New NWS alert near your locations';
+      if (n.cancelled) return 'NWS alert cancelled near your locations';
+      if (isEndedNotice(n)) return 'NWS alert no longer in effect at some of your locations';
+      return n.isUpdate ? 'NWS alert changed near your locations' : 'New NWS alert near your locations';
     case 'warn':
-      return n.isUpdate ? 'Emergency alert update near your locations' : 'Emergency alert sent to phones near your locations';
+      if (isEndedNotice(n)) return 'Emergency alert no longer covers some of your locations';
+      return n.isUpdate ? 'Emergency alert updated near your locations' : 'Emergency alert sent to phones near your locations';
     case 'quake':
       return 'Earthquake near your locations';
     case 'nps':
@@ -231,18 +271,30 @@ function headerText(n: Notice): string {
 
 const MAX_PINS_LISTED = 6;
 
-function PinList({ hits, radiusMi, color }: { hits: PinHit[]; radiusMi: number; color: string }) {
+function PinList({ hits, radiusMi, color, heading, fresh = [] }: {
+  hits: PinHit[];
+  radiusMi: number;
+  color: string;
+  heading?: string;
+  /** Keys of pins to mark as newly reached. */
+  fresh?: readonly string[];
+}) {
   const listed = hits.slice(0, MAX_PINS_LISTED);
   const more = hits.length - listed.length;
   return (
     <div className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2">
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">Within {radiusMi} mi</div>
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">{heading ?? `Within ${radiusMi} mi`}</div>
       <ul className="space-y-0.5">
         {listed.map(({ pin, distanceMi }) => (
           <li key={pin.key} className="flex items-baseline gap-2 text-[12.5px]">
             <span aria-hidden className="text-white/40">📍</span>
             <span className="min-w-0 flex-1 truncate text-white/90">
               {pin.name} <span className="text-white/35">· {pin.groupName}</span>
+              {fresh.includes(pin.key) && (
+                <span className="ml-1.5 rounded px-1 py-px text-[9.5px] font-bold uppercase tracking-wider" style={{ color, background: `${color}22` }}>
+                  New
+                </span>
+              )}
             </span>
             <span
               className={`shrink-0 text-[11px] font-semibold ${distanceMi === 0 ? '' : 'text-white/60'}`}
@@ -290,10 +342,72 @@ function Times({ items }: { items: [string, string | null][] }) {
   );
 }
 
+/** How a change's old or new value reads: times as times, an unset one by what it means. */
+function changeValue(c: AlertChange, v: string | null): string {
+  if (v === null) return c.label === 'Ends' ? 'until further notice' : 'not given';
+  if (c.kind === 'time') return fmtTime(v) ?? v;
+  // CAP's recommended actions are run together: "AllClear" → "All clear".
+  return c.label === 'Action' ? v.replace(/([a-z])([A-Z])/g, (_, a: string, b: string) => `${a} ${b.toLowerCase()}`) : v;
+}
+
+/** What an update changed from the version it replaces, and where it now reaches or no longer does. */
+function WhatChanged({ n }: { n: NwsNotice | WarnNotice }) {
+  const rows: { label: string; body: ReactNode }[] = n.changes.map((c) => ({
+    label: c.label,
+    body:
+      // The new message itself is shown in full above.
+      c.label === 'Message' ? (
+        <span className="text-white/60">Previously: “{c.from ?? 'none'}”</span>
+      ) : (
+        <>
+          <span className="text-white/45 line-through decoration-white/30">{changeValue(c, c.from)}</span>
+          <span className="px-1.5 text-white/35">→</span>
+          <span className="font-semibold" style={{ color: n.color }}>{changeValue(c, c.to)}</span>
+        </>
+      ),
+  }));
+  const reached = n.hits.filter((h) => n.newPins.includes(h.pin.key)).map((h) => h.pin.name);
+  if (reached.length > 0) rows.push({ label: 'Now reaches', body: reached.join(', ') });
+  if (n.endedAt.length > 0) rows.push({ label: 'No longer in effect at', body: n.endedAt.map((p) => p.name).join(', ') });
+  if (rows.length === 0) return null;
+  return (
+    <div className="rounded-lg border px-3 py-2" style={{ borderColor: `${n.color}55`, background: `${n.color}14` }}>
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider" style={{ color: n.color }}>What changed</div>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12.5px] leading-snug">
+        {rows.map((r, i) => (
+          <Fragment key={i}>
+            <dt className="whitespace-nowrap text-white/45">{r.label}</dt>
+            <dd className="min-w-0 text-white/90">{r.body}</dd>
+          </Fragment>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 function NoticeBody({ n, now }: { n: Notice; now: number }) {
   switch (n.category) {
     case 'nws': {
       const p = n.alert.properties;
+      if (n.cancelled) {
+        return (
+          <>
+            <div>
+              <Title color={n.color}>{p.event ?? 'NWS Alert'} cancelled</Title>
+              <Chips items={[p.senderName]} />
+              <p className="mt-2 text-[12.5px] leading-snug text-white/80">
+                {n.cancelled.text ?? 'The National Weather Service cancelled this alert. It is no longer in effect.'}
+              </p>
+            </div>
+            <PinList hits={n.hits} radiusMi={NOTIFY_RADIUS_MI} color={n.color} heading={`Was in effect within ${NOTIFY_RADIUS_MI} mi`} />
+            <Times items={[['Cancelled', fmtTime(n.cancelled.sent)], ['Was due to end', fmtTime(p.ends ?? p.expires)]]} />
+            {p.areaDesc && <p className="line-clamp-2 text-[11px] leading-snug text-white/40">{p.areaDesc}</p>}
+          </>
+        );
+      }
+      // The hazard's own end; `expires` (when this message lapses) only where NWS gives no end.
+      const end = p.ends ?? p.expires;
+      const starts = p.onset && Date.parse(p.onset) > now ? fmtTime(p.onset) : null;
       return (
         <>
           <div>
@@ -301,11 +415,21 @@ function NoticeBody({ n, now }: { n: Notice; now: number }) {
             <Chips items={[p.severity, p.urgency, p.senderName]} />
             {p.headline && <p className="mt-2 text-[12.5px] leading-snug text-white/80">{p.headline}</p>}
           </div>
-          <PinList hits={n.hits} radiusMi={NOTIFY_RADIUS_MI} color={n.color} />
+          {n.isUpdate && <WhatChanged n={n} />}
+          {n.hits.length > 0 && (
+            <PinList
+              hits={n.hits}
+              radiusMi={NOTIFY_RADIUS_MI}
+              color={n.color}
+              fresh={n.isUpdate ? n.newPins : []}
+              heading={isEndedNotice(n) ? `Still within ${NOTIFY_RADIUS_MI} mi` : undefined}
+            />
+          )}
           <Times
             items={[
               ['Issued', fmtTime(p.sent ?? p.effective)],
-              ['Expires', fmtTime(p.expires) && `${fmtTime(p.expires)}${fmtUntil(p.expires, now) ? ` (${fmtUntil(p.expires, now)})` : ''}`],
+              ['Starts', starts],
+              [p.ends ? 'Ends' : 'Expires', fmtTime(end) && `${fmtTime(end)}${fmtUntil(end, now) ? ` (${fmtUntil(end, now)})` : ''}`],
             ]}
           />
           {p.areaDesc && <p className="line-clamp-2 text-[11px] leading-snug text-white/40">{p.areaDesc}</p>}
@@ -327,7 +451,16 @@ function NoticeBody({ n, now }: { n: Notice; now: number }) {
               <p className="text-[13px] font-medium leading-snug text-white/90">{a.weaText}</p>
             </div>
           )}
-          <PinList hits={n.hits} radiusMi={WARN_NOTIFY_RADIUS_MI} color={n.color} />
+          {n.isUpdate && <WhatChanged n={n} />}
+          {n.hits.length > 0 && (
+            <PinList
+              hits={n.hits}
+              radiusMi={WARN_NOTIFY_RADIUS_MI}
+              color={n.color}
+              fresh={n.isUpdate ? n.newPins : []}
+              heading={isEndedNotice(n) ? `Still within ${WARN_NOTIFY_RADIUS_MI} mi` : undefined}
+            />
+          )}
           <Times
             items={[
               ['Sent', fmtTime(a.sent)],
@@ -459,7 +592,15 @@ export function NoticeCard({ notice, index, total, now, onShow, onDismiss, onDis
     >
       <div className="flex items-center gap-2 px-4 py-2" style={{ background: `${color}33`, borderBottom: `1px solid ${color}66` }}>
         <span aria-hidden className="text-[15px]">
-          {notice.category === 'flight' ? '✈' : notice.category === 'ship' ? '⚓' : notice.category === 'nps' ? '🏞' : '⚠'}
+          {notice.category === 'flight'
+            ? '✈'
+            : notice.category === 'ship'
+              ? '⚓'
+              : notice.category === 'nps'
+                ? '🏞'
+                : (notice.category === 'nws' || notice.category === 'warn') && isEndedNotice(notice)
+                  ? '✓'
+                  : '⚠'}
         </span>
         <span className="flex-1 text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color }}>
           {headerText(notice)}

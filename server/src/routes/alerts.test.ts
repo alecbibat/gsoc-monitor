@@ -140,4 +140,61 @@ describe('alerts proxy', () => {
       vi.useRealTimers();
     }
   });
+
+  describe('what became of an alert', () => {
+    const fate = () => base.replace(/\/active$/, '/fate');
+    const ID = (hex: string) => `urn:oid:2.49.0.1.840.0.${hex.repeat(40 / hex.length)}.001.1`;
+    const record = (props: Record<string, unknown>) =>
+      new Response(JSON.stringify({ properties: props }), { headers: { 'content-type': 'application/geo+json' } });
+
+    it('rejects anything but an NWS alert id, without calling NWS', async () => {
+      for (const q of ['', 'id=', 'id=abc', `id=${ID('ab')}x`, `id=${encodeURIComponent('https://evil.example/x')}`, 'id=urn:oid:2.49.0.1.840.0../..001.1']) {
+        expect((await realFetch(`${fate()}?${q}`)).status, q).toBe(400);
+      }
+      expect(seen).toHaveLength(0);
+    });
+
+    it('says an alert was cancelled, with the cancellation', async () => {
+      const original = ID('a1');
+      const cancel = ID('c1');
+      upstream = (url) =>
+        url.pathname.endsWith(original)
+          ? record({ id: original, messageType: 'Alert', replacedBy: `https://api.weather.gov/alerts/${cancel}` })
+          : record({ id: cancel, messageType: 'Cancel', sent: '2026-11-05T14:00:00-05:00', description: 'The Flood Warning has been cancelled.' });
+      const res = await realFetch(`${fate()}?id=${original}`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        id: original,
+        status: 'cancelled',
+        by: { id: cancel, sent: '2026-11-05T14:00:00-05:00', description: 'The Flood Warning has been cancelled.' },
+      });
+      expect(seen.map((s) => s.url)).toEqual([`https://api.weather.gov/alerts/${original}`, `https://api.weather.gov/alerts/${cancel}`]);
+    });
+
+    it('tells a replacement by an update, and an alert nothing replaced, from a cancellation', async () => {
+      const updated = ID('a2');
+      const update = ID('d2');
+      upstream = (url) =>
+        url.pathname.endsWith(updated)
+          ? record({ id: updated, replacedBy: `https://api.weather.gov/alerts/${update}` })
+          : record({ id: update, messageType: 'Update' });
+      expect(await (await realFetch(`${fate()}?id=${updated}`)).json()).toEqual({ id: updated, status: 'replaced', by: { id: update, messageType: 'Update' } });
+
+      const lone = ID('a3');
+      upstream = () => record({ id: lone, messageType: 'Alert' });
+      expect(await (await realFetch(`${fate()}?id=${lone}`)).json()).toEqual({ id: lone, status: 'not-replaced' });
+    });
+
+    it('never follows a replacedBy that is not one of NWS\'s own alerts', async () => {
+      const id = ID('a4');
+      upstream = () => record({ id, replacedBy: 'https://evil.example/alerts/x' });
+      expect(await (await realFetch(`${fate()}?id=${id}`)).json()).toEqual({ id, status: 'not-replaced' });
+      expect(seen.map((s) => s.url)).toEqual([`https://api.weather.gov/alerts/${id}`]);
+    });
+
+    it('502s when NWS will not answer', async () => {
+      upstream = () => new Response('Service Unavailable', { status: 503 });
+      expect((await realFetch(`${fate()}?id=${ID('a5')}`)).status).toBe(502);
+    });
+  });
 });

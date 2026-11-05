@@ -1,6 +1,7 @@
 import type { RawAlert } from '../layers/alerts/alertsData';
 import type { FlightEventWithModel, NpsAlert, ShipPortEvent, WarnAlert } from '../types';
-import type { PinHit } from './pinAlertMatch';
+import type { AlertChange } from './alertChanges';
+import type { PinHit, PinRef } from './pinAlertMatch';
 
 // ── What the alert popup can announce ────────────────────────────────────────
 // One notice per thing that happened. Every kind carries a `key` (unique
@@ -14,8 +15,12 @@ import type { PinHit } from './pinAlertMatch';
 export type NoticeCategory = 'nws' | 'warn' | 'quake' | 'nps' | 'flight' | 'ship';
 
 export const NOTICE_CATEGORIES: { id: NoticeCategory; label: string; detail: string }[] = [
-  { id: 'nws', label: 'NWS alerts', detail: 'New weather alerts within 15 mi of a property' },
-  { id: 'warn', label: 'Wireless Emergency Alerts', detail: 'PBS WARN alerts within 50 mi of a property' },
+  {
+    id: 'nws',
+    label: 'NWS alerts',
+    detail: 'Weather alerts within 15 mi of a property: new ones, and changes — timing, upgrades, severity, cancellation',
+  },
+  { id: 'warn', label: 'Wireless Emergency Alerts', detail: 'PBS WARN alerts within 50 mi of a property, and their updates' },
   { id: 'quake', label: 'Earthquakes', detail: 'M4.5 or stronger within 50 mi of a property' },
   {
     id: 'nps',
@@ -34,24 +39,35 @@ interface NoticeBase {
   aliases?: string[];
 }
 
-export interface NwsNotice extends NoticeBase {
+/** How a later version of an alert differs from the one it replaces. */
+interface AlertDelta {
+  /** A later version of an alert already seen. */
+  isUpdate: boolean;
+  /** What changed from the version it replaces (empty when only its reach did). */
+  changes: AlertChange[];
+  /** Keys of the pins it reaches that the version it replaces didn't. */
+  newPins: string[];
+  /** Pins inside the area of the version it replaces that it no longer covers: it ended there. */
+  endedAt: PinRef[];
+}
+
+export interface NwsNotice extends NoticeBase, AlertDelta {
   category: 'nws';
-  /** The alert's own id. */
+  /** The alert's own id (for a cancellation, the cancel message's). */
   id: string;
   alert: RawAlert;
   /** Pins within the radius, nearest first. */
   hits: PinHit[];
-  /** An update of an alert already on the map that now reaches a pin it didn't. */
-  isUpdate: boolean;
+  /** NWS cancelled the alert outright: when, and what the cancellation said. */
+  cancelled: { sent: string | null; text: string | null } | null;
   /** [west, south, east, north] around the alert's area and the pins it reaches. */
   bbox: [number, number, number, number];
 }
 
-export interface WarnNotice extends NoticeBase {
+export interface WarnNotice extends NoticeBase, AlertDelta {
   category: 'warn';
   alert: WarnAlert;
   hits: PinHit[];
-  isUpdate: boolean;
   bbox: [number, number, number, number];
 }
 
@@ -94,6 +110,16 @@ export interface ShipNotice extends NoticeBase {
 }
 
 export type Notice = NwsNotice | WarnNotice | QuakeNotice | NpsNotice | FlightNotice | ShipNotice;
+
+/** An alert that ended at a property (cancelled, or no longer covering it) reads as good news. */
+export const ENDED_COLOR = '#34d399';
+export const ENDED_RANK = 3;
+
+/** The notice only says an alert ended somewhere: nothing new, nothing changed for the worse. */
+export function isEndedNotice(n: NwsNotice | WarnNotice): boolean {
+  if (n.category === 'nws' && n.cancelled) return true;
+  return n.isUpdate && n.changes.length === 0 && n.newPins.length === 0 && n.endedAt.length > 0;
+}
 
 // Operational events read calmer than hazards.
 export const FLIGHT_COLOR = '#38bdf8';

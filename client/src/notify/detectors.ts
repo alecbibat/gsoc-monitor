@@ -6,12 +6,13 @@
 import { WEA_CLASSES } from '../layers/warn/warnMeta';
 import { NPS_CATEGORY } from '../nps/npsMeta';
 import type { EarthquakeFeature, FlightEventWithModel, NpsAlert, ShipPortEvent, WarnAlert } from '../types';
+import { weaChanges, weaFacts } from './alertChanges';
 import {
-  ALL_PINS, SEEN_TTL_MS, detectNewNear, hitsBbox, mergeHits, pinsNearCircle, pinsNearRings, ringsBbox,
+  ALL_PINS, SEEN_TTL_MS, detectNewNear, hitsBbox, mergeHits, pinsByKey, pinsNearCircle, pinsNearRings, ringsBbox,
   type PinHit, type PinRef, type SeenMap,
 } from './pinAlertMatch';
 import {
-  FLIGHT_COLOR, SHIP_COLOR, quakeColor,
+  ENDED_COLOR, ENDED_RANK, FLIGHT_COLOR, SHIP_COLOR, isEndedNotice, quakeColor,
   type FlightNotice, type NpsNotice, type QuakeInfo, type QuakeNotice, type ShipNotice, type WarnNotice,
 } from './notices';
 
@@ -50,7 +51,12 @@ function warnBbox(a: WarnAlert): [number, number, number, number] {
   return ringsBbox(rings);
 }
 
-/** WEAs (PBS WARN) that are new and within WARN_NOTIFY_RADIUS_MI of a pin. */
+/**
+ * WEAs (PBS WARN) within WARN_NOTIFY_RADIUS_MI of a pin that are new, or
+ * updated there: a later version with a new message, action, alert type,
+ * severity, certainty, urgency or expiry, or that reaches another pin or no
+ * longer covers one. A WEA re-sent unchanged stays quiet.
+ */
 export function detectWarnNotices(opts: {
   alerts: readonly WarnAlert[];
   seen: SeenMap;
@@ -60,29 +66,39 @@ export function detectWarnNotices(opts: {
   radiusMi?: number;
 }): { notices: WarnNotice[]; seen: SeenMap } {
   const { now, pins = ALL_PINS, radiusMi = WARN_NOTIFY_RADIUS_MI } = opts;
+  const named = pinsByKey(pins);
   const { fresh, seen } = detectNewNear({
     items: opts.alerts,
     idOf: (a) => a.id,
     hitsOf: (a) => warnHits(a, pins, radiusMi),
     refsOf: (a) => (a.referencedId ? [a.referencedId] : []),
     skip: (a) => !!a.expires && Date.parse(a.expires) <= now,
+    factsOf: weaFacts,
+    changesOf: weaChanges,
     seen: opts.seen,
     baseline: opts.baseline,
     now,
   });
-  const notices = fresh.map(({ item: alert, id, hits, isUpdate }): WarnNotice => ({
-    category: 'warn',
-    key: `warn:${id}`,
-    // An NWS warning sent to phones is the same event as the NWS alert of
-    // that id (the WEA's CAP id is the NWS one plus ".IPAWS").
-    aliases: alert.nws ? [`nws:${alert.capId.replace(/\.IPAWS$/, '')}`] : [],
-    color: (WEA_CLASSES[alert.weaClass] ?? WEA_CLASSES['public-safety']).color,
-    rank: WEA_RANK[alert.weaClass] ?? 12,
-    alert,
-    hits,
-    isUpdate,
-    bbox: hitsBbox(warnBbox(alert), hits),
-  }));
+  const notices = fresh.map(({ item: alert, id, hits, isUpdate, changes, newPins, endedPins }): WarnNotice => {
+    const endedAt = named(endedPins);
+    const notice: WarnNotice = {
+      category: 'warn',
+      key: `warn:${id}`,
+      // An NWS warning sent to phones is the same event as the NWS alert of
+      // that id (the WEA's CAP id is the NWS one plus ".IPAWS").
+      aliases: alert.nws ? [`nws:${alert.capId.replace(/\.IPAWS$/, '')}`] : [],
+      color: (WEA_CLASSES[alert.weaClass] ?? WEA_CLASSES['public-safety']).color,
+      rank: WEA_RANK[alert.weaClass] ?? 12,
+      alert,
+      hits,
+      isUpdate,
+      changes,
+      newPins,
+      endedAt,
+      bbox: hitsBbox(warnBbox(alert), [...hits, ...endedAt.map((pin) => ({ pin, distanceMi: 0 }))]),
+    };
+    return isEndedNotice(notice) ? { ...notice, color: ENDED_COLOR, rank: ENDED_RANK } : notice;
+  });
   return { notices, seen };
 }
 

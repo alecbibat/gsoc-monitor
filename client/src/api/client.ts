@@ -113,6 +113,8 @@ export const api = {
   jtwcInvests: () => getJson<import('../types').JtwcInvestsResponse>('/api/jtwc-invests'),
   outages: () => getJson<import('../types').OutagesResponse>('/api/outages'),
   warn: () => getJson<import('../types').WarnFeed>('/api/warn/active'),
+  /** Whether an NWS alert that left the active feed was cancelled, replaced or neither. */
+  alertFate: (id: string) => getJson<import('../types').AlertFate>(`/api/alerts/fate?id=${encodeURIComponent(id)}`),
   roadClosures: () => getJson<import('../types').RoadClosuresFeed>('/api/roads/closures'),
   webcams: () => getJson<import('../types').WebcamsFeed>('/api/webcams'),
   riverDetail: (lid: string) =>
