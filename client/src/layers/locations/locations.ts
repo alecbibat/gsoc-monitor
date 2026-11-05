@@ -46,6 +46,7 @@ export const LOCATION_GROUPS: LocationGroup[] = [
       { name: 'Grand Canyon Railway & Hotel', lat: 35.25185, lon: -112.19152 },
       { name: 'City of Valle - Employee Housing', lat: 35.65216, lon: -112.13947 },
       { name: 'Grand Canyon Village', lat: 36.05624, lon: -112.13939 },
+      { name: 'Phantom Ranch', lat: 36.10584, lon: -112.09468 },
       { name: 'The Grand Hotel', lat: 35.96997, lon: -112.12712 },
       { name: 'Grand Canyon Hotel & Suites', lat: 35.97134, lon: -112.12840 },
       { name: 'Grand Canyon Trading Post', lat: 35.97243, lon: -112.12635 },

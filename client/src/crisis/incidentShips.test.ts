@@ -100,7 +100,7 @@ describe('shipListText', () => {
     expect(shipListText([STAR_BREEZE])).toBe('Star Breeze');
     expect(shipListText([STAR_BREEZE, WIND_SURF])).toBe('Star Breeze and Wind Surf');
     expect(shipListText(FLEET_ROSTER.map((s) => s.mmsi))).toBe(
-      'Star Breeze, Star Legend, Star Pride and 4 more'
+      'Star Breeze, Star Explorer, Star Legend and 5 more'
     );
   });
 });
