@@ -78,6 +78,8 @@ export const useLayersStore = create<LayersState>()(
         outages: false,
         intel: false,
         warn: false,
+        // Asked for by name: closures around the followed national parks.
+        roads: true,
       },
       basemap: 'dark',
       toggleLayer: (id) =>

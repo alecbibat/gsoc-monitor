@@ -19,7 +19,8 @@ import countyRouter from './routes/county';
 import parkRouter from './routes/park';
 import directionsRouter from './routes/directions';
 import driveRouter from './routes/route';
-import parkNewsRouter from './routes/parkNews';
+import npsRouter from './routes/nps';
+import roadsRouter from './routes/roads';
 import satellitesRouter from './routes/satellites';
 import newsMapRouter from './routes/newsMap';
 import smokeRouter from './routes/smoke';
@@ -163,7 +164,10 @@ function main() {
   // Unused by the client (routes in-browser); gated so it isn't a public Overpass/OSRM proxy.
   app.use('/api/directions', requireAuth, directionsRouter);
   app.use('/api/drive', requireAuth, driveRouter);
-  app.use('/api/park-news', parkNewsRouter);
+  // National Park Service Data API: park alerts, news releases (NPS_API_KEY).
+  app.use('/api/nps', npsRouter);
+  // Road closures around those parks (NPS road events + state DOT feeds).
+  app.use('/api/roads', roadsRouter);
   app.use('/api/satellites', satellitesRouter);
   app.use('/api/news-map', newsMapRouter);
   app.use('/api/smoke', smokeRouter);

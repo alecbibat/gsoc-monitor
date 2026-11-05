@@ -130,7 +130,7 @@ data route.
 | **MyShipTracking** | `MYSHIPTRACKING_API_KEY` | Optional paid AIS alternative | Paid |
 | **PurpleAir** | `PURPLEAIR_API_KEY` | Air quality sensors | Paid/registered |
 | **AirNow** | `AIRNOW_API_KEY` | EPA air quality | Free, registration |
-| **NPS Data API** | `NPS_API_KEY` | Park news/alerts. Defaults to `DEMO_KEY` (rate-limited). | Free |
+| **NPS Data API** | `NPS_API_KEY` | Park alerts (popups, National Parks panel), news (ticker), NPS road events. Defaults to `DEMO_KEY` (a few requests/hour; the server then polls 4× less often). | Free |
 
 Other env vars: `PORT`, `NODE_ENV`, `NWS_USER_AGENT` (contact string required by NWS
 and Nominatim policy), `SHIPS_SCRAPE_CRUISEMAPPER`, `SHIPS_POLL_MINUTES`,
@@ -165,7 +165,8 @@ and Nominatim policy), `SHIPS_SCRAPE_CRUISEMAPPER`, `SHIPS_POLL_MINUTES`,
 | `/api/news` | BBC, NPR, Sky News, Al Jazeera, Guardian RSS |
 | `/api/news-map` | api.gdeltproject.org |
 | `/api/county`, `/api/park` | ArcGIS feature services |
-| `/api/park-news` | developer.nps.gov |
+| `/api/nps` (alerts · news · feed · status) | developer.nps.gov (NPS Data API) |
+| `/api/roads/closures` | carto.nps.gov (Yellowstone, Glacier road status), services1.arcgis.com (Death Valley road status), developer.nps.gov (road events), cwwp2.dot.ca.gov (Caltrans LCS), az511.gov (ADOT WZDx) |
 | `/api/directions`, `/api/drive` | router.project-osrm.org, overpass-api.de |
 | `/api/outages` | ArcGIS · **KUBRA Storm Center** (kubra.io) · NISC co-op maps (outagemap-data.cloud.coop) — 9 named utilities |
 | `/api/ships` | aisstream.io · **CruiseMapper scraped by IMO** (free fallback, behind Cloudflare) · optional paid AIS |

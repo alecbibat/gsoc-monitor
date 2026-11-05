@@ -1,16 +1,18 @@
 // The notification rules beyond NWS alerts: Wireless Emergency Alerts and
-// earthquakes near a pin, and the company aircraft's and Windstar ships'
-// movements. Pure, like pinAlertMatch: AlertNotifier feeds each poll in.
+// earthquakes near a pin, National Park Service alerts at the followed parks,
+// and the company aircraft's and Windstar ships' movements. Pure, like
+// pinAlertMatch: AlertNotifier feeds each poll in.
 
 import { WEA_CLASSES } from '../layers/warn/warnMeta';
-import type { EarthquakeFeature, FlightEventWithModel, ShipPortEvent, WarnAlert } from '../types';
+import { NPS_CATEGORY } from '../nps/npsMeta';
+import type { EarthquakeFeature, FlightEventWithModel, NpsAlert, ShipPortEvent, WarnAlert } from '../types';
 import {
   ALL_PINS, SEEN_TTL_MS, detectNewNear, hitsBbox, mergeHits, pinsNearCircle, pinsNearRings, ringsBbox,
   type PinHit, type PinRef, type SeenMap,
 } from './pinAlertMatch';
 import {
   FLIGHT_COLOR, SHIP_COLOR, quakeColor,
-  type FlightNotice, type QuakeInfo, type QuakeNotice, type ShipNotice, type WarnNotice,
+  type FlightNotice, type NpsNotice, type QuakeInfo, type QuakeNotice, type ShipNotice, type WarnNotice,
 } from './notices';
 
 export const WARN_NOTIFY_RADIUS_MI = 50;
@@ -219,4 +221,69 @@ export function detectShipNotices(opts: {
     event,
   }));
   return { notices, seen };
+}
+
+// ── National Park Service alerts ─────────────────────────────────────────────
+// Unlike the hazards above these have no area: the park is the place. An
+// alert stays listed for as long as the park keeps it up (some for months),
+// so — as everywhere — what is already listed when the dashboard opens is
+// recorded, not announced. After that, a new alert announces, and so does an
+// edit that changes what it says: parks keep standing alerts ("Trail Ridge
+// Road Status Update") and edit them as conditions change, which is exactly
+// the change the room wants to see. Reworded whitespace or a re-index alone
+// doesn't count.
+
+export interface NpsSeenEntry {
+  /** What the alert said when last seen (npsAlertSig). */
+  sig: string;
+  lastSeen: number;
+}
+
+export type NpsSeen = ReadonlyMap<string, NpsSeenEntry>;
+
+const squash = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+
+/** The parts of an alert whose change is news: its category, title and text. */
+export function npsAlertSig(a: NpsAlert): string {
+  return `${a.category}\u0001${squash(a.title)}\u0001${squash(a.description)}`;
+}
+
+/** FNV-1a, for a short, stable notice key per version of an alert. */
+function hash32(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
+/** NPS alerts that are new, or whose category, title or text changed, since the last poll. */
+export function detectNpsNotices(opts: {
+  alerts: readonly NpsAlert[];
+  seen: NpsSeen;
+  baseline: boolean;
+  now: number;
+}): { notices: NpsNotice[]; seen: NpsSeen } {
+  const { alerts, baseline, now } = opts;
+  const next = new Map<string, NpsSeenEntry>();
+  for (const [id, entry] of opts.seen) if (now - entry.lastSeen < SEEN_TTL_MS) next.set(id, entry);
+  const notices: NpsNotice[] = [];
+  for (const alert of alerts) {
+    const sig = npsAlertSig(alert);
+    const prior = next.get(alert.id);
+    next.set(alert.id, { sig, lastSeen: now });
+    if (baseline || (prior && prior.sig === sig)) continue;
+    const cat = NPS_CATEGORY[alert.category] ?? NPS_CATEGORY.info;
+    notices.push({
+      category: 'nps',
+      // One key per version: an edit announces once, and the same version twice never does.
+      key: `nps:${alert.id}:${hash32(sig)}`,
+      color: cat.color,
+      rank: cat.noticeRank,
+      alert,
+      isUpdate: !!prior,
+    });
+  }
+  return { notices, seen: next };
 }

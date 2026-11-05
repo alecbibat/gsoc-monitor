@@ -11,13 +11,17 @@ import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { useLayersStore } from '../store/layersStore';
 import { useCrisisStore } from '../crisis/crisisStore';
 import { useCrisisDockStore } from '../ui/uiStore';
+import { fetchNpsFeedShared } from '../nps/npsStore';
+import { NPS_CATEGORY, formatNpsDay, relativeNpsDay } from '../nps/npsMeta';
+import { parkFrame } from '../nps/flyToPark';
+import { openNpsPanel } from '../nps/openNpsPanel';
 import type { EarthquakeFeature, LayerId } from '../types';
 import { useAlertNotifyStore } from './alertNotifyStore';
 import { NOTIFY_RADIUS_MI, detectNewAlertNotices, type PinHit, type SeenMap } from './pinAlertMatch';
 import {
   QUAKE_NOTIFY_RADIUS_MI, WARN_NOTIFY_RADIUS_MI,
-  detectFlightNotices, detectQuakeNotices, detectShipNotices, detectWarnNotices,
-  type SeenIds,
+  detectFlightNotices, detectNpsNotices, detectQuakeNotices, detectShipNotices, detectWarnNotices,
+  type NpsSeen, type SeenIds,
 } from './detectors';
 import type { Notice, NoticeCategory } from './notices';
 
@@ -28,6 +32,7 @@ import type { Notice, NoticeCategory } from './notices';
 //   nws    — NWS alerts within 15 mi of a property (shares the map layer's download)
 //   warn   — Wireless Emergency Alerts (PBS WARN) within 50 mi
 //   quake  — M4.5+ earthquakes within 50 mi
+//   nps    — new or changed National Park Service alerts at the followed parks
 //   flight — the company aircraft's takeoffs and landings
 //   ship   — Windstar arrivals at and departures from port
 // Runs whether or not the matching map layers are shown, and during the
@@ -83,6 +88,19 @@ const quakeStep = (): Step => {
   };
 };
 
+const npsStep = (): Step => {
+  let seen: NpsSeen = new Map();
+  return async (baseline) => {
+    const feed = await fetchNpsFeedShared();
+    // A failed alerts half is a skipped poll, never "no alerts": the alerts it
+    // hid would all read as new once it recovered.
+    if (!feed.alerts) throw new Error(feed.alertsError ?? 'NPS alerts unavailable');
+    const out = detectNpsNotices({ alerts: feed.alerts, seen, baseline, now: Date.now() });
+    seen = out.seen;
+    return out.notices;
+  };
+};
+
 const flightStep = (): Step => {
   let seen: SeenIds = new Map();
   return async (baseline) => {
@@ -107,6 +125,8 @@ const SOURCES: Record<NoticeCategory, { makeStep: () => Step; everyMs: number }>
   nws: { makeStep: nwsStep, everyMs: 60_000 },
   warn: { makeStep: warnStep, everyMs: 60_000 },
   quake: { makeStep: quakeStep, everyMs: 60_000 },
+  // The server refreshes NPS alerts every 5 minutes; parks post a few a week.
+  nps: { makeStep: npsStep, everyMs: 120_000 },
   flight: { makeStep: flightStep, everyMs: 60_000 },
   // Positions land about every two hours; every two minutes is plenty.
   ship: { makeStep: shipStep, everyMs: 120_000 },
@@ -198,6 +218,10 @@ function headerText(n: Notice): string {
       return n.isUpdate ? 'Emergency alert update near your locations' : 'Emergency alert sent to phones near your locations';
     case 'quake':
       return 'Earthquake near your locations';
+    case 'nps':
+      return n.isUpdate
+        ? `National Park Service alert updated · ${n.alert.park}`
+        : `New National Park Service alert · ${n.alert.park}`;
     case 'flight':
       return n.event.kind === 'takeoff' ? 'Company aircraft departed' : 'Company aircraft landed';
     case 'ship':
@@ -333,6 +357,36 @@ function NoticeBody({ n, now }: { n: Notice; now: number }) {
         </>
       );
     }
+    case 'nps': {
+      const a = n.alert;
+      const cat = NPS_CATEGORY[a.category] ?? NPS_CATEGORY.info;
+      const posted = formatNpsDay(a.postedDay);
+      const ago = relativeNpsDay(a.postedDay);
+      return (
+        <>
+          <div>
+            <Title color={n.color}>{a.title}</Title>
+            <Chips items={[cat.label, a.parkFullName, n.isUpdate && 'Updated']} />
+          </div>
+          {a.description && (
+            <div className="hud-scroll max-h-56 overflow-y-auto overscroll-contain rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2">
+              <p className="whitespace-pre-line text-[12.5px] leading-snug text-white/85">{a.description}</p>
+            </div>
+          )}
+          <Times items={[[n.isUpdate ? 'Last edited' : 'Posted', posted && `${posted}${ago ? ` (${ago})` : ''}`]]} />
+          <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px]">
+            {a.url && (
+              <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-emerald-300/85 hover:text-emerald-200 hover:underline">
+                More info on nps.gov ↗
+              </a>
+            )}
+            <a href={a.conditionsUrl} target="_blank" rel="noopener noreferrer" className="text-emerald-300/85 hover:text-emerald-200 hover:underline">
+              Park conditions ↗
+            </a>
+          </div>
+        </>
+      );
+    }
     case 'flight': {
       const e = n.event;
       const a = e.airport;
@@ -405,7 +459,7 @@ export function NoticeCard({ notice, index, total, now, onShow, onDismiss, onDis
     >
       <div className="flex items-center gap-2 px-4 py-2" style={{ background: `${color}33`, borderBottom: `1px solid ${color}66` }}>
         <span aria-hidden className="text-[15px]">
-          {notice.category === 'flight' ? '✈' : notice.category === 'ship' ? '⚓' : '⚠'}
+          {notice.category === 'flight' ? '✈' : notice.category === 'ship' ? '⚓' : notice.category === 'nps' ? '🏞' : '⚠'}
         </span>
         <span className="flex-1 text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color }}>
           {headerText(notice)}
@@ -477,6 +531,7 @@ export function AlertNotifier() {
   useNoticeSource('nws', enabled && categories.nws);
   useNoticeSource('warn', enabled && categories.warn);
   useNoticeSource('quake', enabled && categories.quake);
+  useNoticeSource('nps', enabled && categories.nps);
   useNoticeSource('flight', enabled && categories.flight);
   useNoticeSource('ship', enabled && categories.ship);
 
@@ -564,6 +619,15 @@ export function AlertNotifier() {
           },
           locked: true,
         });
+        break;
+      }
+      case 'nps': {
+        // The park, with the company's properties in it, and the panel with the
+        // alert's full text and every other alert in effect there.
+        ensureLayer('locations');
+        const frame = parkFrame(n.alert.parkCode);
+        if (live && frame) flyToBoundingBox(live, ...frame);
+        openNpsPanel(n.alert.parkCode, n.alert.id);
         break;
       }
       case 'flight':

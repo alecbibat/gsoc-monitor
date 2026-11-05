@@ -1,5 +1,5 @@
 import type { RawAlert } from '../layers/alerts/alertsData';
-import type { FlightEventWithModel, ShipPortEvent, WarnAlert } from '../types';
+import type { FlightEventWithModel, NpsAlert, ShipPortEvent, WarnAlert } from '../types';
 import type { PinHit } from './pinAlertMatch';
 
 // ── What the alert popup can announce ────────────────────────────────────────
@@ -11,12 +11,17 @@ import type { PinHit } from './pinAlertMatch';
 // also went out to phones as a WEA), so whichever source reports it first
 // announces it once.
 
-export type NoticeCategory = 'nws' | 'warn' | 'quake' | 'flight' | 'ship';
+export type NoticeCategory = 'nws' | 'warn' | 'quake' | 'nps' | 'flight' | 'ship';
 
 export const NOTICE_CATEGORIES: { id: NoticeCategory; label: string; detail: string }[] = [
   { id: 'nws', label: 'NWS alerts', detail: 'New weather alerts within 15 mi of a property' },
   { id: 'warn', label: 'Wireless Emergency Alerts', detail: 'PBS WARN alerts within 50 mi of a property' },
   { id: 'quake', label: 'Earthquakes', detail: 'M4.5 or stronger within 50 mi of a property' },
+  {
+    id: 'nps',
+    label: 'National Park alerts',
+    detail: 'New or changed NPS alerts (danger, closures, cautions, info) at the six parks',
+  },
   { id: 'flight', label: 'Company aircraft', detail: 'Takeoffs and landings, with the airport' },
   { id: 'ship', label: 'Windstar fleet', detail: 'Port arrivals and departures' },
 ];
@@ -71,6 +76,13 @@ export interface QuakeNotice extends NoticeBase {
   hits: PinHit[];
 }
 
+export interface NpsNotice extends NoticeBase {
+  category: 'nps';
+  alert: NpsAlert;
+  /** An alert already on the park's list whose category, title or text changed. */
+  isUpdate: boolean;
+}
+
 export interface FlightNotice extends NoticeBase {
   category: 'flight';
   event: FlightEventWithModel;
@@ -81,7 +93,7 @@ export interface ShipNotice extends NoticeBase {
   event: ShipPortEvent;
 }
 
-export type Notice = NwsNotice | WarnNotice | QuakeNotice | FlightNotice | ShipNotice;
+export type Notice = NwsNotice | WarnNotice | QuakeNotice | NpsNotice | FlightNotice | ShipNotice;
 
 // Operational events read calmer than hazards.
 export const FLIGHT_COLOR = '#38bdf8';

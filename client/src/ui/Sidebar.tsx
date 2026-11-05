@@ -39,6 +39,7 @@ import { FleetSnapshotButton } from '../layers/ships/FleetSnapshotButton';
 import { api } from '../api/client';
 import { LayerToggle } from './LayerToggle';
 import { Section } from './Section';
+import { NationalParksSection } from '../nps/NationalParksSection';
 import { BasemapSwitcher } from './BasemapSwitcher';
 import { ScreensaverControls } from './ScreensaverControls';
 import { RadarControls } from '../layers/radar/RadarControls';
@@ -535,6 +536,8 @@ export function Sidebar() {
             }
           />
         </Section>
+
+        <NationalParksSection />
 
         <Section title="Weather">
           <LayerToggle

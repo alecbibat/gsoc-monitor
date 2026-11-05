@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { EarthquakeFeature, FlightEventWithModel, ShipPortEvent, WarnAlert } from '../types';
+import type { EarthquakeFeature, FlightEventWithModel, NpsAlert, ShipPortEvent, WarnAlert } from '../types';
 import {
-  NOTICE_MAX_AGE_MS, detectFlightNotices, detectQuakeNotices, detectShipNotices, detectWarnNotices, warnHits,
-  type SeenIds,
+  NOTICE_MAX_AGE_MS, detectFlightNotices, detectNpsNotices, detectQuakeNotices, detectShipNotices, detectWarnNotices,
+  warnHits, type NpsSeen, type SeenIds,
 } from './detectors';
 import type { PinRef, SeenMap } from './pinAlertMatch';
 
@@ -175,5 +175,74 @@ describe('Windstar port notices', () => {
 
   it('stays quiet on the baseline', () => {
     expect(detectShipNotices({ events: [portEvent('a')], seen: new Map(), baseline: true, now: NOW }).notices).toEqual([]);
+  });
+});
+
+describe('National Park Service notices', () => {
+  const park = (id: string, extra: Partial<NpsAlert> = {}): NpsAlert => ({
+    id,
+    parkCode: 'romo',
+    park: 'Rocky Mountain',
+    parkFullName: 'Rocky Mountain National Park',
+    category: 'info',
+    categoryLabel: 'Information',
+    title: 'Trail Ridge Road Status Update',
+    description: 'Trail Ridge Road is closed at Many Parks Curve and the Colorado River Trailhead.',
+    url: 'https://www.nps.gov/romo/planyourvisit/road_status.htm',
+    conditionsUrl: 'https://www.nps.gov/romo/planyourvisit/conditions.htm',
+    postedDay: '2026-11-04',
+    postedAt: Date.UTC(2026, 10, 4, 12),
+    roadEvents: [],
+    ...extra,
+  });
+
+  /** Run polls in order (first one is the baseline); return each poll's notices. */
+  function runNps(polls: NpsAlert[][]) {
+    let seen: NpsSeen = new Map();
+    return polls.map((alerts, i) => {
+      const out = detectNpsNotices({ alerts, seen, baseline: i === 0, now: NOW + i * MIN });
+      seen = out.seen;
+      return out.notices;
+    });
+  }
+
+  it('records what is already listed, then announces a new alert once', () => {
+    const standing = park('a');
+    const fresh = park('b', { category: 'danger', title: 'Bear activity closes Bear Lake Trail', description: 'Closed.' });
+    const [first, second, third] = runNps([[standing], [standing, fresh], [standing, fresh]]);
+    expect(first).toEqual([]);
+    expect(second.map((n) => n.alert.id)).toEqual(['b']);
+    expect(second[0]).toMatchObject({ category: 'nps', isUpdate: false, color: '#f87171', rank: 12 });
+    expect(third).toEqual([]);
+  });
+
+  it('announces an edit that changes what the alert says, once per version', () => {
+    const v1 = park('a');
+    const v2 = park('a', { description: 'Trail Ridge Road is closed for the season.', postedDay: '2026-11-05' });
+    const [, edited, again, reverted] = runNps([[v1], [v2], [v2], [v1]]);
+    expect(edited).toHaveLength(1);
+    expect(edited[0].isUpdate).toBe(true);
+    expect(again).toEqual([]);
+    // Back to the first wording: a change the room hasn't seen in this run of the poller.
+    expect(reverted).toHaveLength(1);
+    expect(reverted[0].key).not.toBe(edited[0].key);
+  });
+
+  it('treats a category change as news but not whitespace, case or a re-index', () => {
+    const v1 = park('a');
+    const cosmetic = park('a', { title: '  TRAIL RIDGE ROAD   status update ', postedDay: '2026-11-05', postedAt: 1 });
+    const escalated = park('a', { category: 'closure', categoryLabel: 'Park Closure' });
+    const [, quiet, loud] = runNps([[v1], [cosmetic], [escalated]]);
+    expect(quiet).toEqual([]);
+    expect(loud).toHaveLength(1);
+    expect(loud[0]).toMatchObject({ isUpdate: true, color: '#fb923c', rank: 9 });
+  });
+
+  it('forgets an alert gone from the feed for the seen window', () => {
+    const a = park('a');
+    let seen: NpsSeen = detectNpsNotices({ alerts: [a], seen: new Map(), baseline: true, now: NOW }).seen;
+    seen = detectNpsNotices({ alerts: [], seen, baseline: false, now: NOW + 7 * 60 * MIN }).seen;
+    const back = detectNpsNotices({ alerts: [a], seen, baseline: false, now: NOW + 7 * 60 * MIN + MIN });
+    expect(back.notices.map((n) => n.isUpdate)).toEqual([false]);
   });
 });
