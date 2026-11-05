@@ -13,6 +13,7 @@ export const WIND_COLOR = '#fbbf24';
 
 export const FLEET_ROSTER: FleetRosterShip[] = [
   { mmsi: '311083000', name: 'Star Breeze', cls: 'STAR' },
+  { mmsi: '255806193', name: 'Star Explorer', cls: 'STAR' },
   { mmsi: '311085000', name: 'Star Legend', cls: 'STAR' },
   { mmsi: '311084000', name: 'Star Pride', cls: 'STAR' },
   { mmsi: '311001759', name: 'Star Seeker', cls: 'STAR' },

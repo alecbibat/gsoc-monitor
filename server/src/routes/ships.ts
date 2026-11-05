@@ -20,6 +20,13 @@ interface FleetShip {
 }
 const FLEET: FleetShip[] = [
   { mmsi: '311083000', imo: 8807997, name: 'Star Breeze' },
+  // Ex-World Explorer (Mystic Cruises, 2019), converted at West Sea, Viana do
+  // Castelo; Windstar service from Dec 28, 2026. Portugal (Madeira) flag as of
+  // Nov 2026 and its AIS still sends WORLD EXPLORER (fleetName keeps the label
+  // right). If a reflag brings a new MMSI, by-IMO positions (CruiseMapper,
+  // paid providers) keep arriving under this one; update it here, in the
+  // client's FLEET_ROSTER and in ShipClassCard's PROFILES.
+  { mmsi: '255806193', imo: 9835719, name: 'Star Explorer' },
   { mmsi: '311085000', imo: 9008598, name: 'Star Legend' },
   { mmsi: '311084000', imo: 8707343, name: 'Star Pride' },
   { mmsi: '311001759', imo: 9904819, name: 'Star Seeker' },
@@ -29,6 +36,17 @@ const FLEET: FleetShip[] = [
 ];
 const ALLOWED_IMOS = new Set(FLEET.map((s) => s.imo));
 const FLEET_MMSIS = FLEET.map((s) => s.mmsi);
+
+/**
+ * A fleet ship's own name, by MMSI or IMO — it wins over the name its AIS
+ * broadcasts, which can lag a renaming (the Star Explorer still sends WORLD
+ * EXPLORER). The by-IMO providers already label by the fleet name; this keeps
+ * the live AIS path in line. Null for a vessel outside the fleet.
+ */
+export function fleetName(mmsi: string, imo: number | null): string | null {
+  const ship = FLEET.find((s) => s.mmsi === mmsi) ?? (imo !== null ? FLEET.find((s) => s.imo === imo) : undefined);
+  return ship?.name ?? null;
+}
 
 // aisstream subscription mode. The firehose streams every ship aisstream sees
 // worldwide — useful once as a diagnostic (it proved none of the fleet are in
@@ -458,7 +476,9 @@ function handleMessage(raw: string) {
     const record: VesselData = {
       mmsi,
       imo: sd?.imo ?? existing?.imo ?? null,
-      name: sd?.name || (meta.ShipName as string | undefined)?.trim() || existing?.name || null,
+      name:
+        fleetName(mmsi, sd?.imo ?? existing?.imo ?? null) ??
+        (sd?.name || (meta.ShipName as string | undefined)?.trim() || existing?.name || null),
       callsign: sd?.callsign ?? existing?.callsign ?? null,
       shipType: sd?.shipType ?? existing?.shipType ?? null,
       latitude: lat,
@@ -517,7 +537,7 @@ function handleMessage(raw: string) {
       const enriched: VesselData = {
         ...existing,
         imo: info.imo ?? existing.imo,
-        name: info.name || existing.name,
+        name: fleetName(mmsi, info.imo ?? existing.imo) ?? (info.name || existing.name),
         callsign: info.callsign || existing.callsign,
         shipType: info.shipType ?? existing.shipType,
         destination: info.destination || existing.destination,

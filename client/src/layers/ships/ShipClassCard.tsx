@@ -46,6 +46,8 @@ const PROFILES: Record<string, ShipProfile> = {
   '311085000': { class: 'STAR CLASS', built: 1992, refitted: 2021, lengthM: 159, beamM: 19.2, grt: 12_995, guests: 312, crew: 190, speedKt: 18 }, // Star Legend
   '311084000': { class: 'STAR CLASS', built: 1988, refitted: 2020, lengthM: 159, beamM: 19.2, grt: 12_995, guests: 312, crew: 190, speedKt: 18 }, // Star Pride
   '311001759': { class: 'STAR CLASS', built: 2025, lengthM: 131.5, beamM: 19, grt: 9_315, guests: 224, crew: 135, speedKt: 16, iceClass: true }, // Star Seeker
+  // Ex-World Explorer (Mystic Cruises), converted for Windstar in 2026 (CruiseMapper; VesselFinder).
+  '255806193': { class: 'STAR CLASS', built: 2019, refitted: 2026, lengthM: 126, beamM: 19, grt: 9_923, guests: 224, crew: 130, speedKt: 16 }, // Star Explorer
   // Wind class — original sailing vessels
   '309056000': { class: 'WIND CLASS', built: 1988, lengthM: 110, beamM: 15.8, grt: 5_376, guests: 148, crew: 88, speedKt: 12, sailSpeedKt: 15, masts: 4, sails: 5 }, // Wind Spirit
   '309163000': { class: 'WIND CLASS', built: 1986, lengthM: 110, beamM: 15.8, grt: 5_307, guests: 148, crew: 88, speedKt: 12, sailSpeedKt: 15, masts: 4, sails: 5 }, // Wind Star
