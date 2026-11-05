@@ -641,6 +641,8 @@ export interface WebcamInfo {
   pageUrl: string;
   kind: WebcamKind;
   embedUrl: string | null;
+  /** Page margin around the embed's player to crop off, px (0 = none). */
+  embedMarginPx: number;
   lat: number;
   lon: number;
   approxLocation: boolean;

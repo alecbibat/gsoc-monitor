@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WEBCAMS, catalogProblems } from './catalog';
 import { MAX_IMAGE_BYTES, getWebcamImage, imageFetchUrl, imageTtlMs, resetWebcamCache, webcamStatus } from './proxy';
 import type { WebcamDef } from './types';
+import { webcamInfo } from '../routes/webcams';
 
 const cam: WebcamDef = {
   id: 'test-cam',
@@ -157,6 +158,8 @@ describe('webcam catalog', () => {
       { ...cam, id: 'plain-embed', embedUrl: 'http://player.example/cam' },
       { ...cam, id: 'leaky-link', kind: 'link' },
       { ...cam, id: 'plain-direct', browserDirect: true, imageUrl: 'http://cam.example/a.jpg' },
+      { ...cam, id: 'margin-no-embed', embedMarginPx: 8 },
+      { ...cam, id: 'huge-margin', embedUrl: 'https://player.example/cam', embedMarginPx: 400 },
     ];
     const problems = catalogProblems(bad).join('\n');
     expect(problems).toMatch(/Bad Id: id must be a lowercase slug/);
@@ -168,5 +171,18 @@ describe('webcam catalog', () => {
     expect(problems).toMatch(/plain-embed: embedUrl must be https/);
     expect(problems).toMatch(/leaky-link: a link camera must not be fetched or embedded/);
     expect(problems).toMatch(/plain-direct: a browser-direct camera needs an https image/);
+    expect(problems).toMatch(/margin-no-embed: embedMarginPx needs an embedUrl/);
+    expect(problems).toMatch(/huge-margin: embedMarginPx needs an embedUrl and 0–24 px/);
+  });
+});
+
+describe('webcamInfo', () => {
+  it("passes on the embed page's margin for the panel to crop, only for a camera with an embed", () => {
+    expect(webcamInfo({ ...cam, embedUrl: 'https://player.example/cam', embedMarginPx: 8 }).embedMarginPx).toBe(8);
+    expect(webcamInfo({ ...cam, embedMarginPx: 8 }).embedMarginPx).toBe(0);
+    expect(webcamInfo(cam).embedMarginPx).toBe(0);
+    const conservancy = WEBCAMS.filter((c) => c.embedUrl?.startsWith('https://pixelcaster.com/'));
+    expect(conservancy.length).toBeGreaterThan(0);
+    expect(conservancy.every((c) => webcamInfo(c).embedMarginPx === 8)).toBe(true);
   });
 });

@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { WebcamInfo } from '../../types';
 import { WebcamDetails } from './WebcamDetails';
-import { ageText, directImageSrc, refreshText, siteOf, staleAfterMs, webcamFreshness, webcamIcon } from './webcamMeta';
+import { ageText, directImageSrc, refreshText, siteOf, spotSlots, staleAfterMs, webcamFreshness, webcamIcon } from './webcamMeta';
 
 const cam: WebcamInfo = {
   id: 'yell-old-faithful',
@@ -13,6 +13,7 @@ const cam: WebcamInfo = {
   pageUrl: 'https://www.nps.gov/yell/learn/photosmultimedia/webcams.htm',
   kind: 'image',
   embedUrl: null,
+  embedMarginPx: 0,
   lat: 44.4605,
   lon: -110.8281,
   approxLocation: true,
@@ -146,5 +147,55 @@ describe('WebcamDetails', () => {
     expect(html).toContain('src="https://www.youtube.com/embed/abc123?autoplay=1&amp;mute=1"');
     expect(html).toContain('Live video');
     expect(html).not.toContain('Marked at the place it shows');
+  });
+});
+
+describe('full screen', () => {
+  const stream: WebcamInfo = {
+    ...cam,
+    kind: 'stream',
+    imagePath: null,
+    embedUrl: 'https://pixelcaster.com/live/grandcanyon/cam1.html',
+    approxLocation: false,
+  };
+  // A browser with the Fullscreen API (the server render has no document at all).
+  const withFullscreenApi = () => vi.stubGlobal('document', { documentElement: { requestFullscreen() {} } });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps full screen with the dashboard: the operator's player may not take the screen", () => {
+    withFullscreenApi();
+    const html = renderToStaticMarkup(<WebcamDetails payload={stream} />);
+    expect(html).toContain('aria-label="Full screen"');
+    expect(html).toContain('allow="autoplay; encrypted-media; picture-in-picture"');
+    expect(html).not.toContain('allowfullscreen');
+  });
+
+  it('offers full screen on a still camera too', () => {
+    withFullscreenApi();
+    expect(renderToStaticMarkup(<WebcamDetails payload={cam} />)).toContain('aria-label="Full screen"');
+  });
+
+  it('leaves full screen to the player where the browser has none of its own (iPhone)', () => {
+    const html = renderToStaticMarkup(<WebcamDetails payload={stream} />);
+    expect(html).not.toContain('aria-label="Full screen"');
+    expect(html).toContain('allowfullscreen');
+  });
+
+  it("has nothing to show full screen for a camera that lives only on its operator's site", () => {
+    withFullscreenApi();
+    const html = renderToStaticMarkup(<WebcamDetails payload={{ ...cam, kind: 'link', imagePath: null }} />);
+    expect(html).not.toContain('aria-label="Full screen"');
+  });
+});
+
+describe('spotSlots', () => {
+  it('lines up the cameras that share a spot, and leaves a lone camera alone', () => {
+    const loganPass = { lon: -113.718, lat: 48.695 };
+    expect(spotSlots([loganPass, { lon: -110.83, lat: 44.46 }, { ...loganPass }, { lon: -113.71801, lat: 48.69499 }])).toEqual([
+      { index: 0, count: 3 },
+      { index: 0, count: 1 },
+      { index: 1, count: 3 },
+      { index: 2, count: 3 },
+    ]);
   });
 });

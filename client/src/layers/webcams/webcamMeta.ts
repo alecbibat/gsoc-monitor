@@ -96,3 +96,15 @@ export function siteOf(url: string): string {
 export function directImageSrc(url: string, bust: boolean, stamp: number): string {
   return bust ? `${url}${url.includes('?') ? '&' : '?'}_=${stamp}` : url;
 }
+
+/** For each camera, its place among the cameras at the same spot. */
+export function spotSlots(cams: readonly { lon: number; lat: number }[]): { index: number; count: number }[] {
+  const spots = new Map<string, number[]>();
+  cams.forEach((c, i) => {
+    const key = `${c.lon.toFixed(4)},${c.lat.toFixed(4)}`;
+    spots.set(key, [...(spots.get(key) ?? []), i]);
+  });
+  const slots: { index: number; count: number }[] = [];
+  for (const members of spots.values()) members.forEach((cam, index) => (slots[cam] = { index, count: members.length }));
+  return slots;
+}

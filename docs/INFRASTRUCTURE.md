@@ -124,7 +124,7 @@ data route.
 | **Heroku** | — | Hosting + Postgres add-on | Paid (dyno + DB plan) |
 | **Cloudinary** | hardcoded cloud/preset | All incident photos + map thumbnails | Free tier / paid by usage |
 | **Google Maps Platform** | `VITE_GOOGLE_MAPS_KEY` | Photorealistic 3D tiles (Map Tiles API). Baked into the bundle at build time. | **Billable per usage** |
-| **Cesium ion** | `VITE_CESIUM_ION_TOKEN` | World Terrain + OSM Buildings. Falls back to the rate-limited demo token. | Free tier |
+| **Cesium ion** | `VITE_CESIUM_ION_TOKEN` | World Terrain + OSM Buildings. Falls back to CesiumJS's bundled demo token, which is rate-limited and stops working a while after each CesiumJS release (ion then answers 401 and 3D Buildings & Terrain stays flat). | Free tier |
 | **AISStream** | `AISSTREAM_API_KEY` | Live ship AIS over `wss://stream.aisstream.io` | Free |
 | **VesselFinder** | `VESSELFINDER_API_KEY` | Optional paid AIS by IMO | Paid |
 | **MyShipTracking** | `MYSHIPTRACKING_API_KEY` | Optional paid AIS alternative | Paid |

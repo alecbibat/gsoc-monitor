@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { startVisiblePolling } from '../../lib/poll';
 import type { WebcamInfo } from '../../types';
 import { directImageSrc, webcamFreshness } from './webcamMeta';
@@ -19,6 +19,32 @@ interface Loaded {
   hostDown: boolean;
 }
 
+/** Class names for a camera's picture: in its panel, or filling the screen. */
+function pictureClasses(fill: boolean) {
+  return fill
+    ? {
+        box: 'relative min-h-0 flex-1 bg-black',
+        img: 'block h-full w-full object-contain',
+        placeholder: 'flex h-full items-center justify-center text-[13px] text-white/45',
+        caption: 'flex flex-wrap items-center gap-x-2 px-4 pb-3 pt-2 text-[12px] text-white/55',
+      }
+    : {
+        box: 'relative overflow-hidden rounded-lg border border-white/10 bg-black/40',
+        img: 'block h-auto w-full',
+        placeholder: 'flex aspect-video items-center justify-center text-[11px] text-white/40',
+        caption: 'mt-1 flex flex-wrap items-center gap-x-2 text-[10.5px] text-white/45',
+      };
+}
+
+interface PictureProps {
+  cam: WebcamInfo;
+  className: string;
+  /** Fill a full-screen frame (letterboxed) instead of the panel's width. */
+  fill: boolean;
+  /** Placed over the picture's top-right corner (the full-screen button). */
+  control?: ReactNode;
+}
+
 const ms = (iso: string | null) => {
   const t = iso ? Date.parse(iso) : NaN;
   return Number.isNaN(t) ? null : t;
@@ -28,28 +54,30 @@ const ms = (iso: string | null) => {
  * A camera whose host turns servers away: the browser loads it straight from
  * the host, as the park's own pages do. No headers to read, so no age.
  */
-function DirectImage({ cam, className }: { cam: WebcamInfo; className: string }) {
+function DirectImage({ cam, className, fill, control }: PictureProps) {
   const [stamp, setStamp] = useState(() => Date.now());
   const [state, setState] = useState<'loading' | 'ok' | 'error'>('loading');
   useEffect(() => startVisiblePolling(() => setStamp(Date.now()), Math.max(30, cam.refreshSec) * 1000), [cam.refreshSec]);
   const src = directImageSrc(cam.directUrl!, cam.directBustCache, stamp);
+  const css = pictureClasses(fill);
   return (
-    <div className={className}>
-      <div className="relative overflow-hidden rounded-lg border border-white/10 bg-black/40">
+    <div className={fill ? 'flex min-h-0 flex-1 flex-col' : className}>
+      <div className={css.box}>
         {state === 'error' ? (
-          <div className="flex aspect-video items-center justify-center text-[11px] text-white/40">Camera unavailable right now</div>
+          <div className={css.placeholder}>Camera unavailable right now</div>
         ) : (
           <img
             src={src}
             alt={`${cam.name} webcam`}
             onLoad={() => setState('ok')}
             onError={() => setState('error')}
-            className={`block h-auto w-full ${state === 'loading' ? 'min-h-[8rem]' : ''}`}
+            className={`${css.img} ${state === 'loading' && !fill ? 'min-h-[8rem]' : ''}`}
           />
         )}
+        {control}
       </div>
       {state === 'ok' && (
-        <div className="mt-1 text-[10.5px] text-white/45">
+        <div className={css.caption}>
           {cam.timeOnImage ? 'Capture time is printed on the image' : "Camera doesn't say when this was taken"}
         </div>
       )}
@@ -57,12 +85,22 @@ function DirectImage({ cam, className }: { cam: WebcamInfo; className: string })
   );
 }
 
-export function WebcamImage({ cam, className = '' }: { cam: WebcamInfo; className?: string }) {
-  if (cam.directUrl) return <DirectImage cam={cam} className={className} />;
-  return <ProxiedImage cam={cam} className={className} />;
+export function WebcamImage({
+  cam,
+  className = '',
+  fill = false,
+  control,
+}: {
+  cam: WebcamInfo;
+  className?: string;
+  fill?: boolean;
+  control?: ReactNode;
+}) {
+  if (cam.directUrl) return <DirectImage cam={cam} className={className} fill={fill} control={control} />;
+  return <ProxiedImage cam={cam} className={className} fill={fill} control={control} />;
 }
 
-function ProxiedImage({ cam, className }: { cam: WebcamInfo; className: string }) {
+function ProxiedImage({ cam, className, fill, control }: PictureProps) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -114,24 +152,24 @@ function ProxiedImage({ cam, className }: { cam: WebcamInfo; className: string }
       })
     : null;
 
+  const css = pictureClasses(fill);
   return (
-    <div className={className}>
-      <div className="relative overflow-hidden rounded-lg border border-white/10 bg-black/40">
+    <div className={fill ? 'flex min-h-0 flex-1 flex-col' : className}>
+      <div className={css.box}>
         {loaded ? (
-          <img src={loaded.url} alt={`${cam.name} webcam`} className="block h-auto w-full" />
+          <img src={loaded.url} alt={`${cam.name} webcam`} className={css.img} />
         ) : (
-          <div className="flex aspect-video items-center justify-center text-[11px] text-white/40">
-            {error ?? 'Loading camera…'}
-          </div>
+          <div className={css.placeholder}>{error ?? 'Loading camera…'}</div>
         )}
         {fresh?.stale && (
           <span className="absolute left-2 top-2 rounded bg-amber-500/90 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-ink-950">
             Stale
           </span>
         )}
+        {control}
       </div>
       {loaded && (
-        <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[10.5px] text-white/45">
+        <div className={css.caption}>
           <span className={fresh?.stale ? 'text-amber-300' : undefined}>
             {fresh?.text ?? "Camera doesn't say when this was taken"}
           </span>

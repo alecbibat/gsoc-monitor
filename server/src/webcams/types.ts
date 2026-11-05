@@ -27,6 +27,11 @@ export interface WebcamDef {
    * cameras; on an `image` camera it adds a "Live video" view beside the still.
    */
   embedUrl?: string;
+  /**
+   * Bare page margin (px) the embed page leaves around its player: the panel
+   * crops it off. Pixelcaster's page keeps the browser's default 8 px, white.
+   */
+  embedMarginPx?: number;
   lat: number;
   lon: number;
   /** The position is the named place the camera shows, not a surveyed mount. */
@@ -78,6 +83,8 @@ export interface WebcamInfo {
   pageUrl: string;
   kind: WebcamKind;
   embedUrl: string | null;
+  /** Page margin around the embed's player to crop off, px (0 = none). */
+  embedMarginPx: number;
   lat: number;
   lon: number;
   approxLocation: boolean;
