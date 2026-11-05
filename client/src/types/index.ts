@@ -25,12 +25,13 @@ export type LayerId =
   | 'wildfires'
   | 'outages'
   | 'intel'
-  | 'warn';
+  | 'warn'
+  | 'roads';
 
 export type SatelliteGroup = 'stations' | 'visual' | 'gps' | 'weather' | 'starlink';
 
 // Standalone dockable widgets that aren't tied to a clicked map entity.
-export type WidgetId = 'news-feed' | 'proximity' | 'intel-feed';
+export type WidgetId = 'news-feed' | 'proximity' | 'intel-feed' | 'nps';
 
 // Anything that can occupy a dockable panel. 'property-watch' is a popped-out
 // single-property hazard window spawned from the Property Watch widget.
@@ -552,6 +553,108 @@ export interface OutagesResponse {
   sources: OutageSourceStatus[];
   updated: number;
   error?: string;
+}
+
+// --- National Park Service (NPS Data API) -----------------------------------
+// Mirrors server/src/nps/*.ts and server/src/routes/nps.ts.
+export type NpsAlertCategory = 'danger' | 'closure' | 'caution' | 'info';
+
+export interface NpsAlert {
+  id: string;
+  parkCode: string;
+  park: string;
+  parkFullName: string;
+  category: NpsAlertCategory;
+  /** NPS's own label: "Danger", "Park Closure", "Caution", "Information". */
+  categoryLabel: string;
+  title: string;
+  /** Plain text; paragraphs separated by blank lines. */
+  description: string;
+  /** NPS's "more information" link; null when it gave none. */
+  url: string | null;
+  /** The park's current-conditions page. */
+  conditionsUrl: string;
+  /** The calendar day NPS last indexed (posted or edited) it, YYYY-MM-DD. */
+  postedDay: string | null;
+  postedAt: number | null;
+  roadEvents: { id: string; title: string; url: string | null }[];
+}
+
+export interface NpsNewsItem {
+  id: string;
+  parkCode: string;
+  park: string;
+  parkFullName: string;
+  title: string;
+  abstract: string;
+  url: string;
+  image: { url: string; alt: string; credit: string } | null;
+  /** The calendar day of release, YYYY-MM-DD. */
+  releasedDay: string | null;
+  releasedAt: number;
+}
+
+export interface NpsApiStatus {
+  /** NPS_API_KEY is set (false = the shared, heavily rate-limited DEMO_KEY). */
+  keyConfigured: boolean;
+  rateLimit: number | null;
+  rateRemaining: number | null;
+  lastOkAt: string | null;
+  lastError: string | null;
+  lastErrorAt: string | null;
+}
+
+export interface NpsFeed {
+  parks: { code: string; name: string; fullName: string }[];
+  /** null when that feed failed (see alertsError) — not the same as "none in effect". */
+  alerts: NpsAlert[] | null;
+  alertsFetchedAt: string | null;
+  alertsError: string | null;
+  news: NpsNewsItem[] | null;
+  newsFetchedAt: string | null;
+  newsError: string | null;
+  api: NpsApiStatus;
+}
+
+// --- Road closures around the followed parks --------------------------------
+// Mirrors server/src/roads/types.ts.
+export type RoadImpact = 'closed' | 'restricted';
+
+export interface RoadClosure {
+  id: string;
+  source: string;
+  sourceLabel: string;
+  /** The followed park whose area it falls in. */
+  parkCode: string;
+  title: string;
+  roadNames: string[];
+  description: string;
+  impact: RoadImpact;
+  eventType: string;
+  direction: string | null;
+  start: string | null;
+  end: string | null;
+  updated: string | null;
+  /** Polylines of [lon, lat]; empty when the feed gave only a point. */
+  lines: number[][][];
+  point: [number, number] | null;
+  url: string | null;
+}
+
+export interface RoadSourceStatus {
+  source: string;
+  label: string;
+  ok: boolean;
+  count: number;
+  error: string | null;
+  fetchedAt: string | null;
+  disabled?: string;
+}
+
+export interface RoadClosuresFeed {
+  closures: RoadClosure[];
+  sources: RoadSourceStatus[];
+  fetchedAt: string;
 }
 
 // --- Wireless Emergency Alerts (PBS WARN) -----------------------------------

@@ -91,7 +91,6 @@ export const api = {
     getJson<import('../types').DriveResult>(
       `/api/drive?fromLat=${fromLat}&fromLon=${fromLon}&toLat=${toLat}&toLon=${toLon}`
     ),
-  parkNews: () => getJson<import('../types').NewsResponse>('/api/park-news'),
   newsMap: (query?: string, timespan?: string) => {
     const qs = new URLSearchParams();
     if (query) qs.set('query', query);
@@ -114,6 +113,7 @@ export const api = {
   jtwcInvests: () => getJson<import('../types').JtwcInvestsResponse>('/api/jtwc-invests'),
   outages: () => getJson<import('../types').OutagesResponse>('/api/outages'),
   warn: () => getJson<import('../types').WarnFeed>('/api/warn/active'),
+  roadClosures: () => getJson<import('../types').RoadClosuresFeed>('/api/roads/closures'),
   riverDetail: (lid: string) =>
     getJson<import('../types').RiverDetail>(`/api/rivers/${encodeURIComponent(lid)}`),
   windForecast: (lat: number, lon: number) =>

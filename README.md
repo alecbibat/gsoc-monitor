@@ -12,11 +12,22 @@ Global Situational & Operational Conditions Monitor — a real-time 3D globe das
   - a new NWS alert covers a property pin or comes within 15 miles of one, listing the locations it reaches;
   - a Wireless Emergency Alert (PBS WARN) goes out to phones within 50 miles of a pin, quoting the message sent;
   - an M4.5 or stronger earthquake strikes within 50 miles of a pin;
+  - a National Park Service alert is posted at one of the six parks, or an existing one's category, title or text changes — Danger, Park Closure, Caution and Information alike — quoting the alert in full; *Show on map* flies to the park and opens the National Parks panel on it;
   - one of the three company aircraft takes off or lands, naming the airport;
   - a Windstar ship arrives in or leaves a port, naming the port and, on departure, where it's bound. Ship positions land about every two hours, so these can trail the ship by that much.
 
   The bell in the top bar opens the settings: a master switch and one per kind, saved per browser and all on by default. Nothing pops for what was already going on when the page opened. Updates of an alert already shown only notify for locations they newly reach, and an NWS warning that also went out to phones pops once. When several are waiting the popup counts them (*1 of 3*) and shows the most urgent next.
 - **Wireless Emergency Alerts (PBS WARN)** — every WEA in force, as PBS WARN broadcasts and maps them: NWS and USGS warnings plus state and local alerts (AMBER, evacuations, police activity, 911 outages). Drawn as the area phones were alerted in, with a dashed border coloured by alert class and a marker; the click panel shows the exact message sent to phones.
+- **National parks (NPS Data API)** — Glacier, Yellowstone, Grand Canyon, Death Valley, Rocky Mountain and Mount Rushmore:
+  - *Ticker:* every park alert in effect and the last 30 days of park news releases run in the bottom ticker among the world headlines, as green chips led by an **NPS** badge and the park's name (plus *Danger* / *Closure* / *Caution* on alerts). A news chip opens the release on nps.gov; an alert chip opens it in the National Parks panel. The panel or the sidebar switches them off.
+  - *National Parks panel* (sidebar → National Parks → Park alerts & news): alerts in effect, most serious first, and recent news, filterable by park; flags when the server is on the shared `DEMO_KEY`.
+  - *Popups:* a new park alert, or an edit that changes what one says (parks keep standing alerts such as "Trail Ridge Road Status Update" and rewrite them as conditions change), flashes the screen like the other alert popups.
+- **Road closures (parks)** — roads closed or restricted in and around the six parks, drawn along the road: solid red = closed, dashed amber = restricted, with a sign at each; from a continental view each park shows one badge with its counts. On by default. Sources, all keyless:
+  - Yellowstone, Glacier and Death Valley's own road-status maps (the data behind the road maps on their nps.gov pages) — e.g. every Grand Loop segment closed to wheeled vehicles for the winter, Going-to-the-Sun Road's gates;
+  - NPS road events (WZDx; Grand Teton's, beside Yellowstone — none of the six parks publishes there yet);
+  - Caltrans lane closures in Inyo County (CA-190, US-395) and Arizona DOT work zones (I-40, US-180, SR-64).
+
+  Grand Canyon, Rocky Mountain and Mount Rushmore publish no road feed of their own, so their road news arrives as NPS alerts (e.g. Trail Ridge Road's closure gates). The sidebar lists each source's count and says when one is down; the others keep drawing.
 - **Live flights** — adsb.fi ADS-B (free, no key), plane icons rotated to heading, favorites list, auto-refresh when camera moves.
 - **Satellites** — CelesTrak TLE + satellite.js SGP4 propagation; real-time orbits for Space Stations / Brightest / GPS / Weather / Starlink groups, click any satellite to trace its orbit ring and read live position, altitude, speed, and orbital elements.
 - **Time zones** — real zone polygons (timezone-boundary-builder / OpenStreetMap, ODbL) with a live clock on every zone, to the second, daylight-saving aware; boundaries are rebuilt from a release with `npm run build:timezones`.
@@ -54,6 +65,10 @@ npm run dev:client
 | NASA GIBS (Earth basemap) | No key needed | Public WMTS tiles of the daily MODIS Terra/Aqua true-color mosaic, fetched straight from the browser (no server involvement). |
 | Photon (search) | No key needed | komoot's public OpenStreetMap geocoder (`photon.komoot.io`) — the search box's primary source, including suggestions as you type. Fair use: results are cached server-side for 24 h. |
 | PBS WARN (Wireless Emergency Alerts) | No key needed | Fetched server-side (`/api/warn/active`) from the API behind [warn.pbs.org](https://warn.pbs.org) — the same requests its map makes. It is undocumented, so it can change without notice; failures show on the layer and the last good answer is served meanwhile. Proxied because its CORS header is inconsistent, and cached 45 s so every viewer shares one request. Credit: "Wireless Emergency Alerts broadcast by PBS". (FEMA's own feeds don't fit a live layer: OpenFEMA's IPAWS archive is published 24 h late, and IPAWS-OPEN needs a FEMA-issued PIN.) |
+| NPS Data API (park alerts, news, road events) | **Free key** (`NPS_API_KEY`) | Sign up at [nps.gov/subjects/developer](https://www.nps.gov/subjects/developer/get-started.htm); 1,000 requests/hour. Fetched server-side and shared by every viewer (alerts every 5 min, news every 20, road events every 15). Without a key the server uses the shared `DEMO_KEY` — a few requests an hour per IP — and stretches those intervals 4×; the National Parks panel says so. |
+| Park road status (Yellowstone, Glacier, Death Valley) | No key needed | The services behind each park's nps.gov road map: NPS's Carto (`carto.nps.gov`) for Yellowstone and Glacier, NPS's ArcGIS for Death Valley. Public but undocumented, so they can change without notice — a source that fails shows as unavailable in the sidebar and the rest keep drawing. Polled every 10 min. |
+| Caltrans lane closures | No key needed | `cwwp2.dot.ca.gov` LCS feed, District 9 (Inyo County). Planned closures only, as begin/end points. Every 10 min. |
+| Arizona DOT work zones | No key needed | `az511.gov/api/wzdx` (WZDx). Work zones only; incidents need AZ511's keyed API. A few MB statewide, so every 30 min; only what lies near the Grand Canyon is kept. |
 | Airports and ports | Bundled | Name where the company aircraft take off and land, and the ports Windstar ships call at. Airports: [OurAirports](https://ourairports.com/data/) (public domain). Ports: [UN/LOCODE](https://unece.org/trade/uncefact/unlocode) (UNECE), with [GeoNames](https://www.geonames.org) coordinates (CC BY 4.0) for ports UN/LOCODE lists without any. Rebuilt with `npm run build:nav-places` (see below). |
 | US county outlines | Bundled | Census-derived TopoJSON from the [`us-atlas`](https://github.com/topojson/us-atlas) package (ISC), shipped with the client: resolves county-based NWS alerts and merges each alert's counties into one outline. |
 | Nominatim (geocoding) | No key needed | Uses OSM data; `NWS_USER_AGENT` string is also used here as User-Agent per their policy. Search fallback (never for as-you-type suggestions, which its policy forbids) and the intel feed's place lookups, sharing one 1 request/second gate. |
@@ -66,6 +81,7 @@ heroku create your-app-name
 
 # 2. Set required env vars
 heroku config:set NWS_USER_AGENT="gsoc-monitor (you@email.com)"
+heroku config:set NPS_API_KEY="your-nps-api-key"
 
 # 3. Push and deploy
 git push heroku main   # or: heroku git:push ...

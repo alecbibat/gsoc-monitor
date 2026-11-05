@@ -49,6 +49,8 @@ const KIND_HEIGHTS: Partial<Record<PanelKind, number>> = {
   ships: 630,
   'wind-forecast': 560,
   rivers: 620,
+  // National Parks: status, park chips and the alert list without a scroll.
+  nps: 640,
 };
 
 // Panel z-order only ever climbs (every open / raise takes topZ + 1). Before it

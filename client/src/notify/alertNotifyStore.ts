@@ -6,7 +6,7 @@ import type { Notice, NoticeCategory } from './notices';
 // (persisted per browser, all on by default), and the queue of notices
 // waiting to be acknowledged.
 
-const ALL_ON: Record<NoticeCategory, boolean> = { nws: true, warn: true, quake: true, flight: true, ship: true };
+const ALL_ON: Record<NoticeCategory, boolean> = { nws: true, warn: true, quake: true, nps: true, flight: true, ship: true };
 
 interface AlertNotifyState {
   enabled: boolean;

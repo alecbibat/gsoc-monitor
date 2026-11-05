@@ -43,7 +43,7 @@ const warn = (key: string, aliases: string[] = []): WarnNotice => ({
 beforeEach(() => {
   useAlertNotifyStore.setState({
     enabled: true,
-    categories: { nws: true, warn: true, quake: true, flight: true, ship: true },
+    categories: { nws: true, warn: true, quake: true, nps: true, flight: true, ship: true },
     queue: [],
     announced: new Set(),
     flashSeq: 0,
@@ -87,7 +87,7 @@ describe('alert notify store', () => {
   it('keeps a saved browser’s choices and turns on kinds it never saw', () => {
     const merged = mergeNotifySettings({ enabled: false, categories: { ship: false } }, useAlertNotifyStore.getState());
     expect(merged.enabled).toBe(false);
-    expect(merged.categories).toEqual({ nws: true, warn: true, quake: true, flight: true, ship: false });
+    expect(merged.categories).toEqual({ nws: true, warn: true, quake: true, nps: true, flight: true, ship: false });
   });
 });
 

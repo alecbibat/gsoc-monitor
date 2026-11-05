@@ -3,6 +3,7 @@ import type { WidgetId } from '../types';
 import { NewsWidget } from './news/NewsWidget';
 import { ProximityWidget } from './proximity/ProximityWidget';
 import { IntelWidget } from './intel/IntelWidget';
+import { NpsWidget } from './nps/NpsWidget';
 import { WIDGET_META, type WidgetMeta } from './widgetMeta';
 
 export interface WidgetDef extends WidgetMeta {
@@ -14,6 +15,7 @@ const RENDER: Record<WidgetId, () => ReactNode> = {
   proximity: () => <ProximityWidget />,
   'news-feed': () => <NewsWidget />,
   'intel-feed': () => <IntelWidget />,
+  nps: () => <NpsWidget />,
 };
 
 export const WIDGETS: WidgetDef[] = WIDGET_META.map((m) => ({ ...m, render: RENDER[m.id] }));

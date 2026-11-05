@@ -30,6 +30,14 @@ export const WIDGET_META: WidgetMeta[] = [
     accentClass: 'border-sky-500/40',
   },
   {
+    id: 'nps',
+    title: 'National Parks',
+    subtitle: 'NPS alerts · news',
+    label: 'Parks',
+    glyph: '🏞',
+    accentClass: 'border-emerald-500/40',
+  },
+  {
     id: 'intel-feed',
     title: 'Intel Feed',
     subtitle: 'Scanner · crime · news · social',

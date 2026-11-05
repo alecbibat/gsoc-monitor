@@ -12,8 +12,6 @@ export type CategoryFilter =
   | 'health'
   | 'environment';
 
-export type NewsMode = 'breaking' | 'park';
-
 export interface CustomSource {
   url: string;
   label: string;
@@ -34,13 +32,6 @@ interface NewsState {
   categoryFilter: Set<CategoryFilter>;
   seenIds: Set<string>;
   customSources: CustomSource[];
-  // Park news
-  parkItems: NewsItem[];
-  parkUpdated: number | null;
-  parkLoading: boolean;
-  parkError: string | null;
-  // Mode
-  newsMode: NewsMode;
 
   setData: (items: NewsItem[], updated: number) => void;
   setLoading: (loading: boolean) => void;
@@ -49,10 +40,6 @@ interface NewsState {
   toggleCategory: (c: CategoryFilter) => void;
   addCustomSource: (source: CustomSource) => void;
   removeCustomSource: (url: string) => void;
-  setParkData: (items: NewsItem[], updated: number) => void;
-  setParkLoading: (loading: boolean) => void;
-  setParkError: (error: string | null) => void;
-  setNewsMode: (mode: NewsMode) => void;
 }
 
 export const useNewsStore = create<NewsState>()(
@@ -66,11 +53,6 @@ export const useNewsStore = create<NewsState>()(
       categoryFilter: new Set(ALL_CATEGORIES),
       seenIds: new Set(),
       customSources: [],
-      parkItems: [],
-      parkUpdated: null,
-      parkLoading: false,
-      parkError: null,
-      newsMode: 'breaking',
 
       setData: (items, updated) =>
         set((s) => {
@@ -109,14 +91,16 @@ export const useNewsStore = create<NewsState>()(
         }),
       removeCustomSource: (url) =>
         set((s) => ({ customSources: s.customSources.filter((c) => c.url !== url) })),
-      setParkData: (parkItems, parkUpdated) => set({ parkItems, parkUpdated, parkLoading: false, parkError: null }),
-      setParkLoading: (parkLoading) => set({ parkLoading }),
-      setParkError: (parkError) => set({ parkError, parkLoading: false }),
-      setNewsMode: (newsMode) => set({ newsMode }),
     }),
     {
       name: 'gsoc-news',
-      partialize: (state) => ({ customSources: state.customSources, newsMode: state.newsMode }),
+      partialize: (state) => ({ customSources: state.customSources }),
+      // v0 also saved the old park/breaking ticker mode; National Park items now
+      // mix into the one ticker (see nps/), so only the custom sources carry over.
+      version: 1,
+      migrate: (persisted) => ({
+        customSources: ((persisted ?? {}) as { customSources?: CustomSource[] }).customSources ?? [],
+      }),
     }
   )
 );
