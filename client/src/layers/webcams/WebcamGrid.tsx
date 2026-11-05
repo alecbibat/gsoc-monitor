@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { usePanelStore } from '../../panels/panelStore';
 import type { WebcamInfo } from '../../types';
 import { NPS_PARKS } from '../../nps/parks';
-import { staleAfterMs } from './webcamMeta';
+import { directImageSrc, siteOf, webcamFreshness } from './webcamMeta';
 import { useWebcamsFeed, useWebcamsStore } from './webcamsStore';
 
 // The parks' webcams as a grid of current stills, for the National Parks
@@ -21,10 +21,37 @@ export function openWebcamPanel(cam: WebcamInfo): void {
   });
 }
 
+/** A link-out camera's tile goes straight to the operator's page. */
+function LinkTile({ cam }: { cam: WebcamInfo }) {
+  return (
+    <a
+      href={cam.pageUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="group overflow-hidden rounded-lg border border-white/8 bg-white/5 text-left transition hover:border-emerald-400/40"
+      title={`${cam.name} — opens on ${siteOf(cam.pageUrl)}`}
+    >
+      <div className="flex aspect-video flex-col items-center justify-center gap-0.5 bg-black/40 text-[10px] text-white/45">
+        <span>Opens on {siteOf(cam.pageUrl)} ↗</span>
+      </div>
+      <div className="px-1.5 py-1">
+        <div className="truncate text-[11px] font-medium text-white/85 group-hover:text-white">{cam.name}</div>
+        <div className="truncate text-[9.5px] text-white/40">{cam.operator}</div>
+      </div>
+    </a>
+  );
+}
+
 function Tile({ cam, bucket, showPark }: { cam: WebcamInfo; bucket: number; showPark: boolean }) {
+  if (cam.kind === 'link') return <LinkTile cam={cam} />;
   const [failed, setFailed] = useState(false);
-  const updated = cam.status?.imageUpdated ? Date.parse(cam.status.imageUpdated) : NaN;
-  const stale = Number.isFinite(updated) && Date.now() - updated > staleAfterMs(cam.refreshSec);
+  const toMs = (iso: string | null | undefined) => (iso ? Date.parse(iso) || null : null);
+  const { stale } = webcamFreshness({
+    updated: toMs(cam.status?.imageUpdated),
+    unchangedSince: toMs(cam.status?.unchangedSince),
+    refreshSec: cam.refreshSec,
+    now: Date.now(),
+  });
   return (
     <button
       type="button"
@@ -33,9 +60,13 @@ function Tile({ cam, bucket, showPark }: { cam: WebcamInfo; bucket: number; show
       title={`${cam.name} — ${cam.operator}`}
     >
       <div className="relative aspect-video bg-black/40">
-        {cam.kind === 'image' && cam.imagePath && !failed ? (
+        {cam.kind === 'image' && (cam.imagePath || cam.directUrl) && !failed ? (
           <img
-            src={`${cam.imagePath}?v=${bucket}`}
+            src={
+              cam.directUrl
+                ? directImageSrc(cam.directUrl, cam.directBustCache, bucket)
+                : `${cam.imagePath}?v=${bucket}`
+            }
             alt=""
             loading="lazy"
             onError={() => setFailed(true)}
@@ -46,8 +77,11 @@ function Tile({ cam, bucket, showPark }: { cam: WebcamInfo; bucket: number; show
             {cam.kind === 'stream' ? '▶ Live video' : 'Unavailable'}
           </div>
         )}
-        {cam.kind === 'stream' && (
-          <span className="absolute left-1 top-1 rounded bg-red-500/90 px-1 text-[9px] font-bold uppercase tracking-wider text-white">
+        {(cam.kind === 'stream' || cam.embedUrl) && (
+          <span
+            className="absolute right-1 top-1 rounded bg-red-500/90 px-1 text-[9px] font-bold uppercase tracking-wider text-white"
+            title="Live video available"
+          >
             Live
           </span>
         )}

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WEBCAMS, catalogProblems } from './catalog';
-import { MAX_IMAGE_BYTES, getWebcamImage, imageTtlMs, resetWebcamCache, webcamStatus } from './proxy';
+import { MAX_IMAGE_BYTES, getWebcamImage, imageFetchUrl, imageTtlMs, resetWebcamCache, webcamStatus } from './proxy';
 import type { WebcamDef } from './types';
 
 const cam: WebcamDef = {
@@ -89,6 +89,50 @@ describe('webcam image proxy', () => {
     expect(webcamStatus(cam.id)).toMatchObject({ ok: true, imageUpdated: '2026-11-05T15:58:00.000Z', error: null });
   });
 
+  it("doesn't take a re-stamping host's word: age comes from seeing the bytes change", async () => {
+    const restamper = { ...cam, id: 'restamper', trustLastModified: false };
+    let t = 1_000_000;
+    const now = () => t;
+    // Same bytes every time, but Last-Modified always "just now".
+    fetchMock.mockImplementation(async () => jpeg(10, { 'last-modified': new Date(t).toUTCString() }));
+    const first = await getWebcamImage(restamper, now);
+    expect(first.imageUpdated).toBeNull();
+    expect(first.unchangedSince).toBe(1_000_000);
+    t += imageTtlMs(restamper) + 1;
+    const second = await getWebcamImage(restamper, now);
+    expect(second.imageUpdated).toBeNull();
+    expect(second.unchangedSince).toBe(1_000_000);
+    // New bytes: the change is the image's time.
+    t += imageTtlMs(restamper) + 1;
+    fetchMock.mockImplementation(async () => jpeg(11));
+    const third = await getWebcamImage(restamper, now);
+    expect(third.imageUpdated).toBe(t);
+    expect(third.unchangedSince).toBe(t);
+  });
+
+  it('keeps counting unchanged time even when Last-Modified is trusted', async () => {
+    let t = 1_000_000;
+    const now = () => t;
+    fetchMock.mockImplementation(async () => jpeg(10));
+    await getWebcamImage(cam, now);
+    t += 3 * imageTtlMs(cam);
+    const later = await getWebcamImage(cam, now);
+    expect(later.imageUpdated).toBe(Date.parse('Thu, 05 Nov 2026 15:58:00 GMT'));
+    expect(later.unchangedSince).toBe(1_000_000);
+    expect(webcamStatus(cam.id)?.unchangedSince).toBe(new Date(1_000_000).toISOString());
+  });
+
+  it('adds a timestamp for hosts whose CDN would serve an old frame', async () => {
+    expect(imageFetchUrl({ imageUrl: 'https://glacier.org/webcam/lpp_nps.jpg', bustCache: true }, 123)).toBe(
+      'https://glacier.org/webcam/lpp_nps.jpg?_=123'
+    );
+    expect(imageFetchUrl({ imageUrl: 'https://x.example/cam.jpg?size=l', bustCache: true }, 9)).toBe('https://x.example/cam.jpg?size=l&_=9');
+    expect(imageFetchUrl({ imageUrl: 'https://x.example/cam.jpg' }, 9)).toBe('https://x.example/cam.jpg');
+    fetchMock.mockResolvedValueOnce(jpeg());
+    await getWebcamImage({ ...cam, id: 'busted', bustCache: true }, () => 42);
+    expect(fetchMock.mock.calls[0][0]).toBe('https://example.com/cam.jpg?_=42');
+  });
+
   it('keeps a fetch between 20 s and 2 min', () => {
     expect(imageTtlMs({ refreshSec: 10 })).toBe(20_000);
     expect(imageTtlMs({ refreshSec: 60 })).toBe(30_000);
@@ -110,6 +154,9 @@ describe('webcam catalog', () => {
       { ...cam, id: 'no-image', imageUrl: undefined },
       { ...cam, id: 'no-embed', kind: 'stream', embedUrl: 'http://insecure.example/embed' },
       { ...cam, id: 'null-island', lat: 0, lon: 0 },
+      { ...cam, id: 'plain-embed', embedUrl: 'http://player.example/cam' },
+      { ...cam, id: 'leaky-link', kind: 'link' },
+      { ...cam, id: 'plain-direct', browserDirect: true, imageUrl: 'http://cam.example/a.jpg' },
     ];
     const problems = catalogProblems(bad).join('\n');
     expect(problems).toMatch(/Bad Id: id must be a lowercase slug/);
@@ -118,5 +165,8 @@ describe('webcam catalog', () => {
     expect(problems).toMatch(/no-image: image camera without imageUrl/);
     expect(problems).toMatch(/no-embed: stream camera without an https embedUrl/);
     expect(problems).toMatch(/null-island: bad coordinates/);
+    expect(problems).toMatch(/plain-embed: embedUrl must be https/);
+    expect(problems).toMatch(/leaky-link: a link camera must not be fetched or embedded/);
+    expect(problems).toMatch(/plain-direct: a browser-direct camera needs an https image/);
   });
 });

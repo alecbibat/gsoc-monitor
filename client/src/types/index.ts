@@ -619,12 +619,15 @@ export interface NpsFeed {
 
 // --- Park webcams -------------------------------------------------------------
 // Mirrors server/src/webcams/types.ts.
-export type WebcamKind = 'image' | 'stream';
+/** image — a refreshing still (proxied); stream — live video in the operator's player; link — only on the operator's own site. */
+export type WebcamKind = 'image' | 'stream' | 'link';
 
 export interface WebcamStatus {
   ok: boolean;
-  /** When the operator last replaced the image (Last-Modified), ISO. */
+  /** When the operator last replaced the image, ISO; null = unknown. */
   imageUpdated: string | null;
+  /** Since when the server has seen these exact bytes, ISO. */
+  unchangedSince: string | null;
   checkedAt: string | null;
   error: string | null;
 }
@@ -644,6 +647,12 @@ export interface WebcamInfo {
   refreshSec: number;
   /** The proxied still, for `image` cameras. */
   imagePath: string | null;
+  /** For cameras the browser loads straight from the host (its site turns servers away). */
+  directUrl: string | null;
+  /** Add a timestamp to directUrl on each load (the host's CDN caches stale frames). */
+  directBustCache: boolean;
+  /** The camera prints its capture time on the image. */
+  timeOnImage: boolean;
   note: string | null;
   status: WebcamStatus | null;
 }

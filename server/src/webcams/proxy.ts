@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import type { WebcamDef, WebcamStatus } from './types';
 
 // ── Webcam image proxy ───────────────────────────────────────────────────────
@@ -8,6 +9,12 @@ import type { WebcamDef, WebcamStatus } from './types';
 // old each image is (Last-Modified), so a frozen camera is flagged instead of
 // passing for live. Only cameras in the catalog are proxied — never a URL a
 // client supplies.
+//
+// Last-Modified alone can't be trusted for that: some hosts re-stamp an
+// unchanged file every few minutes, others stamp every response with the
+// request time. So the proxy also fingerprints each image and remembers since
+// when it has seen the same bytes — a picture that hasn't changed for longer
+// than the camera ever goes without one is stale, whatever the headers say.
 
 const USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 gsoc-monitor/1.0';
@@ -18,12 +25,26 @@ export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 export interface CachedImage {
   body: Buffer;
   contentType: string;
-  /** Last-Modified from the operator, epoch ms (null when the host doesn't say). */
+  /**
+   * When the operator replaced the image, epoch ms: its Last-Modified where
+   * that's trusted, else the moment the server saw the bytes change; null
+   * when neither is known.
+   */
   imageUpdated: number | null;
+  /** Since when the server has seen these exact bytes, epoch ms. */
+  unchangedSince: number;
   fetchedAt: number;
 }
 
+interface Seen {
+  hash: string;
+  since: number;
+  /** When the server saw the bytes change to these; null if they were already there on its first look. */
+  changedAt: number | null;
+}
+
 const cache = new Map<string, CachedImage>();
+const seenBytes = new Map<string, Seen>();
 const inflight = new Map<string, Promise<CachedImage>>();
 const statuses = new Map<string, WebcamStatus>();
 
@@ -40,9 +61,15 @@ function note(id: string, s: WebcamStatus): void {
   statuses.set(id, s);
 }
 
+/** The URL to fetch: with a cache-busting timestamp when the host's CDN needs one. */
+export function imageFetchUrl(cam: Pick<WebcamDef, 'imageUrl' | 'bustCache'>, t: number): string {
+  const url = cam.imageUrl ?? '';
+  return cam.bustCache ? `${url}${url.includes('?') ? '&' : '?'}_=${t}` : url;
+}
+
 async function fetchImage(cam: WebcamDef, now: () => number): Promise<CachedImage> {
   if (!cam.imageUrl) throw new Error('not an image camera');
-  const res = await fetch(cam.imageUrl, {
+  const res = await fetch(imageFetchUrl(cam, now()), {
     signal: AbortSignal.timeout(TIMEOUT_MS),
     redirect: 'follow',
     headers: {
@@ -59,8 +86,21 @@ async function fetchImage(cam: WebcamDef, now: () => number): Promise<CachedImag
   const body = Buffer.from(await res.arrayBuffer());
   if (body.length === 0) throw new Error('empty image');
   if (body.length > MAX_IMAGE_BYTES) throw new Error('image too large');
+  const t = now();
+  const hash = createHash('sha1').update(body).digest('hex');
+  const prev = seenBytes.get(cam.id);
+  const seen: Seen =
+    prev && prev.hash === hash ? prev : { hash, since: t, changedAt: prev ? t : null };
+  seenBytes.set(cam.id, seen);
   const lm = Date.parse(res.headers.get('last-modified') ?? '');
-  return { body, contentType, imageUpdated: Number.isNaN(lm) ? null : lm, fetchedAt: now() };
+  const trusted = cam.trustLastModified !== false && !Number.isNaN(lm);
+  return {
+    body,
+    contentType,
+    imageUpdated: trusted ? lm : seen.changedAt,
+    unchangedSince: seen.since,
+    fetchedAt: t,
+  };
 }
 
 export interface ProxiedImage extends CachedImage {
@@ -87,6 +127,7 @@ export async function getWebcamImage(cam: WebcamDef, now: () => number = Date.no
     note(cam.id, {
       ok: true,
       imageUpdated: fresh.imageUpdated !== null ? new Date(fresh.imageUpdated).toISOString() : null,
+      unchangedSince: new Date(fresh.unchangedSince).toISOString(),
       checkedAt: new Date(fresh.fetchedAt).toISOString(),
       error: null,
     });
@@ -96,6 +137,7 @@ export async function getWebcamImage(cam: WebcamDef, now: () => number = Date.no
     note(cam.id, {
       ok: false,
       imageUpdated: hit?.imageUpdated != null ? new Date(hit.imageUpdated).toISOString() : null,
+      unchangedSince: hit ? new Date(hit.unchangedSince).toISOString() : null,
       checkedAt: new Date(now()).toISOString(),
       error,
     });
@@ -109,4 +151,5 @@ export function resetWebcamCache(): void {
   cache.clear();
   inflight.clear();
   statuses.clear();
+  seenBytes.clear();
 }

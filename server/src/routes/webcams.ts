@@ -26,7 +26,11 @@ export function webcamInfo(cam: WebcamDef): WebcamInfo {
     lon: cam.lon,
     approxLocation: !!cam.approxLocation,
     refreshSec: cam.refreshSec,
-    imagePath: cam.kind === 'image' && cam.imageUrl ? `/api/webcams/${encodeURIComponent(cam.id)}/image` : null,
+    imagePath:
+      cam.kind === 'image' && cam.imageUrl && !cam.browserDirect ? `/api/webcams/${encodeURIComponent(cam.id)}/image` : null,
+    directUrl: cam.kind === 'image' && cam.browserDirect && cam.imageUrl ? cam.imageUrl : null,
+    directBustCache: !!(cam.browserDirect && cam.bustCache),
+    timeOnImage: !!cam.timeOnImage,
     note: cam.note ?? null,
     status: webcamStatus(cam.id),
   };
@@ -40,7 +44,8 @@ router.get('/', (_req, res) => {
 
 router.get('/:id/image', async (req, res) => {
   const cam = WEBCAM_BY_ID.get(req.params.id);
-  if (!cam || cam.kind !== 'image' || !cam.imageUrl) {
+  // Browser-direct cameras are never fetched by the server (see WebcamDef).
+  if (!cam || cam.kind !== 'image' || !cam.imageUrl || cam.browserDirect) {
     res.status(404).json({ error: 'No such webcam image' });
     return;
   }
@@ -52,6 +57,7 @@ router.get('/:id/image', async (req, res) => {
       'Cache-Control': `public, max-age=${Math.max(5, Math.floor((imageTtlMs(cam) - (Date.now() - img.fetchedAt)) / 1000))}`,
       'X-Webcam-Updated': new Date(img.imageUpdated ?? img.fetchedAt).toISOString(),
       'X-Webcam-Updated-Known': img.imageUpdated !== null ? '1' : '0',
+      'X-Webcam-Unchanged-Since': new Date(img.unchangedSince).toISOString(),
       'X-Webcam-Fetched': new Date(img.fetchedAt).toISOString(),
       ...(img.stale ? { 'X-Webcam-Stale': '1' } : {}),
     });

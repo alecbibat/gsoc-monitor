@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { WebcamInfo } from '../../types';
 import { WebcamDetails } from './WebcamDetails';
-import { ageText, refreshText, staleAfterMs, webcamIcon } from './webcamMeta';
+import { ageText, directImageSrc, refreshText, siteOf, staleAfterMs, webcamFreshness, webcamIcon } from './webcamMeta';
 
 const cam: WebcamInfo = {
   id: 'yell-old-faithful',
@@ -18,7 +18,10 @@ const cam: WebcamInfo = {
   approxLocation: true,
   refreshSec: 60,
   imagePath: '/api/webcams/yell-old-faithful/image',
+  directUrl: null,
+  directBustCache: false,
   note: 'Faces Old Faithful Geyser from the visitor education center.',
+  timeOnImage: false,
   status: null,
 };
 
@@ -47,6 +50,38 @@ describe('webcam wording', () => {
   });
 });
 
+describe('webcamFreshness', () => {
+  const NOW = 10_000_000_000;
+  const MIN = 60_000;
+  it('reads a fresh picture as fresh', () => {
+    expect(webcamFreshness({ updated: NOW - 3 * MIN, unchangedSince: NOW - 2 * MIN, refreshSec: 60, now: NOW })).toEqual({
+      stale: false,
+      text: 'Updated 3 min ago',
+    });
+  });
+
+  it('calls an old picture stale', () => {
+    expect(webcamFreshness({ updated: NOW - 90 * MIN, unchangedSince: NOW - 5 * MIN, refreshSec: 60, now: NOW })).toEqual({
+      stale: true,
+      text: 'Last new image 2 h ago',
+    });
+  });
+
+  it("calls a picture stale when its bytes haven't changed, whatever the header claims", () => {
+    expect(webcamFreshness({ updated: NOW - 2 * MIN, unchangedSince: NOW - 45 * MIN, refreshSec: 60, now: NOW })).toEqual({
+      stale: true,
+      text: 'No new image for 45 min',
+    });
+  });
+
+  it('says where the time is when the camera only prints it', () => {
+    expect(webcamFreshness({ updated: null, unchangedSince: NOW, refreshSec: 900, now: NOW, timeOnImage: true }).text).toBe(
+      'Capture time is printed on the image'
+    );
+    expect(webcamFreshness({ updated: null, unchangedSince: NOW, refreshSec: 900, now: NOW }).text).toBeNull();
+  });
+});
+
 describe('WebcamDetails', () => {
   it('shows a still camera with its operator, cadence, note and source', () => {
     const html = renderToStaticMarkup(<WebcamDetails payload={cam} />);
@@ -58,6 +93,47 @@ describe('WebcamDetails', () => {
     expect(html).toContain('href="https://www.nps.gov/yell/learn/photosmultimedia/webcams.htm"');
     expect(html).toContain('Marked at the place it shows');
     expect(html).not.toContain('<iframe');
+  });
+
+  it('offers a Still / Live video switch when the operator also streams the camera', () => {
+    const html = renderToStaticMarkup(
+      <WebcamDetails payload={{ ...cam, embedUrl: 'https://pixelcaster.com/live/grandcanyon/cam2.html' }} />
+    );
+    expect(html).toContain('aria-label="Camera view"');
+    expect(html).toContain('Live video');
+    expect(html).toContain('Loading camera…');
+    expect(html).not.toContain('<iframe');
+  });
+
+  it('sends a link-out camera to its operator, embedding nothing', () => {
+    const html = renderToStaticMarkup(
+      <WebcamDetails
+        payload={{
+          ...cam,
+          kind: 'link',
+          imagePath: null,
+          operator: 'NPS and Yellowstone Forever',
+          pageUrl: 'https://www.nps.gov/yell/learn/photosmultimedia/webcams.htm',
+        }}
+      />
+    );
+    expect(html).toContain('Watch on nps.gov');
+    expect(html).toContain("it can&#x27;t be embedded here");
+    expect(html).not.toContain('<iframe');
+    expect(html).not.toContain('Loading camera');
+    expect(siteOf('https://www.earthcam.com/usa/southdakota/keystone/mountrushmore/')).toBe('earthcam.com');
+  });
+
+  it('loads a browser-direct camera from its host, with a timestamp against stale CDN frames', () => {
+    expect(directImageSrc('https://glacier.org/webcam/lpp_nps.jpg', true, 5)).toBe('https://glacier.org/webcam/lpp_nps.jpg?_=5');
+    expect(directImageSrc('https://glacier.org/webcam/lpp_nps.jpg', false, 5)).toBe('https://glacier.org/webcam/lpp_nps.jpg');
+    const html = renderToStaticMarkup(
+      <WebcamDetails
+        payload={{ ...cam, imagePath: null, directUrl: 'https://glacier.org/webcam/lpp_nps.jpg', directBustCache: true }}
+      />
+    );
+    expect(html).toMatch(/<img src="https:\/\/glacier\.org\/webcam\/lpp_nps\.jpg\?_=\d+"/);
+    expect(html).not.toContain('Loading camera…');
   });
 
   it('embeds a live-video camera', () => {

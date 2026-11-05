@@ -51,6 +51,8 @@ const KIND_HEIGHTS: Partial<Record<PanelKind, number>> = {
   rivers: 620,
   // National Parks: status, park chips and the alert list without a scroll.
   nps: 640,
+  // A webcam: the Still / Live switch, a 16:9 picture and its details.
+  webcams: 480,
 };
 
 // Panel z-order only ever climbs (every open / raise takes topZ + 1). Before it
