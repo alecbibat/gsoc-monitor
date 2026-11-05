@@ -60,6 +60,9 @@ interface NpsState {
   /** Run the parks' alerts and news through the ticker (persisted). */
   inTicker: boolean;
   setInTicker: (on: boolean) => void;
+  /** The ticker runs only the parks' alerts — its BREAKING label toggles this (persisted). */
+  tickerNpsOnly: boolean;
+  setTickerNpsOnly: (on: boolean) => void;
   /** The panel's park filter: 'all' or a park code (persisted). */
   parkFilter: string;
   setParkFilter: (code: string) => void;
@@ -77,6 +80,8 @@ export const useNpsStore = create<NpsState>()(
       error: null,
       inTicker: true,
       setInTicker: (inTicker) => set({ inTicker }),
+      tickerNpsOnly: false,
+      setTickerNpsOnly: (tickerNpsOnly) => set({ tickerNpsOnly }),
       parkFilter: 'all',
       setParkFilter: (parkFilter) => set({ parkFilter }),
       focus: null,
@@ -85,7 +90,7 @@ export const useNpsStore = create<NpsState>()(
     }),
     {
       name: 'gsoc-nps',
-      partialize: (s) => ({ inTicker: s.inTicker, parkFilter: s.parkFilter }),
+      partialize: (s) => ({ inTicker: s.inTicker, parkFilter: s.parkFilter, tickerNpsOnly: s.tickerNpsOnly }),
     }
   )
 );
