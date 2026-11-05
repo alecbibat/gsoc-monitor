@@ -6,6 +6,7 @@ import { NPS_PARKS, NPS_PARK_BY_CODE } from '../../nps/parks';
 import { NPS_ATTRIBUTION, NPS_CATEGORY, NPS_GREEN, formatNpsDay, relativeNpsDay } from '../../nps/npsMeta';
 import { flyToPark } from '../../nps/flyToPark';
 import type { NpsAlert, NpsNewsItem } from '../../types';
+import { WebcamGrid, useWebcamCount } from '../../layers/webcams/WebcamGrid';
 
 // ── National Parks panel ─────────────────────────────────────────────────────
 // Everything the NPS Data API says about the followed parks: the alerts in
@@ -227,6 +228,7 @@ export function NpsWidget() {
   };
 
   const park = filter === 'all' ? null : NPS_PARK_BY_CODE.get(filter) ?? null;
+  const webcamCount = useWebcamCount(filter);
   const api = feed?.api;
 
   return (
@@ -326,6 +328,12 @@ export function NpsWidget() {
             />
           ))}
         </div>
+      </div>
+
+      {/* Webcams: the park's own and its partners' */}
+      <div>
+        <SectionTitle>{webcamCount === null ? 'Webcams' : `Webcams (${webcamCount})`}</SectionTitle>
+        <WebcamGrid parkCode={filter} />
       </div>
 
       {/* News releases */}

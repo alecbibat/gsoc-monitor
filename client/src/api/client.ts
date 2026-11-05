@@ -114,6 +114,7 @@ export const api = {
   outages: () => getJson<import('../types').OutagesResponse>('/api/outages'),
   warn: () => getJson<import('../types').WarnFeed>('/api/warn/active'),
   roadClosures: () => getJson<import('../types').RoadClosuresFeed>('/api/roads/closures'),
+  webcams: () => getJson<import('../types').WebcamsFeed>('/api/webcams'),
   riverDetail: (lid: string) =>
     getJson<import('../types').RiverDetail>(`/api/rivers/${encodeURIComponent(lid)}`),
   windForecast: (lat: number, lon: number) =>

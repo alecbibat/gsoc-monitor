@@ -21,6 +21,7 @@ import directionsRouter from './routes/directions';
 import driveRouter from './routes/route';
 import npsRouter from './routes/nps';
 import roadsRouter from './routes/roads';
+import webcamsRouter from './routes/webcams';
 import satellitesRouter from './routes/satellites';
 import newsMapRouter from './routes/newsMap';
 import smokeRouter from './routes/smoke';
@@ -168,6 +169,8 @@ function main() {
   app.use('/api/nps', npsRouter);
   // Road closures around those parks (NPS road events + state DOT feeds).
   app.use('/api/roads', roadsRouter);
+  // Their webcams (NPS and partner cameras), images through a catalog-only proxy.
+  app.use('/api/webcams', webcamsRouter);
   app.use('/api/satellites', satellitesRouter);
   app.use('/api/news-map', newsMapRouter);
   app.use('/api/smoke', smokeRouter);

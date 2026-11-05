@@ -7,6 +7,7 @@ import { EarthquakeLayer } from './layers/earthquakes/EarthquakeLayer';
 import { AlertsLayer } from './layers/alerts/AlertsLayer';
 import { WarnLayer } from './layers/warn/WarnLayer';
 import { RoadClosuresLayer } from './layers/roads/RoadClosuresLayer';
+import { WebcamsLayer } from './layers/webcams/WebcamsLayer';
 import { RadarLayer } from './layers/radar/RadarLayer';
 import { EarthTimeBar } from './ui/EarthTimeBar';
 import { FlightLayer } from './layers/flights/FlightLayer';
@@ -183,6 +184,7 @@ export default function App() {
           <AlertsLayer />
           <WarnLayer />
           <RoadClosuresLayer />
+          <WebcamsLayer />
           <HurricaneLayer />
           <FireLayer />
           <NgfsLayer />
