@@ -80,6 +80,8 @@ export const useLayersStore = create<LayersState>()(
         warn: false,
         // Asked for by name: closures around the followed national parks.
         roads: true,
+        // The parks' webcams; markers only show from a regional zoom in.
+        webcams: true,
       },
       basemap: 'dark',
       toggleLayer: (id) =>

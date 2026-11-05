@@ -166,6 +166,7 @@ and Nominatim policy), `SHIPS_SCRAPE_CRUISEMAPPER`, `SHIPS_POLL_MINUTES`,
 | `/api/news-map` | api.gdeltproject.org |
 | `/api/county`, `/api/park` | ArcGIS feature services |
 | `/api/nps` (alerts · news · feed · status) | developer.nps.gov (NPS Data API) |
+| `/api/webcams` (list · `/:id/image` proxy, catalogued cameras only) | www.nps.gov, cdn.pixelcaster.com (Grand Canyon Conservancy), volcview.wr.usgs.gov, usgs-nims-images.s3.amazonaws.com, az511.com, sd.cdn.iteris-atis.com; glacier.org images load in the browser |
 | `/api/roads/closures` | carto.nps.gov (Yellowstone, Glacier road status), services1.arcgis.com (Death Valley road status), developer.nps.gov (road events), cwwp2.dot.ca.gov (Caltrans LCS), az511.gov (ADOT WZDx) |
 | `/api/directions`, `/api/drive` | router.project-osrm.org, overpass-api.de |
 | `/api/outages` | ArcGIS · **KUBRA Storm Center** (kubra.io) · NISC co-op maps (outagemap-data.cloud.coop) — 9 named utilities |

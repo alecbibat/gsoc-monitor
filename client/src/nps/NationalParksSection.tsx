@@ -1,6 +1,7 @@
 import { useShallow } from 'zustand/react/shallow';
 import { useLayersStore } from '../store/layersStore';
 import { useRoadsStatus } from '../layers/roads/roadsStore';
+import { useWebcamsStore } from '../layers/webcams/webcamsStore';
 import { LayerToggle } from '../ui/LayerToggle';
 import { Section } from '../ui/Section';
 import { useUiStore } from '../ui/uiStore';
@@ -8,11 +9,13 @@ import { useNpsStore } from './npsStore';
 import { openNpsPanel } from './openNpsPanel';
 import { NPS_GREEN } from './npsMeta';
 
-// The sidebar's home for the national-park feeds: the road-closures layer,
-// the way into the National Parks panel (alerts and news), and whether park
-// items run in the ticker.
+// The sidebar's home for the national-park feeds: the road-closures and
+// webcam layers, the way into the National Parks panel (alerts, webcams and
+// news), and whether park items run in the ticker.
 export function NationalParksSection() {
   const roadsOn = useLayersStore((s) => s.active.roads);
+  const webcamsOn = useLayersStore((s) => s.active.webcams);
+  const webcams = useWebcamsStore(useShallow((s) => ({ count: s.feed?.cams.length ?? null, error: s.error })));
   const toggleLayer = useLayersStore((s) => s.toggleLayer);
   const roads = useRoadsStatus(
     useShallow((s) => ({ closed: s.closed, restricted: s.restricted, sources: s.sources, error: s.error }))
@@ -67,6 +70,18 @@ export function NationalParksSection() {
           restricted.
         </p>
       </LayerToggle>
+      <LayerToggle
+        label="Webcams"
+        active={webcamsOn}
+        onToggle={() => toggleLayer('webcams')}
+        statusText={
+          webcams.count !== null
+            ? `${webcams.count} cameras · camera icons appear as you zoom in to a park`
+            : webcams.error
+              ? 'Webcams unavailable'
+              : 'Loading cameras…'
+        }
+      />
       <label className="flex cursor-pointer items-center gap-2 px-3 py-1 text-[12px] text-white/65">
         <input
           type="checkbox"
