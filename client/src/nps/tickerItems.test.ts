@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { NpsAlert, NpsFeed, NpsNewsItem } from '../types';
-import { TICKER_NEWS_MAX_AGE_MS, interleaveEvenly, npsTickerItems } from './tickerItems';
+import { TICKER_NEWS_MAX_AGE_MS, interleaveEvenly, npsOnlyEmptyText, npsTickerItems } from './tickerItems';
 import { formatNpsDay, relativeNpsDay } from './npsMeta';
 
 const NOW = Date.UTC(2026, 10, 5, 15);
@@ -56,6 +56,11 @@ describe('npsTickerItems', () => {
     expect(items[2]).toMatchObject({ kind: 'news', url: 'https://www.nps.gov/glac/learn/news/n1.htm' });
   });
 
+  it('runs only the alerts in the NPS-alerts mode', () => {
+    const f = feed([alert('a1', 'closure'), alert('a2', 'info')], [news('n1', 2)]);
+    expect(npsTickerItems(f, NOW, { alertsOnly: true }).map((i) => `${i.kind}:${i.id}`)).toEqual(['alert:a1', 'alert:a2']);
+  });
+
   it('keeps a release right at the age limit and copes with a failed half', () => {
     const edge = { ...news('edge', 0), releasedAt: NOW - TICKER_NEWS_MAX_AGE_MS };
     expect(npsTickerItems(feed(null, [edge]), NOW).map((i) => i.id)).toEqual(['edge']);
@@ -98,5 +103,14 @@ describe('NPS day formatting', () => {
     expect(relativeNpsDay('2026-11-04', now)).toBe('yesterday');
     expect(relativeNpsDay('2026-11-01', now)).toBe('4 days ago');
     expect(relativeNpsDay('2026-09-01', now)).toBeNull();
+  });
+});
+
+describe('npsOnlyEmptyText', () => {
+  it('tells loading, failure and a quiet day apart', () => {
+    expect(npsOnlyEmptyText(null, null)).toBe('Loading National Park Service alerts…');
+    expect(npsOnlyEmptyText(null, 'HTTP 502')).toBe('National Park Service alerts unavailable');
+    expect(npsOnlyEmptyText(feed(null, []), null)).toBe('National Park Service alerts unavailable');
+    expect(npsOnlyEmptyText(feed([], []), null)).toBe('No National Park Service alerts in effect');
   });
 });

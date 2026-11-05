@@ -12,9 +12,14 @@ export type NpsTickerItem =
 
 /**
  * Every alert in effect (most serious first, as the server orders them), then
- * the last month's news releases, newest first.
+ * the last month's news releases, newest first — or, with `alertsOnly` (the
+ * ticker's NPS-alerts mode), just the alerts.
  */
-export function npsTickerItems(feed: NpsFeed | null, now: number): NpsTickerItem[] {
+export function npsTickerItems(
+  feed: NpsFeed | null,
+  now: number,
+  opts: { alertsOnly?: boolean } = {}
+): NpsTickerItem[] {
   if (!feed) return [];
   const alerts: NpsTickerItem[] = (feed.alerts ?? []).map((a) => ({
     kind: 'alert',
@@ -24,6 +29,7 @@ export function npsTickerItems(feed: NpsFeed | null, now: number): NpsTickerItem
     title: a.title,
     category: a.category,
   }));
+  if (opts.alertsOnly) return alerts;
   const news: NpsTickerItem[] = (feed.news ?? [])
     .filter((n) => now - n.releasedAt <= TICKER_NEWS_MAX_AGE_MS)
     .sort((a, b) => b.releasedAt - a.releasedAt)
@@ -50,4 +56,14 @@ export function interleaveEvenly<A, B>(base: readonly A[], extra: readonly B[]):
   }
   while (j < m) out.push(extra[j++]);
   return out;
+}
+
+/**
+ * What the NPS-alerts ticker says when it has no alerts to run — so the bar,
+ * and the label that switches it back, stay on screen.
+ */
+export function npsOnlyEmptyText(feed: NpsFeed | null, error: string | null): string {
+  if (feed?.alerts && feed.alerts.length === 0) return 'No National Park Service alerts in effect';
+  if (error || (feed && !feed.alerts)) return 'National Park Service alerts unavailable';
+  return 'Loading National Park Service alerts…';
 }
