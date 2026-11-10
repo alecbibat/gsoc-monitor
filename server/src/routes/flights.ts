@@ -323,7 +323,103 @@ export function advanceTransition(
   return { state: s, emit: null };
 }
 
+// A jet that lands usually stops transmitting within a minute or two — it
+// taxis out of receiver coverage or powers down — and ADS-B coverage often
+// ends a few hundred feet above the runway, so the last fix is still airborne
+// on short final. Either way no later fix ever arrives to confirm the landing,
+// so silence has to: these rules run on every poll the feed answers.
+/** No fix for this long after an approach-like last fix near an airport: it landed. */
+const LOST_ON_APPROACH_MS = 10 * 60_000;
+/** Above this a "ground" fix is a glitch at altitude, and an airborne one is not on approach. */
+const GROUND_FIX_MAX_KT = 100;
+const APPROACH_MAX_KT = 220;
+/** Still climbing this fast: a departure lost from coverage, not an arrival. */
+const APPROACH_MAX_CLIMB_FPM = 300;
+/** An inferred landing older than this is adopted quietly rather than announced. */
+const INFER_MAX_AGE_MS = 6 * HOUR_MS;
+
+export interface LastFix {
+  onGround: boolean;
+  latitude: number;
+  longitude: number;
+  groundSpeedKt: number | null;
+  verticalRateFpm: number | null;
+  /** When the aircraft reported it, epoch ms. */
+  updatedAt: number;
+}
+
+/**
+ * Advance one aircraft's state machine when the feed answered without a newer
+ * fix. `answeredAt` is the last time the feed answered for this tail (so an
+ * outage on our side never counts as the aircraft going quiet); `nearAirport`
+ * is whether the last fix is within reach of a listed airport. Exported for
+ * tests.
+ */
+export function settleSilence(
+  s: TransitionTracker,
+  last: LastFix,
+  answeredAt: number,
+  nearAirport: boolean
+): { state: TransitionTracker; emit: PendingTransition | null } {
+  const landed = { confirmedOnGround: true, pending: null };
+  if (s.pending) {
+    // A ground fix, then nothing: taxied out of coverage or shut down. A
+    // pending takeoff still waits for a second airborne fix.
+    if (
+      s.pending.kind === 'landing' &&
+      last.onGround &&
+      (last.groundSpeedKt ?? 0) <= GROUND_FIX_MAX_KT &&
+      answeredAt - s.pending.sinceT >= EVENT_MIN_HELD_MS
+    ) {
+      return { state: landed, emit: s.pending };
+    }
+    return { state: s, emit: null };
+  }
+  if (s.confirmedOnGround || last.onGround) return { state: s, emit: null };
+  // Last seen airborne: slow, not climbing, beside an airport, then silent.
+  const onApproach =
+    nearAirport &&
+    last.groundSpeedKt !== null &&
+    last.groundSpeedKt <= APPROACH_MAX_KT &&
+    (last.verticalRateFpm ?? 0) <= APPROACH_MAX_CLIMB_FPM;
+  if (!onApproach || answeredAt - last.updatedAt < LOST_ON_APPROACH_MS) return { state: s, emit: null };
+  const emit: PendingTransition | null =
+    answeredAt - last.updatedAt <= INFER_MAX_AGE_MS
+      ? { kind: 'landing', lat: last.latitude, lon: last.longitude, sinceT: last.updatedAt }
+      : null;
+  return { state: landed, emit };
+}
+
 const transitions = new Map<string, TransitionTracker>();
+/** When adsb.fi last answered for each tail, with or without the aircraft in it. */
+const lastAnswerAt = new Map<string, number>();
+
+/**
+ * A tail's tracker; before its first fix in this process, the state its last
+ * known position implies — so a restart doesn't cost the next takeoff or
+ * landing its event.
+ */
+function trackerFor(reg: string): TransitionTracker | undefined {
+  const s = transitions.get(reg);
+  if (s) return s;
+  const prev = lastKnown.get(reg);
+  return prev ? { confirmedOnGround: prev.onGround, pending: null } : undefined;
+}
+
+function settleQuietTails(): void {
+  for (const reg of TRACKED_TAILS) {
+    const last = lastKnown.get(reg);
+    const answeredAt = lastAnswerAt.get(reg);
+    const s = trackerFor(reg);
+    if (!last || !s || answeredAt === undefined) continue;
+    const near = !last.onGround && nearestAirport(last.latitude, last.longitude) !== null;
+    const out = settleSilence(s, last, answeredAt, near);
+    if (out.state === s) continue;
+    transitions.set(reg, out.state);
+    snapshotDirty = true;
+    if (out.emit) recordFlightEvent(reg, out.emit);
+  }
+}
 
 function recordFlightEvent(reg: string, e: PendingTransition): void {
   events.push({
@@ -406,6 +502,8 @@ interface FlightsSnapshot {
   aircraft?: Array<{ reg: string; info: AircraftInfo }>;
   /** Absent in snapshots written before the takeoff/landing feed existed. */
   events?: FlightEvent[];
+  /** Absent in snapshots written before the state machines were persisted. */
+  transitions?: Array<{ reg: string; state: TransitionTracker }>;
   savedAt: number;
 }
 
@@ -429,6 +527,7 @@ function saveSnapshot(): void {
     history: [...history.entries()].map(([reg, pts]) => ({ reg, pts })),
     aircraft: [...aircraft.entries()].map(([reg, info]) => ({ reg, info })),
     events: [...events],
+    transitions: [...transitions.entries()].map(([reg, state]) => ({ reg, state })),
     savedAt: Date.now(),
   };
   pool
@@ -492,6 +591,11 @@ async function loadSnapshot(attempts = 5): Promise<void> {
         const existing = aircraft.get(reg);
         if (existing && existing.fetchedAt >= info.fetchedAt) continue;
         aircraft.set(reg, info);
+      }
+      for (const { reg, state } of snap.transitions ?? []) {
+        // A tracker a live poll already started knows more than the stored one.
+        if (!tails.has(reg) || transitions.has(reg) || typeof state?.confirmedOnGround !== 'boolean') continue;
+        transitions.set(reg, { confirmedOnGround: state.confirmedOnGround, pending: state.pending ?? null });
       }
       {
         // Same merge discipline as the trails: a live poll may have recorded
@@ -566,7 +670,7 @@ function applyFix(reg: string, f: NormalizedFlight): void {
   if (prev && fixAt <= prev.updatedAt + (moved ? 0 : 2_000)) return;
 
   const trans = advanceTransition(
-    transitions.get(reg),
+    trackerFor(reg),
     f.onGround,
     f.latitude,
     f.longitude,
@@ -608,6 +712,7 @@ async function fetchTail(reg: string): Promise<void> {
     return;
   }
   const json = (await r.json()) as { ac?: AdsbAircraft[] };
+  lastAnswerAt.set(reg, Date.now());
   for (const a of json.ac ?? []) {
     const f = normalizeOne(a);
     if (f && f.registration && f.registration.toUpperCase().replace(/\s/g, '') === reg) {
@@ -634,6 +739,7 @@ function poll(): Promise<void> {
     }
     if (includeSpecials) lastSpecialPollAt = Date.now();
     lastPollAt = Date.now();
+    settleQuietTails();
     pruneHistories();
     // Airframe metadata lookups run beside the poll, not in it — the retry
     // clocks make this a no-op almost always, and the snapshot save catches
