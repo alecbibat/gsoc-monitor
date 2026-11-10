@@ -5,7 +5,9 @@ import {
   decimateTrail,
   iconExpired,
   recordTrackPoint,
+  settleSilence,
   type FlightTrackPoint,
+  type LastFix,
   type TransitionTracker,
 } from './flights';
 
@@ -122,6 +124,62 @@ describe('advanceTransition', () => {
     ]);
     expect(emitted).toEqual([{ kind: 'landing', t: 30_000 }]);
     expect(state.confirmedOnGround).toBe(true);
+  });
+});
+
+describe('settleSilence', () => {
+  const MIN = 60_000;
+  const fix = (partial: Partial<LastFix>): LastFix => ({
+    onGround: false, latitude: 25.9, longitude: -80.28, groundSpeedKt: 130, verticalRateFpm: -700, updatedAt: 0, ...partial,
+  });
+  const landingPending = { kind: 'landing' as const, lat: 25.9, lon: -80.28, sinceT: 0 };
+
+  it('confirms a landing when the jet goes quiet after touching down', () => {
+    const s: TransitionTracker = { confirmedOnGround: false, pending: landingPending };
+    const last = fix({ onGround: true, groundSpeedKt: 20 });
+    expect(settleSilence(s, last, MIN, false).emit).toBeNull();
+    const out = settleSilence(s, last, 2 * MIN, false);
+    expect(out.emit).toEqual(landingPending);
+    expect(out.state).toEqual({ confirmedOnGround: true, pending: null });
+  });
+
+  it('does not take a glitched ground fix at cruise speed for a landing', () => {
+    const s: TransitionTracker = { confirmedOnGround: false, pending: landingPending };
+    expect(settleSilence(s, fix({ onGround: true, groundSpeedKt: 450 }), 30 * MIN, false).emit).toBeNull();
+  });
+
+  it('leaves a pending takeoff to a second airborne fix', () => {
+    const s: TransitionTracker = { confirmedOnGround: true, pending: { ...landingPending, kind: 'takeoff' } };
+    const out = settleSilence(s, fix({ verticalRateFpm: 2000 }), 30 * MIN, true);
+    expect(out).toEqual({ state: s, emit: null });
+  });
+
+  it('infers a landing from a last fix on approach beside an airport, stamped at that fix', () => {
+    const s: TransitionTracker = { confirmedOnGround: false, pending: null };
+    const last = fix({ updatedAt: 5 * MIN });
+    expect(settleSilence(s, last, 14 * MIN, true).emit).toBeNull();
+    const out = settleSilence(s, last, 15 * MIN, true);
+    expect(out.emit).toEqual({ kind: 'landing', lat: 25.9, lon: -80.28, sinceT: 5 * MIN });
+    expect(out.state.confirmedOnGround).toBe(true);
+  });
+
+  it('does not infer one away from an airport, at cruise speed, or while climbing out', () => {
+    const s: TransitionTracker = { confirmedOnGround: false, pending: null };
+    expect(settleSilence(s, fix({}), 60 * MIN, false).state).toBe(s);
+    expect(settleSilence(s, fix({ groundSpeedKt: 420 }), 60 * MIN, true).state).toBe(s);
+    expect(settleSilence(s, fix({ verticalRateFpm: 1800 }), 60 * MIN, true).state).toBe(s);
+  });
+
+  it('adopts a long-past landing without announcing it', () => {
+    const s: TransitionTracker = { confirmedOnGround: false, pending: null };
+    const out = settleSilence(s, fix({}), 7 * 60 * MIN, true);
+    expect(out.emit).toBeNull();
+    expect(out.state.confirmedOnGround).toBe(true);
+  });
+
+  it('does nothing for an aircraft already known to be on the ground', () => {
+    const s: TransitionTracker = { confirmedOnGround: true, pending: null };
+    expect(settleSilence(s, fix({ onGround: true, groundSpeedKt: 0 }), 60 * MIN, false).state).toBe(s);
   });
 });
 
