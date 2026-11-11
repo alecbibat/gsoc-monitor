@@ -8,13 +8,31 @@ interface Props {
     urgency: string;
     certainty: string;
     senderName: string;
+    /** When this message was sent; absent on panels saved before it was carried. */
+    sent?: string | null;
     effective: string;
+    /** When the hazard begins. */
+    onset?: string | null;
+    /** When the hazard ends (null: NWS gave none). */
+    ends?: string | null;
+    /** When this message lapses — usually well before the hazard ends, as NWS re-issues. */
     expires: string;
     areaDesc: string;
   };
 }
 
+function fmt(iso: string | null | undefined): string | null {
+  const t = iso ? Date.parse(iso) : NaN;
+  return Number.isNaN(t) ? null : new Date(t).toLocaleString(undefined, { timeZoneName: 'short' });
+}
+
 export function AlertDetails({ payload }: Props) {
+  const issued = payload.sent || payload.effective;
+  // Only worth a row when the hazard starts later than the message went out.
+  const starts =
+    payload.onset && Date.parse(payload.onset) > Date.parse(issued) ? fmt(payload.onset) : null;
+  // The hazard's own end; `expires` (when this message lapses) only where NWS gives no end.
+  const ends = fmt(payload.ends);
   return (
     <div className="space-y-3">
       {payload.headline && (
@@ -34,11 +52,15 @@ export function AlertDetails({ payload }: Props) {
         <dt className="text-white/40">Issued by</dt>
         <dd>{payload.senderName}</dd>
 
-        <dt className="text-white/40">Effective</dt>
-        <dd>{new Date(payload.effective).toLocaleString()}</dd>
+        {fmt(issued) && (<><dt className="text-white/40">Issued</dt><dd>{fmt(issued)}</dd></>)}
 
-        <dt className="text-white/40">Expires</dt>
-        <dd>{new Date(payload.expires).toLocaleString()}</dd>
+        {starts && (<><dt className="text-white/40">Starts</dt><dd>{starts}</dd></>)}
+
+        {ends ? (
+          <><dt className="text-white/40">Ends</dt><dd>{ends}</dd></>
+        ) : (
+          fmt(payload.expires) && (<><dt className="text-white/40">Expires</dt><dd>{fmt(payload.expires)}</dd></>)
+        )}
       </dl>
 
       <div>
