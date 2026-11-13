@@ -556,6 +556,32 @@ export interface OutagesResponse {
   error?: string;
 }
 
+// --- Service status (provider status pages) ---------------------------------
+// Mirrors server/src/serviceStatus.ts.
+export type ServiceLevel = 'ok' | 'minor' | 'major' | 'unknown';
+
+export interface ServiceIncident {
+  title: string;
+  level: ServiceLevel;
+  url?: string;
+  since?: string;
+}
+
+export interface ServiceStatus {
+  id: string;
+  name: string;
+  url: string;
+  level: ServiceLevel;
+  summary: string;
+  incidents: ServiceIncident[];
+  checkedAt: number;
+}
+
+export interface ServiceStatusResponse {
+  services: ServiceStatus[];
+  updated: number;
+}
+
 // --- National Park Service (NPS Data API) -----------------------------------
 // Mirrors server/src/nps/*.ts and server/src/routes/nps.ts.
 export type NpsAlertCategory = 'danger' | 'closure' | 'caution' | 'info';

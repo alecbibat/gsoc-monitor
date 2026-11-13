@@ -4,7 +4,7 @@ import { ScreensaverControls } from './ScreensaverControls';
 import { InfoPanel } from './InfoPanel';
 import { useCesiumViewer } from '../cesium/CesiumContext';
 import { resetCamera } from '../cesium/flyTo';
-import { useTrackedHistory } from './useTrackedHistory';
+import { ServiceStatusChip } from '../services/ServiceStatusChip';
 import { useSidebarDockStore, useUiStore } from './uiStore';
 import { useScreensaverStore } from '../screensaver/screensaverStore';
 import { PinsWatchCluster } from '../screensaver/PinsWatchCluster';
@@ -529,54 +529,6 @@ function MobileToolsMenu() {
   );
 }
 
-// Tiny SVG sparkline for the items-tracked counter.
-function Sparkline({ history }: { history: number[] }) {
-  if (history.length < 2) return null;
-  const W = 48;
-  const H = 18;
-  const max = Math.max(...history, 1);
-  const pts = history
-    .map((v, i) => {
-      const x = (i / (history.length - 1)) * W;
-      const y = H - (v / max) * H * 0.9 + H * 0.05;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(' ');
-  return (
-    <svg width={W} height={H} className="shrink-0 opacity-50">
-      <polyline
-        points={pts}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-// Live "N items tracked" pill with rolling sparkline.
-function TrackedCounter() {
-  const { total, history } = useTrackedHistory();
-  return (
-    <div
-      className="pointer-events-auto hidden items-center gap-2 rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 text-white/60 shadow-panel backdrop-blur-sm lg:flex"
-      title="Total items currently tracked across all active layers"
-    >
-      <Sparkline history={history} />
-      <div className="flex flex-col items-end leading-none">
-        <span className="font-mono text-[15px] font-bold tabular-nums text-white/85">
-          {total.toLocaleString()}
-        </span>
-        <span className="text-[9px] font-semibold uppercase tracking-wider text-white/30">
-          tracked
-        </span>
-      </div>
-    </div>
-  );
-}
-
 export function TopBar() {
   // The search/info cluster isn't useful mid-tour, so it fades out
   // while a screensaver runs. visibility (not display) keeps its layout box,
@@ -634,7 +586,7 @@ export function TopBar() {
         <div className="contents lg:flex lg:flex-wrap lg:items-center lg:gap-3">
           <DeployStamp />
           <LiveClock />
-          <TrackedCounter />
+          <ServiceStatusChip />
           {/* Utility buttons: individual on md+, collapsed into ⋯ on mobile. */}
           <MobileToolsMenu />
           <div className="hidden md:contents">

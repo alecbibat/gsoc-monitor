@@ -34,6 +34,7 @@ import fireOutlookRouter from './routes/fireOutlook';
 import ngfsRouter from './ngfs';
 import jtwcRouter from './routes/jtwc';
 import outagesRouter, { initOutagesStream } from './routes/outages';
+import serviceStatusRouter from './routes/serviceStatus';
 import crisisRouter from './routes/crisis';
 import crisisTemplatesRouter from './routes/crisisTemplates';
 import authRouter from './routes/auth';
@@ -184,6 +185,8 @@ function main() {
   app.use('/api/ngfs', ngfsRouter);
   app.use('/api/jtwc-invests', jtwcRouter);
   app.use('/api/outages', outagesRouter);
+  // SaaS / cloud provider status pages for the top bar's service-status chip.
+  app.use('/api/service-status', serviceStatusRouter);
 
   initShipsStream();
   // Background ADS-B poller: keeps last-known aircraft positions and altitude
