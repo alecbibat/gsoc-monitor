@@ -112,6 +112,7 @@ export const api = {
   fireOutlook: () => getJson<import('../types').FireOutlookResponse>('/api/fire-outlook'),
   jtwcInvests: () => getJson<import('../types').JtwcInvestsResponse>('/api/jtwc-invests'),
   outages: () => getJson<import('../types').OutagesResponse>('/api/outages'),
+  serviceStatus: () => getJson<import('../types').ServiceStatusResponse>('/api/service-status'),
   warn: () => getJson<import('../types').WarnFeed>('/api/warn/active'),
   /** Whether an NWS alert that left the active feed was cancelled, replaced or neither. */
   alertFate: (id: string) => getJson<import('../types').AlertFate>(`/api/alerts/fate?id=${encodeURIComponent(id)}`),
