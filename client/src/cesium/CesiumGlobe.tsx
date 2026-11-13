@@ -185,12 +185,12 @@ export function CesiumGlobe({ children, onReady }: Props) {
     });
 
     // --- Make zoom and rotate distinct gestures --------------------------------
-    // Cesium's default wheel/pinch zoom steers toward the cursor / pinch
-    // midpoint, so zooming visibly rotates the globe whenever the pointer is
-    // off-center — and a two-finger pinch additionally tilts. Split them:
-    // drag rotates, wheel zooms straight along the view axis (screen center),
-    // pinch only zooms, and tilt stays available on deliberate inputs
-    // (middle-drag, or Ctrl+drag).
+    // Cesium's default wheel/pinch zoom dives along the cursor ray, which also
+    // tilts and re-headings the view — and a two-finger pinch additionally
+    // tilts. Split them: drag rotates, the wheel zooms about the point under
+    // the cursor (handled manually below, keeping heading and pitch), pinch
+    // only zooms, and tilt stays available on deliberate inputs (middle-drag,
+    // or Ctrl+drag).
     const camCtrl = v.scene.screenSpaceCameraController;
     camCtrl.zoomEventTypes = [Cesium.CameraEventType.PINCH]; // wheel is handled manually below
     camCtrl.tiltEventTypes = [
@@ -203,9 +203,24 @@ export function CesiumGlobe({ children, onReady }: Props) {
     camCtrl.minimumZoomDistance = MIN_CAM_H;
     camCtrl.maximumZoomDistance = MAX_CAM_H;
 
-    // Radial wheel zoom: each notch multiplies camera height by a constant
-    // factor, so one tick feels the same at street scale and globe scale, and
-    // the view never drifts sideways while zooming.
+    // The point where the cursor's ray meets an earth-centered sphere of the
+    // given radius — the same surface before and after a zoom step, so the two
+    // hits differ by a pure rotation about the earth's center.
+    const cursorOnSphere = (pos: Cesium.Cartesian2, radius: number) => {
+      const ray = v.camera.getPickRay(pos);
+      if (!ray) return undefined;
+      const hit = Cesium.IntersectionTests.raySphere(
+        ray,
+        new Cesium.BoundingSphere(Cesium.Cartesian3.ZERO, radius)
+      );
+      if (!hit || !(hit.start > 0)) return undefined;
+      return Cesium.Ray.getPoint(ray, hit.start);
+    };
+
+    // Wheel zoom: each notch multiplies camera height by a constant factor, so
+    // one tick feels the same at street scale and globe scale. The globe is
+    // then turned so the spot that was under the cursor is still under it —
+    // zooming goes where the pointer is, without changing heading or tilt.
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const cam = v.camera;
@@ -216,10 +231,40 @@ export function CesiumGlobe({ children, onReady }: Props) {
       const lines = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? e.deltaY : e.deltaY / 100;
       const steps = Math.max(-4, Math.min(4, lines));
       if (steps === 0) return;
+
+      // What's under the cursor now (terrain-aware, else the ellipsoid). Null
+      // when the pointer is over space — then we zoom about the screen center.
+      const cursor = new Cesium.Cartesian2(e.offsetX, e.offsetY);
+      const cursorRay = v.scene.mode === Cesium.SceneMode.SCENE3D ? cam.getPickRay(cursor) : undefined;
+      const anchor = cursorRay
+        ? (v.scene.globe.pick(cursorRay, v.scene) ?? cam.pickEllipsoid(cursor))
+        : undefined;
+      const { heading, pitch } = cam;
+
       const targetH = Math.min(MAX_CAM_H, Math.max(MIN_CAM_H, h * Math.pow(0.82, -steps)));
       const amount = h - targetH; // >0 → zoom in
       if (amount > 0) cam.zoomIn(amount);
       else if (amount < 0) cam.zoomOut(-amount);
+
+      if (anchor) {
+        const radius = Cesium.Cartesian3.magnitude(anchor);
+        // Turning the camera about the earth's center keeps pitch but shifts
+        // heading; restoring heading nudges the cursor point again, so repeat
+        // — it converges in a couple of passes.
+        for (let i = 0; i < 3; i++) {
+          const now = cursorOnSphere(cursor, radius);
+          if (!now) break; // anchor has left the cursor's reach (zoomed far out)
+          const angle = Cesium.Cartesian3.angleBetween(now, anchor);
+          if (!(angle > 1e-12)) break;
+          const axis = Cesium.Cartesian3.cross(now, anchor, new Cesium.Cartesian3());
+          if (Cesium.Cartesian3.magnitudeSquared(axis) === 0) break;
+          Cesium.Cartesian3.normalize(axis, axis);
+          const rot = Cesium.Matrix3.fromQuaternion(Cesium.Quaternion.fromAxisAngle(axis, angle));
+          const turned = Cesium.Matrix3.multiplyByVector(rot, cam.positionWC, new Cesium.Cartesian3());
+          cam.setView({ destination: turned, orientation: { heading, pitch, roll: 0 } });
+        }
+      }
+
       // zoomIn moves along the view vector, so under tilt the height change is
       // approximate — hard-stop the floor so we can't tunnel under terrain.
       const h2 = cam.positionCartographic?.height;
