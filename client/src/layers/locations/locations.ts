@@ -111,6 +111,9 @@ export const LOCATION_GROUPS: LocationGroup[] = [
       { name: 'Blue Bell Lodge', lat: 43.71780, lon: -103.48240 },
       { name: 'Legion Lake Lodge', lat: 43.76178, lon: -103.46321 },
       { name: 'State Game Lodge', lat: 43.76394, lon: -103.38089 },
+      { name: 'Buffalo Corral Store', lat: 43.65046, lon: -103.37319 },
+      { name: 'Horse Camp', lat: 43.71475, lon: -103.45438 },
+      { name: 'Employee Dorms', lat: 43.75714, lon: -103.37258 },
     ],
   },
   {
@@ -165,6 +168,7 @@ export const LOCATION_GROUPS: LocationGroup[] = [
     icon: '🌲',
     locations: [
       { name: 'Rocky Mountain Offices', lat: 40.36420, lon: -105.54726, altitudeM: 80_000 },
+      { name: 'Trail Ridge Cafe', lat: 40.44112, lon: -105.75460 },
     ],
   },
 ];
