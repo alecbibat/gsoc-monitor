@@ -2,6 +2,7 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { cache } from '../cache';
 import { readAuthUser } from '../middleware/auth';
+import { getLiveBlog } from '../liveBlog';
 
 const router = Router();
 
@@ -322,6 +323,16 @@ async function getBase(): Promise<NewsResult & { stale?: boolean }> {
     throw err;
   }
 }
+
+// HuffPost's live-updates blog: the ticker's second row.
+router.get('/live', async (_req, res) => {
+  try {
+    res.json(await getLiveBlog());
+  } catch (err) {
+    console.error('[liveblog] fetch failed:', err);
+    res.status(502).json({ error: String(err), title: '', url: '', items: [], updated: Date.now() });
+  }
+});
 
 router.get('/', async (req, res) => {
   // Parse user-supplied extra RSS feeds from ?extra=<url-encoded-json>.

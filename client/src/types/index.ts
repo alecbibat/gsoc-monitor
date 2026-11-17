@@ -278,6 +278,21 @@ export interface NewsResponse {
   updated: number;
 }
 
+/** One update of HuffPost's live blog (the ticker's second row). */
+export interface LiveBlogItem {
+  id: string;
+  title: string;
+  url: string;
+  publishedAt: number;
+}
+
+export interface LiveBlogResponse {
+  title: string;
+  url: string;
+  items: LiveBlogItem[];
+  updated: number;
+}
+
 // Geocoded news points for the on-map News (GDELT) layer. Distinct from the
 // NewsItem ticker feed above: each event is a place with one or more articles.
 export interface NewsMapArticle {

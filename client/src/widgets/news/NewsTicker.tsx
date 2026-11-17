@@ -1,4 +1,4 @@
-import { useEffect, useMemo, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { api } from '../../api/client';
 import { usePanelStore } from '../../panels/panelStore';
 import { useScreensaverStore } from '../../screensaver/screensaverStore';
@@ -9,7 +9,7 @@ import { useNpsFeed, useNpsStore } from '../../nps/npsStore';
 import { interleaveEvenly, npsOnlyEmptyText, npsTickerItems, type NpsTickerItem } from '../../nps/tickerItems';
 import { NPS_CATEGORY, NPS_GREEN } from '../../nps/npsMeta';
 import { openNpsPanel } from '../../nps/openNpsPanel';
-import type { NewsItem } from '../../types';
+import type { LiveBlogItem, LiveBlogResponse, NewsItem } from '../../types';
 
 // A horizontally-scrolling headline ticker pinned to the bottom of the screen.
 // Shown while the Breaking News panel is closed, and kept alive during the pins
@@ -27,7 +27,13 @@ import type { NewsItem } from '../../types';
 // A news release opens on nps.gov like any headline; an alert opens the
 // National Parks panel, which has its full text. The button at the right end
 // opens the panel for the mode: Breaking News, or National Parks.
+//
+// Above it runs a second row, HUFFPOST LIVE: the posts of HuffPost's rolling
+// live-updates blog, newest first, each with its time and a link to the post.
+// The LIVE button at the right end of the bar switches the row off and on
+// (remembered per browser).
 const REFRESH_MS = 5 * 60_000;
+const LIVE_REFRESH_MS = 2 * 60_000;
 /** Short lists repeat so one pass of the marquee still spans the bar. */
 const MIN_LOOP_ITEMS = 6;
 
@@ -114,6 +120,64 @@ function WorldHeadline({ item }: { item: NewsItem }) {
   );
 }
 
+/** One pass of a marquee (short lists repeated to span the bar), twice over for the seamless loop. */
+function marqueeLoop<T>(items: T[]): { loop: T[]; durationS: number } {
+  const reps = items.length > 0 ? Math.ceil(MIN_LOOP_ITEMS / items.length) : 1;
+  const pass = reps > 1 ? Array.from({ length: reps }, () => items).flat() : items;
+  return { loop: [...pass, ...pass], durationS: Math.max(24, pass.length * 7) };
+}
+
+/** "9:09 AM" for a post from today, "Mon 9:09 AM" for an older one. */
+export function liveTime(publishedAt: number, now: number): string {
+  if (!publishedAt) return '';
+  const d = new Date(publishedAt);
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (d.toDateString() === new Date(now).toDateString()) return time;
+  return `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`;
+}
+
+function LiveHeadline({ item, now }: { item: LiveBlogItem; now: number }) {
+  return (
+    <a
+      href={item.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="group mx-4 inline-flex items-center gap-2 text-[12px]"
+    >
+      <span className="shrink-0 tabular-nums text-violet-300/70">{liveTime(item.publishedAt, now)}</span>
+      <span className="text-white/75 transition group-hover:text-white">{item.title}</span>
+      <span className="ml-2 text-white/15">•</span>
+    </a>
+  );
+}
+
+/** The HuffPost Live row, above the headlines. */
+function LiveRow({ live }: { live: LiveBlogResponse }) {
+  const { loop, durationS } = marqueeLoop(live.items);
+  const now = Date.now();
+  return (
+    <div className="flex min-h-[2rem] items-center border-t border-white/10 bg-ink-900/85 backdrop-blur-sm">
+      <a
+        href={live.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex shrink-0 items-center gap-1.5 self-stretch border-r border-white/10 bg-violet-500/10 px-3 text-[10px] font-bold uppercase tracking-widest text-violet-300 transition hover:bg-violet-500/20"
+        title={live.title ? `HuffPost live updates: ${live.title}. Open the live blog.` : 'Open the HuffPost live blog'}
+      >
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />
+        HuffPost Live
+      </a>
+      <div className="relative flex-1 overflow-hidden">
+        <div className="animate-marquee flex w-max items-center" style={{ animationDuration: `${durationS}s` }}>
+          {loop.map((item, i) => (
+            <LiveHeadline key={`${item.id}:${i}`} item={item} now={now} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PanelIcon() {
   return (
     <svg
@@ -142,6 +206,11 @@ interface TickerBarProps {
   /** Shown in the NPS-alerts mode when there is nothing to run. */
   emptyText: string;
   insetForSidebar: boolean;
+  /** HuffPost's live blog, or null before its first answer. */
+  live: LiveBlogResponse | null;
+  /** The HuffPost Live row is switched on. */
+  liveOn: boolean;
+  onToggleLive: () => void;
   onToggleMode: () => void;
   onOpenNpsPanel: () => void;
   onOpenModePanel: () => void;
@@ -155,14 +224,14 @@ export function TickerBar({
   showNpsKey,
   emptyText,
   insetForSidebar,
+  live,
+  liveOn,
+  onToggleLive,
   onToggleMode,
   onOpenNpsPanel,
   onOpenModePanel,
 }: TickerBarProps) {
-  const reps = entries.length > 0 ? Math.ceil(MIN_LOOP_ITEMS / entries.length) : 1;
-  const pass = reps > 1 ? Array.from({ length: reps }, () => entries).flat() : entries;
-  const durationS = Math.max(24, pass.length * 7);
-  const loop = [...pass, ...pass];
+  const { loop, durationS } = marqueeLoop(entries);
   const panelLabel = npsOnly ? 'Open the National Parks panel' : 'Open the Breaking News panel';
 
   return (
@@ -171,6 +240,7 @@ export function TickerBar({
         insetForSidebar ? 'md:left-72' : ''
       }`}
     >
+      {liveOn && live && live.items.length > 0 && <LiveRow live={live} />}
       <div className="flex min-h-[2.25rem] items-center border-t border-white/10 bg-ink-900/85 pb-safe backdrop-blur-sm">
         {/* Label — click to switch between all headlines and park alerts only. */}
         <button
@@ -233,6 +303,22 @@ export function TickerBar({
           )}
         </div>
 
+        {/* The HuffPost Live row above, on or off. */}
+        <button
+          type="button"
+          onClick={onToggleLive}
+          aria-pressed={liveOn}
+          className={`flex h-full shrink-0 items-center gap-1.5 border-l border-white/10 px-2.5 text-[10px] font-bold uppercase tracking-widest transition ${
+            liveOn
+              ? 'bg-violet-500/10 text-violet-300 hover:bg-violet-500/20'
+              : 'text-white/35 hover:bg-white/5 hover:text-white/75'
+          }`}
+          title={liveOn ? 'Hide the HuffPost Live row' : 'Show the HuffPost Live row above the ticker'}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${liveOn ? 'bg-violet-400' : 'bg-white/30'}`} />
+          Live
+        </button>
+
         {/* The panel for what's running: Breaking News, or National Parks. */}
         <button
           type="button"
@@ -255,6 +341,9 @@ export function NewsTicker() {
   const customSources = useNewsStore((s) => s.customSources);
   const setData = useNewsStore((s) => s.setData);
   const setError = useNewsStore((s) => s.setError);
+  const liveOn = useNewsStore((s) => s.liveRow);
+  const setLiveOn = useNewsStore((s) => s.setLiveRow);
+  const [live, setLive] = useState<LiveBlogResponse | null>(null);
 
   const npsInTicker = useNpsStore((s) => s.inTicker);
   const npsOnly = useNpsStore((s) => s.tickerNpsOnly);
@@ -293,6 +382,24 @@ export function NewsTicker() {
       stop();
     };
   }, [active, customSources, setData, setError]);
+
+  // The live blog, while its row is on. A failed refresh keeps the last answer.
+  useEffect(() => {
+    if (!active || !liveOn) return;
+    let cancelled = false;
+    const stop = startVisiblePolling(() => {
+      api
+        .liveBlog()
+        .then((res) => {
+          if (!cancelled) setLive(res);
+        })
+        .catch(() => {});
+    }, LIVE_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [active, liveOn]);
 
   // Rebuilt per feed answer (npsUpdated), not per render, so the 30-day news
   // cut-off is judged once per refresh and the marquee doesn't restart.
@@ -341,6 +448,9 @@ export function NewsTicker() {
       // outside the screensaver, not collapsed). During the pins screensaver
       // the sidebar is hidden, so span the full width — very left to very right.
       insetForSidebar={!screensaverActive && !sidebarCollapsed}
+      live={live}
+      liveOn={liveOn}
+      onToggleLive={() => setLiveOn(!liveOn)}
       onToggleMode={() => setNpsOnly(!npsOnly)}
       onOpenNpsPanel={() => openNpsPanel()}
       onOpenModePanel={npsOnly ? () => openNpsPanel() : openNewsPanel}
