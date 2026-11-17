@@ -32,6 +32,9 @@ interface NewsState {
   categoryFilter: Set<CategoryFilter>;
   seenIds: Set<string>;
   customSources: CustomSource[];
+  /** Run the HuffPost Live row above the ticker (persisted). */
+  liveRow: boolean;
+  setLiveRow: (on: boolean) => void;
 
   setData: (items: NewsItem[], updated: number) => void;
   setLoading: (loading: boolean) => void;
@@ -53,6 +56,8 @@ export const useNewsStore = create<NewsState>()(
       categoryFilter: new Set(ALL_CATEGORIES),
       seenIds: new Set(),
       customSources: [],
+      liveRow: true,
+      setLiveRow: (liveRow) => set({ liveRow }),
 
       setData: (items, updated) =>
         set((s) => {
@@ -94,7 +99,7 @@ export const useNewsStore = create<NewsState>()(
     }),
     {
       name: 'gsoc-news',
-      partialize: (state) => ({ customSources: state.customSources }),
+      partialize: (state) => ({ customSources: state.customSources, liveRow: state.liveRow }),
       // v0 also saved the old park/breaking ticker mode; National Park items now
       // mix into the one ticker (see nps/), so only the custom sources carry over.
       version: 1,

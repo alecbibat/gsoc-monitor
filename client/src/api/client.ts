@@ -83,6 +83,7 @@ export const api = {
     }
     return getJson<import('../types').NewsResponse>('/api/news');
   },
+  liveBlog: () => getJson<import('../types').LiveBlogResponse>('/api/news/live'),
   county: (fips: string) => getJson<GeoJSON.FeatureCollection>(`/api/county/${fips}`),
   park: (code: string) => getJson<GeoJSON.FeatureCollection>(`/api/park/${code}`),
   directions: (lat: number, lon: number) =>
