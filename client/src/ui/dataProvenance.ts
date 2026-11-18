@@ -51,6 +51,19 @@ export const LAYER_PROVENANCE: Array<{ id: LayerId; info: Provenance }> = [
     },
   },
   {
+    id: 'airports',
+    info: {
+      name: 'Airport Status (FAA)',
+      icon: '🛫',
+      source: 'FAA Air Traffic Control System Command Center',
+      method:
+        'Ground stops, ground delay programs, closures, arrival and departure delays and deicing at US airports, read every minute from the feed behind the FAA’s own National Airspace System Status map. Only airports with something going on are listed.',
+      trust:
+        'Published by the FAA facility that issues these programs. Delay figures are the FAA’s estimates for the airport as a whole, not for any one flight — the airline has the last word on a flight.',
+      url: 'https://nasstatus.faa.gov',
+    },
+  },
+  {
     id: 'flights',
     info: {
       name: 'Flights (ADS-B)',

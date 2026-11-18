@@ -4,6 +4,8 @@ import { flyToBoundingBox, flyToLonLat } from '../cesium/flyTo';
 import { alertRings, fetchActiveAlertsShared, loadCountyAtlas, type RawAlert } from '../layers/alerts/alertsData';
 import { alertPanelData } from '../layers/alerts/alertPanel';
 import { WEA_CLASSES } from '../layers/warn/warnMeta';
+import { airportPanelData } from '../layers/airports/airportPanel';
+import { AIRPORT_TIERS, airportEvents } from '../layers/airports/airportsMeta';
 import { api } from '../api/client';
 import { startVisiblePolling } from '../lib/poll';
 import { usePanelStore } from '../panels/panelStore';
@@ -22,9 +24,9 @@ import {
   NOTIFY_RADIUS_MI, detectNewAlertNotices, nwsAlertId, nwsCancelNotice, vanishedEarly, type PinHit, type SeenMap,
 } from './pinAlertMatch';
 import {
-  QUAKE_NOTIFY_RADIUS_MI, WARN_NOTIFY_RADIUS_MI,
-  detectFlightNotices, detectNpsNotices, detectQuakeNotices, detectShipNotices, detectWarnNotices,
-  type NpsSeen, type SeenIds,
+  AIRPORT_NEAR_MI, QUAKE_NOTIFY_RADIUS_MI, WARN_NOTIFY_RADIUS_MI,
+  detectAirportNotices, detectFlightNotices, detectNpsNotices, detectQuakeNotices, detectShipNotices, detectWarnNotices,
+  type AirportSeen, type NpsSeen, type SeenIds,
 } from './detectors';
 import { isEndedNotice, type Notice, type NoticeCategory, type NwsNotice, type WarnNotice } from './notices';
 
@@ -37,6 +39,7 @@ import { isEndedNotice, type Notice, type NoticeCategory, type NwsNotice, type W
 //   warn   — Wireless Emergency Alerts (PBS WARN) within 50 mi, and their updates
 //   quake  — M4.5+ earthquakes within 50 mi
 //   nps    — new or changed National Park Service alerts at the followed parks
+//   airport — FAA ground stops, delay programs, closures and hour-long delays, at any airport
 //   flight — the company aircraft's takeoffs and landings
 //   ship   — Windstar arrivals at and departures from port
 // Runs whether or not the matching map layers are shown, and during the
@@ -138,6 +141,16 @@ const npsStep = (): Step => {
   };
 };
 
+const airportStep = (): Step => {
+  let seen: AirportSeen = new Map();
+  return async (baseline) => {
+    const feed = await api.faaAirports();
+    const out = detectAirportNotices({ airports: feed.airports, seen, baseline, now: Date.now() });
+    seen = out.seen;
+    return out.notices;
+  };
+};
+
 const flightStep = (): Step => {
   let seen: SeenIds = new Map();
   return async (baseline) => {
@@ -164,6 +177,7 @@ const SOURCES: Record<NoticeCategory, { makeStep: () => Step; everyMs: number }>
   quake: { makeStep: quakeStep, everyMs: 60_000 },
   // The server refreshes NPS alerts every 5 minutes; parks post a few a week.
   nps: { makeStep: npsStep, everyMs: 120_000 },
+  airport: { makeStep: airportStep, everyMs: 60_000 },
   flight: { makeStep: flightStep, everyMs: 60_000 },
   // Positions land about every two hours; every two minutes is plenty.
   ship: { makeStep: shipStep, everyMs: 120_000 },
@@ -262,6 +276,8 @@ function headerText(n: Notice): string {
       return n.isUpdate
         ? `National Park Service alert updated · ${n.alert.park}`
         : `New National Park Service alert · ${n.alert.park}`;
+    case 'airport':
+      return n.hits.length > 0 ? 'FAA airport status · gateway to your locations' : 'FAA airport status';
     case 'flight':
       return n.event.kind === 'takeoff' ? 'Company aircraft departed' : 'Company aircraft landed';
     case 'ship':
@@ -520,6 +536,44 @@ function NoticeBody({ n, now }: { n: Notice; now: number }) {
         </>
       );
     }
+    case 'airport': {
+      const a = n.airport;
+      const events = airportEvents(a, now);
+      const lead = events.find((e) => e.kind === n.fresh[0]) ?? events[0];
+      return (
+        <>
+          <div>
+            <Title color={n.color}>
+              {lead?.title ?? 'Airport status'} · {a.name} ({a.id})
+            </Title>
+          </div>
+          <ul className="space-y-1 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2">
+            {events.map((e) => {
+              const isNew = n.fresh.includes(e.kind);
+              const tint = AIRPORT_TIERS[e.tier].color;
+              return (
+                <li key={e.kind} className="flex items-baseline gap-2 text-[12.5px] leading-snug">
+                  <span aria-hidden className="h-2 w-2 shrink-0 translate-y-[-1px] rounded-full" style={{ background: tint }} />
+                  <span className="min-w-0 flex-1">
+                    <span className={isNew ? 'font-semibold text-white/95' : 'text-white/70'}>{e.title}</span>
+                    {e.detail && <span className="text-white/50"> · {e.detail}</span>}
+                  </span>
+                  {isNew && (
+                    <span className="shrink-0 rounded px-1 py-px text-[9.5px] font-bold uppercase tracking-wider" style={{ color: tint, background: `${tint}22` }}>
+                      New
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {n.hits.length > 0 && <PinList hits={n.hits} radiusMi={AIRPORT_NEAR_MI} color={n.color} heading={`Your locations within ${AIRPORT_NEAR_MI} mi`} />}
+          <p className="text-[10.5px] leading-snug text-white/35">
+            FAA figures are for the airport as a whole. Check the airline for a particular flight.
+          </p>
+        </>
+      );
+    }
     case 'flight': {
       const e = n.event;
       const a = e.airport;
@@ -594,6 +648,8 @@ export function NoticeCard({ notice, index, total, now, onShow, onDismiss, onDis
         <span aria-hidden className="text-[15px]">
           {notice.category === 'flight'
             ? '✈'
+            : notice.category === 'airport'
+              ? '🛫'
             : notice.category === 'ship'
               ? '⚓'
               : notice.category === 'nps'
@@ -673,6 +729,7 @@ export function AlertNotifier() {
   useNoticeSource('warn', enabled && categories.warn);
   useNoticeSource('quake', enabled && categories.quake);
   useNoticeSource('nps', enabled && categories.nps);
+  useNoticeSource('airport', enabled && categories.airport);
   useNoticeSource('flight', enabled && categories.flight);
   useNoticeSource('ship', enabled && categories.ship);
 
@@ -771,6 +828,11 @@ export function AlertNotifier() {
         openNpsPanel(n.alert.parkCode, n.alert.id);
         break;
       }
+      case 'airport':
+        ensureLayer('airports');
+        if (live) flyToLonLat(live, n.airport.lon, n.airport.lat, 600_000);
+        panels.open({ ...airportPanelData(n.airport, Date.now()), locked: true });
+        break;
       case 'flight':
         ensureLayer('flights');
         if (live) flyToLonLat(live, n.event.lon, n.event.lat, 60_000);

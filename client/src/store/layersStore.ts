@@ -78,6 +78,8 @@ export const useLayersStore = create<LayersState>()(
         outages: false,
         intel: false,
         warn: false,
+        // A dozen or so markers on a busy day: on unless switched off.
+        airports: true,
         // Asked for by name: closures around the followed national parks.
         roads: true,
         // The parks' webcams; markers only show from a regional zoom in.

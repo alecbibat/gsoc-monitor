@@ -9,6 +9,7 @@ import { FuelLegend, FuelLegendCompact } from './fuel/FuelLegend';
 import { TimeZonesLegend, TimeZonesLegendCompact } from './timezones/TimeZonesLegend';
 import { NgfsLegend, NgfsLegendCompact } from './ngfs/NgfsLegend';
 import { WarnLegend, WarnLegendCompact } from './warn/WarnLegend';
+import { AirportStatusLegend, AirportStatusLegendCompact } from './airports/AirportStatusLegend';
 import { RoadClosuresLegend, RoadClosuresLegendCompact } from './roads/RoadClosuresLegend';
 
 export interface LayerLegend {
@@ -36,6 +37,7 @@ export interface LayerLegend {
 // so it renders on both surfaces; Controls are the one store-bound part.
 export const LAYER_LEGENDS: LayerLegend[] = [
   { id: 'warn', title: 'Wireless Emergency Alerts', Legend: WarnLegend, Compact: WarnLegendCompact },
+  { id: 'airports', title: 'Airport Status (FAA)', Legend: AirportStatusLegend, Compact: AirportStatusLegendCompact },
   { id: 'roads', title: 'Road Closures (Parks)', Legend: RoadClosuresLegend, Compact: RoadClosuresLegendCompact },
   { id: 'radar', title: 'Precipitation Radar', Legend: RadarLegend, Compact: RadarLegendCompact, Controls: RadarPlayer },
   { id: 'precip', title: 'Precip Forecast (WPC)', hint: 'inches', Legend: PrecipLegend, Compact: PrecipLegendCompact },

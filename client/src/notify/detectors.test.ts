@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { EarthquakeFeature, FlightEventWithModel, NpsAlert, ShipPortEvent, WarnAlert } from '../types';
+import type { EarthquakeFeature, FaaAirportStatus, FlightEventWithModel, NpsAlert, ShipPortEvent, WarnAlert } from '../types';
+import {
+  AIRPORT_QUIET_MS, detectAirportNotices, type AirportSeen,
+} from './detectors';
 import {
   NOTICE_MAX_AGE_MS, detectFlightNotices, detectNpsNotices, detectQuakeNotices, detectShipNotices, detectWarnNotices,
   warnHits, type NpsSeen, type SeenIds,
@@ -273,5 +276,80 @@ describe('National Park Service notices', () => {
     seen = detectNpsNotices({ alerts: [], seen, baseline: false, now: NOW + 7 * 60 * MIN }).seen;
     const back = detectNpsNotices({ alerts: [a], seen, baseline: false, now: NOW + 7 * 60 * MIN + MIN });
     expect(back.notices.map((n) => n.isUpdate)).toEqual([false]);
+  });
+});
+
+describe('FAA airport notices', () => {
+  // The stand-in airport sits ~25 mi from Lodge A and ~240 mi from Lodge B.
+  const airport = (id: string, over: Partial<FaaAirportStatus> = {}): FaaAirportStatus => ({
+    id, name: `${id} International`, lat: 40.2, lon: -104.6,
+    groundStop: null, groundDelay: null, arrivalDelay: null, departureDelay: null,
+    closure: null, restriction: null, deicing: null, config: null,
+    ...over,
+  });
+  const stop = { reason: 'wind', start: null, end: null, extension: null, facilities: [], advisoryUrl: null };
+  const gdp = { reason: 'wind', avgMin: 92, maxMin: 341, start: null, end: null, advisoryUrl: null };
+  const delay = (avgMin: number) => ({ reason: 'WX:Thunderstorms', min: null, max: null, avgMin, trend: 'increasing', updated: null });
+
+  /** Run polls at the given minutes past NOW (first one is the baseline); return each poll's notices. */
+  function run(polls: [number, FaaAirportStatus[]][]) {
+    let seen: AirportSeen = new Map();
+    return polls.map(([min, airports], i) => {
+      const out = detectAirportNotices({ airports, seen, baseline: i === 0, now: NOW + min * MIN, pins: PINS });
+      seen = out.seen;
+      return out.notices;
+    });
+  }
+
+  it('stays quiet on the baseline, then announces a new ground stop once, wherever it is', () => {
+    const far = airport('MIA', { lat: 25.8, lon: -80.3, groundStop: stop });
+    const [base, first, again] = run([[0, []], [1, [far]], [2, [far]]]);
+    expect(base).toEqual([]);
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatchObject({ category: 'airport', fresh: ['ground-stop'], hits: [], color: '#ff8a3d' });
+    expect(again).toEqual([]);
+    expect(run([[0, [far]], [1, [far]]])[1]).toEqual([]);
+  });
+
+  it('makes one popup of several things starting together, worst first, naming nearby properties', () => {
+    const [, notices] = run([[0, []], [1, [airport('DEN', { groundDelay: gdp, groundStop: stop })]]]);
+    expect(notices).toHaveLength(1);
+    expect(notices[0].fresh).toEqual(['ground-stop', 'ground-delay']);
+    expect(notices[0].hits.map((h) => h.pin.key)).toEqual(['g::A', 'g::B']);
+    expect(notices[0].rank).toBeGreaterThan(7);
+  });
+
+  it('announces what is added to an airport already listed, and only that', () => {
+    const [, , notices] = run([
+      [0, []],
+      [1, [airport('DEN', { groundDelay: gdp })]],
+      [2, [airport('DEN', { groundDelay: gdp, groundStop: stop })]],
+    ]);
+    expect(notices.map((n) => n.fresh)).toEqual([['ground-stop']]);
+  });
+
+  it('leaves short delays, deicing and closures to some traffic to the map', () => {
+    const quiet = airport('SLC', {
+      departureDelay: delay(45),
+      deicing: { since: null, until: null },
+      restriction: { text: 'TO NON SKED TRANSIENT GA ACFT', notam: null, start: null, end: null, daily: null },
+    });
+    const [, none, grown] = run([[0, []], [1, [quiet]], [2, [{ ...quiet, departureDelay: delay(75) }]]]);
+    expect(none).toEqual([]);
+    expect(grown.map((n) => n.fresh)).toEqual([['departure-delay']]);
+  });
+
+  it('treats a stop re-issued within the hour as the same one, and a later one as new', () => {
+    const den = airport('DEN', { groundStop: stop });
+    const quietMin = AIRPORT_QUIET_MS / MIN;
+    const [, first, lifted, back, gone, later] = run([
+      [0, []], [1, [den]], [20, []], [40, [den]], [41, []], [41 + quietMin + 1, [den]],
+    ]);
+    expect(first).toHaveLength(1);
+    expect(lifted).toEqual([]);
+    expect(back).toEqual([]);
+    expect(gone).toEqual([]);
+    expect(later).toHaveLength(1);
+    expect(later[0].key).not.toBe(first[0].key);
   });
 });

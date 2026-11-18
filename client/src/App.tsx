@@ -6,6 +6,7 @@ import { CesiumGlobe } from './cesium/CesiumGlobe';
 import { EarthquakeLayer } from './layers/earthquakes/EarthquakeLayer';
 import { AlertsLayer } from './layers/alerts/AlertsLayer';
 import { WarnLayer } from './layers/warn/WarnLayer';
+import { AirportStatusLayer } from './layers/airports/AirportStatusLayer';
 import { RoadClosuresLayer } from './layers/roads/RoadClosuresLayer';
 import { WebcamsLayer } from './layers/webcams/WebcamsLayer';
 import { RadarLayer } from './layers/radar/RadarLayer';
@@ -183,6 +184,7 @@ export default function App() {
           <EarthquakeLayer />
           <AlertsLayer />
           <WarnLayer />
+          <AirportStatusLayer />
           <RoadClosuresLayer />
           <WebcamsLayer />
           <HurricaneLayer />
