@@ -47,7 +47,7 @@ const warn = (key: string, aliases: string[] = []): WarnNotice => ({
 beforeEach(() => {
   useAlertNotifyStore.setState({
     enabled: true,
-    categories: { nws: true, warn: true, quake: true, nps: true, flight: true, ship: true },
+    categories: { nws: true, warn: true, quake: true, nps: true, airport: true, flight: true, ship: true },
     queue: [],
     announced: new Set(),
     flashSeq: 0,
@@ -91,7 +91,7 @@ describe('alert notify store', () => {
   it('keeps a saved browser’s choices and turns on kinds it never saw', () => {
     const merged = mergeNotifySettings({ enabled: false, categories: { ship: false } }, useAlertNotifyStore.getState());
     expect(merged.enabled).toBe(false);
-    expect(merged.categories).toEqual({ nws: true, warn: true, quake: true, nps: true, flight: true, ship: false });
+    expect(merged.categories).toEqual({ nws: true, warn: true, quake: true, nps: true, airport: true, flight: true, ship: false });
   });
 });
 
@@ -189,6 +189,27 @@ describe('NoticeCard', () => {
     const html = render(update);
     expect(html).toContain('Emergency alert updated near your locations');
     expect(html).toContain('Previously: “Shelter in place.”');
+  });
+
+  it('names the airport, marks what is new there, and lists the properties it serves', () => {
+    const airport: Notice = {
+      category: 'airport', key: 'airport:LAS:ground-stop:1', color: '#ff8a3d', rank: 9, fresh: ['ground-stop'],
+      airport: {
+        id: 'LAS', name: 'Harry Reid International', lat: 36.084, lon: -115.1537,
+        groundStop: { reason: 'WX:Thunderstorms', start: null, end: null, extension: 'MEDIUM', facilities: [], advisoryUrl: null },
+        groundDelay: null, arrivalDelay: null,
+        departureDelay: { reason: 'VOL:Volume', min: '31 minutes', max: '45 minutes', avgMin: 38, trend: 'increasing', updated: null },
+        closure: null, restriction: null, deicing: null, config: null,
+      },
+      hits: [{ pin: PIN_B, distanceMi: 171.2 }],
+    };
+    const html = render(airport);
+    expect(html).toContain('FAA airport status · gateway to your locations');
+    expect(html).toContain('Ground stop · Harry Reid International (LAS)');
+    expect(html).toMatch(/Ground stop<\/span><span[^>]*> · Weather: thunderstorms<\/span><\/span><span[^>]*>New</);
+    expect(html).toContain('31 minutes to 45 minutes · increasing · Volume');
+    expect(html).toContain('Your locations within 250 mi');
+    expect(html).toContain('171.2 mi away');
   });
 
   it('leads a WEA with the message sent to phones', () => {

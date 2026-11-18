@@ -20,6 +20,7 @@ import { FireOutlookDetails } from '../layers/fireOutlook/FireOutlookDetails';
 import { PropertyDetail } from '../widgets/proximity/PropertyDetail';
 import { TimezonePanel } from '../layers/timezones/TimezonePanel';
 import { WarnDetails } from '../layers/warn/WarnDetails';
+import { AirportStatusDetails } from '../layers/airports/AirportStatusDetails';
 import { RoadClosureDetails } from '../layers/roads/RoadClosureDetails';
 import { WebcamDetails } from '../layers/webcams/WebcamDetails';
 import { WIDGET_BY_ID } from '../widgets/registry';
@@ -29,6 +30,7 @@ const ACCENT_BY_KIND: Record<string, string> = {
   earthquakes: 'border-accent-warn/40',
   alerts: 'border-accent-danger/40',
   warn: 'border-rose-500/40',
+  airports: 'border-amber-400/40',
   roads: 'border-red-500/40',
   webcams: 'border-emerald-500/40',
   flights: 'border-accent/40',
@@ -68,6 +70,7 @@ export function PanelContent({ panel }: { panel: PanelData }) {
       {panel.kind === 'earthquakes' && <EarthquakeDetails payload={panel.payload as never} />}
       {panel.kind === 'alerts' && <AlertDetails payload={panel.payload as never} />}
       {panel.kind === 'warn' && <WarnDetails payload={panel.payload as never} />}
+      {panel.kind === 'airports' && <AirportStatusDetails payload={panel.payload as never} />}
       {panel.kind === 'roads' && <RoadClosureDetails payload={panel.payload as never} />}
       {panel.kind === 'webcams' && <WebcamDetails payload={panel.payload as never} />}
       {panel.kind === 'flights' && <FlightDetails payload={panel.payload as never} />}

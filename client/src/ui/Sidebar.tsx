@@ -6,6 +6,8 @@ import { FlightGroupControls, loadFlightActivity } from '../layers/flights/Fligh
 import { useAlertsStatus } from '../layers/alerts/alertsStore';
 import { useWarnStatus } from '../layers/warn/warnStore';
 import { WARN_FETCH_STALE_MS, WARN_HEARTBEAT_STALE_MS } from '../layers/warn/warnMeta';
+import { useAirportsStatus } from '../layers/airports/airportsStore';
+import { FAA_FETCH_STALE_MS, airportsStatusText } from '../layers/airports/airportsMeta';
 import { useEarthquakesStatus } from '../layers/earthquakes/earthquakesStore';
 import { useHurricanesStatus } from '../layers/hurricanes/hurricanesStore';
 import { useLightningStatus } from '../layers/lightning/lightningStore';
@@ -128,6 +130,9 @@ export function Sidebar() {
   const alertsStatus = useAlertsStatus(useShallow((s) => ({ count: s.count, error: s.error })));
   const warnStatus = useWarnStatus(
     useShallow((s) => ({ count: s.count, hiddenNws: s.hiddenNws, heartbeat: s.heartbeat, fetchedAt: s.fetchedAt, error: s.error }))
+  );
+  const airportsStatus = useAirportsStatus(
+    useShallow((s) => ({ count: s.count, tiers: s.tiers, fetchedAt: s.fetchedAt, error: s.error }))
   );
   const earthquakesCount = useEarthquakesStatus((s) => s.count);
   const earthquakesError = useEarthquakesStatus((s) => s.error);
@@ -318,6 +323,17 @@ export function Sidebar() {
       return `${base} · PBS feed stale since ${new Date(hb).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
     }
     return base;
+  }
+
+  function airportsText() {
+    if (airportsStatus.error) return airportsStatus.error;
+    // The proxy serves its last good answer through upstream failures.
+    const fetched = airportsStatus.fetchedAt ? Date.parse(airportsStatus.fetchedAt) : NaN;
+    if (Number.isFinite(fetched) && Date.now() - fetched > FAA_FETCH_STALE_MS) {
+      return `FAA unreachable — showing status as of ${new Date(fetched).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    }
+    if (!Number.isFinite(fetched)) return 'FAA ground stops, delays and closures · live';
+    return airportsStatusText(airportsStatus.tiers, airportsStatus.count);
   }
 
   function satellitesStatusText() {
@@ -835,6 +851,18 @@ export function Sidebar() {
         </Section>
 
         <Section title="Tracking">
+          <LayerToggle
+            label="Airport Status (FAA)"
+            active={(active as Record<string, boolean>).airports ?? false}
+            onToggle={() => toggleLayer('airports')}
+            statusText={airportsText()}
+          >
+            <p className="pt-1 text-[10px] leading-relaxed text-white/30">
+              US airports with a ground stop, ground delay program, closure, delays or deicing,
+              coloured by the worst of them. Airports running normally are not drawn. From the
+              FAA&rsquo;s NAS Status map.
+            </p>
+          </LayerToggle>
           <LayerToggle
             label="Flights (ADS-B)"
             active={active.flights}

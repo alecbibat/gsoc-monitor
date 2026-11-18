@@ -26,6 +26,7 @@ export type LayerId =
   | 'outages'
   | 'intel'
   | 'warn'
+  | 'airports'
   | 'roads'
   | 'webcams';
 
@@ -798,6 +799,70 @@ export type AlertFate =
 export interface WarnFeed {
   alerts: WarnAlert[];
   heartbeat: string | null;
+  fetchedAt: string;
+}
+
+// --- FAA airport status (nasstatus.faa.gov) ---------------------------------
+// Mirrors server/src/routes/faa.ts.
+export interface FaaGroundStop {
+  reason: string | null;
+  start: string | null;
+  end: string | null;
+  /** The FAA's own odds that the stop runs past its end: "LOW", "MEDIUM", "HIGH". */
+  extension: string | null;
+  /** Air traffic centers whose departures are held. */
+  facilities: string[];
+  advisoryUrl: string | null;
+}
+
+export interface FaaGroundDelay {
+  reason: string | null;
+  avgMin: number | null;
+  maxMin: number | null;
+  start: string | null;
+  end: string | null;
+  advisoryUrl: string | null;
+}
+
+export interface FaaDelay {
+  reason: string | null;
+  /** The FAA's range as it words it: "16 minutes", "1 hour and 46 minutes". */
+  min: string | null;
+  max: string | null;
+  avgMin: number | null;
+  trend: string | null;
+  updated: string | null;
+}
+
+export interface FaaClosure {
+  /** What the NOTAM says after "AP CLSD": empty for a plain closure. */
+  text: string;
+  notam: string | null;
+  start: string | null;
+  end: string | null;
+  /** Closed only between these UTC clock times each day ("0730", "1415"). */
+  daily: { from: string; to: string } | null;
+}
+
+export interface FaaAirportStatus {
+  /** FAA identifier ("SFO"). */
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  groundStop: FaaGroundStop | null;
+  groundDelay: FaaGroundDelay | null;
+  arrivalDelay: FaaDelay | null;
+  departureDelay: FaaDelay | null;
+  closure: FaaClosure | null;
+  /** Closed to some traffic only: typically transient general aviation. */
+  restriction: FaaClosure | null;
+  deicing: { since: string | null; until: string | null } | null;
+  config: { arrival: string | null; departure: string | null; arrivalRate: number | null } | null;
+}
+
+export interface FaaFeed {
+  airports: FaaAirportStatus[];
   fetchedAt: string;
 }
 

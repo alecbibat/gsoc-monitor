@@ -115,6 +115,7 @@ export const api = {
   outages: () => getJson<import('../types').OutagesResponse>('/api/outages'),
   serviceStatus: () => getJson<import('../types').ServiceStatusResponse>('/api/service-status'),
   warn: () => getJson<import('../types').WarnFeed>('/api/warn/active'),
+  faaAirports: () => getJson<import('../types').FaaFeed>('/api/faa/airports'),
   /** Whether an NWS alert that left the active feed was cancelled, replaced or neither. */
   alertFate: (id: string) => getJson<import('../types').AlertFate>(`/api/alerts/fate?id=${encodeURIComponent(id)}`),
   roadClosures: () => getJson<import('../types').RoadClosuresFeed>('/api/roads/closures'),

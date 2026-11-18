@@ -1,5 +1,6 @@
 import type { RawAlert } from '../layers/alerts/alertsData';
-import type { FlightEventWithModel, NpsAlert, ShipPortEvent, WarnAlert } from '../types';
+import type { AirportEventKind } from '../layers/airports/airportsMeta';
+import type { FaaAirportStatus, FlightEventWithModel, NpsAlert, ShipPortEvent, WarnAlert } from '../types';
 import type { AlertChange } from './alertChanges';
 import type { PinHit, PinRef } from './pinAlertMatch';
 
@@ -12,7 +13,7 @@ import type { PinHit, PinRef } from './pinAlertMatch';
 // also went out to phones as a WEA), so whichever source reports it first
 // announces it once.
 
-export type NoticeCategory = 'nws' | 'warn' | 'quake' | 'nps' | 'flight' | 'ship';
+export type NoticeCategory = 'nws' | 'warn' | 'quake' | 'nps' | 'airport' | 'flight' | 'ship';
 
 export const NOTICE_CATEGORIES: { id: NoticeCategory; label: string; detail: string }[] = [
   {
@@ -26,6 +27,11 @@ export const NOTICE_CATEGORIES: { id: NoticeCategory; label: string; detail: str
     id: 'nps',
     label: 'National Park alerts',
     detail: 'New or changed NPS alerts (danger, closures, cautions, info) at the six parks',
+  },
+  {
+    id: 'airport',
+    label: 'Airport status (FAA)',
+    detail: 'A new ground stop, ground delay program or closure at any US airport, or delays there reaching an hour',
   },
   { id: 'flight', label: 'Company aircraft', detail: 'Takeoffs and landings, with the airport' },
   { id: 'ship', label: 'Windstar fleet', detail: 'Port arrivals and departures' },
@@ -99,6 +105,16 @@ export interface NpsNotice extends NoticeBase {
   isUpdate: boolean;
 }
 
+export interface AirportNotice extends NoticeBase {
+  category: 'airport';
+  /** The airport as the FAA reports it now: everything going on there. */
+  airport: FaaAirportStatus;
+  /** What is new there, worst first. */
+  fresh: AirportEventKind[];
+  /** Pins within AIRPORT_NEAR_MI of the airport, nearest first (often none). */
+  hits: PinHit[];
+}
+
 export interface FlightNotice extends NoticeBase {
   category: 'flight';
   event: FlightEventWithModel;
@@ -109,7 +125,7 @@ export interface ShipNotice extends NoticeBase {
   event: ShipPortEvent;
 }
 
-export type Notice = NwsNotice | WarnNotice | QuakeNotice | NpsNotice | FlightNotice | ShipNotice;
+export type Notice = NwsNotice | WarnNotice | QuakeNotice | NpsNotice | AirportNotice | FlightNotice | ShipNotice;
 
 /** An alert that ended at a property (cancelled, or no longer covering it) reads as good news. */
 export const ENDED_COLOR = '#34d399';

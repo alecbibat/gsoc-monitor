@@ -1,11 +1,13 @@
 // The notification rules beyond NWS alerts: Wireless Emergency Alerts and
 // earthquakes near a pin, National Park Service alerts at the followed parks,
-// and the company aircraft's and Windstar ships' movements. Pure, like
+// FAA ground stops, delay programs and closures at airports, and the company
+// aircraft's and Windstar ships' movements. Pure, like
 // pinAlertMatch: AlertNotifier feeds each poll in.
 
+import { AIRPORT_TIERS, airportEvents, type AirportEventKind, type AirportTier } from '../layers/airports/airportsMeta';
 import { WEA_CLASSES } from '../layers/warn/warnMeta';
 import { NPS_CATEGORY } from '../nps/npsMeta';
-import type { EarthquakeFeature, FlightEventWithModel, NpsAlert, ShipPortEvent, WarnAlert } from '../types';
+import type { EarthquakeFeature, FaaAirportStatus, FlightEventWithModel, NpsAlert, ShipPortEvent, WarnAlert } from '../types';
 import { weaChanges, weaFacts } from './alertChanges';
 import {
   ALL_PINS, SEEN_TTL_MS, detectNewNear, hitsBbox, mergeHits, pinsByKey, pinsNearCircle, pinsNearRings, ringsBbox,
@@ -13,7 +15,7 @@ import {
 } from './pinAlertMatch';
 import {
   ENDED_COLOR, ENDED_RANK, FLIGHT_COLOR, SHIP_COLOR, isEndedNotice, quakeColor,
-  type FlightNotice, type NpsNotice, type QuakeInfo, type QuakeNotice, type ShipNotice, type WarnNotice,
+  type AirportNotice, type FlightNotice, type NpsNotice, type QuakeInfo, type QuakeNotice, type ShipNotice, type WarnNotice,
 } from './notices';
 
 export const WARN_NOTIFY_RADIUS_MI = 50;
@@ -237,6 +239,86 @@ export function detectShipNotices(opts: {
     event,
   }));
   return { notices, seen };
+}
+
+// ── FAA airport status ───────────────────────────────────────────────────────
+// Unlike the hazards above these aren't tied to a pin: guests, crews and the
+// company aircraft pass through hubs far from any property, so a program at
+// any airport the FAA lists announces — with the properties it is a gateway
+// for, when there are any. What announces is the start of something that
+// disrupts travel: a ground stop, a ground delay program, a closure, or
+// arrival or departure delays reaching AIRPORT_NOTIFY_DELAY_MIN. Deicing,
+// shorter delays and closures to general aviation only are left to the map.
+// Several starting together at one airport make one popup.
+
+/** Arrival or departure delays averaging this long or more announce. */
+export const AIRPORT_NOTIFY_DELAY_MIN = 60;
+/** Properties this close to the airport are listed on its popup. */
+export const AIRPORT_NEAR_MI = 250;
+/**
+ * How long after something was last reported it still counts as the same one.
+ * The FAA lifts and re-issues ground stops through a storm, and a delay
+ * hovers around the threshold; neither should pop every time.
+ */
+export const AIRPORT_QUIET_MS = 60 * 60_000;
+
+const AIRPORT_RANK: Record<AirportTier, number> = {
+  closure: 10,
+  'ground-stop': 9,
+  'ground-delay': 7,
+  delay: 5,
+  deicing: 2,
+  notice: 2,
+};
+
+/** "SFO:ground-stop" → when it was last reported. */
+export type AirportSeen = ReadonlyMap<string, number>;
+
+/** The kinds of event at an airport that are worth a popup when they start. */
+export function airportNotifiable(a: FaaAirportStatus, minDelayMin = AIRPORT_NOTIFY_DELAY_MIN): AirportEventKind[] {
+  const kinds: AirportEventKind[] = [];
+  if (a.closure) kinds.push('closure');
+  if (a.groundStop) kinds.push('ground-stop');
+  if (a.groundDelay) kinds.push('ground-delay');
+  if ((a.arrivalDelay?.avgMin ?? 0) >= minDelayMin) kinds.push('arrival-delay');
+  if ((a.departureDelay?.avgMin ?? 0) >= minDelayMin) kinds.push('departure-delay');
+  return kinds;
+}
+
+/** Ground stops, delay programs, closures and long delays that started since the last poll. */
+export function detectAirportNotices(opts: {
+  airports: readonly FaaAirportStatus[];
+  seen: AirportSeen;
+  baseline: boolean;
+  now: number;
+  pins?: readonly PinRef[];
+}): { notices: AirportNotice[]; seen: AirportSeen } {
+  const { airports, baseline, now, pins = ALL_PINS } = opts;
+  const next = new Map<string, number>();
+  for (const [key, at] of opts.seen) if (now - at < AIRPORT_QUIET_MS) next.set(key, at);
+  const notices: AirportNotice[] = [];
+  for (const airport of airports) {
+    const started: AirportEventKind[] = [];
+    for (const kind of airportNotifiable(airport)) {
+      const key = `${airport.id}:${kind}`;
+      if (!next.has(key)) started.push(kind);
+      next.set(key, now);
+    }
+    if (baseline || started.length === 0) continue;
+    // Worst first, as the map ranks them (a closure outside its hours ranks as a notice).
+    const events = airportEvents(airport, now).filter((e) => started.includes(e.kind));
+    if (events.length === 0) continue;
+    notices.push({
+      category: 'airport',
+      key: `airport:${airport.id}:${events.map((e) => e.kind).join('+')}:${now}`,
+      color: AIRPORT_TIERS[events[0].tier].color,
+      rank: AIRPORT_RANK[events[0].tier],
+      airport,
+      fresh: events.map((e) => e.kind),
+      hits: pinsNearCircle(airport.lat, airport.lon, 0, pins, AIRPORT_NEAR_MI),
+    });
+  }
+  return { notices, seen: next };
 }
 
 // ── National Park Service alerts ─────────────────────────────────────────────
